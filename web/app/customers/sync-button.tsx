@@ -1,17 +1,19 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useBackground } from "@/components/background-status";
 import { syncCustomersAction } from "@/lib/sync-actions";
 
 export function SyncButton() {
-  const [isPending, startTransition] = useTransition();
+  const { run, starting, start } = useBackground();
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState(true);
+  const running = run?.kind === "sync" && run.status === "running";
 
   return (
     <span className="flex items-center gap-2">
-      {msg && (
+      {msg && !running && (
         <span className={`text-xs ${ok ? "text-muted-foreground" : "text-destructive"}`}>
           {msg}
         </span>
@@ -19,16 +21,14 @@ export function SyncButton() {
       <Button
         variant="outline"
         size="sm"
-        disabled={isPending}
-        onClick={() =>
-          startTransition(async () => {
-            const r = await syncCustomersAction();
-            setOk(r.ok);
-            setMsg(r.message);
-          })
-        }
+        disabled={starting || running}
+        onClick={async () => {
+          const r = await start(syncCustomersAction);
+          setOk(r.ok);
+          setMsg(r.ok ? null : r.message);
+        }}
       >
-        {isPending ? "Sincronizando…" : "Sincronizar"}
+        {running ? "Sincronizando…" : "Sincronizar"}
       </Button>
     </span>
   );

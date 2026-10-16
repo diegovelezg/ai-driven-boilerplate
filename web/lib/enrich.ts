@@ -1,24 +1,18 @@
 // Enriquecimiento de dominios (firmográficos). Server-only.
 // La clave es el dominio: si ya existe fila en `domains`, no se re-scrapea.
 import "server-only";
-import { appendFile } from "node:fs/promises";
-import { join } from "node:path";
 import { getSupabase } from "@/lib/supabase";
+import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { createLogger } from "@/lib/log";
 import { classifyDomain, domainFromEmail } from "@/lib/domains";
 import { extractFirmographics } from "@/lib/ai/enrich";
+import { judgeBusinessDomain, B2B_GATE_THRESHOLD } from "@/lib/ai/decisions";
 
 const UA = "Mozilla/5.0 (compatible; RetainEngineBot/0.1)";
 const FETCH_TIMEOUT_MS = 12_000;
-const LOG_FILE = join(process.cwd(), ".data", "enrichment.log");
 
-/** Log a consola + archivo (.data/enrichment.log). Best-effort en archivo. */
-function log(line: string): void {
-  const msg = `[${new Date().toISOString()}] ${line}`;
-  console.log(`[enrich] ${msg}`);
-  appendFile(LOG_FILE, msg + "\n", "utf-8").catch(() => {
-    // Sin archivo de log: la consola ya lo tiene.
-  });
-}
+/** Log a consola + archivo (.data/enrichment.log). */
+const log = createLogger("enrichment");
 
 function htmlToText(html: string): string {
   return html
@@ -119,6 +113,34 @@ export async function enrichDomain(
     if (data) return "skipped";
   }
 
+  // PILOTO gate B2B (Decisions, solo con el string del dominio):
+  // corre ANTES del fetch para ahorrar fetch + extracción en dominios
+  // personales/parqueados. Solo entra si el regex ya dijo `enrichable`.
+  // Rechazo (p < 0.5, sin calibrar) → fila 'personal' para no re-evaluar.
+  // Sin veredicto (rehúse/error/sin key) → se sigue con extracción y se loguea.
+  try {
+    const v = await judgeBusinessDomain(d);
+    log(`${d} gate is_b2b p=${v.probability.toFixed(2)} (umbral ${B2B_GATE_THRESHOLD})`);
+    if (v.isBusiness === false) {
+      const { error } = await db.from("domains").upsert(
+        {
+          domain: d,
+          domain_type: "personal",
+          company_name: null,
+          model: "openai/gpt-6-luna:gate",
+          confidence: v.probability,
+          enriched_at: new Date().toISOString(),
+        },
+        { onConflict: "domain" },
+      );
+      if (error) throw new Error(`Domains upsert: ${error.message}`);
+      log(`${d} → descartado por gate (personal)`);
+      return "skipped";
+    }
+  } catch (e) {
+    log(`${d} gate sin veredicto (${e instanceof Error ? e.message : e}); se sigue`);
+  }
+
   const page = await fetchHomepage(d);
   if (!page) return "failed";
 
@@ -145,73 +167,6 @@ export async function enrichDomain(
   return "enriched";
 }
 
-// ---- Corridas en background (status en DB) ---------------------------------
-
-export type RunStatus = "running" | "done" | "error";
-
-export interface EnrichRunStatus {
-  id: string;
-  status: RunStatus;
-  total: number;
-  processed: number;
-  failed: number;
-  current: string | null;
-  error: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-}
-
-function mapRun(r: Record<string, unknown>): EnrichRunStatus {
-  return {
-    id: String(r.id),
-    status: (r.status as RunStatus) ?? "running",
-    total: Number(r.total ?? 0),
-    processed: Number(r.processed ?? 0),
-    failed: Number(r.failed ?? 0),
-    current: (r.current as string) ?? null,
-    error: (r.error as string) ?? null,
-    startedAt: String(r.started_at ?? ""),
-    finishedAt: (r.finished_at as string) ?? null,
-  };
-}
-
-export async function getLatestRun(storeId: string): Promise<EnrichRunStatus | null> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from("enrichment_runs")
-    .select("*")
-    .eq("store_id", storeId)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(`Runs read: ${error.message}`);
-  return data ? mapRun(data as Record<string, unknown>) : null;
-}
-
-export async function hasRunningRun(storeId: string): Promise<boolean> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from("enrichment_runs")
-    .select("id")
-    .eq("store_id", storeId)
-    .eq("status", "running")
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(`Runs read: ${error.message}`);
-  return Boolean(data);
-}
-
-export async function startRun(storeId: string, total: number): Promise<string> {
-  const db = getSupabase();
-  const { data, error } = await db
-    .from("enrichment_runs")
-    .insert({ store_id: storeId, total, status: "running" })
-    .select("id")
-    .single();
-  if (error || !data) throw new Error(`Run insert: ${error?.message}`);
-  return String(data.id);
-}
-
 /**
  * Procesa una lista de dominios y va actualizando el run en DB (progreso en vivo).
  * Corre en background (vía `after()`), desacoplado de la request del cliente.
@@ -220,16 +175,12 @@ export async function runEnrichment(
   runId: string,
   domains: string[],
 ): Promise<void> {
-  const db = getSupabase();
   let processed = 0;
   let failed = 0;
   log(`run ${runId} start total=${domains.length}`);
 
   for (const d of domains) {
-    await db
-      .from("enrichment_runs")
-      .update({ current: d, processed, failed })
-      .eq("id", runId);
+    await advanceRun(runId, { processed, failed, current: d });
     try {
       const r = await enrichDomain(d);
       if (r === "failed") {
@@ -245,15 +196,9 @@ export async function runEnrichment(
   }
 
   const status: RunStatus = processed === 0 && failed > 0 ? "error" : "done";
-  await db
-    .from("enrichment_runs")
-    .update({
-      status,
-      processed,
-      failed,
-      current: null,
-      finished_at: new Date().toISOString(),
-    })
-    .eq("id", runId);
+  const summary = `${processed} dominio${processed === 1 ? "" : "s"}${
+    failed > 0 ? ` · ${failed} fallidos` : ""
+  }`;
+  await finishRun(runId, { status, processed, failed, summary });
   log(`run ${runId} ${status} processed=${processed} failed=${failed}`);
 }

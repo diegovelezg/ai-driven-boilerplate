@@ -9,37 +9,48 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, TriangleAlert, Wand2, X } from "lucide-react";
-import {
-  getEnrichmentStatusAction,
-  startEnrichmentAction,
-} from "@/lib/enrich-actions";
-import type { EnrichRunStatus } from "@/lib/enrich";
+import { Check, RefreshCw, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { getBackgroundStatusAction } from "@/lib/background-actions";
+import type { BackgroundRun } from "@/lib/background";
 
-interface EnrichmentCtxValue {
-  run: EnrichRunStatus | null;
-  starting: boolean;
-  start: () => void;
+export interface BackgroundTaskResult {
+  ok: boolean;
+  message: string;
+  run: BackgroundRun | null;
 }
 
-const EnrichmentCtx = createContext<EnrichmentCtxValue | null>(null);
+interface BackgroundCtxValue {
+  run: BackgroundRun | null;
+  starting: boolean;
+  start: (action: () => Promise<BackgroundTaskResult>) => Promise<BackgroundTaskResult>;
+}
 
-export function useEnrichment(): EnrichmentCtxValue {
-  const ctx = useContext(EnrichmentCtx);
-  if (!ctx) throw new Error("useEnrichment debe usarse dentro de <EnrichmentStatus>");
+const BackgroundCtx = createContext<BackgroundCtxValue | null>(null);
+
+export function useBackground(): BackgroundCtxValue {
+  const ctx = useContext(BackgroundCtx);
+  if (!ctx) throw new Error("useBackground debe usarse dentro de <BackgroundStatus>");
   return ctx;
 }
 
-const DISMISS_KEY = "enrichment:dismissedRun";
+const ICONS: Record<string, LucideIcon> = {
+  enrichment: Wand2,
+  sync: RefreshCw,
+};
+
+const DISMISS_KEY = "background:dismissedRun";
 const STALE_MS = 20 * 60 * 1000;
+const AUTO_HIDE_MS = 5000;
 
 /**
- * Provider global: mantiene el estado del enriquecimiento y muestra una cinta
- * persistente en todas las vistas. Se cierra con la X cuando terminó.
+ * Cinta global de procesos en segundo plano (SSOT). Muestra el estado de la
+ * última corrida y se cierra con la X cuando terminó. Un mismo componente sirve
+ * para cualquier trabajo (enriquecimiento, sincronización, ...): sólo cambia el
+ * `kind` de la corrida a la que responde.
  */
-export function EnrichmentStatus({ children }: { children: ReactNode }) {
+export function BackgroundStatus({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [run, setRun] = useState<EnrichRunStatus | null>(null);
+  const [run, setRun] = useState<BackgroundRun | null>(null);
   const [starting, setStarting] = useState(false);
   const [dismissedId, setDismissedId] = useState<string | null>(() =>
     typeof window === "undefined" ? null : window.localStorage.getItem(DISMISS_KEY),
@@ -48,7 +59,7 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
   const [now, setNow] = useState<number | null>(null);
 
   useEffect(() => {
-    getEnrichmentStatusAction().then(setRun);
+    getBackgroundStatusAction().then(setRun);
   }, []);
 
   const running = run?.status === "running";
@@ -56,20 +67,25 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
     if (!running) return;
     const t = setInterval(() => {
       setNow(Date.now());
-      getEnrichmentStatusAction().then(setRun);
+      getBackgroundStatusAction().then(setRun);
     }, 2000);
     return () => clearInterval(t);
   }, [running]);
 
-  const start = useCallback(() => {
-    setStarting(true);
-    startEnrichmentAction()
-      .then((r) => {
+  const start = useCallback(
+    async (action: () => Promise<BackgroundTaskResult>) => {
+      setStarting(true);
+      try {
+        const r = await action();
         if (r.run) setRun(r.run);
         router.refresh();
-      })
-      .finally(() => setStarting(false));
-  }, [router]);
+        return r;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [router],
+  );
 
   const dismiss = useCallback(() => {
     if (!run) return;
@@ -80,6 +96,14 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
   // Corrida "colgada" (p.ej. el server se reinició a mitad): se trata como terminada.
   const stale = running && !!run && now !== null && now - Date.parse(run.startedAt) > STALE_MS;
   const finished = !!run && (!running || stale);
+  const succeeded = !!run && !running && !stale && run.status === "done";
+
+  // Terminó con éxito: se oculta sola a los pocos segundos (no persiste si ya cumplió).
+  useEffect(() => {
+    if (!succeeded) return;
+    const t = setTimeout(dismiss, AUTO_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [succeeded, dismiss]);
 
   const total = run?.total ?? 0;
   const processed = run?.processed ?? 0;
@@ -88,9 +112,11 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
   const visible = !!run && run.id !== dismissedId;
+  const Icon = (run && ICONS[run.kind]) || Wand2;
+  const label = run?.label ?? "";
 
   return (
-    <EnrichmentCtx.Provider value={{ run, starting, start }}>
+    <BackgroundCtx.Provider value={{ run, starting, start }}>
       {children}
       {visible && (
         <div className="fixed inset-x-0 top-0 z-50">
@@ -102,8 +128,8 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
               />
               <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
               <div className="relative flex h-full items-center justify-center gap-2 text-xs font-medium tabular-nums">
-                <Wand2 className="size-3.5 animate-pulse text-primary" aria-hidden />
-                Enriqueciendo dominios… {done}/{total}
+                <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
+                {label}… {done}/{total}
                 {failed > 0 && <span className="text-destructive">· {failed} fallidos</span>}
               </div>
             </div>
@@ -118,14 +144,13 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
               {run?.status === "done" && !stale ? (
                 <>
                   <Check className="size-3.5" aria-hidden />
-                  Enriquecimiento listo · {processed} dominio{processed === 1 ? "" : "s"}
-                  {failed > 0 && ` · ${failed} fallidos`}
+                  {label} listo{run?.summary ? ` · ${run.summary}` : ""}
                 </>
               ) : (
                 <>
                   <TriangleAlert className="size-3.5" aria-hidden />
-                  Enriquecimiento {stale ? "interrumpido" : "con errores"} · {processed} ok ·{" "}
-                  {failed} fallidos
+                  {label} {stale ? "interrumpido" : "con errores"}
+                  {run?.error ? ` · ${run.error}` : run?.summary ? ` · ${run.summary}` : ""}
                 </>
               )}
               <button
@@ -140,6 +165,6 @@ export function EnrichmentStatus({ children }: { children: ReactNode }) {
           )}
         </div>
       )}
-    </EnrichmentCtx.Provider>
+    </BackgroundCtx.Provider>
   );
 }

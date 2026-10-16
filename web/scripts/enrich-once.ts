@@ -1,7 +1,8 @@
 // Ejecución manual del enriquecimiento (como sync-once.ts).
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/enrich-once.ts [limit]
 import { readFileSync } from "node:fs";
-import { pendingDomains, runEnrichment, startRun } from "@/lib/enrich";
+import { pendingDomains, runEnrichment } from "@/lib/enrich";
+import { startRun } from "@/lib/background";
 import { resolveStoreId } from "@/lib/customers-db";
 
 async function main() {
@@ -17,7 +18,7 @@ async function main() {
   if (pending.length === 0) return;
 
   const batch = pending.slice(0, limit);
-  const runId = await startRun(storeId, batch.length);
+  const runId = await startRun(storeId, "enrichment", "Enriquecimiento", batch.length);
   console.log(`run ${runId} · ${batch.length} dominios`);
   await runEnrichment(runId, batch);
   console.log("fin");

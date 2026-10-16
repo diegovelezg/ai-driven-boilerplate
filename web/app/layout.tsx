@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
-import { EnrichmentStatus } from "@/components/enrichment-status";
+import { BackgroundStatus } from "@/components/background-status";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import "./globals.css";
@@ -36,7 +36,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <EnrichmentStatus>
+          <BackgroundStatus>
             <SidebarProvider defaultOpen={false}>
               <AppSidebar />
               <SidebarInset>
@@ -44,7 +44,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 {children}
               </SidebarInset>
             </SidebarProvider>
-          </EnrichmentStatus>
+          </BackgroundStatus>
         </ThemeProvider>
       </body>
     </html>

@@ -1,7 +1,9 @@
 // Sync ecommerce → Supabase. Upsert-only: nunca borra (preserva source='local').
 import { getSupabase } from "@/lib/supabase";
+import { createLogger } from "@/lib/log";
 import {
   groupTotalsByCurrency,
+  isRealOrder,
   listMedusaCustomers,
   listMedusaOrdersRaw,
   listMedusaRegions,
@@ -9,6 +11,9 @@ import {
   type CanonicalOrder,
   type MedusaVersion,
 } from "@/lib/medusa";
+
+/** Log a consola + archivo (.data/sync.log). */
+const log = createLogger("sync");
 
 /** Clave canónica del tenant: URL normalizada. */
 export function normalizeShopUrl(url: string): string {
@@ -20,8 +25,50 @@ export interface SyncSummary {
   customers: number;
   orders: number;
   skippedOrders: number;
+  /** Órdenes de prueba (títulos test ES/EN): se guardan con is_test, no agregan. */
+  excludedTestOrders: number;
+  /** Canceladas/archivadas/pago fallido: se guardan con su estado, no agregan. */
+  excludedInvalidOrders: number;
   channels: number;
   markets: number;
+}
+
+/** Fases del sync (para el progreso en la cinta de background). */
+export const SYNC_TOTAL = 5;
+
+export interface SyncProgress {
+  processed: number;
+  total: number;
+  current: string;
+}
+
+export interface SyncOptions {
+  onProgress?: (p: SyncProgress) => void | Promise<void>;
+}
+
+/** Upsert idempotente de la tienda. Devuelve su id. */
+async function upsertStore(shopUrl: string, shopCurrency: string): Promise<string> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("stores")
+    .upsert(
+      { platform: "medusa", shop_url: shopUrl, shop_currency: shopCurrency },
+      { onConflict: "platform,shop_url" },
+    )
+    .select("id")
+    .single();
+  if (error || !data) throw new Error(`Store upsert: ${error?.message}`);
+  return data.id as string;
+}
+
+/**
+ * Crea/actualiza la tienda y devuelve su id. Necesario para registrar el run de
+ * background antes de que exista el sync (la primera vez aún no hay tienda).
+ */
+export async function ensureStore(medusaUrl: string, token: string): Promise<string> {
+  const regions = await listMedusaRegions(medusaUrl, token);
+  const shopCurrency = Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
+  return upsertStore(normalizeShopUrl(medusaUrl), shopCurrency);
 }
 
 async function fetchAll<T>(
@@ -43,26 +90,24 @@ export async function syncStoreFromMedusa(
   medusaUrl: string,
   version: MedusaVersion,
   token: string,
+  opts: SyncOptions = {},
 ): Promise<SyncSummary> {
   void version;
   const db = getSupabase();
   const shopUrl = normalizeShopUrl(medusaUrl);
   const now = new Date().toISOString();
+  const report = (processed: number, current: string) => {
+    log(`fase ${processed + 1}/${SYNC_TOTAL}: ${current}`);
+    return opts.onProgress?.({ processed, total: SYNC_TOTAL, current });
+  };
+  log(`start shopUrl=${shopUrl}`);
 
   // 1. Store (tenant) + regions → markets.
+  await report(0, "Tienda y mercados");
   const regions = await listMedusaRegions(medusaUrl, token);
   const shopCurrency =
     Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
-  const { data: store, error: storeErr } = await db
-    .from("stores")
-    .upsert(
-      { platform: "medusa", shop_url: shopUrl, shop_currency: shopCurrency },
-      { onConflict: "platform,shop_url" },
-    )
-    .select("id")
-    .single();
-  if (storeErr || !store) throw new Error(`Store upsert: ${storeErr?.message}`);
-  const storeId = store.id as string;
+  const storeId = await upsertStore(shopUrl, shopCurrency);
 
   const marketRows = Object.entries(regions).map(([sourceId, r]) => ({
     store_id: storeId,
@@ -100,6 +145,7 @@ export async function syncStoreFromMedusa(
   const resolveExt = (ext: string): string => aliasMap.get(ext) ?? ext;
 
   // 2. Todos los customers + todas las orders (paginado).
+  await report(1, "Descargando customers y orders");
   const customers = await fetchAll((offset, limit) =>
     listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
       rows: r.customers,
@@ -115,8 +161,10 @@ export async function syncStoreFromMedusa(
   const orders: CanonicalOrder[] = rawOrders
     .map((o) => medusaOrderToCanonical(o, regions))
     .filter((o): o is CanonicalOrder => o !== null);
+  log(`descargados customers=${customers.length} orders=${orders.length} (raw=${rawOrders.length})`);
 
   // 3. Channels distintos desde las orders → upsert.
+  await report(2, "Canales");
   const channelByKey = new Map(
     orders
       .filter((o) => o.channel)
@@ -140,10 +188,18 @@ export async function syncStoreFromMedusa(
     (channels ?? []).map((c) => [`${c.source}|${c.source_id}`, c.id as string]),
   );
 
-  // 4. Agregado de compras por customer (por external_id, por moneda).
+  // 4. Agregado de compras REALES por customer (por external_id, por moneda).
+  // Test + canceladas/archivadas/pago fallido se guardan (auditable) pero no agregan.
   const amountsByCustomer = new Map<string, Array<{ amount: number; currency: string | null }>>();
   const lastOrderAtByCustomer = new Map<string, string>();
+  let excludedTestOrders = 0;
+  let excludedInvalidOrders = 0;
   for (const o of orders) {
+    if (!isRealOrder(o)) {
+      if (o.isTest) excludedTestOrders += 1;
+      else excludedInvalidOrders += 1;
+      continue;
+    }
     if (!o.customerExternalId) continue;
     const key = resolveExt(o.customerExternalId);
     const arr = amountsByCustomer.get(key) ?? [];
@@ -160,6 +216,9 @@ export async function syncStoreFromMedusa(
   }
 
   // 5. Upsert customers con stats (un solo upsert).
+  // orders_count/total_spent/currency = SOLO moneda primaria (nunca mezclar);
+  // el desglose completo va en stats_by_currency.
+  await report(3, "Guardando customers");
   const customerRows = customers
     .filter((c) => !aliasMap.has(c.id))
     .map((c) => {
@@ -174,9 +233,14 @@ export async function syncStoreFromMedusa(
         first_name: c.firstName,
         last_name: c.lastName,
         company_name: c.companyName,
-        orders_count: totals.reduce((s, t) => s + t.ordersCount, 0),
+        orders_count: primary?.ordersCount ?? 0,
         total_spent: primary?.totalSpent ?? 0,
         currency: primary?.currency ?? null,
+        stats_by_currency: totals.map((t) => ({
+          currency: t.currency,
+          ordersCount: t.ordersCount,
+          totalSpent: t.totalSpent,
+        })),
         last_order_at: lastOrderAtByCustomer.get(resolveExt(c.id)) ?? null,
         external_created_at: c.createdAt,
         last_synced_at: now,
@@ -203,6 +267,7 @@ export async function syncStoreFromMedusa(
   }
 
   // 6. Upsert orders (solo las de customers conocidos).
+  await report(4, "Guardando orders");
   const itemsByOrderId = new Map(
     rawOrders.map((o) => [
       String(o.id ?? ""),
@@ -233,6 +298,9 @@ export async function syncStoreFromMedusa(
       total_amount: o.totalAmount,
       currency: o.currency,
       country: o.country,
+      status: o.status,
+      payment_status: o.paymentStatus,
+      is_test: o.isTest,
       items_json: itemsByOrderId.get(o.sourceOrderId) ?? [],
       placed_at: o.placedAt,
     });
@@ -244,11 +312,18 @@ export async function syncStoreFromMedusa(
     if (error) throw new Error(`Orders upsert: ${error.message}`);
   }
 
+  log(
+    `done customers=${customerRows.length} orders=${orderRows.length} ` +
+      `skipped=${skippedOrders} test=${excludedTestOrders} invalid=${excludedInvalidOrders} ` +
+      `markets=${marketRows.length} channels=${channelRows.length}`,
+  );
   return {
     storeName: shopUrl,
     customers: customerRows.length,
     orders: orderRows.length,
     skippedOrders,
+    excludedTestOrders,
+    excludedInvalidOrders,
     channels: channelRows.length,
     markets: marketRows.length,
   };

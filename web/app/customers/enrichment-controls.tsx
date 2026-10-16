@@ -2,13 +2,14 @@
 
 import { Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useEnrichment } from "@/components/enrichment-status";
+import { useBackground } from "@/components/background-status";
+import { startEnrichmentAction } from "@/lib/enrich-actions";
 
 export function EnrichmentControls({ pending }: { pending: number }) {
-  const { run, starting, start } = useEnrichment();
-  const running = run?.status === "running";
-  const total = run?.total ?? 0;
-  const done = (run?.processed ?? 0) + (run?.failed ?? 0);
+  const { run, starting, start } = useBackground();
+  const running = run?.kind === "enrichment" && run.status === "running";
+  const total = running ? run.total : 0;
+  const done = running ? run.processed + run.failed : 0;
 
   return (
     <Button
@@ -17,7 +18,7 @@ export function EnrichmentControls({ pending }: { pending: number }) {
       disabled={starting || running || pending === 0}
       title={pending === 0 ? "No hay dominios de negocio pendientes" : "Enriquecer dominios con IA"}
       className="border-transparent bg-accent text-accent-foreground hover:bg-accent/70"
-      onClick={start}
+      onClick={() => start(startEnrichmentAction)}
     >
       <Wand2 className="text-primary" aria-hidden />
       {running ? `${done}/${total}` : pending > 0 ? `Enriquecer (${pending})` : "Enriquecer"}

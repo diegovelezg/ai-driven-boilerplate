@@ -48,6 +48,12 @@ export interface CanonicalOrder {
   currency: string;
   country: string | null;
   placedAt: string | null;
+  /** Estado crudo Medusa (v1: pending|completed|archived|canceled|requires_action). */
+  status: string | null;
+  /** Estado de pago crudo (v1: captured|awaiting|...|canceled|failed). */
+  paymentStatus: string | null;
+  /** true si los ítems delatan una orden de prueba (ver TEST_ITEM_KEYWORDS). */
+  isTest: boolean;
 }
 
 export interface CustomersPage {
@@ -246,6 +252,68 @@ export async function listMedusaRegions(
   return out;
 }
 
+/** Estados de orden que NO cuentan como compra real (RFM/agregados). */
+export const EXCLUDED_ORDER_STATUSES = new Set([
+  "canceled",
+  "cancelled",
+  "archived",
+  "requires_action",
+]);
+
+/** Estados de pago que NO cuentan como compra real. */
+export const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
+
+/**
+ * Palabras que delatan ítems de prueba, ES + EN. Se matchea por palabra
+ * completa (no subcadena): "test" marca "Prueba MX" pero no "contest".
+ */
+export const TEST_ITEM_KEYWORDS = [
+  "prueba",
+  "pruebas",
+  "probando",
+  "test",
+  "tests",
+  "testing",
+  "teste",
+  "draft",
+  "drafts",
+  "borrador",
+  "borradores",
+  "dummy",
+  "fake",
+  "fakes",
+  "ejemplo",
+  "ejemplos",
+  "example",
+  "examples",
+  "demo",
+  "demos",
+];
+
+const TEST_ITEM_RE = new RegExp(`\\b(${TEST_ITEM_KEYWORDS.join("|")})\\b`, "i");
+
+/** true si el título del ítem parece de prueba (ES/EN, palabra completa). */
+export function isTestItemTitle(title: string): boolean {
+  return TEST_ITEM_RE.test(title.trim());
+}
+
+/** true si algún ítem de la orden parece de prueba. */
+export function isTestOrder(
+  items: Array<{ title?: unknown } | Record<string, unknown>>,
+): boolean {
+  return items.some((i) =>
+    isTestItemTitle(String((i as Record<string, unknown>).title ?? "")),
+  );
+}
+
+/** true si la orden canónica cuenta como compra real (no test, no cancelada…). */
+export function isRealOrder(o: Pick<CanonicalOrder, "status" | "paymentStatus" | "isTest">): boolean {
+  if (o.isTest) return false;
+  if (o.status && EXCLUDED_ORDER_STATUSES.has(o.status.toLowerCase())) return false;
+  if (o.paymentStatus && EXCLUDED_PAYMENT_STATUSES.has(o.paymentStatus.toLowerCase())) return false;
+  return true;
+}
+
 /** Mapea una order cruda de Medusa v1 al modelo canónico (channel + market + moneda). */
 export function medusaOrderToCanonical(
   o: Record<string, unknown>,
@@ -260,6 +328,9 @@ export function medusaOrderToCanonical(
   const bill = o.billing_address as Record<string, unknown> | undefined;
   const regionId = region?.id as string | undefined;
   const reg = (regionId && regions[regionId]) || null;
+  const items = (o.items as Array<Record<string, unknown>> | undefined) ?? [];
+  // canceled_at sin status cancelado ocurre: normalizar a 'canceled'.
+  const status = o.canceled_at ? "canceled" : ((o.status as string) ?? null);
   return {
     sourceOrderId: String(id),
     customerEmail: String(o.email ?? ""),
@@ -285,6 +356,9 @@ export function medusaOrderToCanonical(
     country:
       (ship?.country_code as string) ?? (bill?.country_code as string) ?? null,
     placedAt: (o.created_at as string) ?? null,
+    status,
+    paymentStatus: (o.payment_status as string) ?? null,
+    isTest: isTestOrder(items),
   };
 }
 
@@ -294,8 +368,10 @@ export function formatMoney(amountMinor: number, currency: string | null): strin
     return new Intl.NumberFormat("es-PE", {
       style: "currency",
       currency: code,
-    }).format(amountMinor / 100);
+      maximumFractionDigits: 0,
+      minimumFractionDigits: 0,
+    }).format(Math.round(amountMinor / 100));
   } catch {
-    return `${(amountMinor / 100).toFixed(2)} ${code}`;
+    return `${Math.round(amountMinor / 100)} ${code}`;
   }
 }
