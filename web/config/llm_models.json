@@ -1,0 +1,35 @@
+{
+  "$comment": "Configuración LLM — retain-engine-ai. Patrón espejo de dooh-agencia-ai (providers + procesos con fallback). Los modelos se eligen por (provider, model); 'quality' es el nivel homologado interno: alta | media | economica.",
+  "providers": {
+    "deepseek": {
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url": "https://api.deepseek.com",
+      "backend": "openai"
+    },
+    "openai": {
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url": "https://api.openai.com/v1",
+      "backend": "openai"
+    }
+  },
+  "processes": {
+    "customer_chat": {
+      "primary": { "provider": "deepseek", "model": "deepseek-chat", "quality": "media" },
+      "fallback": { "provider": "openai", "model": "gpt-4o-mini", "quality": "media" },
+      "temperature": 0.4,
+      "max_tokens": 1500
+    },
+    "customer_classify": {
+      "primary": { "provider": "deepseek", "model": "deepseek-chat", "quality": "media" },
+      "fallback": { "provider": "openai", "model": "gpt-4o-mini", "quality": "media" },
+      "temperature": 0.2,
+      "max_tokens": 1000
+    },
+    "enrichment": {
+      "primary": { "provider": "deepseek", "model": "deepseek-chat", "quality": "economica" },
+      "fallback": { "provider": "openai", "model": "gpt-4o-mini", "quality": "economica" },
+      "temperature": 0.1,
+      "max_tokens": 500
+    }
+  }
+}

@@ -86,6 +86,19 @@ export async function syncStoreFromMedusa(
     (markets ?? []).map((m) => [m.source_id as string, m.id as string]),
   );
 
+  // Alias de fusión: los customers combinados se omiten y sus órdenes se reasignan al canónico.
+  const { data: aliasData } = await db
+    .from("customer_aliases")
+    .select("merged_external_id,canonical_external_id")
+    .eq("store_id", storeId);
+  const aliasMap = new Map<string, string>(
+    (aliasData ?? []).map((a) => [
+      String(a.merged_external_id),
+      String(a.canonical_external_id),
+    ]),
+  );
+  const resolveExt = (ext: string): string => aliasMap.get(ext) ?? ext;
+
   // 2. Todos los customers + todas las orders (paginado).
   const customers = await fetchAll((offset, limit) =>
     listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
@@ -129,33 +142,46 @@ export async function syncStoreFromMedusa(
 
   // 4. Agregado de compras por customer (por external_id, por moneda).
   const amountsByCustomer = new Map<string, Array<{ amount: number; currency: string | null }>>();
+  const lastOrderAtByCustomer = new Map<string, string>();
   for (const o of orders) {
     if (!o.customerExternalId) continue;
-    const arr = amountsByCustomer.get(o.customerExternalId) ?? [];
+    const key = resolveExt(o.customerExternalId);
+    const arr = amountsByCustomer.get(key) ?? [];
     arr.push({ amount: o.totalAmount, currency: o.currency });
-    amountsByCustomer.set(o.customerExternalId, arr);
+    amountsByCustomer.set(key, arr);
+    // Señal de orders para el fingerprint LLM: cubre reemplazos/edits que no
+    // cambian count/total (comparación por instante, no por string).
+    if (o.placedAt && !Number.isNaN(Date.parse(o.placedAt))) {
+      const prev = lastOrderAtByCustomer.get(key);
+      if (!prev || Date.parse(o.placedAt) > Date.parse(prev)) {
+        lastOrderAtByCustomer.set(key, o.placedAt);
+      }
+    }
   }
 
   // 5. Upsert customers con stats (un solo upsert).
-  const customerRows = customers.map((c) => {
-    const totals = groupTotalsByCurrency(amountsByCustomer.get(c.id) ?? []);
-    const primary = totals[0];
-    return {
-      store_id: storeId,
-      external_id: c.id,
-      source: "ecommerce",
-      email: c.email,
-      phone: c.phone,
-      first_name: c.firstName,
-      last_name: c.lastName,
-      company_name: c.companyName,
-      orders_count: totals.reduce((s, t) => s + t.ordersCount, 0),
-      total_spent: primary?.totalSpent ?? 0,
-      currency: primary?.currency ?? null,
-      external_created_at: c.createdAt,
-      last_synced_at: now,
-    };
-  });
+  const customerRows = customers
+    .filter((c) => !aliasMap.has(c.id))
+    .map((c) => {
+      const totals = groupTotalsByCurrency(amountsByCustomer.get(resolveExt(c.id)) ?? []);
+      const primary = totals[0];
+      return {
+        store_id: storeId,
+        external_id: c.id,
+        source: "ecommerce",
+        email: c.email,
+        phone: c.phone,
+        first_name: c.firstName,
+        last_name: c.lastName,
+        company_name: c.companyName,
+        orders_count: totals.reduce((s, t) => s + t.ordersCount, 0),
+        total_spent: primary?.totalSpent ?? 0,
+        currency: primary?.currency ?? null,
+        last_order_at: lastOrderAtByCustomer.get(resolveExt(c.id)) ?? null,
+        external_created_at: c.createdAt,
+        last_synced_at: now,
+      };
+    });
   for (let i = 0; i < customerRows.length; i += 500) {
     const { error } = await db
       .from("customers")
@@ -190,7 +216,8 @@ export async function syncStoreFromMedusa(
   let skippedOrders = 0;
   const orderRows = [];
   for (const o of orders) {
-    const customerId = o.customerExternalId && customerIdByExternal.get(o.customerExternalId);
+    const customerId =
+      o.customerExternalId && customerIdByExternal.get(resolveExt(o.customerExternalId));
     if (!customerId) {
       skippedOrders += 1;
       continue;

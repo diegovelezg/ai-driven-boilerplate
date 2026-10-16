@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Retain Engine — web
 
-## Getting Started
+Dashboard merchant + sync multi-tenant de ecommerce (Medusa hoy, Shopify/Woo después) a Supabase. La vista de customers lee desde BD, no del ecommerce en vivo.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 (App Router) + React 19 + TailwindCSS 4 + shadcn/ui
+- Supabase local (Postgres + PostgREST) vía CLI + Docker; misma migración corre en cloud
+- Medusa v1/v2 en modo **solo lectura** (ver `lib/medusa.ts`)
+
+## Quickstart
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# 1. Stack local (una vez; deja API :54321 y Studio :54323)
+npx supabase start        # desde la raíz del repo
+
+# 2. Env (una vez)
+# web/.env.local con SUPABASE_URL=http://127.0.0.1:54321,
+# SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY (ver `npx supabase status`)
+
+# 3. App
+cd web
+npm install
+npm run dev               # :3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Conectar tienda y sincronizar
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. `/settings` → login admin de Medusa (**cada auth dispara un sync** a BD).
+2. `/customers` → botón **Sincronizar** para re-sync manual, o:
+   ```bash
+   npx tsx --env-file=.env.local scripts/sync-once.ts
+   ```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Modelo de datos (Fase 1)
 
-## Learn More
+Migración fuente de verdad: `supabase/migrations/20261016000000_phase1_multitenant.sql`.
 
-To learn more about Next.js, take a look at the following resources:
+- `stores` = tenant (unique por `platform + shop_url`)
+- `channels` (sales_channel/publication) y `market_regions` (region/market + moneda)
+- `customers` con `source`: `ecommerce` (upsert en sync) o `local` (intacto, nunca borrado)
+- `orders` con moneda **original** + FKs a channel/market + país crudo — nunca se suman monedas distintas
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Detalle del diseño en `README.md` (raíz), secciones 2 y 5. Fase 2 (pendiente): `customer_market_stats` + motor RFM.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Comandos
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run dev     # desarrollo
+npm run build && npm run start
+npm run lint
+npx supabase stop   # apaga el stack local (desde la raíz)
+```

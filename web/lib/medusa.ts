@@ -71,23 +71,6 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-/** Detecta v1 vs v2 sin auth: la ruta v2 existe solo en v2. */
-export async function detectMedusaVersion(url: string): Promise<MedusaVersion | null> {
-  try {
-    const res = await fetch(`${baseUrl(url)}/auth/user/emailpass`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-      cache: "no-store",
-    });
-    const body = await res.text().catch(() => "");
-    if (body.includes("Cannot POST")) return "v1";
-    return "v2";
-  } catch {
-    return null;
-  }
-}
-
 /** Login JWT version-aware. v1 → access_token, v2 → token. */
 export async function medusaLogin(
   url: string,

@@ -36,15 +36,19 @@ const nav = [
 export function AppSidebar() {
   const pathname = usePathname();
   return (
-    <Sidebar>
+    <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/" />}>
+            <SidebarMenuButton
+              size="lg"
+              render={<Link href="/" />}
+              tooltip="Retain Engine"
+            >
               <span className="flex size-6 items-center justify-center rounded bg-primary text-[11px] font-bold text-primary-foreground">
                 R
               </span>
-              <span className="text-sm font-semibold tracking-tight">
+              <span className="text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
                 Retain Engine
               </span>
             </SidebarMenuButton>
@@ -65,6 +69,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       render={<Link href={item.href} />}
                       isActive={active}
+                      tooltip={item.label}
                     >
                       <item.icon strokeWidth={1.75} />
                       <span>{item.label}</span>
@@ -80,8 +85,8 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex items-center justify-between px-1">
-          <span className="truncate text-xs text-muted-foreground">
+        <div className="flex items-center justify-between px-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-2">
+          <span className="truncate text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
             diegovelezg@gmail.com
           </span>
           <ModeToggle />

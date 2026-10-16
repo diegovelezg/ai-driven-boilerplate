@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ChevronsUpDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,32 +15,137 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney, type CanonicalCustomer } from "@/lib/medusa";
+import type {
+  CustomersSortDir,
+  CustomersSortKey,
+  EditableCustomer,
+} from "@/lib/customers-db";
+import {
+  updateCustomerAction,
+  type UpdateCustomerState,
+} from "@/lib/customer-actions";
+import { CustomerDrawer } from "./customer-drawer";
 
 interface Props {
-  rows: CanonicalCustomer[];
+  rows: EditableCustomer[];
   totalCount: number;
   q: string;
   page: number;
   pageSize: number;
+  sortKey: CustomersSortKey;
+  sortDir: CustomersSortDir;
 }
 
-type SortKey = "email" | "name" | "phone" | "company" | "orders" | "total";
+/** Celda con edición inline: click -> input; Enter/blur guarda, Escape cancela. */
+function EditableCell({
+  value,
+  onSave,
+}: {
+  value: string;
+  onSave: (draft: string) => Promise<UpdateCustomerState>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const cancelRef = useRef(false);
 
-export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
+  const commit = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    const next = draft.trim().replace(/\s+/g, " ");
+    if (next === value) {
+      setEditing(false);
+    } else {
+      setSaving(true);
+      const res = await onSave(next);
+      setSaving(false);
+      if (res.ok) setEditing(false);
+      else setError(res.message);
+    }
+    busyRef.current = false;
+  };
+
+  const handleBlur = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      busyRef.current = false;
+      setEditing(false);
+      setError(null);
+      return;
+    }
+    void commit();
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        title="Click para editar"
+        onClick={(e) => {
+          e.stopPropagation();
+          setDraft(value);
+          setError(null);
+          setEditing(true);
+        }}
+        className="block w-full cursor-text rounded px-1 py-0.5 text-left hover:bg-accent"
+      >
+        {value || <span className="text-muted-foreground/60">—</span>}
+      </button>
+    );
+  }
+  return (
+    <span onClick={(e) => e.stopPropagation()} className="block">
+      <Input
+        autoFocus
+        value={draft}
+        disabled={saving}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setError(null);
+        }}
+        onBlur={handleBlur}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          else if (e.key === "Escape") {
+            cancelRef.current = true;
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        aria-invalid={error ? true : undefined}
+        title={error ?? "Enter guarda · Escape cancela · vacío = valor de Medusa"}
+        className={`h-7 px-1.5 ${error ? "border-destructive" : ""}`}
+      />
+    </span>
+  );
+}
+
+export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, sortDir }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState(q);
 
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const buildParams = useCallback(
+    (overrides: { q?: string; page?: number; sort?: string; dir?: string }) => {
+      const params = new URLSearchParams();
+      const nextQ = overrides.q ?? q;
+      if (nextQ.trim()) params.set("q", nextQ.trim());
+      params.set("page", String(overrides.page ?? page));
+      params.set("sort", overrides.sort ?? sortKey);
+      params.set("dir", overrides.dir ?? sortDir);
+      return params.toString();
+    },
+    [q, page, sortKey, sortDir],
+  );
 
-  const toggleSort = (key: SortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDir("asc");
-    } else {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    }
+  // El sort ordena en servidor (Supabase) sobre todos los datos, no solo la página.
+  const toggleSort = (key: CustomersSortKey) => {
+    const nextDir: CustomersSortDir =
+      sortKey === key && sortDir === "asc" ? "desc" : "asc";
+    startTransition(() => {
+      router.replace(`/customers?${buildParams({ page: 1, sort: key, dir: nextDir })}`);
+    });
   };
 
   // Sincroniza el input cuando el `q` commiteado cambia por navegación externa
@@ -54,57 +159,39 @@ export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
     if (query === q) return;
     const t = setTimeout(() => {
       startTransition(() => {
-        const params = new URLSearchParams();
-        if (query.trim()) params.set("q", query.trim());
-        params.set("page", "1");
-        router.replace(`/customers?${params.toString()}`);
+        router.replace(`/customers?${buildParams({ q: query, page: 1 })}`);
       });
     }, 300);
     return () => clearTimeout(t);
-  }, [query, q, router]);
+  }, [query, q, router, buildParams]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const goTo = (next: number) => {
-    const params = new URLSearchParams();
-    if (q.trim()) params.set("q", q.trim());
-    params.set("page", String(next));
     startTransition(() => {
-      router.replace(`/customers?${params.toString()}`);
+      router.replace(`/customers?${buildParams({ page: next })}`);
     });
   };
 
   const displayName = (c: CanonicalCustomer) =>
     [c.firstName, c.lastName].filter(Boolean).join(" ");
 
-  const sortedRows = useMemo(() => {
-    if (!sortKey) return rows;
-    const dir = sortDir === "asc" ? 1 : -1;
-    const valueOf = (c: CanonicalCustomer): string | number => {
-      switch (sortKey) {
-        case "email":
-          return c.email.toLowerCase();
-        case "name":
-          return displayName(c).toLowerCase();
-        case "phone":
-          return (c.phone ?? "").toLowerCase();
-        case "company":
-          return (c.companyName ?? "").toLowerCase();
-        case "orders":
-          return c.ordersCount;
-        case "total":
-          return c.totalSpent;
-      }
-    };
-    return [...rows].sort((a, b) => {
-      const va = valueOf(a);
-      const vb = valueOf(b);
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
-      return String(va).localeCompare(String(vb), undefined, { numeric: true }) * dir;
-    });
-  }, [rows, sortKey, sortDir]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = rows.find((r) => r.id === selectedId) ?? null;
 
-  const getSortIcon = (column: SortKey) => {
+  // Inline "Nombre": un solo input "Nombre Apellido" (parte por primer espacio).
+  const saveName = (c: EditableCustomer) => (full: string) => {
+    const parts = full.split(/\s+/).filter(Boolean);
+    return updateCustomerAction({
+      id: c.dbId,
+      values: {
+        first_name: parts[0] ?? "",
+        last_name: parts.slice(1).join(" "),
+      },
+    });
+  };
+
+  const getSortIcon = (column: CustomersSortKey) => {
     if (sortKey !== column)
       return <ChevronsUpDown className="size-3.5 opacity-40" aria-hidden />;
     return sortDir === "asc" ? (
@@ -114,7 +201,7 @@ export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
     );
   };
 
-  const sortButtonClass = (column: SortKey, alignRight = false) =>
+  const sortButtonClass = (column: CustomersSortKey, alignRight = false) =>
     `inline-flex items-center gap-1 rounded px-1 py-1 text-left font-medium hover:text-foreground ${
       alignRight ? "flex-row-reverse" : ""
     } ${sortKey === column ? "text-foreground" : ""}`;
@@ -188,15 +275,31 @@ export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedRows.map((c) => (
-                <TableRow key={c.id}>
+              {rows.map((c) => (
+                <TableRow
+                  key={c.id}
+                  onClick={() => setSelectedId(c.id)}
+                  className="cursor-pointer"
+                >
                   <TableCell className="px-4 py-4 font-medium">{c.email}</TableCell>
                   <TableCell className="px-4 py-4 text-muted-foreground">
-                    {displayName(c) || "—"}
+                    <EditableCell value={displayName(c)} onSave={saveName(c)} />
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-muted-foreground">{c.phone ?? "—"}</TableCell>
                   <TableCell className="px-4 py-4 text-muted-foreground">
-                    {c.companyName ?? "—"}
+                    <EditableCell
+                      value={c.phone ?? ""}
+                      onSave={(v) =>
+                        updateCustomerAction({ id: c.dbId, values: { phone: v } })
+                      }
+                    />
+                  </TableCell>
+                  <TableCell className="px-4 py-4 text-muted-foreground">
+                    <EditableCell
+                      value={c.companyName ?? ""}
+                      onSave={(v) =>
+                        updateCustomerAction({ id: c.dbId, values: { company_name: v } })
+                      }
+                    />
                   </TableCell>
                   <TableCell className="px-4 py-4 text-right tabular-nums">
                     {c.ordersCount}
@@ -206,7 +309,7 @@ export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
                   </TableCell>
                 </TableRow>
               ))}
-              {sortedRows.length === 0 && (
+              {rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                     {q ? `Sin resultados para “${q}”.` : "Sin customers en Medusa."}
@@ -241,6 +344,14 @@ export function CustomersView({ rows, totalCount, q, page, pageSize }: Props) {
           </Button>
         </div>
       </div>
+
+      {selected && (
+        <CustomerDrawer
+          key={selected.id}
+          customer={selected}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </div>
   );
 }

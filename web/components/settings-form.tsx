@@ -72,12 +72,14 @@ export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="medusaVersion">Versión</Label>
-                <Select name="medusaVersion" defaultValue="auto">
+                <Select
+                  name="medusaVersion"
+                  defaultValue={defaults.medusaVersion || "v1"}
+                >
                   <SelectTrigger id="medusaVersion">
-                    <SelectValue placeholder="Auto-detectar" />
+                    <SelectValue placeholder="Versión de Medusa" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="auto">Auto-detectar</SelectItem>
                     <SelectItem value="v1">v1</SelectItem>
                     <SelectItem value="v2">v2</SelectItem>
                   </SelectContent>

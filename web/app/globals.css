@@ -128,3 +128,13 @@
     @apply font-sans;
   }
 }
+
+/* Cinta de estado de enriquecimiento: brillo que recorre la barra. */
+@keyframes enrich-sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}

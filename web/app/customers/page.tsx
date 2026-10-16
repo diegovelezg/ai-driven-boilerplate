@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { CanonicalCustomer } from "@/lib/medusa";
-import { queryStoreCustomers, resolveStoreId } from "@/lib/customers-db";
+import type { EditableCustomer } from "@/lib/customers-db";
+import { parseCustomersSort, queryStoreCustomers, resolveStoreId } from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { pendingDomains } from "@/lib/enrich";
+import { countDuplicateEmails } from "@/lib/duplicates";
 import { CustomersView } from "./customers-view";
+import { EnrichmentControls } from "./enrichment-controls";
 import { SyncButton } from "./sync-button";
 
 export const instant = false;
@@ -15,7 +18,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
@@ -23,12 +26,15 @@ export default async function CustomersPage({
 
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
+  const sort = parseCustomersSort({ sort: sp.sort, dir: sp.dir });
 
-  let rows: CanonicalCustomer[] = [];
+  let rows: EditableCustomer[] = [];
   let totalCount = 0;
   let error: string | null = null;
   let page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1);
   let synced = false;
+  let pendingCount = 0;
+  let duplicateCount = 0;
 
   if (connected && dbReady) {
     try {
@@ -37,7 +43,9 @@ export default async function CustomersPage({
         error = "Tienda aún sin sincronizar. Presiona Sincronizar.";
       } else {
         synced = true;
-        const fetchPage = (p: number) => queryStoreCustomers(storeId, q, p, PAGE_SIZE);
+        pendingCount = (await pendingDomains(storeId)).length;
+        duplicateCount = await countDuplicateEmails(storeId);
+        const fetchPage = (p: number) => queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort);
         let res = await fetchPage(page);
         totalCount = res.totalCount;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -61,7 +69,22 @@ export default async function CustomersPage({
           <span className="text-xs text-muted-foreground">
             {!connected ? "sin conexión" : !dbReady ? "sin BD" : `${totalCount} en BD`}
           </span>
-          {connected && dbReady && <SyncButton />}
+          {connected && dbReady && (
+            <>
+              {synced && <EnrichmentControls pending={pendingCount} />}
+              {synced && duplicateCount > 0 && (
+                <Button
+                  render={<Link href="/customers/duplicates" />}
+                  nativeButton={false}
+                  variant="outline"
+                  size="sm"
+                >
+                  Duplicados ({duplicateCount})
+                </Button>
+              )}
+              <SyncButton />
+            </>
+          )}
         </span>
       </header>
 
@@ -71,7 +94,12 @@ export default async function CustomersPage({
             <p className="text-[13px] text-muted-foreground">
               Conecta Medusa con tu usuario admin para traer customers.
             </p>
-            <Button render={<Link href="/settings" />} variant="outline" size="sm">
+            <Button
+              render={<Link href="/settings" />}
+              nativeButton={false}
+              variant="outline"
+              size="sm"
+            >
               Ir a Settings
             </Button>
           </CardContent>
@@ -99,7 +127,7 @@ export default async function CustomersPage({
       )}
 
       {synced && !error && (
-        <CustomersView rows={rows} totalCount={totalCount} q={q} page={page} pageSize={PAGE_SIZE} />
+        <CustomersView rows={rows} totalCount={totalCount} q={q} page={page} pageSize={PAGE_SIZE} sortKey={sort.key} sortDir={sort.dir} />
       )}
     </div>
   );

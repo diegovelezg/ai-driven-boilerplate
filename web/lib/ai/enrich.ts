@@ -1,0 +1,96 @@
+import "server-only";
+import { getLlmConfig, type ModelRef } from "./llm-config";
+
+export interface FirmographicsResult {
+  companyName: string | null;
+  industry: string | null;
+  description: string | null;
+  size: string | null;
+  location: string | null;
+  confidence: number | null;
+  /** provider/model que respondió (para trazabilidad en `domains.model`). */
+  model: string;
+}
+
+const SYSTEM = `Eres un analista que extrae la ficha de una empresa a partir del texto de su web.
+Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
+{"company_name": string|null, "industry": string|null, "description": string|null, "size": string|null, "location": string|null, "confidence": number}
+Reglas:
+- "description": máximo 240 caracteres, 1-2 frases.
+- "size": usa "micro","pequeña","mediana" o "grande"; null si no es deducible.
+- "location": ciudad/país si aparece.
+- "confidence": número entre 0 y 1.
+- Si un dato no se deduce del texto, usa null. NO inventes.`;
+
+async function complete(
+  ref: ModelRef,
+  messages: Array<{ role: string; content: string }>,
+  temperature: number,
+  maxTokens: number,
+): Promise<string> {
+  const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
+  if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
+  const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: ref.model,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error(`${ref.provider}: respuesta vacía`);
+  }
+  return content;
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** Extrae firmográficos de un dominio a partir del texto de su web (primario → fallback). */
+export async function extractFirmographics(
+  domain: string,
+  text: string,
+): Promise<FirmographicsResult> {
+  const cfg = getLlmConfig("enrichment");
+  const messages = [
+    { role: "system", content: SYSTEM },
+    {
+      role: "user",
+      content: `Dominio: ${domain}\n\nTexto de la web (recortado):\n${text.slice(0, 6000)}`,
+    },
+  ];
+
+  let content: string;
+  let used: ModelRef;
+  try {
+    used = cfg.primary;
+    content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens);
+  } catch (e) {
+    if (!cfg.fallback) throw e;
+    console.warn(`[enrich] primario ${cfg.primary.model} falló; fallback a ${cfg.fallback.model}`);
+    used = cfg.fallback;
+    content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens);
+  }
+
+  const parsed = JSON.parse(content) as Record<string, unknown>;
+  return {
+    companyName: str(parsed.company_name),
+    industry: str(parsed.industry),
+    description: str(parsed.description),
+    size: str(parsed.size),
+    location: str(parsed.location),
+    confidence: typeof parsed.confidence === "number" ? parsed.confidence : null,
+    model: `${used.provider}/${used.model}`,
+  };
+}

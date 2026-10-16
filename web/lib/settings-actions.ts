@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { detectMedusaVersion, medusaLogin, testMedusa } from "@/lib/medusa";
+import { medusaLogin, testMedusa } from "@/lib/medusa";
 import type { MedusaVersion } from "@/lib/medusa";
 import { readConnections, writeConnections } from "@/lib/store";
 import type { Platform } from "@/lib/store";
@@ -34,18 +34,14 @@ export async function saveConnectionsAction(
   const medusaUrl = String(formData.get("medusaUrl") ?? "").trim();
   const email = String(formData.get("medusaEmail") ?? "").trim();
   const password = String(formData.get("medusaPassword") ?? "");
-  let version = String(formData.get("medusaVersion") ?? "auto") as MedusaVersion | "auto";
+  const version = String(formData.get("medusaVersion") ?? "") as MedusaVersion;
 
   if (!medusaUrl || !email || !password) {
     return { ok: false, message: "Falta URL, email o password" };
   }
 
-  if (version === "auto") {
-    const detected = await detectMedusaVersion(medusaUrl);
-    if (!detected) {
-      return { ok: false, message: "No pude detectar la versión: elígela manual abajo." };
-    }
-    version = detected;
+  if (version !== "v1" && version !== "v2") {
+    return { ok: false, message: "Elige la versión de Medusa (v1 o v2)" };
   }
 
   try {
