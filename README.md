@@ -60,16 +60,21 @@ Mapeo:
 - Dashboard Next.js (App Router) que lee desde BD (no del ecommerce en vivo): `/settings`,
   `/customers`.
 - Chat por cliente con LLM (streaming; config de modelos con primario + fallback).
+- Agente de retención con **ADK** (`@google/adk`): `LlmAgent` con tools read-only sobre la ficha/compras/empresa del customer. Modelo, esfuerzo y fallback desde `web/config/llm_models.json`; soporta proveedores **OpenAI estándar**, **Anthropic** y **Gemini** (failover entre proveedores vía `RoutedLlm`).
 - Perfiles de tienda, ediciones manuales de cliente, fingerprint.
+- RFM por quintiles + ciclo esperado en ficha (`expectedCycleDays`, `dueStatus`;
+  jerarquía cliente → tienda → arquetipo), solo lectura.
+- Set perfilador del tenant (investigator/sector/synthesizer/critic, aislado en
+  `web/lib/profiling/`) + taxonomía Shopify + brief sectorial cacheado.
+- Enriquecimiento por dominios + gate B2B en piloto.
 
 **No existe todavía:**
 
-- Motor RFM / intervalo de recompra.
+- Motor RFM persistido (cron 24h, `CustomerMarketStats`, vistas `churn_risk_view`).
 - Acciones propuestas (`ProposedAction`) y el loop de aprobación.
 - Despacho por WhatsApp/email.
-- Clasificación B2B/B2C y enriquecimiento.
 - Adaptador de **tupantalla** (primer caso).
-- Orquestación de agente (ADK) y canvas.
+- Canvas del agente.
 
 ## Fuera de alcance (por ahora)
 

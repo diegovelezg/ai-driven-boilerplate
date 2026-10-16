@@ -17,6 +17,7 @@ import { formatMoney } from "@/lib/medusa";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { MergeButton } from "./merge-button";
+import { MergeAllBar } from "./merge-all-button";
 
 export const instant = false;
 
@@ -66,6 +67,8 @@ export default async function DuplicatesPage() {
           <CardContent className="p-4 text-[13px] text-muted-foreground">{error}</CardContent>
         </Card>
       )}
+
+      {!error && <MergeAllBar totalGroups={groups.length} />}
 
       {!error && groups.length === 0 && (
         <Card>

@@ -1,0 +1,29 @@
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { toEditableCustomer } from "@/lib/customers-db";
+import { domainFromEmail } from "@/lib/domains";
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  if (!isSupabaseConfigured()) {
+    return Response.json({ error: "Supabase no configurado." }, { status: 500 });
+  }
+  const { id } = await params;
+  if (!id) return Response.json({ error: "Falta id." }, { status: 400 });
+
+  const db = getSupabase();
+  const { data, error } = await db.from("customers").select("*").eq("id", id).maybeSingle();
+  if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (!data) return Response.json({ error: "Customer no encontrado." }, { status: 404 });
+
+  const r = data as Record<string, unknown>;
+  const domain = domainFromEmail(String(r.email ?? ""));
+  let enriched = new Map<string, string>();
+  if (domain) {
+    const { data: d } = await db.from("domains").select("domain,company_name").eq("domain", domain).maybeSingle();
+    const name = (d?.company_name as string | undefined) ?? null;
+    if (name) enriched = new Map([[domain, name]]);
+  }
+  return Response.json({ customer: toEditableCustomer(r, enriched) });
+}

@@ -1,5 +1,5 @@
 import "server-only";
-import { getLlmConfig, type ModelRef } from "./llm-config";
+import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "./llm-config";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -17,24 +17,28 @@ async function postStream(
   temperature: number,
   maxTokens: number,
   signal?: AbortSignal,
+  reasoningEffort?: string | null,
+  jsonMode: "none" | "native" = "none",
 ): Promise<Response> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) {
     return new Response(`Falta ${ref.apiKeyEnv} en .env.local`, { status: 503 });
   }
+  const body: Record<string, unknown> = {
+    model: ref.model,
+    messages,
+    ...chatCompletionParams(ref.provider, ref.model, temperature, maxTokens),
+    stream: true,
+  };
+  if (jsonMode === "native") body.response_format = { type: "json_object" };
+  Object.assign(body, reasoningBody(ref.provider, ref.model, reasoningEffort));
   return fetch(chatUrl(ref), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: ref.model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      stream: true,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
 }
@@ -56,6 +60,8 @@ export async function streamChat(
     cfg.temperature,
     cfg.maxTokens,
     opts.signal,
+    cfg.reasoningEffort,
+    cfg.jsonMode,
   ).catch((e) => new Response(e instanceof Error ? e.message : "fetch failed", { status: 502 }));
 
   if ((!res.ok || !res.body) && cfg.fallback) {
@@ -68,6 +74,8 @@ export async function streamChat(
       cfg.temperature,
       cfg.maxTokens,
       opts.signal,
+      cfg.reasoningEffort,
+      cfg.jsonMode,
     ).catch(
       (e) => new Response(e instanceof Error ? e.message : "fetch failed", { status: 502 }),
     );

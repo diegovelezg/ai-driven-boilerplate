@@ -58,6 +58,17 @@ export function toEditableCustomer(
   const currency = (r.currency as string) ?? null;
   const ordersCount = Number(r.orders_count ?? 0);
   const totalSpent = Number(r.total_spent ?? 0);
+  // Desglose por moneda (sync lo escribe; fallback a la primaria pre-migración).
+  const rawStats = (r.stats_by_currency as Array<Record<string, unknown>> | null) ?? [];
+  const totalsByCurrency = rawStats.length > 0
+    ? rawStats.map((t) => ({
+        currency: String(t.currency ?? ""),
+        ordersCount: Number(t.ordersCount ?? 0),
+        totalSpent: Number(t.totalSpent ?? 0),
+      }))
+    : currency
+      ? [{ currency, ordersCount, totalSpent }]
+      : [];
   const overrides =
     (r.manual_edits as Record<string, unknown> | null) ?? {};
   const baseCustomerType = (r.customer_type as string) ?? "B2C";
@@ -83,7 +94,7 @@ export function toEditableCustomer(
     ordersCount,
     totalSpent,
     currency,
-    totalsByCurrency: currency ? [{ currency, ordersCount, totalSpent }] : [],
+    totalsByCurrency,
     base: {
       firstName: (r.first_name as string) ?? null,
       lastName: (r.last_name as string) ?? null,

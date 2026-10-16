@@ -1,9 +1,12 @@
 # AI Retention Engine — Blueprint de arquitectura (referencia)
 
 > **Estado:** documento de referencia/visión, no contrato de implementación.
-> La parte de ecommerce (Medusa) corresponde a la **Fase 1 ya implementada**; el resto
-> (motor RFM, clasificación B2B/B2C, enriquecimiento, acciones propuestas, ADK, canvas)
-> **aún no existe**. Ver el `README.md` raíz para el posicionamiento y el MVP actual.
+> La parte de ecommerce (Medusa) corresponde a la **Fase 1 ya implementada**; el RFM
+> existe a nivel lectura (quintiles + ciclo esperado en ficha, `web/lib/customer-data.ts`)
+> y el perfilado del tenant tiene set propio (`web/lib/profiling/`); **aún no existe**
+> la mitad escritura (cron RFM, `CustomerMarketStats`, `churn_risk_view`,
+> clasificación B2B/B2C total, acciones propuestas, ADK, canvas).
+> Ver el `README.md` raíz para el posicionamiento y el MVP actual.
 
 ## 1. High-Level Architecture Diagram
 

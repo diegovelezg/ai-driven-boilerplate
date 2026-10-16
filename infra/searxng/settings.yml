@@ -1,0 +1,13 @@
+# SearXNG local (prospector + enriquecimiento rescue).
+# Fuente versionada de este archivo: `infra/searxng/settings.yml` en el repo.
+# El contenedor lo monta read-only; nada en /tmp (tmpfs en Arch: se pierde al reboot).
+# NOTA: `secret_key` es solo para dev local (sesiones/CSRF del SearXNG propio).
+use_default_settings: true
+server:
+  secret_key: "f64019a013b39fe5a6f7047701b2a39a596748d0ccafdd985e649a905ab61907"
+  limiter: false
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json

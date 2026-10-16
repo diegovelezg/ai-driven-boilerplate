@@ -1,0 +1,279 @@
+// Lecturas de compras + firmográficos de un customer. Compartido por las API
+// routes y las tools del agente ADK (misma fuente de verdad).
+import { getSupabase } from "@/lib/supabase";
+import { isRealOrder } from "@/lib/medusa";
+import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
+import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
+
+export interface CustomerOrderItem {
+  title: string;
+  quantity: number;
+}
+
+export interface CustomerOrder {
+  date: string | null;
+  total: number;
+  currency: string | null;
+  items: CustomerOrderItem[];
+}
+
+export interface CustomerRfm {
+  recencyDays: number | null;
+  frequency: number;
+  monetary: number;
+  currency: string | null;
+  avgTicket: number;
+  r: number | null;
+  f: number | null;
+  m: number | null;
+  /** Segmento RFM simplificado: Nuevo|Campeón|Recurrente|Ocasional|En riesgo|Inactivo|Sin compras */
+  segment: string;
+  /** Ciclo esperado de recompra (días): mediana del cliente → ciclo de la tienda → default del arquetipo. */
+  expectedCycleDays: number | null;
+  /** De dónde salió el ciclo: cliente|tienda|arquetipo. */
+  cycleSource: "cliente" | "tienda" | "arquetipo" | null;
+  churnMultiplier: number | null;
+  /** Estado vs el ciclo esperado: al_dia|por_vencer|vencido. */
+  dueStatus: "al_dia" | "por_vencer" | "vencido" | null;
+  /** Días desde que venció (0 si aún no vence). */
+  overdueDays: number | null;
+}
+
+export interface CustomerFirmographics {
+  domain: string;
+  domainType: DomainType | "none";
+  enrichable: boolean;
+  enriched: boolean;
+  companyName: string | null;
+  industry: string | null;
+  description: string | null;
+  size: string | null;
+  location: string | null;
+  logoUrl: string | null;
+  sourceUrl: string | null;
+  confidence: number | null;
+  enrichedAt: string | null;
+}
+
+/** Mediana de intervalos entre compras (días). null si F<2 o sin fechas. */
+export function medianInterval(datesAsc: Date[]): number | null {
+  if (datesAsc.length < 2) return null;
+  // Sesiones: pedidos con <1d de separación son una sola compra en cuotas
+  // (mismo día / pagos partidos), no cadencia. Solo gaps entre sesiones cuentan.
+  const sessions: Date[] = [datesAsc[0]];
+  for (let i = 1; i < datesAsc.length; i += 1) {
+    const gap = (datesAsc[i].getTime() - sessions[sessions.length - 1].getTime()) / 86_400_000;
+    if (gap >= 1) sessions.push(datesAsc[i]);
+  }
+  if (sessions.length < 2) return null;
+  const gaps: number[] = [];
+  for (let i = 1; i < sessions.length; i += 1) {
+    gaps.push((sessions[i].getTime() - sessions[i - 1].getTime()) / 86_400_000);
+  }
+  gaps.sort((a, b) => a - b);
+  const mid = Math.floor(gaps.length / 2);
+  const med = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
+  return Math.max(1, Math.round(med));
+}
+
+/** Quintil 1-5 por ranking medio (empates promediados). n<=1 => 3 neutral. */
+function quintile(sortedAsc: number[], v: number): number {
+  const n = sortedAsc.length;
+  if (n <= 1) return 3;
+  const below = sortedAsc.filter((x) => x < v).length;
+  const equal = sortedAsc.filter((x) => x === v).length;
+  const rankMid = below + (equal - 1) / 2;
+  return Math.min(5, 1 + Math.floor((rankMid / (n - 1)) * 5));
+}
+
+function segment(r: number | null, f: number): string {
+  if (f === 0) return "Sin compras";
+  if (f === 1 && (r ?? 0) >= 4) return "Nuevo";
+  if ((r ?? 0) >= 4 && f >= 4) return "Campeón";
+  if ((r ?? 0) >= 3 && f >= 3) return "Recurrente";
+  if ((r ?? 5) <= 2 && f >= 3) return "En riesgo";
+  if ((r ?? 5) <= 2) return "Inactivo";
+  return "Ocasional";
+}
+
+export interface CustomerOrdersAndRfm {
+  orders: CustomerOrder[];
+  summary: CustomerRfm;
+}
+
+/** Compras (más reciente primero) + RFM vs la distribución de la tienda. */
+export async function loadCustomerOrdersAndRfm(
+  dbId: string,
+  orderLimit = 20,
+): Promise<CustomerOrdersAndRfm | null> {
+  const db = getSupabase();
+  const { data: customer, error: custErr } = await db
+    .from("customers")
+    .select("store_id,orders_count,total_spent,currency,last_order_at")
+    .eq("id", dbId)
+    .maybeSingle();
+  if (custErr || !customer) return null;
+
+  const [{ data: orders, error }, { data: population }] = await Promise.all([
+    db
+      .from("orders")
+      .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
+      .eq("customer_id", dbId)
+      .order("placed_at", { ascending: false })
+      // Traer de más: las test/canceladas se filtran abajo (misma regla que el sync).
+      .limit(Math.max(orderLimit * 3, 60)),
+    db
+      .from("customers")
+      .select("orders_count,total_spent,last_order_at")
+      .eq("store_id", customer.store_id as string)
+      .limit(5000),
+  ]);
+  if (error) throw new Error(error.message);
+
+  // Solo compras reales: misma regla que los agregados del sync
+  // (cabecera orders_count ↔ lista visibles, por construcción).
+  const realRows = ((orders as Array<Record<string, unknown>> | null) ?? []).filter((o) =>
+    isRealOrder({
+      status: (o.status as string) ?? null,
+      paymentStatus: (o.payment_status as string) ?? null,
+      isTest: Boolean(o.is_test),
+    }),
+  );
+  const orderRows: CustomerOrder[] = realRows.slice(0, orderLimit).map((o) => ({
+    date: (o.placed_at as string) ?? null,
+    total: Number(o.total_amount ?? 0),
+    currency: (o.currency as string) ?? null,
+    items: (((o.items_json as Array<Record<string, unknown>>) ?? []).slice(0, 5)).map((i) => ({
+      title: String(i.title ?? "—"),
+      quantity: Number(i.quantity ?? 0),
+    })),
+  }));
+
+  const frequency = Number(customer.orders_count ?? 0);
+  const monetary = Number(customer.total_spent ?? 0);
+  const currency = (customer.currency as string) ?? null;
+  const lastRaw = (customer.last_order_at as string) ?? (orderRows[0]?.date as string | null) ?? null;
+  const lastDate = lastRaw ? new Date(lastRaw) : null;
+  const recencyDays =
+    lastDate && !Number.isNaN(lastDate.getTime())
+      ? Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86_400_000))
+      : null;
+
+  const pop = ((population as Array<Record<string, unknown>>) ?? []).filter(
+    (p) => Number(p.orders_count ?? 0) > 0,
+  );
+  const fPop = pop.map((p) => Number(p.orders_count ?? 0)).sort((a, b) => a - b);
+  const mPop = pop.map((p) => Number(p.total_spent ?? 0)).sort((a, b) => a - b);
+  const rPop = pop
+    .map((p) => {
+      const d = p.last_order_at ? new Date(p.last_order_at as string) : null;
+      return d && !Number.isNaN(d.getTime())
+        ? Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000))
+        : null;
+    })
+    .filter((d): d is number => d !== null)
+    .sort((a, b) => a - b);
+
+  const f = frequency > 0 ? quintile(fPop, frequency) : null;
+  const m = frequency > 0 ? quintile(mPop, monetary) : null;
+  const r = recencyDays !== null && frequency > 0 ? 6 - quintile(rPop, recencyDays) : null;
+
+  // Ciclo esperado: mediana del cliente → ciclo declarado de la tienda →
+  // default del arquetipo. El perfil del tenant por fin alimenta el motor.
+  const orderDatesAsc = realRows
+    .map((o) => (o.placed_at ? new Date(o.placed_at as string) : null))
+    .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const customerMedian = medianInterval(orderDatesAsc);
+  const storeId = customer.store_id as string;
+  const tenantProfile = await getStoreProfile(storeId).catch(() => null);
+  const tenantCycle = tenantProfile?.repurchaseCycleDays ?? null;
+  const archetypeCycle = tenantProfile
+    ? (ARCHETYPES[tenantProfile.archetype]?.defaultCycleDays ?? null)
+    : null;
+  const expectedCycleDays = customerMedian ?? tenantCycle ?? archetypeCycle;
+  const cycleSource =
+    customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
+  const churnMultiplier = tenantProfile?.churnMultiplier ?? 1.25;
+  const dueStatus =
+    recencyDays === null || expectedCycleDays === null
+      ? null
+      : recencyDays > expectedCycleDays * churnMultiplier
+        ? "vencido"
+        : recencyDays > expectedCycleDays
+          ? "por_vencer"
+          : "al_dia";
+  const overdueDays =
+    recencyDays === null || expectedCycleDays === null
+      ? null
+      : Math.max(0, recencyDays - expectedCycleDays);
+
+  return {
+    orders: orderRows,
+    summary: {
+      recencyDays,
+      frequency,
+      monetary,
+      currency,
+      avgTicket: frequency > 0 ? Math.round(monetary / frequency) : 0,
+      r,
+      f,
+      m,
+      segment: segment(r, frequency),
+      expectedCycleDays,
+      cycleSource,
+      churnMultiplier,
+      dueStatus,
+      overdueDays,
+    },
+  };
+}
+
+/** Firmográficos de la empresa del customer (enriquecimiento por dominio). */
+export async function loadCustomerFirmographics(
+  dbId: string,
+): Promise<CustomerFirmographics | null> {
+  const db = getSupabase();
+  const { data: customer, error } = await db
+    .from("customers")
+    .select("email")
+    .eq("id", dbId)
+    .maybeSingle();
+  if (error || !customer) return null;
+
+  const domain = domainFromEmail(String(customer.email ?? ""));
+  const cls = classifyDomain(domain);
+  const base: CustomerFirmographics = {
+    domain,
+    domainType: cls.type,
+    enrichable: cls.enrichable,
+    enriched: false,
+    companyName: null,
+    industry: null,
+    description: null,
+    size: null,
+    location: null,
+    logoUrl: null,
+    sourceUrl: null,
+    confidence: null,
+    enrichedAt: null,
+  };
+  if (!cls.enrichable) return base;
+
+  const { data: row } = await db.from("domains").select("*").eq("domain", domain).maybeSingle();
+  if (!row) return base;
+
+  return {
+    ...base,
+    enriched: true,
+    companyName: (row.company_name as string) ?? null,
+    industry: (row.industry as string) ?? null,
+    description: (row.description as string) ?? null,
+    size: (row.size as string) ?? null,
+    location: (row.location as string) ?? null,
+    logoUrl: (row.logo_url as string) ?? null,
+    sourceUrl: (row.source_url as string) ?? null,
+    confidence: row.confidence == null ? null : Number(row.confidence),
+    enrichedAt: (row.enriched_at as string) ?? null,
+  };
+}

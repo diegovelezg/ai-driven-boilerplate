@@ -1,5 +1,8 @@
 import "server-only";
-import { getLlmConfig, type ModelRef } from "./llm-config";
+import { createLogger } from "../log";
+import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "./llm-config";
+
+const log = createLogger("enrichment");
 
 export interface FirmographicsResult {
   companyName: string | null;
@@ -27,20 +30,23 @@ async function complete(
   messages: Array<{ role: string; content: string }>,
   temperature: number,
   maxTokens: number,
+  reasoningEffort?: string | null,
+  jsonMode: "none" | "native" = "native",
 ): Promise<string> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
   const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const body: Record<string, unknown> = {
+    model: ref.model,
+    messages,
+    ...chatCompletionParams(ref.provider, ref.model, temperature, maxTokens),
+  };
+  if (jsonMode === "native") body.response_format = { type: "json_object" };
+  Object.assign(body, reasoningBody(ref.provider, ref.model, reasoningEffort));
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: ref.model,
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-      response_format: { type: "json_object" },
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -75,12 +81,12 @@ export async function extractFirmographics(
   let used: ModelRef;
   try {
     used = cfg.primary;
-    content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens);
+    content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode);
   } catch (e) {
     if (!cfg.fallback) throw e;
-    console.warn(`[enrich] primario ${cfg.primary.model} falló; fallback a ${cfg.fallback.model}`);
+    log(`capa=extract primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
     used = cfg.fallback;
-    content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens);
+    content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode);
   }
 
   const parsed = JSON.parse(content) as Record<string, unknown>;

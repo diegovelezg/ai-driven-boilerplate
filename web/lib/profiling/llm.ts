@@ -1,0 +1,55 @@
+// Helper LLM del set perfilador: un proceso de llm_models.json, JSON nativo,
+// primario → fallback. Sin texto libre (los agentes devuelven veredictos).
+import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { createProfilerLogger } from "./log";
+
+const log = createProfilerLogger();
+
+async function once(ref: ModelRef, proc: string, system: string, user: string): Promise<string> {
+  const cfg = getLlmConfig(proc);
+  const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
+  if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
+  const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  // deepseek con thinking activado se come el presupuesto en reasoning y
+  // trunca el JSON (empírico x2): el fallback va sin thinking, tonto pero vivo.
+  const effort = ref.provider === "deepseek" ? null : cfg.reasoningEffort;
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: ref.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      ...chatCompletionParams(ref.provider, ref.model, cfg.temperature, cfg.maxTokens),
+      response_format: { type: "json_object" },
+      ...reasoningBody(ref.provider, ref.model, effort),
+    }),
+  });
+  if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const data = await res.json();
+  const choice = data?.choices?.[0] ?? {};
+  const c = choice?.message?.content;
+  if (typeof c !== "string" || !c.trim()) {
+    log(`${proc} respuesta vacía: finish=${choice?.finish_reason ?? "?"} keys=${Object.keys(choice?.message ?? {}).join(",")} refusal=${JSON.stringify(choice?.message?.refusal ?? null).slice(0, 120)} usage=${JSON.stringify(data?.usage?.completion_tokens_details ?? null)}`);
+    throw new Error(`${ref.provider}: respuesta vacía`);
+  }
+  return c;
+}
+
+/** Llamada JSON a un proceso (primario → fallback). Lanza si ambos fallan. */
+export async function completeProcessJson(
+  proc: string,
+  system: string,
+  user: string,
+): Promise<string> {
+  const cfg = getLlmConfig(proc);
+  try {
+    return await once(cfg.primary, proc, system, user);
+  } catch (e) {
+    log(`${proc} primario ${cfg.primary.provider}/${cfg.primary.model} falló (${e instanceof Error ? e.message : e})`);
+    if (!cfg.fallback) throw e;
+    return await once(cfg.fallback, proc, system, user);
+  }
+}

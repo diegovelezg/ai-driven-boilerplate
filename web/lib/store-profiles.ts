@@ -88,6 +88,12 @@ export const ARCHETYPES: Record<ArchetypeId, ArchetypeDef> = {
 export interface StoreProfile {
   storeId: string;
   businessModel: BusinessModel;
+  /** Vertical con las palabras del agente (verdad primaria). */
+  verticalDetected: string | null;
+  /** Nodo Shopify Standard Product Taxonomy (null = sin mapeo honesto). */
+  taxonomyId: string | null;
+  /** Granularidad del comprador deducida por el perfilador. */
+  buyerType: string | null;
   industry: string | null;
   catalogType: CatalogType | null;
   repurchaseCycleDays: number | null;
@@ -201,6 +207,9 @@ function toProfile(storeId: string, r: Record<string, unknown>): StoreProfile {
   return {
     storeId,
     businessModel: (r.business_model as BusinessModel) ?? "b2c",
+    verticalDetected: (r.vertical_detected as string) ?? null,
+    taxonomyId: (r.taxonomy_id as string) ?? null,
+    buyerType: (r.buyer_type as string) ?? null,
     industry: (r.industry as string) ?? null,
     catalogType: (r.catalog_type as CatalogType) ?? null,
     repurchaseCycleDays: (r.repurchase_cycle_days as number) ?? null,
@@ -232,6 +241,9 @@ export async function upsertStoreProfile(p: StoreProfile): Promise<void> {
     {
       store_id: p.storeId,
       business_model: p.businessModel,
+      vertical_detected: p.verticalDetected,
+      taxonomy_id: p.taxonomyId,
+      buyer_type: p.buyerType,
       industry: p.industry,
       catalog_type: p.catalogType,
       repurchase_cycle_days: p.repurchaseCycleDays,

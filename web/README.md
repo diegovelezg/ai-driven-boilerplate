@@ -41,7 +41,19 @@ Migración fuente de verdad: `supabase/migrations/20261016000000_phase1_multiten
 - `customers` con `source`: `ecommerce` (upsert en sync) o `local` (intacto, nunca borrado)
 - `orders` con moneda **original** + FKs a channel/market + país crudo — nunca se suman monedas distintas
 
-Detalle del diseño en `README.md` (raíz), secciones 2 y 5. Fase 2 (pendiente): `customer_market_stats` + motor RFM.
+Detalle del diseño en `README.md` (raíz), secciones 2 y 5. Fase 2 (pendiente): `customer_market_stats` + cron RFM + vistas (`churn_risk_view`). Ya existe a nivel lectura: quintiles + ciclo esperado en ficha y set perfilador (`lib/profiling/`).
+
+## SearXNG local (prospector + rescue de enriquecimiento)
+
+```bash
+# Una vez (desde la raíz del repo; settings versionado en infra/searxng/):
+docker run -d --name searxng --restart unless-stopped -p 8888:8080 \
+  -v $PWD/infra/searxng/settings.yml:/etc/searxng/settings.yml:ro \
+  searxng/searxng:latest
+# SEARXNG_URL=http://localhost:8888 (default en lib/prospect.ts; override en .env.local)
+```
+
+No montar desde `/tmp` (tmpfs en Arch: se pierde al reboot aunque el contenedor tenga `--restart`).
 
 ## Comandos
 

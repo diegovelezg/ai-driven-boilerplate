@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Building2, ExternalLink, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -406,6 +407,39 @@ function ScoreBadge({ axis, score }: { axis: "R" | "F" | "M"; score: number | nu
   );
 }
 
+function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
+  if (orders.length === 0) return null;
+  const chrono = [...orders].reverse();
+  const max = Math.max(...chrono.map((o) => o.total), 1);
+  const first = chrono[0].date?.slice(0, 10) ?? "";
+  const last = chrono[chrono.length - 1].date?.slice(0, 10) ?? "";
+  return (
+    <div>
+      <div
+        className="flex h-32 items-end gap-1.5"
+        role="img"
+        aria-label={`Historial de ${orders.length} compras`}
+      >
+        {chrono.map((o, i) => (
+          <div
+            key={i}
+            title={`${o.date ? o.date.slice(0, 10) : "s/f"}: ${formatMoney(o.total, o.currency)}`}
+            style={{ height: `${Math.max(6, Math.round((o.total / max) * 100))}%` }}
+            className="min-w-0 flex-1 rounded-t bg-primary/70 transition-colors hover:bg-primary"
+          />
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
+        <span>{first}</span>
+        <span>
+          {orders.length} compra{orders.length === 1 ? "" : "s"}
+        </span>
+        <span>{last}</span>
+      </div>
+    </div>
+  );
+}
+
 function ComprasTab({ dbId }: { dbId: string }) {
   const [orders, setOrders] = useState<CustomerOrder[] | null>(null);
   const [summary, setSummary] = useState<CustomerRfm | null>(null);
@@ -444,41 +478,68 @@ function ComprasTab({ dbId }: { dbId: string }) {
           : `hace ${summary.recencyDays} días`;
 
   return (
-    <div className="grid gap-6 px-8 py-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-xl font-semibold tabular-nums">
-              {formatMoney(summary.monetary, summary.currency)}
-              <ScoreBadge axis="M" score={summary.m} />
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Compras</p>
-            <p className="text-xl font-semibold tabular-nums">
-              {summary.frequency}
-              <ScoreBadge axis="F" score={summary.f} />
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Ticket prom.</p>
-            <p className="text-xl font-semibold tabular-nums">
-              {formatMoney(summary.avgTicket, summary.currency)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Última compra</p>
-            <p className="text-xl font-semibold">
-              {recencyLabel}
-              <ScoreBadge axis="R" score={summary.r} />
-            </p>
-          </div>
-        </div>
+    <div className="grid gap-5 px-8 py-6">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {[
+          {
+            label: "Total",
+            value: formatMoney(summary.monetary, summary.currency),
+            score: <ScoreBadge axis="M" score={summary.m} />,
+          },
+          {
+            label: "Compras",
+            value: String(summary.frequency),
+            score: <ScoreBadge axis="F" score={summary.f} />,
+          },
+          {
+            label: "Ticket prom.",
+            value: formatMoney(summary.avgTicket, summary.currency),
+            score: null,
+          },
+          {
+            label: "Última compra",
+            value: recencyLabel,
+            score: <ScoreBadge axis="R" score={summary.r} />,
+          },
+        ].map((s) => (
+          <Card key={s.label}>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs text-muted-foreground">{s.label}</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums">
+                {s.value}
+                {s.score}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline" className="text-[13px] font-normal" title="Segmento RFM simplificado">
           {summary.segment}
         </Badge>
+        {summary.expectedCycleDays !== null && summary.expectedCycleDays !== undefined && (
+          <span
+            className="text-xs text-muted-foreground tabular-nums"
+            title={`Ciclo esperado cada ${summary.expectedCycleDays}d (fuente: ${summary.cycleSource ?? "—"}) × ${summary.churnMultiplier ?? 1.25}`}
+          >
+            cada ~{summary.expectedCycleDays}d
+            {summary.cycleSource === "cliente"
+              ? " (su ritmo)"
+              : summary.cycleSource === "tienda"
+                ? " (ritmo tienda)"
+                : " (arquetipo)"}
+            {summary.dueStatus === "vencido" && summary.overdueDays !== null
+              ? ` · vencido hace ${summary.overdueDays}d`
+              : summary.dueStatus === "por_vencer"
+                ? " · por vencer"
+                : summary.dueStatus === "al_dia"
+                  ? " · al día"
+                  : ""}
+          </span>
+        )}
       </div>
+
+      <PurchaseBars orders={orders} />
 
       {orders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
@@ -520,11 +581,13 @@ function ComprasTab({ dbId }: { dbId: string }) {
 export function CustomerDrawer({
   customer,
   onClose,
+  initialTab = "datos",
 }: {
   customer: EditableCustomer;
   onClose: () => void;
+  initialTab?: "datos" | "compras" | "chat";
 }) {
-  const [tab, setTab] = useState<"datos" | "compras" | "chat">("datos");
+  const [tab, setTab] = useState<"datos" | "compras" | "chat">(initialTab);
 
   const displayName = [customer.firstName, customer.lastName].filter(Boolean).join(" ");
   const initials = (displayName || customer.email)

@@ -1,0 +1,67 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+
+type Op = (id: string) => Promise<{ ok: boolean; message: string }>;
+
+/** Par Aprobar/Rechazar genérico (acciones y leads). */
+export function ApprovePair({
+  id,
+  onApprove,
+  onReject,
+}: {
+  id: string;
+  onApprove: Op;
+  onReject: Op;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = async (fn: Op) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await fn(id);
+      setMsg(r.message);
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="flex items-center gap-2">
+      <Button size="sm" disabled={busy} onClick={() => run(onApprove)}>
+        Aprobar
+      </Button>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => run(onReject)}>
+        Rechazar
+      </Button>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
+export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onDismiss(id);
+          router.refresh();
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      Descartar
+    </Button>
+  );
+}

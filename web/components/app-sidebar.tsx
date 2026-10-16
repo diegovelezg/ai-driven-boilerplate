@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Settings,
-  ShoppingBag,
   Users,
 } from "lucide-react";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -29,7 +28,6 @@ const nav = [
   { href: "/review", label: "Review Inbox", icon: Inbox, badge: "14" },
   { href: "/chat", label: "Chat", icon: MessagesSquare },
   { href: "/customers", label: "Customers", icon: Users },
-  { href: "/campaigns", label: "Campaigns", icon: ShoppingBag },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

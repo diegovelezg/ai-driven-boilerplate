@@ -21,6 +21,12 @@ export type ArchetypeId =
 
 export interface DescriptionInterpretation {
   businessModel: BusinessModel | null;
+  /** Vertical con las palabras del agente/investigación (verdad primaria). */
+  vertical: string | null;
+  /** Quién compra, en granularidad del perfilador (puede ser null). */
+  buyerType: string | null;
+  /** true = el merchant dijo que el ciclo varía/no sabe (null respondido, no hueco). */
+  cycleUnknown: boolean;
   industry: string | null;
   catalogType: CatalogType | null;
   archetype: ArchetypeId | null;
@@ -108,6 +114,9 @@ function parseCycleDays(text: string): number | null {
 export function interpretBusinessDescription(raw: string): DescriptionInterpretation {
   const empty: DescriptionInterpretation = {
     businessModel: null,
+    vertical: null,
+    buyerType: null,
+    cycleUnknown: false,
     industry: null,
     catalogType: null,
     archetype: null,
@@ -197,6 +206,9 @@ export function interpretBusinessDescription(raw: string): DescriptionInterpreta
 
   return {
     businessModel,
+    vertical: industry,
+    buyerType: businessModel === "b2b" ? "empresa" : businessModel === "b2c" ? "persona" : null,
+    cycleUnknown: false,
     industry,
     catalogType,
     archetype,

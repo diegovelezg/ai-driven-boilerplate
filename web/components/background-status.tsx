@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, RefreshCw, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
+import { Check, ListChecks, PenLine, Radar, RefreshCw, Send, TrendingUp, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { getBackgroundStatusAction } from "@/lib/background-actions";
 import type { BackgroundRun } from "@/lib/background";
 
@@ -36,11 +36,18 @@ export function useBackground(): BackgroundCtxValue {
 const ICONS: Record<string, LucideIcon> = {
   enrichment: Wand2,
   sync: RefreshCw,
+  scout: Radar,
+  strategist: ListChecks,
+  copywriter: PenLine,
+  dispatcher: Send,
+  analyst: TrendingUp,
+  prospect: Wand2,
 };
 
 const DISMISS_KEY = "background:dismissedRun";
 const STALE_MS = 20 * 60 * 1000;
 const AUTO_HIDE_MS = 5000;
+const ERROR_HIDE_MS = 15000;
 
 /**
  * Cinta global de procesos en segundo plano (SSOT). Muestra el estado de la
@@ -98,12 +105,13 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   const finished = !!run && (!running || stale);
   const succeeded = !!run && !running && !stale && run.status === "done";
 
-  // Terminó con éxito: se oculta sola a los pocos segundos (no persiste si ya cumplió).
+  // Terminó (éxito o error): se oculta sola — el error aguanta más para
+  // alcanzar a leerse, pero también desaparece sin pedir la X.
   useEffect(() => {
-    if (!succeeded) return;
-    const t = setTimeout(dismiss, AUTO_HIDE_MS);
+    if (!finished) return;
+    const t = setTimeout(dismiss, succeeded ? AUTO_HIDE_MS : ERROR_HIDE_MS);
     return () => clearTimeout(t);
-  }, [succeeded, dismiss]);
+  }, [finished, succeeded, dismiss]);
 
   const total = run?.total ?? 0;
   const processed = run?.processed ?? 0;

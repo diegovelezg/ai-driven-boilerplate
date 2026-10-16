@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -13,13 +14,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { saveTenantProfileAction } from "@/lib/profile-actions";
-import {
-  interpretBusinessDescription,
-  type DescriptionInterpretation,
-} from "@/lib/profile-interpreter";
+import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
+import { ProfileChat } from "@/components/profile-chat";
+import { VERTICALS, verticalName } from "@/lib/taxonomy";
 import {
   ARCHETYPES,
-  INDUSTRIES,
   type ArchetypeId,
   type BusinessModel,
   type CatalogType,
@@ -46,20 +45,23 @@ const MODEL_DEFAULT_ARCHETYPE: Record<BusinessModel, ArchetypeId> = {
   hybrid: "hibrido",
 };
 
-const TEXTAREA_CLASS =
-  "min-h-28 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50";
-
 export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   const [state, action, pending] = useActionState(saveTenantProfileAction, null);
   const [step, setStep] = useState<1 | 2>(profile ? 2 : 1);
 
-  // Entrada orgánica
+  // Descripción acumulada del chat (se guarda con el perfil).
   const [description, setDescription] = useState(profile?.description ?? "");
   const [reading, setReading] = useState<DescriptionInterpretation | null>(null);
 
   // Confirmación visible
   const [model, setModel] = useState<BusinessModel>(profile?.businessModel ?? suggestion.businessModel);
   const [industry, setIndustry] = useState<string | null>(profile?.industry ?? null);
+  // Verdad del agente (primaria) + mapeo Shopify (derivado, nullable).
+  const [verticalDetected, setVerticalDetected] = useState<string | null>(
+    profile?.verticalDetected ?? null,
+  );
+  const [taxonomyId, setTaxonomyId] = useState<string | null>(profile?.taxonomyId ?? null);
+  const [buyerType, setBuyerType] = useState<string | null>(profile?.buyerType ?? null);
 
   // Derivado por detrás (no se muestra; lo usa el motor de churn)
   const [archetype, setArchetype] = useState<ArchetypeId>(profile?.archetype ?? suggestion.archetype);
@@ -77,6 +79,10 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   const [confidence, setConfidence] = useState<"alta" | "media" | "baja" | null>(
     profile?.interpretationConfidence ?? null,
   );
+  const [criticInfo, setCriticInfo] = useState<{
+    verdict: "accept" | "reject";
+    reasons: string[];
+  } | null>(null);
 
   if (!storeId) {
     return (
@@ -91,22 +97,42 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     );
   }
 
-  const applyInterpretation = (r: DescriptionInterpretation) => {
+  const applyInterpretation = (
+    r: DescriptionInterpretation & { taxonomyId?: string | null },
+    fullDescription?: string,
+  ) => {
     setReading(r);
+    if (fullDescription !== undefined) setDescription(fullDescription);
     const m = r.businessModel ?? model;
     const a = (r.archetype && r.businessModel ? r.archetype : MODEL_DEFAULT_ARCHETYPE[m]);
     setModel(m);
     setArchetype(a);
-    setCompanyRequired(ARCHETYPES[a].companyRequired);
+    setCompanyRequired(r.companyRequired || ARCHETYPES[a].companyRequired);
     setMult(String(ARCHETYPES[a].defaultMultiplier));
-    if (r.industry) setIndustry(r.industry);
+    if (r.vertical) setVerticalDetected(r.vertical);
+    if (r.buyerType) setBuyerType(r.buyerType);
+    if (r.taxonomyId) {
+      setTaxonomyId(r.taxonomyId);
+      setIndustry(verticalName(r.taxonomyId));
+    } else if (r.industry) {
+      setIndustry(r.industry);
+    }
     if (r.catalogType) setCatalog(r.catalogType);
     if (r.cycleDays) setCycle(String(r.cycleDays));
     setConfidence(r.confidence);
     setSource("sugerido");
   };
 
-  const interpret = () => applyInterpretation(interpretBusinessDescription(description));
+  // El chat propone, el set enriquece, el humano confirma: recién ahí se aplica y se avanza.
+  const handleChatConfirm = (
+    proposal: DescriptionInterpretation & { taxonomyId?: string | null },
+    fullDescription: string,
+    info?: { criticVerdict: "accept" | "reject"; criticReasons: string[] },
+  ) => {
+    applyInterpretation(proposal, fullDescription);
+    setCriticInfo(info ? { verdict: info.criticVerdict, reasons: info.criticReasons } : null);
+    setStep(2);
+  };
 
   const useDataSignal = () => {
     setModel(suggestion.businessModel);
@@ -115,6 +141,12 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     setMult(String(ARCHETYPES[suggestion.archetype].defaultMultiplier));
     setSource("sugerido");
     setStep(2);
+  };
+
+  const onTaxonomyChange = (v: string | null) => {
+    setTaxonomyId(v || null);
+    setIndustry(verticalName(v || null));
+    setSource("manual");
   };
 
   const onModelChange = (v: BusinessModel) => {
@@ -133,12 +165,15 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     }
   };
 
-  const canContinue = description.trim().length >= 10;
-
   return (
     <form action={action} className="flex w-full max-w-2xl flex-col gap-4">
-      {/* Todo lo derivado viaja oculto: el arquetipo se trabaja por detrás. */}
+      {/* Todo lo derivado viaja oculto (fuera del condicional de paso: el submit
+          ocurre en el paso 2 pero la evidencia se acumula en el paso 1). */}
+      <input type="hidden" name="description" value={description} />
       <input type="hidden" name="businessModel" value={model} />
+      <input type="hidden" name="verticalDetected" value={verticalDetected ?? ""} />
+      <input type="hidden" name="taxonomyId" value={taxonomyId ?? ""} />
+      <input type="hidden" name="buyerType" value={buyerType ?? ""} />
       <input type="hidden" name="industry" value={industry ?? ""} />
       <input type="hidden" name="catalogType" value={catalog ?? ""} />
       <input type="hidden" name="archetype" value={archetype} />
@@ -162,77 +197,29 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
           <CardDescription>
             {step === 1
               ? "Cuéntanos qué vendes y a quién, con tus palabras."
-              : "Confirma estos dos datos — del resto nos encargamos nosotros."}
+              : "Confirma lo que generó el set — ajusta lo que sea antes de guardar."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {step === 1 ? (
+            <ProfileChat
+              storeId={storeId}
+              onConfirm={handleChatConfirm}
+              onUseDataSignal={useDataSignal}
+            />
+          ) : (
             <>
-              <div className="grid gap-1.5">
-                <Label htmlFor="description">Describe tu negocio</Label>
-                <textarea
-                  id="description"
-                  name="description"
-                  className={TEXTAREA_CLASS}
-                  rows={4}
-                  placeholder="Ej. Tostaduría en Lima: vendemos café en grano a oficinas por suscripción mensual, y también a personas en tienda online…"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </div>
-
-              {reading && (
+              {criticInfo && criticInfo.verdict === "reject" && criticInfo.reasons.length > 0 && (
                 <div className="rounded-lg border border-input p-3 text-xs">
-                  <p className="font-medium">
-                    Lo que entendí{confidence ? ` (confianza ${confidence})` : ""}:
-                  </p>
-                  {reading.understood.length > 0 ? (
-                    <ul className="mt-1 list-disc pl-4 text-muted-foreground">
-                      {reading.understood.map((u) => (
-                        <li key={u}>{u}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-1 text-muted-foreground">
-                      No pude extraer mucho — prueba con qué vendes, a quién y cada cuánto recompran.
-                    </p>
-                  )}
-                  {reading.questions.length > 0 && (
-                    <>
-                      <p className="mt-2 font-medium">Para afinar:</p>
-                      <ul className="mt-1 list-disc pl-4 text-muted-foreground">
-                        {reading.questions.map((q) => (
-                          <li key={q}>{q}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+                  <p className="font-medium">El revisor corrigió la propuesta:</p>
+                  <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+                    {criticInfo.reasons.map((x) => (
+                      <li key={x}>{x}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" variant="outline" onClick={interpret} disabled={!canContinue}>
-                  Interpretar
-                </Button>
-                <Button type="button" onClick={() => { if (!reading) interpret(); setStep(2); }} disabled={!canContinue}>
-                  Continuar
-                </Button>
-                <button
-                  type="button"
-                  onClick={useDataSignal}
-                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                >
-                  Omitir y usar datos de la tienda
-                </button>
-              </div>
-              {!canContinue && (
-                <p className="text-xs text-muted-foreground">
-                  Escribe al menos una frase (10 caracteres) para continuar.
-                </p>
-              )}
-            </>
-          ) : (
-            <>
               <div className="grid gap-1.5">
                 <Label htmlFor="businessModel">¿A quién le vendes?</Label>
                 <Select value={model} onValueChange={(v) => onModelChange(v as BusinessModel)}>
@@ -250,20 +237,89 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
               </div>
 
               <div className="grid gap-1.5">
-                <Label htmlFor="industry">¿A qué se dedica tu negocio?</Label>
-                <Select value={industry ?? ""} onValueChange={(v) => { setIndustry(v || null); setSource("manual"); }}>
-                  <SelectTrigger id="industry">
+                <Label htmlFor="taxonomy">¿A qué se dedica tu negocio?</Label>
+                {verticalDetected && (
+                  <p className="text-xs text-muted-foreground">
+                    El agente detectó: {verticalDetected}.
+                  </p>
+                )}
+                <Select value={taxonomyId ?? ""} onValueChange={onTaxonomyChange}>
+                  <SelectTrigger id="taxonomy">
                     <SelectValue placeholder="Elegir…" />
                   </SelectTrigger>
                   <SelectContent>
-                    {INDUSTRIES.map((i) => (
-                      <SelectItem key={i} value={i}>
-                        {i}
+                    {VERTICALS.map((v) => (
+                      <SelectItem key={v.taxonomy_id} value={v.taxonomy_id}>
+                        {v.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Elegido: {verticalName(taxonomyId) ?? "sin mapear (vale tu texto libre)"}.
+                </p>
               </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="buyerType">¿Quién te compra?</Label>
+                <Input
+                  id="buyerType"
+                  value={buyerType ?? ""}
+                  maxLength={60}
+                  onChange={(e) => {
+                    setBuyerType(e.target.value || null);
+                    setSource("manual");
+                  }}
+                  placeholder="Ej. negocio pequeño anunciante"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="cycle">Recompra cada (días)</Label>
+                  <Input
+                    id="cycle"
+                    inputMode="numeric"
+                    value={cycle}
+                    onChange={(e) => setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+                    placeholder={`Auto (${ARCHETYPES[archetype].defaultCycleDays}d)`}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Propuesto por el set; vacío = auto del arquetipo.
+                  </p>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="mult">Multiplicador de churn</Label>
+                  <Input
+                    id="mult"
+                    inputMode="decimal"
+                    value={mult}
+                    onChange={(e) => setMult(e.target.value.replace(/[^0-9.]/g, "").slice(0, 4))}
+                    placeholder="1.25"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Alerta cuando inactividad &gt; ciclo × esto (1.0–5.0).
+                  </p>
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm" htmlFor="companyRequired">
+                <input
+                  id="companyRequired"
+                  type="checkbox"
+                  checked={companyRequired}
+                  onChange={(e) => {
+                    setCompanyRequired(e.target.checked);
+                    setSource("manual");
+                  }}
+                  className="size-4 accent-primary"
+                />
+                Mis clientes son empresas (pedir RUC/empresa)
+              </label>
+
+              <p className="text-xs text-muted-foreground">
+                Patrón que usará el motor: {ARCHETYPES[archetype].label}.
+              </p>
 
               {reading && reading.understood.length > 0 && (
                 <p className="text-xs text-muted-foreground">

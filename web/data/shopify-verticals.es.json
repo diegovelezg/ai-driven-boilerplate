@@ -1,0 +1,137 @@
+{
+ "version": "2026-08",
+ "locale": "es",
+ "source": "Shopify Standard Product Taxonomy (MIT) — snapshot de verticales raíz. Refrescar con el release: https://github.com/Shopify/product-taxonomy/releases/latest/download/categories.es.json.gz",
+ "verticals": [
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/ap",
+   "prefix": "ap",
+   "name": "Productos para mascotas y animales"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/aa",
+   "prefix": "aa",
+   "name": "Ropa y accesorios"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/ae",
+   "prefix": "ae",
+   "name": "Arte y ocio"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/bt",
+   "prefix": "bt",
+   "name": "Bebés y niños pequeños"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/bu",
+   "prefix": "bu",
+   "name": "Paquetes"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/bi",
+   "prefix": "bi",
+   "name": "Economía e industria"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/co",
+   "prefix": "co",
+   "name": "Cámaras y ópticas"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/el",
+   "prefix": "el",
+   "name": "Electrónica"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/fb",
+   "prefix": "fb",
+   "name": "Alimentación, bebida y tabaco"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/fr",
+   "prefix": "fr",
+   "name": "Mobiliario"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/gc",
+   "prefix": "gc",
+   "name": "Tarjetas de regalo"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/ha",
+   "prefix": "ha",
+   "name": "Bricolaje"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/hb",
+   "prefix": "hb",
+   "name": "Salud y belleza"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/hg",
+   "prefix": "hg",
+   "name": "Casa y jardín"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/lb",
+   "prefix": "lb",
+   "name": "Maletas y bolsos de viaje"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/ma",
+   "prefix": "ma",
+   "name": "Productos para adultos"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/me",
+   "prefix": "me",
+   "name": "Multimedia"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/os",
+   "prefix": "os",
+   "name": "Material de oficina"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/pa",
+   "prefix": "pa",
+   "name": "Complementos de productos"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/rc",
+   "prefix": "rc",
+   "name": "Elementos religiosos y ceremoniales"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/se",
+   "prefix": "se",
+   "name": "Servicios"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/so",
+   "prefix": "so",
+   "name": "Software"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/sg",
+   "prefix": "sg",
+   "name": "Equipamiento deportivo"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/tg",
+   "prefix": "tg",
+   "name": "Juegos y juguetes"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/na",
+   "prefix": "na",
+   "name": "Sin categoría"
+  },
+  {
+   "taxonomy_id": "gid://shopify/TaxonomyCategory/vp",
+   "prefix": "vp",
+   "name": "Vehículos y recambios"
+  }
+ ]
+}
