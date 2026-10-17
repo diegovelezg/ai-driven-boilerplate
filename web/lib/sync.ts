@@ -290,6 +290,10 @@ export async function syncStoreFromMedusa(
         title: String(i.title ?? ""),
         quantity: Number(i.quantity ?? 0),
         unit_price: Number(i.unit_price ?? 0),
+        // Captura tonta: metadata crudo del line_item (ej. media_comments,
+        // media_file del upload custom). Null si no hay. La interpretación
+        // (LLM) va en enrich, no aquí.
+        metadata: (i.metadata as Record<string, unknown> | null) ?? null,
       })),
     ]),
   );

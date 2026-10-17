@@ -1,5 +1,6 @@
 // Lecturas de customers desde Supabase (source of truth para la vista).
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { searchContentCustomerIds } from "@/lib/media-context";
 import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
@@ -215,17 +216,74 @@ async function loadEnrichedByDomain(
   db: ReturnType<typeof getSupabase>,
   rows: Array<Record<string, unknown>>,
 ): Promise<Map<string, string>> {
+  const firms = await loadEnrichedFirmsByDomain(db, rows);
   const map = new Map<string, string>();
+  for (const [domain, firm] of firms) {
+    if (firm.company) map.set(domain, firm.company);
+  }
+  return map;
+}
+
+/** Firmográficos enriquecidos por dominio: qué es la empresa, no solo su nombre. */
+export interface EnrichedFirm {
+  company: string | null;
+  industry: string | null;
+  description: string | null;
+  size: string | null;
+  location: string | null;
+}
+
+async function loadEnrichedFirmsByDomain(
+  db: ReturnType<typeof getSupabase>,
+  rows: Array<Record<string, unknown>>,
+): Promise<Map<string, EnrichedFirm>> {
+  const map = new Map<string, EnrichedFirm>();
   const domains = [
     ...new Set(rows.map((r) => domainFromEmail(String(r.email ?? ""))).filter(Boolean)),
   ];
   if (domains.length === 0) return map;
-  const { data } = await db.from("domains").select("domain,company_name").in("domain", domains);
-  for (const d of data ?? []) {
-    const name = (d.company_name as string) ?? null;
-    if (name) map.set(String(d.domain), name);
+  const { data } = await db
+    .from("domains")
+    .select("domain,company_name,industry,description,size,location")
+    .in("domain", domains);
+  for (const d of (data ?? []) as Array<Record<string, unknown>>) {
+    map.set(String(d.domain), {
+      company: (d.company_name as string) ?? null,
+      industry: (d.industry as string) ?? null,
+      description: (d.description as string) ?? null,
+      size: (d.size as string) ?? null,
+      location: (d.location as string) ?? null,
+    });
   }
   return map;
+}
+
+/** Dominios cuya ficha enriquecida matchea el término (nombre, industria, qué es…). */
+async function searchEnrichedDomains(
+  db: ReturnType<typeof getSupabase>,
+  term: string,
+  limit = 20,
+): Promise<string[]> {
+  const esc = term.replace(/[%_\\]/g, "\\$&").replace(/,/g, " ");
+  if (!esc.trim()) return [];
+  const like = `%${esc}%`;
+  const { data } = await db
+    .from("domains")
+    .select("domain")
+    .or(
+      `company_name.ilike.${like},industry.ilike.${like},description.ilike.${like},size.ilike.${like},location.ilike.${like},domain.ilike.${like}`,
+    )
+    .limit(limit);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((d) => String(d.domain));
+}
+
+/** ¿El término matchea la ficha enriquecida (nombre, industria, descripción, sede, dominio)? */
+function matchesEnrichedFirm(needle: string, firm: EnrichedFirm | undefined): boolean {
+  if (!firm) return false;
+  const hay = [firm.company, firm.industry, firm.description, firm.size, firm.location]
+    .map((v) => String(v ?? "").toLowerCase())
+    .filter(Boolean);
+  return hay.some((h) => h.includes(needle));
 }
 
 export interface CustomerFilters {
@@ -380,8 +438,20 @@ export async function queryStoreCustomers(
   const from = (page - 1) * pageSize;
   const ascending = sort.dir === "asc";
   const term = q.trim();
-  const like = term ? `%${term.replace(/[%_\\]/g, "\\$&")}%` : null;
-  const searchOr = `email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like}`;
+  const like = term ? `%${term.replace(/[%_\\]/g, "\\$&").replace(/,/g, " ")}%` : null;
+  // Búsqueda en customers + empresa efectiva (Medusa) + empresa enriquecida
+  // (qué es: nombre, industria, descripción…). Lo enriquecido vive en `domains`
+  // (global, por dominio): se resuelve a dominios y se filtra por email.
+  const enrichedDomains = like ? await searchEnrichedDomains(db, term).catch(() => []) : [];
+  const enrichedEmailOr = enrichedDomains
+    .map((d) => `email.ilike.%@${d}%`)
+    .join(",");
+  // Contenido pautado (captions Nivel 1: marca/categoría/qué anuncia) → customer ids.
+  const contentIds = like ? await searchContentCustomerIds(storeId, term).catch(() => new Map()) : new Map();
+  const contentIdOr = contentIds.size > 0 ? `,id.in.(${[...contentIds.keys()].join(",")})` : "";
+  const searchOr = like
+    ? `email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},company_name.ilike.${like}${enrichedEmailOr ? `,${enrichedEmailOr}` : ""}${contentIdOr}`
+    : null;
 
   // Con filtros (segmento/ticket) se resuelve en JS sobre la población:
   // con mercado, segmento y ticket son relativos AL MERCADO (quintiles y
@@ -427,7 +497,11 @@ export async function queryStoreCustomers(
         return [c.avgTicketMinor];
       }),
     );
-    const enriched = await loadEnrichedByDomain(db, scoped);
+    const firms = await loadEnrichedFirmsByDomain(db, scoped);
+    const enriched = new Map<string, string>();
+    for (const [domain, firm] of firms) {
+      if (firm.company) enriched.set(domain, firm.company);
+    }
     const needle = term.toLowerCase();
     const matched: EditableCustomer[] = [];
     scoped.forEach((r, i) => {
@@ -450,10 +524,22 @@ export async function queryStoreCustomers(
         return;
       }
       if (needle) {
-        const hay = [r.email, r.first_name, r.last_name, r.phone].map((v) =>
-          String(v ?? "").toLowerCase(),
-        );
-        if (!hay.some((h) => h.includes(needle))) return;
+        const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
+        const domain = domainFromEmail(String(r.email ?? ""));
+        const hay = [
+          r.email,
+          r.first_name,
+          r.last_name,
+          r.phone,
+          r.company_name,
+          overrides["company_name"],
+        ].map((v) => String(v ?? "").toLowerCase());
+        if (
+          !hay.some((h) => h.includes(needle)) &&
+          !matchesEnrichedFirm(needle, firms.get(domain)) &&
+          !contentIds.has(String(r.id))
+        )
+          return;
       }
       matched.push(toEditableCustomer(r, enriched));
     });
@@ -497,7 +583,7 @@ export async function queryStoreCustomers(
     const all: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
       let bq = db.from("customers").select("*").eq("store_id", storeId);
-      if (like) bq = bq.or(searchOr);
+      if (like && searchOr) bq = bq.or(searchOr);
       const { data, error } = await bq.range(off, off + 999);
       if (error) throw new Error(`DB read: ${error.message}`);
       all.push(...((data as Array<Record<string, unknown>>) ?? []));
@@ -543,7 +629,7 @@ export async function queryStoreCustomers(
   }
   // Desempate estable para paginar sin filas duplicadas/ausentes.
   if (sort.key !== "email") query = query.order("email", { ascending: true });
-  if (like) query = query.or(searchOr);
+  if (like && searchOr) query = query.or(searchOr);
   const { data, count, error } = await query.range(from, from + pageSize - 1);
   if (error) throw new Error(`DB read: ${error.message}`);
 

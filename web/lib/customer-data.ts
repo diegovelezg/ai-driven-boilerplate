@@ -2,6 +2,7 @@
 // routes y las tools del agente ADK (misma fuente de verdad).
 import { getSupabase } from "@/lib/supabase";
 import { isRealOrder } from "@/lib/medusa";
+import { enrichOrderItems } from "@/lib/media-context";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 import { absoluteRecencyScore } from "@/lib/insights";
@@ -9,6 +10,15 @@ import { absoluteRecencyScore } from "@/lib/insights";
 export interface CustomerOrderItem {
   title: string;
   quantity: number;
+  /** Rango de pauta (dateStart/dateEnd) o null. Ver lib/media-context.ts. */
+  pauta?: string | null;
+  /** Lo que tecleó el cliente (media_comments) o null. */
+  clienteDijo?: string | null;
+  /** Lo que contiene la pieza (caption IA) o null. */
+  contiene?: string | null;
+  categoria?: string | null;
+  /** Resto de metadata escalar (talla, color…), sanitizado. */
+  detalles?: Record<string, string | number | boolean>;
 }
 
 export interface CustomerOrder {
@@ -145,15 +155,27 @@ export async function loadCustomerOrdersAndRfm(
       isTest: Boolean(o.is_test),
     }),
   );
-  const orderRows: CustomerOrder[] = realRows.slice(0, orderLimit).map((o) => ({
-    date: (o.placed_at as string) ?? null,
-    total: Number(o.total_amount ?? 0),
-    currency: (o.currency as string) ?? null,
-    items: (((o.items_json as Array<Record<string, unknown>>) ?? []).slice(0, 5)).map((i) => ({
+  const sliced = realRows.slice(0, orderLimit);
+  const rawPerOrder = sliced.map((o) =>
+    (((o.items_json as Array<Record<string, unknown>>) ?? []).slice(0, 5)).map((i) => ({
       title: String(i.title ?? "—"),
       quantity: Number(i.quantity ?? 0),
+      metadata: (i.metadata as Record<string, unknown> | undefined) ?? undefined,
     })),
-  }));
+  );
+  // 1 sola query de captions para todas las líneas (ver lib/media-context.ts).
+  const enrichedFlat = await enrichOrderItems(customer.store_id as string, rawPerOrder.flat());
+  let cursor = 0;
+  const orderRows: CustomerOrder[] = sliced.map((o, oi) => {
+    const items = enrichedFlat.slice(cursor, cursor + rawPerOrder[oi].length);
+    cursor += rawPerOrder[oi].length;
+    return {
+      date: (o.placed_at as string) ?? null,
+      total: Number(o.total_amount ?? 0),
+      currency: (o.currency as string) ?? null,
+      items,
+    };
+  });
 
   const frequency = Number(customer.orders_count ?? 0);
   const monetary = Number(customer.total_spent ?? 0);

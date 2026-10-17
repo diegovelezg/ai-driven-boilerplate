@@ -802,27 +802,50 @@ function ComprasTab({
       {orders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
       ) : (
-        <Table>
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="px-3">Fecha</TableHead>
+              <TableHead className="w-[112px] px-3">Fecha</TableHead>
               <TableHead className="px-3">Detalle</TableHead>
-              <TableHead className="px-3 text-right">Total</TableHead>
+              <TableHead className="w-[96px] px-3 text-right">Total</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {orders.map((o, i) => (
               <TableRow key={i}>
-                <TableCell className="whitespace-nowrap px-3 py-2.5 text-[13px] tabular-nums">
+                <TableCell className="whitespace-nowrap py-2.5 pl-2 pr-4 text-[13px] tabular-nums">
                   {o.date ? o.date.slice(0, 10) : "—"}
                 </TableCell>
                 <TableCell
-                  className="max-w-0 truncate px-3 py-2.5 text-[13px] text-muted-foreground"
+                  className="px-3 py-2.5 text-[13px] text-muted-foreground"
                   title={o.items.map((it) => `${it.title} x${it.quantity}`).join("; ")}
                 >
-                  {o.items.length > 0
-                    ? o.items.map((it) => `${it.title} x${it.quantity}`).join(" · ")
-                    : "—"}
+                  {o.items.length > 0 ? (
+                    <div className="flex flex-col gap-1.5">
+                      {o.items.map((it, j) => (
+                        <div key={j} className="min-w-0">
+                          <div className="break-words">
+                            {it.title} x{it.quantity}
+                          </div>
+                          {it.contiene && (
+                            <div className="break-words text-[12px]">
+                              {it.contiene}
+                              {it.categoria && (
+                                <Badge
+                                  variant="secondary"
+                                  className="ml-1.5 border-primary/30 bg-primary/10 align-middle text-[11px] font-normal text-primary"
+                                >
+                                  {it.categoria}
+                                </Badge>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    "—"
+                  )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap px-3 py-2.5 text-right text-[13px] tabular-nums">
                   {formatMoney(o.total, o.currency)}

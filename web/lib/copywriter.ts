@@ -45,18 +45,15 @@ export function purchaseLanguage(
 const SYSTEM = `Redactas WhatsApp B2B de recupero para vía pública (español Perú, directo, profesional, cero cursi).
 Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 {"channel": "whatsapp"|"email", "subject": string|null, "body": string}
-Reglas duras (si las rompes el mensaje se rechaza):
-- ANCLA OBLIGATORIA: cada mensaje lleva UN dato que solo aplica a ese cliente: fecha exacta de su última pauta + 1 ubicación real + su ritmo o su silencio (ej "pautabas cada ~22d y ya van 30", "llevas 219d sin pautar tras 2 campañas en Gamarra"). PROHIBIDO el mensaje genérico intercambiable entre clientes.
-- FRASES PROHIBIDAS (nunca las uses, ni con variantes): "podemos ayudarte a revisar opciones", "estamos aquí para ayudarte", "si estás pensando en volver a pautar", "¿te interesa?", "¿te gustaría retomarlo?", "planificar tu próxima campaña". Son plantilla de 1990.
-- Tono por objetivo (viene en el brief):
-  · vip_care = cliente leal (3+ pautas, gasto top): reconoce historial en 1 línea, trato 1-a-1, oferta concreta (mismo circuito / prioridad de espacios). No ruegues.
-  · nurture = tenía hábito y se cortó: nombra el quiebre de ritmo y da 1 lectura útil (repite su zona fuerte o prueba zona nueva según su patrón).
-  · winback = 1-2 compras: simple, baja fricción, una sola propuesta concreta.
-- CTA SIEMPRE concreto y respondible con "sí" (ej "¿te reservo el mismo circuito para noviembre? Respóndeme sí y te paso disponibilidad"). PROHIBIDA la pregunta abierta vaga.
-- Nunca menciones score, media, ciclo, arquetipo ni cifras internas: solo lo que el cliente reconocería (fechas, lugares, su propio ritmo).
-- Basa el mensaje en el historial real dado. NO inventes ubicaciones ni fechas.
+Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradores: aperturas, orden y cierres distintos):
+- Usa los datos del brief (fechas, lugares, contenido, situación): al menos uno debe aparecer reconocible en el texto. PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
+- PROHIBIDAS las frases de plantilla y call center (hay control automático: si las usas el borrador se rechaza).
+- PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA propuesta accionable de máximo 15 palabras, con tu propia fórmula.
+- Nunca menciones score, media, ciclo, arquetipo ni cifras internas: solo lo que el cliente reconocería.
+- Tono por objetivo (viene en el brief): vip_care = leal, trato 1-a-1. nurture = hábito cortado, una lectura útil. winback = simple, baja fricción.
 - Empieza con "Hola {primer nombre}," (solo primer nombre, nunca apellido ni email).
-- whatsapp: máximo 400 caracteres, 2-4 frases cortas, sin asunto (subject null). email: subject corto + body de máximo 1200 caracteres.
+- Voz: primera persona singular + tuteo. PROHIBIDO "reservamos/preparamos" o el trato de usted.
+- whatsapp: máximo 400 caracteres, sin asunto (subject null). email: subject corto + body de máximo 1200 caracteres.
 - Un solo mensaje, listo para enviar. Sin placeholders tipo [NOMBRE].`;
 
 /** Frases plantilla que delatan al redactor genérico: si el borrador las
@@ -76,6 +73,13 @@ const BANNED = [
 function hasBanned(body: string): boolean {
   const b = body.toLowerCase();
   return BANNED.some((p) => b.includes(p));
+}
+
+/** El ancla se verifica por código (fecha o lugar del brief presente en el
+ *  texto), no por posición: el modelo decide dónde ponerla. */
+function hasAnchor(body: string, tokens: Array<string | null>): boolean {
+  const b = body.toLowerCase();
+  return tokens.some((t) => !!t && t.length >= 4 && b.includes(t.toLowerCase()));
 }
 
 /** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes. */
@@ -197,15 +201,33 @@ async function draftForSignal(
     return !["cancelled", "canceled", "archived", "refunded"].includes(st);
   })).slice(0, 5);
   // Historial legible: fecha corta + ubicaciones reales (sin "x0", sin moneda).
-  const histLines = real.map((o) => {
+  // Enriquecido con media-context (misma forma para cualquier tenant):
+  // contiene/categoría/pauta/clienteDijo/detalles solo si existen (sin nulls ruidosos).
+  const { enrichOrderItems } = await import("@/lib/media-context");
+  const rawPerOrder = real.map((o) =>
+    ((o.items_json as Array<Record<string, unknown>>) ?? []).map((i) => ({
+      title: String(i.title ?? "").trim(),
+      quantity: Number(i.quantity ?? 0),
+      metadata: (i.metadata as Record<string, unknown> | undefined) ?? undefined,
+    })),
+  );
+  const enrichedFlat = await enrichOrderItems(storeId, rawPerOrder.flat());
+  let cur = 0;
+  const histLines = real.map((o, oi) => {
     const iso = String(o.placed_at ?? "?").slice(0, 10);
     const f = fechaCorta(String(o.placed_at ?? "")) ?? iso;
-    const items = ((o.items_json as Array<Record<string, unknown>>) ?? [])
-      .map((i) => String(i.title ?? "").trim())
-      .filter((t) => t && t !== "—")
-      .slice(0, 4)
-      .join(" · ");
-    return `- ${f} (${iso}): ${items || "pauta sin detalle"}`;
+    const items = enrichedFlat.slice(cur, cur + rawPerOrder[oi].length);
+    cur += rawPerOrder[oi].length;
+    const titles = items.map((i) => i.title).filter((t) => t && t !== "—").slice(0, 4).join(" · ");
+    const extras: string[] = [];
+    for (const it of items.slice(0, 2)) {
+      if (it.contiene) extras.push(`contiene "${it.contiene}"${it.categoria ? ` [${it.categoria}]` : ""}`);
+      if (it.pauta) extras.push(`pauta ${it.pauta}`);
+      if (it.clienteDijo) extras.push(`cliente dijo: "${it.clienteDijo.slice(0, 120)}"`);
+      const det = Object.entries(it.detalles ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ");
+      if (det) extras.push(det);
+    }
+    return `- ${f} (${iso}): ${titles || "pauta sin detalle"}${extras.length > 0 ? ` — ${extras.join("; ")}` : ""}`;
   });
   const hist = histLines.join("\n") || "(sin compras visibles)";
   // Patrón del cliente: ¿repite circuito o explora? (top ubicación por frecuencia)
@@ -218,27 +240,42 @@ async function draftForSignal(
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
   const distinct = counts.size;
-  const patron =
-    top && top[1] >= 2
-      ? `REPITE: su zona fuerte es "${top[0]}" (${top[1]} veces en últimas ${real.length} pautas)`
-      : distinct >= 3
-        ? `EXPLORA: prueba zonas distintas (${distinct} ubicaciones distintas, sin repetir)`
-        : top
-          ? `mixto: última zona "${top[0]}"`
-          : "sin patrón legible";
-  const firstName = (s.first_name ?? "").trim().split(/\s+/)[0] || s.email;
   const r = parseReason(s.reason);
   const days = r.days;
+  // Patrón cualitativo (sin conteos: evita "cinco pautas"/"zona fuerte" con n bajo).
+  // El estado por ratio fija el tono; los números citables son solo fecha+lugar+silencio.
+  const catCounts = new Map<string, number>();
+  const marcaByCat = new Map<string, string>();
+  for (const it of enrichedFlat) {
+    if (it.categoria) {
+      catCounts.set(it.categoria, (catCounts.get(it.categoria) ?? 0) + 1);
+      const m = it.contiene?.split(":")[0]?.trim() ?? "";
+      if (m && !marcaByCat.has(it.categoria)) marcaByCat.set(it.categoria, m);
+    }
+  }
+  const topCat = [...catCounts.entries()].sort((a, b) => b[1] - a[1])[0];
+  const ratio = days && r.expected ? days / r.expected : null;
+  const estado =
+    ratio === null
+      ? "sin referencia de ritmo"
+      : ratio < 3
+        ? "pausa corta: tono de retoma natural"
+        : ratio < 10
+          ? "hábito cortado: nombra el quiebre"
+          : "dormido: OBLIGATORIO abrir reconociendo el tiempo (ej. «sé que ha pasado más de un año»). PROHIBIDO escribir como si la pausa fuera reciente";
+  const patron =
+    topCat && topCat[1] >= 2
+      ? `CONTENIDO: suele pautar "${topCat[0]}"${marcaByCat.get(topCat[0]) ? ` (ej. ${marcaByCat.get(topCat[0])})` : ""}. Tono: continuidad de su línea`
+      : top && top[1] >= 2
+        ? `REPITE: suele volver a "${top[0]}". Tono: volver a lo que le funciona`
+        : distinct >= 3
+          ? `EXPLORA: prueba zonas distintas. Tono: novedad y cobertura`
+          : top
+            ? `última zona "${top[0]}"`
+            : "sin patrón legible";
+  const firstName = (s.first_name ?? "").trim().split(/\s+/)[0] || s.email;
   const lastIso = real[0] ? String(real[0].placed_at ?? "").slice(0, 10) : null;
   const lastF = real[0] ? (fechaCorta(String(real[0].placed_at ?? "")) ?? lastIso) : null;
-  // Ritmo: solo el ciclo "cliente" es ritmo propio citable; tienda/arquetipo
-  // es referencia interna y NO se le dice al cliente ("cada 60d" suena a call center).
-  const ritmo =
-    r.source === "cliente" && r.expected
-      ? `ritmo propio: pautaba cada ~${r.expected}d (medido de sus compras) → quiebre real`
-      : r.expected
-        ? `sin ritmo propio medible (referencia interna ${r.expected}d, NO citar)`
-        : "sin ritmo medible";
   const objetivo =
     s.kind === "vip_care"
       ? "vip_care: cliente leal, reconoce historial + oferta 1-a-1 concreta"
@@ -246,10 +283,19 @@ async function draftForSignal(
         ? "winback: 1-2 compras, simple y baja fricción"
         : "nurture: tenía hábito y se cortó, nombra el quiebre + 1 lectura útil";
 
+  // Menú de jugadas: variedad real de oferta (misma restricción, distinto movimiento).
+  const jugada =
+    patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
+      ? "repetir su circuito habitual con prioridad de espacios, o proponerle una zona de su historial distinta a la última"
+      : patron.startsWith("EXPLORA")
+        ? "ampliar cobertura a una zona que aún no prueba, o consolidar su mejor zona"
+        : "retomar su última zona con una propuesta simple y concreta";
+
   const user = [
     `Cliente: ${firstName} (objetivo ${objetivo})`,
-    `Última pauta: ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días. ${ritmo}.`,
+    `Última pauta: ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días. Situación: ${estado}.`,
     `Patrón: ${patron}.`,
+    `Jugada (elige UNA, no las combines): ${jugada}.`,
     `Historial real (usa nombres tal cual, no inventes):`,
     hist,
     s.phone ? "Canal: whatsapp (tiene teléfono)." : "Canal: email (sin teléfono).",
@@ -267,8 +313,15 @@ async function draftForSignal(
   let { channel, body, subject } = await attempt(null);
   if (!body) throw new Error("El LLM devolvió body vacío.");
   if (hasBanned(body)) {
-    const retry = await attempt("tu borrador anterior sonaba a plantilla genérica; reescribe con el ancla específica del cliente y CTA concreto, sin ninguna frase prohibida.");
+    const retry = await attempt("tu borrador anterior sonaba a plantilla genérica; reescribe con otra estructura y otras palabras, sin ninguna frase prohibida.");
     if (hasBanned(retry.body)) throw new Error("Borrador con frase plantilla (rechazado por control de calidad).");
+    ({ channel, body, subject } = retry);
+  }
+  // Ancla programática: fecha o lugar del brief debe aparecer (posición libre).
+  const anchorTokens = [lastIso, lastF, ...[...counts.keys()].slice(0, 3)];
+  if (!hasAnchor(body, anchorTokens)) {
+    const retry = await attempt("tu borrador no incluye ningún dato reconocible del brief (fecha o lugar): reescribe incluyéndolo de forma natural.");
+    if (!hasAnchor(retry.body, anchorTokens)) throw new Error("Borrador sin ancla (rechazado por control de calidad).");
     ({ channel, body, subject } = retry);
   }
   if (channel === "whatsapp" && body.length > 600) throw new Error("WhatsApp demasiado largo (>600).");

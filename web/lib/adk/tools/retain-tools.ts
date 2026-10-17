@@ -2,6 +2,7 @@ import { FunctionTool, type BaseTool } from "@google/adk";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
+import { domainFromEmail } from "@/lib/domains";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 import { queryStoreCustomers } from "@/lib/customers-db";
 import { loadCustomerOrdersAndRfm, loadCustomerFirmographics } from "@/lib/customer-data";
@@ -245,22 +246,87 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const find = new FunctionTool({
     name: "find_customer",
     description:
-      "Busca un customer por email o nombre y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta).",
+      "Busca un customer por email, nombre, teléfono o empresa —incluida la empresa enriquecida (nombre, industria, descripción/qué es, sede, dominio)— o por lo que pauta en pantallas (marca/categoría anunciada, ej. 'fisioterapia', 'K-pop', 'muebles') y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta). Ej.: 'PUCP', 'universidad', 'educación superior'.",
     parameters: z.object({ q: z.string().min(2) }),
     execute: async ({ q }: { q: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
-      const like = `%${q}%`;
+      const db = getSupabase();
+      const esc = q.replace(/[%_\\]/g, "\\$&").replace(/,/g, " ");
+      const like = `%${esc}%`;
       const fq = withMarket(
         getSupabase()
           .from("customers")
-          .select("id,email,first_name,last_name,orders_count,total_spent")
+          .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
           .eq("store_id", storeId)
-          .or(`email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like}`),
+          .or(`email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},company_name.ilike.${like}`),
         "id",
       );
       const { data, error } = await fq.limit(5);
       if (error) return { error: error.message };
-      return data ?? [];
+      const rows = ((data ?? []) as Array<Record<string, unknown>>).slice();
+      // Empresa enriquecida vive en `domains` (por dominio): dominios que
+      // matchean (qué es, no solo el nombre) → customers con ese email.
+      if (rows.length < 5) {
+        const { data: drows } = await db
+          .from("domains")
+          .select("domain,company_name,industry")
+          .or(`company_name.ilike.${like},industry.ilike.${like},description.ilike.${like},location.ilike.${like},domain.ilike.${like}`)
+          .limit(10);
+        const doms = ((drows ?? []) as Array<Record<string, unknown>>).filter((d) =>
+          String((d as Record<string, unknown>).domain ?? ""),
+        );
+        const seen = new Set(rows.map((r) => String(r.id)));
+        const firmByDomain = new Map(
+          doms.map((d) => [
+            String((d as Record<string, unknown>).domain),
+            {
+              company: ((d as Record<string, unknown>).company_name as string) ?? null,
+              industry: ((d as Record<string, unknown>).industry as string) ?? null,
+            },
+          ]),
+        );
+        for (const d of [...firmByDomain.keys()].slice(0, 10)) {
+          if (rows.length >= 5) break;
+          const escD = d.replace(/[%_\\]/g, "\\$&");
+          const dq = withMarket(
+            db
+              .from("customers")
+              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+              .eq("store_id", storeId)
+              .like("email", `%@${escD}`),
+            "id",
+          );
+          const { data: dc } = await dq.limit(5 - rows.length);
+          for (const c of ((dc ?? []) as Array<Record<string, unknown>>)) {
+            if (seen.has(String(c.id))) continue;
+            seen.add(String(c.id));
+            rows.push({ ...c, enriched_company: firmByDomain.get(d)?.company ?? null });
+          }
+        }
+      }
+      // Contenido pautado (captions Nivel 1): marca/categoría/qué anuncia.
+      if (rows.length < 5) {
+        const { searchContentCustomerIds } = await import("@/lib/media-context");
+        const hits = await searchContentCustomerIds(storeId, q).catch(() => new Map());
+        const known = new Set(rows.map((r) => String((r as Record<string, unknown>).id)));
+        const ids = [...hits.keys()].filter((id) => !known.has(id)).slice(0, 5 - rows.length);
+        if (ids.length > 0) {
+          const { data: cc } = await db
+            .from("customers")
+            .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+            .eq("store_id", storeId)
+            .in("id", ids);
+          for (const c of ((cc ?? []) as Array<Record<string, unknown>>)) {
+            const hit = hits.get(String(c.id));
+            known.add(String(c.id));
+            rows.push({
+              ...c,
+              matched_content: `${hit?.marca ? `${hit.marca}: ` : ""}${hit?.que ?? ""}${hit?.categoria ? ` (${hit.categoria})` : ""}`,
+            });
+          }
+        }
+      }
+      return rows;
     },
   });
 
@@ -282,7 +348,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const filterCustomers = new FunctionTool({
     name: "filter_customers",
     description:
-      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). Segmento: Campeón, Recurrente, Ocasional, En riesgo, Inactivo, Nuevo o Sin compras. ticketTier 0-3 = cuartil de ticket (3 = top). freqBucket 0-3 = 1, 2, 3–5, 6+ compras. vip = solo insignia 'No los pierdas'. q = texto libre (email/nombre/teléfono). Pasa SOLO lo que pida el merchant.",
+      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). Segmento: Campeón, Recurrente, Ocasional, En riesgo, Inactivo, Nuevo o Sin compras. ticketTier 0-3 = cuartil de ticket (3 = top). freqBucket 0-3 = 1, 2, 3–5, 6+ compras. vip = solo insignia 'No los pierdas'. q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
     parameters: z.object({
       q: z.string().min(2).max(100).optional(),
       segment: z.enum(SEGMENTS).optional(),
@@ -339,24 +405,51 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const profile = new FunctionTool({
     name: "get_customer_profile",
     description:
-      "Ficha del customer en contexto: nombre, email, teléfono, empresa, tipo (B2B/B2C), compras y gasto. Úsala para identidad.",
+      "Ficha del customer en contexto: nombre, email, teléfono, empresa (efectiva: manual > Medusa > enriquecida), tipo (B2B/B2C), compras y gasto. Si la empresa viene del enriquecimiento, incluye industria y descripción (qué es). Úsala para identidad.",
     parameters: z.object({}),
     execute: async () => {
       if (!customerId) return noCustomer;
       const { data, error } = await getSupabase()
         .from("customers")
-        .select("first_name,last_name,email,phone,company_name,customer_type,orders_count,total_spent,currency,created_at")
+        .select("first_name,last_name,email,phone,company_name,manual_edits,customer_type,orders_count,total_spent,currency,created_at")
         .eq("id", customerId)
         .maybeSingle();
       if (error) return { error: error.message };
       if (!data) return { error: "Customer no encontrado." };
       const c = data as Record<string, unknown>;
+      // Empresa efectiva (misma regla que la GUI): manual > Medusa > enriquecida.
+      const overrides = (c.manual_edits as Record<string, unknown> | null) ?? {};
+      const manualCompany =
+        typeof overrides["company_name"] === "string" && overrides["company_name"] !== ""
+          ? (overrides["company_name"] as string)
+          : null;
+      const baseCompany = (c.company_name as string) ?? null;
+      let enrichedCompany: string | null = null;
+      let industry: string | null = null;
+      let companyDescription: string | null = null;
+      if (!manualCompany && !baseCompany) {
+        const domain = domainFromEmail(String(c.email ?? ""));
+        if (domain) {
+          const { data: drow } = await getSupabase()
+            .from("domains")
+            .select("company_name,industry,description")
+            .eq("domain", domain)
+            .maybeSingle();
+          const d = drow as Record<string, unknown> | null;
+          enrichedCompany = (d?.company_name as string) ?? null;
+          industry = (d?.industry as string) ?? null;
+          companyDescription = (d?.description as string) ?? null;
+        }
+      }
       return {
         first_name: (c.first_name as string) ?? null,
         last_name: (c.last_name as string) ?? null,
         email: (c.email as string) ?? null,
         phone: (c.phone as string) ?? null,
-        company_name: (c.company_name as string) ?? null,
+        company_name: manualCompany ?? baseCompany ?? enrichedCompany,
+        company_enriched: !manualCompany && !baseCompany && !!enrichedCompany,
+        industry,
+        company_description: companyDescription,
         customer_type: (c.customer_type as string) ?? null,
         orders_count: Number(c.orders_count ?? 0),
         total_spent: Number(c.total_spent ?? 0),
@@ -382,7 +475,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const firmographics = new FunctionTool({
     name: "get_customer_firmographics",
     description:
-      "Empresa del customer en contexto por su dominio (nombre, industria, tamaño, ubicación). Puede no estar enriquecida.",
+      "Empresa del customer en contexto por su dominio (nombre, industria, descripción/qué es, tamaño, ubicación, confianza). Puede no estar enriquecida.",
     parameters: z.object({}),
     execute: async () => {
       if (!customerId) return noCustomer;
