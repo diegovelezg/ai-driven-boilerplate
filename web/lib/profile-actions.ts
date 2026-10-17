@@ -5,6 +5,8 @@ import { resolveStoreId } from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
 import {
   ARCHETYPES,
+  getStoreProfile,
+  resolveManualSlots,
   upsertStoreProfile,
   type ArchetypeId,
   type BusinessModel,
@@ -243,6 +245,19 @@ export async function saveTenantProfileAction(
   const interpretationConfidence =
     confRaw === "alta" || confRaw === "media" || confRaw === "baja" ? confRaw : null;
 
+  // Slots que el merchant fijó a mano: el vigilante (#6) nunca propone
+  // cambiarlos. No basta la fuente: un guardado "sugerido" conserva la
+  // protección de los slots manuales previos que no cambiaron de valor.
+  const existing = await getStoreProfile(storeId).catch(() => null);
+  const manualSlots = resolveManualSlots({
+    archetypeSource,
+    archetype,
+    cycleDays: cycle,
+    taxonomyId: taxonomyRaw,
+    buyerType: buyerRaw,
+    existing,
+  });
+
   try {
     await upsertStoreProfile({
       storeId,
@@ -256,6 +271,7 @@ export async function saveTenantProfileAction(
       churnMultiplier: Math.round(mult * 100) / 100,
       archetype,
       archetypeSource,
+      manualSlots,
       companyRequired: formData.get("companyRequired") === "on",
       description,
       interpretationConfidence,

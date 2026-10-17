@@ -2,7 +2,7 @@
 // Uso: npx tsx --env-file=.env.local scripts/measure-risk.ts
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import { medianInterval } from "@/lib/customer-data";
+import { dueStatusFor, medianInterval } from "@/lib/customer-data";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 import { isRealOrder } from "@/lib/medusa";
 
@@ -55,10 +55,11 @@ async function main() {
       ? Math.max(0, Math.floor((now - last.getTime()) / 86_400_000))
       : null;
     if (rec === null || expected === null) { sinCiclo++; continue; }
-    if (rec > expected * mult) {
+    const status = dueStatusFor(rec, expected, mult);
+    if (status === "vencido") {
       vencido++;
       if (top.length < 10) top.push({ id: (c.id as string).slice(0, 8), f: Number(c.orders_count ?? 0), rec, exp: expected, over: rec - expected });
-    } else if (rec > expected) porVencer++;
+    } else if (status === "por_vencer") porVencer++;
     else alDia++;
   }
   console.log(`buyers=${buyers.length} vencido=${vencido} por_vencer=${porVencer} al_dia=${alDia} sin_ciclo=${sinCiclo}`);

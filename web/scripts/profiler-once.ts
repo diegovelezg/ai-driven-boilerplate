@@ -41,6 +41,7 @@ async function main() {
     churnMultiplier: ARCHETYPES[archetype].defaultMultiplier,
     archetype,
     archetypeSource: "auto",
+    manualSlots: [],
     companyRequired: s.companyRequired,
     description,
     interpretationConfidence: s.confidence,

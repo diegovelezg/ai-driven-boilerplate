@@ -281,7 +281,10 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                     id="cycle"
                     inputMode="numeric"
                     value={cycle}
-                    onChange={(e) => setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+                    onChange={(e) => {
+                      setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4));
+                      setSource("manual");
+                    }}
                     placeholder={`Auto (${ARCHETYPES[archetype].defaultCycleDays}d)`}
                   />
                   <p className="text-xs text-muted-foreground">

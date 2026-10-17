@@ -7,6 +7,7 @@ import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { createLogger } from "@/lib/log";
 import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
+import { recalibrateWithRun } from "@/lib/profile-recalibrate/service";
 import {
   advanceRun,
   finishRun,
@@ -59,6 +60,11 @@ export async function syncCustomersAction(): Promise<SyncState> {
           summary: `${s.customers} customers, ${s.orders} orders (test excl: ${s.excludedTestOrders}, inválidas excl: ${s.excludedInvalidOrders})`,
         });
         log(`run ${runId} done`);
+        // Vigilante de perfil (#6): con datos frescos, si toca la revisión
+        // semanal corre sola. Nunca rompe la sync: sus fallos quedan en su run.
+        await recalibrateWithRun(storeId, "post-sync").catch((e) =>
+          log(`recalibrate post-sync falló: ${e instanceof Error ? e.message : e}`),
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : "error";
         await finishRun(runId, {

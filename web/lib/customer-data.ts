@@ -52,6 +52,18 @@ export interface CustomerRfm {
   overdueDays: number | null;
 }
 
+/** Estado vs el ciclo esperado (puro: lo usan la ficha y measure-risk). */
+export function dueStatusFor(
+  recencyDays: number | null,
+  expectedCycleDays: number | null,
+  churnMultiplier: number,
+): CustomerRfm["dueStatus"] {
+  if (recencyDays === null || expectedCycleDays === null) return null;
+  if (recencyDays > expectedCycleDays * churnMultiplier) return "vencido";
+  if (recencyDays > expectedCycleDays) return "por_vencer";
+  return "al_dia";
+}
+
 export interface CustomerFirmographics {
   domain: string;
   domainType: DomainType | "none";
@@ -228,14 +240,7 @@ export async function loadCustomerOrdersAndRfm(
   const cycleSource =
     customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
   const churnMultiplier = tenantProfile?.churnMultiplier ?? 1.25;
-  const dueStatus =
-    recencyDays === null || expectedCycleDays === null
-      ? null
-      : recencyDays > expectedCycleDays * churnMultiplier
-        ? "vencido"
-        : recencyDays > expectedCycleDays
-          ? "por_vencer"
-          : "al_dia";
+  const dueStatus = dueStatusFor(recencyDays, expectedCycleDays, churnMultiplier);
   const overdueDays =
     recencyDays === null || expectedCycleDays === null
       ? null

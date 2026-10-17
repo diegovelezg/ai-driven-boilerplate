@@ -100,6 +100,8 @@ export interface StoreProfile {
   churnMultiplier: number;
   archetype: ArchetypeId;
   archetypeSource: "manual" | "sugerido" | "auto";
+  /** Slots fijados a mano (vigilante #6): nunca se proponen cambios sobre ellos. */
+  manualSlots: string[];
   companyRequired: boolean;
   /** Descripción libre del negocio (entrada orgánica primaria). */
   description: string | null;
@@ -216,6 +218,7 @@ function toProfile(storeId: string, r: Record<string, unknown>): StoreProfile {
     churnMultiplier: Number(r.churn_multiplier ?? 1.25),
     archetype: (r.archetype as ArchetypeId) ?? "b2c_consumible",
     archetypeSource: (r.archetype_source as StoreProfile["archetypeSource"]) ?? "auto",
+    manualSlots: Array.isArray(r.manual_slots) ? (r.manual_slots as string[]) : [],
     companyRequired: Boolean(r.company_required),
     description: (r.description as string) ?? null,
     interpretationConfidence:
@@ -250,6 +253,7 @@ export async function upsertStoreProfile(p: StoreProfile): Promise<void> {
       churn_multiplier: p.churnMultiplier,
       archetype: p.archetype,
       archetype_source: p.archetypeSource,
+      manual_slots: p.manualSlots ?? [],
       company_required: p.companyRequired,
       description: p.description,
       interpretation_confidence: p.interpretationConfidence,
@@ -259,6 +263,84 @@ export async function upsertStoreProfile(p: StoreProfile): Promise<void> {
     { onConflict: "store_id" },
   );
   if (error) throw new Error(`DB write: ${error.message}`);
+}
+
+/** Slots del perfil que el vigilante puede proponer (columnas 1:1). */
+export type StoreProfileSlot =
+  | "archetype"
+  | "repurchase_cycle_days"
+  | "taxonomy_id"
+  | "buyer_type";
+
+/** Patch de UNA columna para un slot (puro). Valor serializado como en los deltas. */
+export function profileSlotPatch(
+  slot: StoreProfileSlot,
+  value: string | null,
+): Record<string, unknown> {
+  switch (slot) {
+    case "archetype":
+      return { archetype: value };
+    case "repurchase_cycle_days":
+      return { repurchase_cycle_days: value === null ? null : Number(value) };
+    case "taxonomy_id":
+      return { taxonomy_id: value };
+    case "buyer_type":
+      return { buyer_type: value };
+  }
+}
+
+/**
+ * Actualiza SOLO la columna de un slot. Dos decisiones HITL en paralelo
+ * sobre slots distintos no se pisan (Postgres serializa por fila y cada
+ * update toca una columna distinta), a diferencia del upsert completo.
+ */
+export async function updateStoreProfileSlot(
+  storeId: string,
+  slot: StoreProfileSlot,
+  value: string | null,
+): Promise<void> {
+  const { data, error } = await getSupabase()
+    .from("store_profiles")
+    .update({ ...profileSlotPatch(slot, value), updated_at: new Date().toISOString() })
+    .eq("store_id", storeId)
+    .select("store_id");
+  if (error) throw new Error(`DB write: ${error.message}`);
+  if (!data || data.length === 0) throw new Error("DB write: perfil no encontrado.");
+}
+
+export interface ManualSlotsInput {
+  archetypeSource: "manual" | "sugerido";
+  archetype: ArchetypeId;
+  cycleDays: number | null;
+  taxonomyId: string | null;
+  buyerType: string | null;
+  /** Perfil vigente antes de este guardado (para no perder protecciones). */
+  existing: StoreProfile | null;
+}
+
+/**
+ * Slots protegidos tras un guardado del form (puro). Con fuente `manual`
+ * se protege todo lo fijado; con `sugerido` se conserva la protección de
+ * los slots manuales previos cuyo valor no cambió en este guardado.
+ */
+export function resolveManualSlots(input: ManualSlotsInput): string[] {
+  if (input.archetypeSource === "manual") {
+    return [
+      "archetype",
+      ...(input.cycleDays !== null ? ["repurchase_cycle_days"] : []),
+      ...(input.taxonomyId ? ["taxonomy_id"] : []),
+      ...(input.buyerType ? ["buyer_type"] : []),
+    ];
+  }
+  const prev = input.existing;
+  if (!prev) return [];
+  const same: Record<string, boolean> = {
+    archetype: prev.archetype === input.archetype,
+    repurchase_cycle_days: prev.repurchaseCycleDays === input.cycleDays,
+    taxonomy_id: prev.taxonomyId === input.taxonomyId,
+    buyer_type: prev.buyerType === input.buyerType,
+  };
+  return (prev.manualSlots ?? []).filter((s) => same[s]);
 }
 
 /**
