@@ -183,9 +183,9 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-start justify-between gap-2 border-b px-4 py-3">
               <div className="min-w-0">
-                <p className="text-sm font-semibold tracking-tight">Pregúntale a tu equipo</p>
+                <p className="text-sm font-semibold tracking-tight">Pregunta a tu equipo de agentes</p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {dock.storeName}
+                  {dock.storeName} · Scout · Estratega · Redactor · Analista
                 </p>
               </div>
               <div className="flex shrink-0 items-center">

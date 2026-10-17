@@ -46,6 +46,8 @@ export interface ChatShellProps {
   error: string | null;
   /** Sugerencias del estado vacío (un click = un ask). */
   suggestions?: string[];
+  /** Rota las sugerencias (pool grande, se muestran 3). */
+  onShuffleSuggestions?: () => void;
   emptyTitle: string;
   emptySubtitle?: string;
   /** Avatar/initials del estado vacío (ficha de customer). */
@@ -73,6 +75,7 @@ export function ChatShell({
   pending,
   error,
   suggestions = [],
+  onShuffleSuggestions,
   emptyTitle,
   emptySubtitle,
   emptyAvatar,
@@ -84,10 +87,27 @@ export function ChatShell({
   className,
 }: ChatShellProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const prevPendingRef = useRef(pending);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  // Foco inicial: al abrir el chat se escribe sin click previo.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Tras cada respuesta (pending true → false) el foco vuelve al input
+  // para el siguiente mensaje. Se hace aquí (SSOT visual) para cubrir
+  // store, ficha y perfil sin duplicar lógica.
+  useEffect(() => {
+    if (prevPendingRef.current && !pending) {
+      inputRef.current?.focus();
+    }
+    prevPendingRef.current = pending;
+  }, [pending]);
 
   return (
     <div className={`flex h-full min-h-0 flex-1 flex-col${className ? ` ${className}` : ""}`}>
@@ -97,24 +117,36 @@ export function ChatShell({
           <div className="m-auto flex flex-col items-center gap-5 py-10 text-center">
             {emptyAvatar}
             <div className="grid gap-2">
-              <p className="text-lg font-medium">{emptyTitle}</p>
+              <p className="text-lg font-semibold tracking-tight">{emptyTitle}</p>
               {emptySubtitle && (
-                <p className="max-w-xs text-sm text-muted-foreground">{emptySubtitle}</p>
+                <p className="mx-auto max-w-xs text-sm leading-relaxed text-muted-foreground">{emptySubtitle}</p>
               )}
             </div>
             {suggestions.length > 0 && (
-              <div className="flex max-w-sm flex-wrap justify-center gap-2">
-                {suggestions.map((s) => (
+              <div className="grid gap-2.5">
+                <div className="flex max-w-sm flex-wrap justify-center gap-2">
+                  {suggestions.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => onAsk(s)}
+                      disabled={pending}
+                      className="rounded-full border border-border bg-muted/40 px-3.5 py-2 text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-muted disabled:opacity-50"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                {onShuffleSuggestions && (
                   <button
-                    key={s}
                     type="button"
-                    onClick={() => onAsk(s)}
+                    onClick={onShuffleSuggestions}
                     disabled={pending}
-                    className="rounded-lg border border-border bg-muted/40 px-3.5 py-2 text-[13px] text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                    className="mx-auto text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
                   >
-                    {s}
+                    Ver otras preguntas
                   </button>
-                ))}
+                )}
               </div>
             )}
           </div>
@@ -163,6 +195,7 @@ export function ChatShell({
         }}
       >
         <Input
+          ref={inputRef}
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           placeholder={placeholder}
