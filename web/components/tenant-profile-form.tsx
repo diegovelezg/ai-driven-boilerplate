@@ -166,24 +166,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   };
 
   return (
-    <form action={action} className="flex w-full max-w-2xl flex-col gap-4">
-      {/* Todo lo derivado viaja oculto (fuera del condicional de paso: el submit
-          ocurre en el paso 2 pero la evidencia se acumula en el paso 1). */}
-      <input type="hidden" name="description" value={description} />
-      <input type="hidden" name="businessModel" value={model} />
-      <input type="hidden" name="verticalDetected" value={verticalDetected ?? ""} />
-      <input type="hidden" name="taxonomyId" value={taxonomyId ?? ""} />
-      <input type="hidden" name="buyerType" value={buyerType ?? ""} />
-      <input type="hidden" name="industry" value={industry ?? ""} />
-      <input type="hidden" name="catalogType" value={catalog ?? ""} />
-      <input type="hidden" name="archetype" value={archetype} />
-      <input type="hidden" name="repurchaseCycleDays" value={cycle} />
-      <input type="hidden" name="churnMultiplier" value={mult} />
-      <input type="hidden" name="archetypeSource" value={source} />
-      <input type="hidden" name="interpretationConfidence" value={confidence ?? ""} />
-      {companyRequired && <input type="hidden" name="companyRequired" value="on" />}
-      {profile?.notes && <input type="hidden" name="notes" value={profile.notes} />}
-
+    <div className="flex w-full max-w-2xl flex-col gap-4">
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
@@ -208,7 +191,24 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
               onUseDataSignal={useDataSignal}
             />
           ) : (
-            <>
+            <form action={action} className="flex flex-col gap-3">
+              {/* Todo lo derivado viaja oculto (el submit ocurre en el paso 2
+                  pero la evidencia se acumula en el paso 1). */}
+              <input type="hidden" name="description" value={description} />
+              <input type="hidden" name="businessModel" value={model} />
+              <input type="hidden" name="verticalDetected" value={verticalDetected ?? ""} />
+              <input type="hidden" name="taxonomyId" value={taxonomyId ?? ""} />
+              <input type="hidden" name="buyerType" value={buyerType ?? ""} />
+              <input type="hidden" name="industry" value={industry ?? ""} />
+              <input type="hidden" name="catalogType" value={catalog ?? ""} />
+              <input type="hidden" name="archetype" value={archetype} />
+              <input type="hidden" name="repurchaseCycleDays" value={cycle} />
+              <input type="hidden" name="churnMultiplier" value={mult} />
+              <input type="hidden" name="archetypeSource" value={source} />
+              <input type="hidden" name="interpretationConfidence" value={confidence ?? ""} />
+              {companyRequired && <input type="hidden" name="companyRequired" value="on" />}
+              {profile?.notes && <input type="hidden" name="notes" value={profile.notes} />}
+
               {criticInfo && criticInfo.verdict === "reject" && criticInfo.reasons.length > 0 && (
                 <div className="rounded-lg border border-input p-3 text-xs">
                   <p className="font-medium">El revisor corrigió la propuesta:</p>
@@ -340,10 +340,10 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                   </p>
                 )}
               </div>
-            </>
+            </form>
           )}
         </CardContent>
       </Card>
-    </form>
+    </div>
   );
 }

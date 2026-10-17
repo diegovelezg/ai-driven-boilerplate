@@ -407,6 +407,95 @@ function ScoreBadge({ axis, score }: { axis: "R" | "F" | "M"; score: number | nu
   );
 }
 
+function medianNum(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/** Tendencia del ticket: prom. segunda mitad vs primera mitad (%). null si <4 compras. */
+function ticketTrendPct(chrono: CustomerOrder[]): number | null {
+  if (chrono.length < 4) return null;
+  const half = Math.floor(chrono.length / 2);
+  const avg = (xs: CustomerOrder[]) =>
+    xs.reduce((a, o) => a + o.total, 0) / Math.max(1, xs.length);
+  const first = avg(chrono.slice(0, half));
+  if (first <= 0) return null;
+  const second = avg(chrono.slice(half));
+  return ((second - first) / first) * 100;
+}
+
+/** Mediana del intervalo entre compras (días). null si <2 fechas. */
+function medianGapDays(chrono: CustomerOrder[]): number | null {
+  const ds = chrono
+    .map((o) => (o.date ? new Date(o.date) : null))
+    .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  if (ds.length < 2) return null;
+  const gaps: number[] = [];
+  for (let i = 1; i < ds.length; i += 1) {
+    gaps.push(Math.max(1, Math.round((ds[i].getTime() - ds[i - 1].getTime()) / 86_400_000)));
+  }
+  return Math.round(medianNum(gaps));
+}
+
+type TierBounds = [number, number, number];
+
+/** Cuartil del ticket medio vs la tienda (misma regla que filtros/dashboard). */
+function ticketQuartileLabel(avg: number, bounds: TierBounds | null | undefined): string | null {
+  if (!bounds) return null;
+  const [q1, med, q3] = bounds;
+  if (avg <= q1) return "Q1";
+  if (avg <= med) return "Q2";
+  if (avg <= q3) return "Q3";
+  return "Q4 · top 25%";
+}
+
+/** Posicionamiento en gasto desde el quintil M (M5 ≈ top 20%). */
+function monetaryReach(m: number | null): string | null {
+  if (m === null || m <= 1) return null;
+  return `supera al ~${(m - 1) * 20}% en gasto`;
+}
+
+/** Acción sugerida por segmento (Putler/DinMo: cada segmento → próxima acción). */
+const SEGMENT_ACTION: Record<string, string> = {
+  "Campeón": "Pedir reseña o referido · no sobre-ofertar",
+  "Recurrente": "Upsell / programa de fidelidad",
+  "Ocasional": "Oferta limitada para activar 2ª compra",
+  "Nuevo": "Onboarding + seguimiento temprano",
+  "En riesgo": "Winback personalizado antes de perderlo",
+  "Inactivo": "Reactivar con descuento relevante",
+  "Sin compras": "Convertir primera compra",
+};
+
+function CumulativeSpark({ chrono }: { chrono: CustomerOrder[] }) {
+  if (chrono.length === 0) return null;
+  let acc = 0;
+  const cum = chrono.map((o) => (acc += o.total));
+  const max = Math.max(...cum, 1);
+  const w = 100;
+  const h = 36;
+  const pts = cum
+    .map((v, i) => {
+      const x = chrono.length === 1 ? w : (i / (chrono.length - 1)) * w;
+      const y = h - 3 - (v / max) * (h - 6);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="h-9 w-full"
+      role="img"
+      aria-label={`Gasto acumulado en ${chrono.length} compras`}
+      preserveAspectRatio="none"
+    >
+      <polyline points={pts} fill="none" strokeWidth="1.5" className="stroke-primary" />
+    </svg>
+  );
+}
+
 function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
   if (orders.length === 0) return null;
   const chrono = [...orders].reverse();
@@ -440,7 +529,17 @@ function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
   );
 }
 
-function ComprasTab({ dbId }: { dbId: string }) {
+function ComprasTab({
+  dbId,
+  customerLabel,
+  tierBounds,
+  onGoAgent,
+}: {
+  dbId: string;
+  customerLabel: string;
+  tierBounds?: TierBounds | null;
+  onGoAgent?: (prompt: string) => void;
+}) {
   const [orders, setOrders] = useState<CustomerOrder[] | null>(null);
   const [summary, setSummary] = useState<CustomerRfm | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -477,69 +576,228 @@ function ComprasTab({ dbId }: { dbId: string }) {
           ? "ayer"
           : `hace ${summary.recencyDays} días`;
 
+  // Derivados integradores (solo con lo ya cargado: orders + summary).
+  const chrono = [...orders].reverse();
+  const totals = chrono.map((o) => o.total);
+  const tMin = totals.length > 0 ? Math.min(...totals) : 0;
+  const tMax = totals.length > 0 ? Math.max(...totals) : 0;
+  const tMed = totals.length > 0 ? Math.round(medianNum(totals)) : 0;
+  const trend = ticketTrendPct(chrono);
+  const gapMed = medianGapDays(chrono);
+  const cycleSrc =
+    summary.cycleSource === "cliente"
+      ? "su ritmo"
+      : summary.cycleSource === "tienda"
+        ? "ritmo tienda"
+        : summary.cycleSource === "arquetipo"
+          ? "arquetipo"
+          : null;
+  const dueLabel =
+    summary.dueStatus === "vencido" && summary.overdueDays !== null
+      ? `vencido hace ${summary.overdueDays}d`
+      : summary.dueStatus === "por_vencer"
+        ? "por vencer"
+        : summary.dueStatus === "al_dia"
+          ? "al día"
+          : null;
+  const trendLabel =
+    trend === null
+      ? null
+      : `${trend >= 0 ? "↑" : "↓"} ${Math.abs(Math.round(trend))}% vs primeras`;
+  const firstDate = chrono[0]?.date?.slice(0, 10) ?? null;
+  const lastDate = chrono[chrono.length - 1]?.date?.slice(0, 10) ?? null;
+  const quartile = ticketQuartileLabel(summary.avgTicket, tierBounds);
+  const reach = monetaryReach(summary.m);
+  const suggestion = SEGMENT_ACTION[summary.segment] ?? null;
+  const resumen =
+    summary.frequency === 0
+      ? "Sin compras registradas."
+      : [
+          `${summary.frequency} compra${summary.frequency === 1 ? "" : "s"}`,
+          summary.expectedCycleDays !== null ? `cada ~${summary.expectedCycleDays}d` : null,
+          `ticket ${formatMoney(summary.avgTicket, summary.currency)}`,
+          trendLabel ? `(${trendLabel})` : null,
+          `última ${recencyLabel}${dueLabel ? ` · ${dueLabel}` : ""}`,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  // Prompt con la recomendación + contexto para el agente (auto-envío al abrirlo).
+  const agentPrompt =
+    suggestion !== null && summary.frequency > 0
+      ? [
+          `El análisis de datos recomienda para ${customerLabel} [${summary.segment}]: ${suggestion}.`,
+          `Contexto: ${resumen}.`,
+          `Detalle: R${summary.r ?? "–"}/F${summary.f ?? "–"}/M${summary.m ?? "–"} vs la tienda; ticket prom. ${formatMoney(summary.avgTicket, summary.currency)} (rango ${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}, mediana ${formatMoney(tMed, summary.currency)}${quartile ? `, ${quartile}` : ""}${trendLabel ? `, ${trendLabel}` : ""}); ritmo esperado ~${summary.expectedCycleDays ?? "–"}d${cycleSrc ? ` (${cycleSrc})` : ""}${gapMed !== null ? `, observado ~${gapMed}d` : ""}; última compra ${recencyLabel}${dueLabel ? ` (${dueLabel})` : ""}.`,
+          "¿Qué acción concreta propones para este cliente y por qué? Básate en su historial real.",
+        ].join(" ")
+      : null;
+  // Riesgo churn: progreso recencia → umbral (ciclo × multiplicador).
+  const churnMult = summary.churnMultiplier ?? 1.25;
+  const churnThreshold =
+    summary.expectedCycleDays !== null ? summary.expectedCycleDays * churnMult : null;
+  const churnRatio =
+    summary.recencyDays !== null && churnThreshold !== null && churnThreshold > 0
+      ? Math.min(1, summary.recencyDays / churnThreshold)
+      : null;
+  const churnRemaining =
+    summary.recencyDays !== null && churnThreshold !== null
+      ? Math.ceil(churnThreshold - summary.recencyDays)
+      : null;
+
   return (
     <div className="grid gap-5 px-8 py-6">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          {
-            label: "Total",
-            value: formatMoney(summary.monetary, summary.currency),
-            score: <ScoreBadge axis="M" score={summary.m} />,
-          },
-          {
-            label: "Compras",
-            value: String(summary.frequency),
-            score: <ScoreBadge axis="F" score={summary.f} />,
-          },
-          {
-            label: "Ticket prom.",
-            value: formatMoney(summary.avgTicket, summary.currency),
-            score: null,
-          },
-          {
-            label: "Última compra",
-            value: recencyLabel,
-            score: <ScoreBadge axis="R" score={summary.r} />,
-          },
-        ].map((s) => (
-          <Card key={s.label}>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs text-muted-foreground">{s.label}</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">
-                {s.value}
-                {s.score}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="text-[13px] font-normal" title="Segmento RFM simplificado">
-          {summary.segment}
-        </Badge>
-        {summary.expectedCycleDays !== null && summary.expectedCycleDays !== undefined && (
-          <span
-            className="text-xs text-muted-foreground tabular-nums"
-            title={`Ciclo esperado cada ${summary.expectedCycleDays}d (fuente: ${summary.cycleSource ?? "—"}) × ${summary.churnMultiplier ?? 1.25}`}
+      <div className="grid gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <Badge
+            className="text-[13px] font-medium"
+            title={`Segmento RFM: R${summary.r ?? "–"}/F${summary.f ?? "–"}/M${summary.m ?? "–"} vs la tienda`}
           >
-            cada ~{summary.expectedCycleDays}d
-            {summary.cycleSource === "cliente"
-              ? " (su ritmo)"
-              : summary.cycleSource === "tienda"
-                ? " (ritmo tienda)"
-                : " (arquetipo)"}
-            {summary.dueStatus === "vencido" && summary.overdueDays !== null
-              ? ` · vencido hace ${summary.overdueDays}d`
-              : summary.dueStatus === "por_vencer"
-                ? " · por vencer"
-                : summary.dueStatus === "al_dia"
-                  ? " · al día"
-                  : ""}
-          </span>
+            {summary.segment}
+          </Badge>
+          {summary.noLosPierdas && (
+            <Badge
+              variant="destructive"
+              className="text-[13px] font-medium"
+              title="Top 20% gasto histórico e inactivo: prioridad de recuperación personal, no descuento genérico"
+            >
+              No los pierdas
+            </Badge>
+          )}
+          <p className="text-[13px] text-muted-foreground tabular-nums">{resumen}</p>
+        </div>
+        {suggestion && (
+          <p className="text-[13px] text-muted-foreground">
+            Sugerencia: <span className="text-foreground">{suggestion}</span>
+            {onGoAgent && agentPrompt && (
+              <button
+                type="button"
+                onClick={() => onGoAgent(agentPrompt)}
+                className="ml-2 text-[13px] text-primary underline-offset-2 hover:underline"
+              >
+                Abrir agente
+              </button>
+            )}
+          </p>
         )}
       </div>
 
-      <PurchaseBars orders={orders} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card title={`Recencia ${summary.r ?? "–"}/5 · Frecuencia ${summary.f ?? "–"}/5 · Monetario ${summary.m ?? "–"}/5 vs la tienda`}>
+          <CardContent className="px-4 py-3.5">
+            <p className="text-xs text-muted-foreground">Segmento</p>
+            <p className="mt-1 truncate text-xl font-semibold">{summary.segment}</p>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              R{summary.r ?? "–"} · F{summary.f ?? "–"} · M{summary.m ?? "–"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card
+          title={
+            summary.expectedCycleDays !== null
+              ? `Ciclo esperado cada ${summary.expectedCycleDays}d (fuente: ${summary.cycleSource ?? "—"}) × ${summary.churnMultiplier ?? 1.25}`
+              : "Sin ciclo esperado"
+          }
+        >
+          <CardContent className="px-4 py-3.5">
+            <p className="text-xs text-muted-foreground">Ritmo</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">
+              {summary.expectedCycleDays !== null ? `~${summary.expectedCycleDays}d` : "—"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              {gapMed !== null ? `observado ~${gapMed}d · ` : ""}
+              última {recencyLabel}
+              {dueLabel ? ` · ${dueLabel}` : ""}
+            </p>
+            {churnRatio !== null && churnRemaining !== null && (
+              <div
+                className="mt-2"
+                title={`Umbral churn ~${Math.round(churnThreshold ?? 0)}d (ciclo × ${churnMult})`}
+              >
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={`h-full rounded-full ${
+                      churnRatio >= 1
+                        ? "bg-destructive"
+                        : churnRatio >= 0.8
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${Math.round(churnRatio * 100)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                  {churnRemaining >= 0
+                    ? `quedan ~${churnRemaining}d al churn`
+                    : dueLabel ?? "vencido"}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        <Card title={totals.length > 0 ? `Tickets: min ${formatMoney(tMin, summary.currency)} · mediana ${formatMoney(tMed, summary.currency)} · max ${formatMoney(tMax, summary.currency)} (últimas ${orders.length})` : "Sin tickets"}>
+          <CardContent className="px-4 py-3.5">
+            <p className="text-xs text-muted-foreground">Ticket prom.</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">
+              {formatMoney(summary.avgTicket, summary.currency)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              {totals.length > 0
+                ? `${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}${quartile ? ` · ${quartile}` : ""}${trendLabel ? ` · ${trendLabel}` : ""}`
+                : "—"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card title={`Acumulado en ${summary.frequency} compras`}>
+          <CardContent className="px-4 py-3.5">
+            <p className="text-xs text-muted-foreground">Total</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums">
+              {formatMoney(summary.monetary, summary.currency)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              {summary.frequency} compra{summary.frequency === 1 ? "" : "s"}
+              {reach ? ` · ${reach}` : cycleSrc ? ` · ${cycleSrc}` : ""}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {orders.length > 0 && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <Card>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs font-medium">Ticket en el tiempo</p>
+              <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                {firstDate ?? "—"} → {lastDate ?? "—"}
+                {trendLabel ? ` · ${trendLabel}` : ""}
+              </p>
+              <div className="mt-2">
+                <PurchaseBars orders={orders} />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground tabular-nums">
+                mediana {formatMoney(tMed, summary.currency)} · rango {formatMoney(tMin, summary.currency)}–
+                {formatMoney(tMax, summary.currency)}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs font-medium">Trayectoria acumulada</p>
+              <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                {formatMoney(summary.monetary, summary.currency)} en {summary.frequency} compras
+              </p>
+              <div className="mt-2">
+                <CumulativeSpark chrono={chrono} />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground tabular-nums">
+                {gapMed !== null ? `compra cada ~${gapMed}d (observado)` : "1 sola compra"}
+                {summary.expectedCycleDays !== null && gapMed !== null
+                  ? ` · esperado ~${summary.expectedCycleDays}d`
+                  : ""}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {orders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
@@ -582,12 +840,16 @@ export function CustomerDrawer({
   customer,
   onClose,
   initialTab = "datos",
+  tierBounds = null,
 }: {
   customer: EditableCustomer;
   onClose: () => void;
   initialTab?: "datos" | "compras" | "chat";
+  tierBounds?: TierBounds | null;
 }) {
   const [tab, setTab] = useState<"datos" | "compras" | "chat">(initialTab);
+  // Prompt con la recomendación del análisis: se auto-envía al abrir el tab Agente.
+  const [agentSeed, setAgentSeed] = useState<string | null>(null);
 
   const displayName = [customer.firstName, customer.lastName].filter(Boolean).join(" ");
   const initials = (displayName || customer.email)
@@ -636,11 +898,21 @@ export function CustomerDrawer({
           {tab === "datos" ? (
             <DatosTab customer={customer} onClose={onClose} />
           ) : tab === "compras" ? (
-            <ComprasTab dbId={customer.dbId} />
+            <ComprasTab
+              dbId={customer.dbId}
+              customerLabel={displayName || customer.email}
+              tierBounds={tierBounds}
+              onGoAgent={(prompt) => {
+                setAgentSeed(prompt);
+                setTab("chat");
+              }}
+            />
           ) : (
             <CustomerChat
               dbId={customer.dbId}
               customerName={displayName || customer.email}
+              initialPrompt={agentSeed}
+              onInitialSent={() => setAgentSeed(null)}
             />
           )}
         </div>

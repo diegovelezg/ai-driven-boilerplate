@@ -7,6 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -16,6 +23,8 @@ import {
 } from "@/components/ui/table";
 import { formatMoney, type CanonicalCustomer } from "@/lib/medusa";
 import type {
+  CustomerFilterMeta,
+  CustomerFilters,
   CustomersSortDir,
   CustomersSortKey,
   EditableCustomer,
@@ -34,6 +43,11 @@ interface Props {
   pageSize: number;
   sortKey: CustomersSortKey;
   sortDir: CustomersSortDir;
+  filters: CustomerFilters;
+  meta: CustomerFilterMeta | null;
+  shopCurrency: string | null;
+  /** Filtro global por mercado (?market= del header): se preserva al navegar. */
+  marketId: string | null;
 }
 
 /** Celda con edición inline: click -> input; Enter/blur guarda, Escape cancela. */
@@ -121,22 +135,58 @@ function EditableCell({
   );
 }
 
-export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, sortDir }: Props) {
+export function CustomersView({
+  rows,
+  totalCount,
+  q,
+  page,
+  pageSize,
+  sortKey,
+  sortDir,
+  filters,
+  meta,
+  shopCurrency,
+  marketId,
+}: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [query, setQuery] = useState(q);
 
   const buildParams = useCallback(
-    (overrides: { q?: string; page?: number; sort?: string; dir?: string }) => {
+    (overrides: {
+      q?: string;
+      page?: number;
+      sort?: string;
+      dir?: string;
+      segment?: string | null;
+      ticket?: string | null;
+      freq?: string | null;
+      vip?: boolean | null;
+    }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
       if (nextQ.trim()) params.set("q", nextQ.trim());
       params.set("page", String(overrides.page ?? page));
       params.set("sort", overrides.sort ?? sortKey);
       params.set("dir", overrides.dir ?? sortDir);
+      const seg = overrides.segment !== undefined ? overrides.segment : filters.segment;
+      if (seg) params.set("segment", seg);
+      const tick = overrides.ticket !== undefined ? overrides.ticket : (
+        filters.ticketTier === null ? null : String(filters.ticketTier)
+      );
+      if (tick) params.set("ticket", tick);
+      const fr = overrides.freq !== undefined ? overrides.freq : (
+        filters.freqBucket === null ? null : String(filters.freqBucket)
+      );
+      if (fr) params.set("freq", fr);
+      const vip = overrides.vip !== undefined ? overrides.vip : (
+        filters.noLosPierdas ? true : null
+      );
+      if (vip) params.set("vip", "1");
+      if (marketId) params.set("market", marketId);
       return params.toString();
     },
-    [q, page, sortKey, sortDir],
+    [q, page, sortKey, sortDir, filters, marketId],
   );
 
   // El sort ordena en servidor (Supabase) sobre todos los datos, no solo la página.
@@ -147,6 +197,29 @@ export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, so
       router.replace(`/customers?${buildParams({ page: 1, sort: key, dir: nextDir })}`);
     });
   };
+
+  const setFilter = (patch: { segment?: string | null; ticket?: string | null; freq?: string | null; vip?: boolean | null }) => {
+    startTransition(() => {
+      router.replace(`/customers?${buildParams({ page: 1, ...patch })}`);
+    });
+  };
+
+  const ticketOptions = (() => {
+    if (!meta?.tierBounds) return [];
+    const [q1, med, q3] = meta.tierBounds;
+    const f = (n: number) => formatMoney(n, shopCurrency);
+    return [
+      { value: "0", label: `Q1 · ticket ≤ ${f(q1)}` },
+      { value: "1", label: `Q2 · ${f(q1)}–${f(med)}` },
+      { value: "2", label: `Q3 · ${f(med)}–${f(q3)}` },
+      { value: "3", label: `Q4 · ticket > ${f(q3)}` },
+    ];
+  })();
+  const filtersActive =
+    filters.segment !== null ||
+    filters.ticketTier !== null ||
+    filters.freqBucket !== null ||
+    filters.noLosPierdas;
 
   // Sincroniza el input cuando el `q` commiteado cambia por navegación externa
   // (botones paginación, atrás/adelante). setState en callback: sin cascading render.
@@ -208,8 +281,8 @@ export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, so
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative max-w-sm flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative max-w-sm flex-1 basis-52">
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -230,7 +303,77 @@ export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, so
             </button>
           )}
         </div>
-        <span className="text-xs text-muted-foreground tabular-nums">
+        <Select
+          value={filters.segment ?? "all"}
+          onValueChange={(v) => setFilter({ segment: v === "all" ? null : v })}
+          disabled={!meta}
+        >
+          <SelectTrigger className="w-44" aria-label="Filtrar por segmento RFM">
+            <SelectValue placeholder="Segmento" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los segmentos</SelectItem>
+            {(meta?.segments ?? []).map((s) => (
+              <SelectItem key={s.key} value={s.key}>
+                {s.key} ({s.count})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.ticketTier === null ? "all" : String(filters.ticketTier)}
+          onValueChange={(v) => setFilter({ ticket: v === "all" ? null : v })}
+          disabled={ticketOptions.length === 0}
+        >
+          <SelectTrigger className="w-44" aria-label="Filtrar por cuartil de ticket">
+            <SelectValue placeholder="Ticket" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todos los tickets</SelectItem>
+            {ticketOptions.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.freqBucket === null ? "all" : String(filters.freqBucket)}
+          onValueChange={(v) => setFilter({ freq: v === "all" ? null : v })}
+          disabled={!meta}
+        >
+          <SelectTrigger className="w-40" aria-label="Filtrar por frecuencia de compra">
+            <SelectValue placeholder="Frecuencia" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toda frecuencia</SelectItem>
+            {(meta?.freqBuckets ?? []).map((b, i) => (
+              <SelectItem key={b.label} value={String(i)}>
+                {b.label} ({b.count})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {filtersActive && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={isPending}
+            onClick={() => setFilter({ segment: null, ticket: null, freq: null, vip: null })}
+          >
+            Limpiar
+          </Button>
+        )}
+        <Button
+          variant={filters.noLosPierdas ? "default" : "outline"}
+          size="sm"
+          disabled={isPending}
+          onClick={() => setFilter({ vip: filters.noLosPierdas ? null : true })}
+          title="Top gasto + inactivos: prioridad de recuperación personal"
+        >
+          No los pierdas{meta ? ` (${meta.noLosPierdas})` : ""}
+        </Button>
+        <span className="ms-auto text-xs text-muted-foreground tabular-nums">
           {isPending
             ? "Buscando…"
             : `${totalCount} resultado${totalCount === 1 ? "" : "s"}`}
@@ -349,6 +492,8 @@ export function CustomersView({ rows, totalCount, q, page, pageSize, sortKey, so
         <CustomerDrawer
           key={selected.id}
           customer={selected}
+          initialTab="compras"
+          tierBounds={meta?.tierBounds ?? null}
           onClose={() => setSelectedId(null)}
         />
       )}

@@ -1,14 +1,18 @@
-// Strategist (Decidir, Fase A): lee señales `open` → prioriza
-// (valor × probabilidad) → `prioritized` + objetivo
+// Strategist (Decidir, Fase A): lee señales `open` → prioriza con el ranking
+// único (lib/mira, insignia + valor esperado) → `prioritized` + objetivo
 // (`winback`|`nurture`|`vip_care`). Determinista, sin LLM:
 // auditable y barato; el proceso `strategist_plan` de llm_models.json queda
 // reservado para priorización con contexto blando futuro.
 // Corre en background con `background_runs` kind `strategist`.
 import { getSupabase } from "@/lib/supabase";
+import { getRankedMira } from "@/lib/mira";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("strategist");
+
+/** Versión del criterio de priorización. Sube cuando cambia la regla. */
+export const STRATEGIST_GEN = "strategist:v1:mira";
 
 interface OpenSignal {
   id: string;
@@ -43,33 +47,27 @@ export async function runStrategist(
   const db = getSupabase();
   let prioritized = 0;
   try {
-    const { data, error } = await db
-      .from("churn_signals")
-      .select("id,customer_id,score,reason,customers(email,first_name,last_name,orders_count,total_spent)")
-      .eq("store_id", storeId)
-      .eq("status", "open")
-      .order("score", { ascending: false, nullsFirst: false })
-      .limit(200);
-    if (error) throw new Error(`Signals read: ${error.message}`);
-    const rows = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
-      const c = (r.customers ?? {}) as Record<string, unknown>;
-      return {
-        id: String(r.id),
-        customer_id: String(r.customer_id),
-        score: r.score == null ? null : Number(r.score),
-        reason: (r.reason as string | null) ?? null,
-        email: String(c.email ?? ""),
-        first_name: (c.first_name as string | null) ?? null,
-        last_name: (c.last_name as string | null) ?? null,
-        orders_count: Number(c.orders_count ?? 0),
-        total_spent: Number(c.total_spent ?? 0),
-      } satisfies OpenSignal;
-    });
-    // Valor × probabilidad: score primero, gasto como desempate.
-    rows.sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || b.total_spent - a.total_spent);
+    // Mismo ranking que Overview/Review/Copywriter (lib/mira): se prioriza el
+    // top real, no empates arbitrarios de score. La foránea va después.
+    const mira = await getRankedMira(storeId, 200);
+    const rows = [...mira.rows, ...mira.foreign]
+      .filter((r) => r.status === "open")
+      .map((r) => ({
+        id: r.signalId,
+        customer_id: r.customerDbId,
+        score: r.score,
+        reason: r.reason,
+        email: r.email,
+        first_name: r.firstName,
+        last_name: r.lastName,
+        orders_count: r.ordersCount,
+        total_spent: r.totalSpent,
+      }) satisfies OpenSignal);
     const spends = [...rows.map((r) => r.total_spent)].sort((a, b) => a - b);
     const vipSpend = spends.length > 0 ? spends[Math.floor(spends.length * 0.8)] : 0;
     log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend}`);
+    // Trazabilidad del ranking: si el top se discute, el log dice quién era.
+    log(`run ${runId} top5=${rows.slice(0, 5).map((r) => r.email || r.customer_id).join(",")}`);
 
     const batch = rows.slice(0, Math.max(0, limit));
     let i = 0;
@@ -79,7 +77,7 @@ export async function runStrategist(
       const kind = objective(s, vipSpend);
       const { error: upErr } = await db
         .from("churn_signals")
-        .update({ status: "prioritized", kind })
+        .update({ status: "prioritized", kind, evidence_json: { generator: STRATEGIST_GEN, run_id: runId, at: new Date().toISOString() } })
         .eq("id", s.id);
       if (upErr) {
         log(`run ${runId} ${s.email} ERROR ${upErr.message}`);

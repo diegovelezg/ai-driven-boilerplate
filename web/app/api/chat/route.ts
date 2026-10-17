@@ -3,6 +3,7 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
 import { createLogger } from "@/lib/log";
+import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
 
 const log = createLogger("adk");
 
@@ -16,35 +17,10 @@ const SESSION_USER_ID = "merchant";
 // que la ruta de ficha) hasta que exista conversación por tienda.
 const sessionService = new InMemorySessionService();
 
-export const AGENT_FOCOS = [
-  "general",
-  "scout",
-  "estratega",
-  "redactor",
-  "prospector",
-  "mensajero",
-  "analista",
-  "perfilador",
-  "vigilancia",
-  "propuesta",
-  "cierre",
-] as const;
-
-export type AgentFoco = (typeof AGENT_FOCOS)[number];
-
-const FOCO_LABEL: Record<AgentFoco, string> = {
-  general: "tu tienda",
-  scout: "Scout · vigilancia",
-  estratega: "Estratega · priorización",
-  redactor: "Redactor · propuestas",
-  prospector: "Prospector · leads",
-  mensajero: "Mensajero · envíos",
-  analista: "Analista · medición",
-  perfilador: "Perfilador · tu negocio",
-  vigilancia: "Vigilancia · Scout + Estratega",
-  propuesta: "Propuesta · Redactor + Prospector",
-  cierre: "Cierre · Mensajero + Analista",
-};
+/** Chat único: el orquestador (customer_agent generalista) decide qué
+ *  especialista invocar por turno. El user nunca elige agente: es orgánico.
+ *  Se acepta `foco` legacy pero se ignora (compat con URLs/bookmarks viejos). */
+export type AgentFoco = "general";
 
 interface IncomingMessage {
   role: "user" | "assistant";
@@ -55,12 +31,22 @@ function sse(text: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 }
 
+/** Tools cuyos resultados son listas accionables: se reenvían al cliente como
+ *  artefacto para pintarlos en el panel lateral (canvas), no en el chat.
+ *  El resumen (get_store_summary) NO es artefacto: se responde en el chat. */
+const ARTIFACT_TOOLS = ["list_signals", "list_actions", "list_leads", "filter_customers"];
+
+function artifactSse(tool: string, data: unknown, query: unknown): string {
+  const rows = Array.isArray(data) ? data.slice(0, 20) : data;
+  return `data: ${JSON.stringify({ artifact: { tool, data: rows, query: query ?? null } })}\n\n`;
+}
+
 export async function POST(req: Request) {
   if (!isSupabaseConfigured()) {
     return Response.json({ error: "Supabase no configurado." }, { status: 500 });
   }
 
-  let body: { storeId?: string; foco?: string; messages?: IncomingMessage[] };
+  let body: { storeId?: string; messages?: IncomingMessage[]; marketId?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -69,9 +55,6 @@ export async function POST(req: Request) {
 
   const storeId = typeof body.storeId === "string" ? body.storeId : "";
   if (!storeId) return Response.json({ error: "Falta storeId." }, { status: 400 });
-  const foco: AgentFoco = (AGENT_FOCOS as readonly string[]).includes(body.foco ?? "")
-    ? (body.foco as AgentFoco)
-    : "general";
 
   const history = (body.messages ?? []).filter(
     (m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
@@ -92,6 +75,13 @@ export async function POST(req: Request) {
   const s = store as Record<string, unknown>;
   const storeName = String(s.name ?? s.shop_url ?? storeId);
 
+  // Filtro global por mercado (?market= del header): se valida contra la
+  // tienda y se resuelve a países/IDs una vez por request para las tools.
+  const marketScope = typeof body.marketId === "string" && body.marketId
+    ? await resolveMarketScope(storeId, body.marketId).catch(() => null)
+    : null;
+  const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
+
   const prior = history
     .slice(0, -1)
     .slice(-8)
@@ -99,7 +89,7 @@ export async function POST(req: Request) {
     .join("\n");
   const userText = last.content.slice(0, 4000);
   const prompt =
-    `Hablas de ${storeName} con foco en ${FOCO_LABEL[foco]}. ` +
+    `Hablas de ${storeName}${marketSuffix} como equipo orquestado (Scout, Estratega, Redactor, Prospector, Mensajero, Analista, Perfilador). ` +
     (prior
       ? `Historial reciente (contexto; el mensaje actual es lo vigente):\n${prior}\n\nMensaje actual: ${userText}`
       : `Mensaje actual: ${userText}`);
@@ -109,7 +99,9 @@ export async function POST(req: Request) {
     agent = getCustomerAgent({
       storeId,
       view: "store_chat",
-      focusLabel: `${storeName} · ${FOCO_LABEL[foco]}`,
+      focusLabel: `${storeName}${marketSuffix} · equipo orquestado`,
+      marketCountries: marketScope?.countries ?? null,
+      marketCustomerIds: marketScope?.customerIds ?? null,
     });
   } catch (e) {
     return Response.json(
@@ -129,15 +121,74 @@ export async function POST(req: Request) {
     async start(controller) {
       const send = (t: string) => controller.enqueue(encoder.encode(t));
       try {
+        // Args de la última llamada por tool en este turno: el canvas los usa
+        // como estado inicial de sus filtros (lo pedido en el chat queda
+        // seleccionado). Vive fuera del loop porque call y response llegan
+        // en eventos distintos.
+        const callArgs: Record<string, unknown> = {};
+        let wroteActions = false;
         for await (const event of runner.runAsync({
           userId: SESSION_USER_ID,
           sessionId,
           newMessage: { role: "user", parts: [{ text: prompt }] },
         })) {
-          if (event.author !== CUSTOMER_AGENT_NAME || event.content?.role !== "model") continue;
-          for (const part of event.content.parts ?? []) {
-            const text = (part as { text?: string }).text;
-            if (text) send(sse(text));
+          if (event.author !== CUSTOMER_AGENT_NAME) continue;
+          for (const part of event.content?.parts ?? []) {
+            const p = part as {
+              text?: string;
+              functionCall?: { name?: string; args?: unknown };
+              functionResponse?: { name?: string; response?: unknown };
+            };
+            // Texto del modelo → burbuja del chat.
+            if (event.content?.role === "model" && p.text) {
+              send(sse(p.text));
+              continue;
+            }
+            if (p.functionCall && ARTIFACT_TOOLS.includes(p.functionCall.name ?? "")) {
+              callArgs[p.functionCall.name as string] = p.functionCall.args ?? null;
+              continue;
+            }
+            // Resultado de tool de datos (role "user", autor = agente) →
+            // artefacto para el canvas. Arrays llegan como {results: [...]}.
+            const fr = p.functionResponse;
+            if (fr && ARTIFACT_TOOLS.includes(fr.name ?? "")) {
+              const r = fr.response as { results?: unknown; result?: unknown } | unknown[];
+              const data = Array.isArray(r) ? r : (r as { results?: unknown; result?: unknown })?.results ?? (r as { result?: unknown })?.result ?? r;
+              const query = callArgs[fr.name as string] ?? null;
+              const n = Array.isArray(data) ? data.length : 1;
+              log(`artifact ${fr.name} filas=${n} query=${JSON.stringify(query)}`);
+              send(artifactSse(fr.name as string, data, query));
+            }
+            if (fr && (fr.name === "approve_actions" || fr.name === "reject_actions")) {
+              wroteActions = true;
+            }
+          }
+        }
+        // Tras una escritura, el canvas quedaría con filas viejas: re-emite
+        // los pendientes con los últimos args de list_actions.
+        if (wroteActions) {
+          try {
+            const q = (callArgs["list_actions"] ?? {}) as {
+              status?: string;
+              limit?: number;
+              channel?: string;
+            };
+            let aq = getSupabase()
+              .from("proposed_actions")
+              .select("id,customer_id,channel,subject,body,status,created_at,customers(email,first_name,last_name)")
+              .eq("store_id", storeId)
+              .eq("status", q.status ?? "pending_review");
+            if (q.channel) aq = aq.eq("channel", q.channel);
+            const scope = marketScope
+              ? { countries: marketScope.countries, customerIds: marketScope.customerIds }
+              : null;
+            const { data } = await applyScopeFilter(aq, scope).order("created_at", {
+              ascending: false,
+            }).limit(q.limit ?? 10);
+            log(`artifact list_actions refresh filas=${(data ?? []).length}`);
+            send(artifactSse("list_actions", data ?? [], { status: q.status ?? "pending_review", limit: q.limit ?? 10, channel: q.channel ?? null }));
+          } catch (e) {
+            log(`refresh tras escritura falló (${e instanceof Error ? e.message : "?"})`);
           }
         }
       } catch (e) {

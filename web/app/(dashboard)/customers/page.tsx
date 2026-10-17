@@ -1,12 +1,19 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { EditableCustomer } from "@/lib/customers-db";
-import { parseCustomersSort, queryStoreCustomers, resolveStoreId } from "@/lib/customers-db";
+import type { CustomerFilterMeta, CustomerFilters, EditableCustomer } from "@/lib/customers-db";
+import {
+  getCustomerFilterMeta,
+  parseCustomerFilters,
+  parseCustomersSort,
+  queryStoreCustomers,
+  resolveStoreId,
+} from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
-import { isSupabaseConfigured } from "@/lib/supabase";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { pendingDomains } from "@/lib/enrich";
 import { countDuplicateEmails } from "@/lib/duplicates";
+import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
 import { CustomersView } from "./customers-view";
 import { EnrichmentControls } from "./enrichment-controls";
 import { SyncButton } from "./sync-button";
@@ -18,7 +25,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; segment?: string; ticket?: string; freq?: string; vip?: string; market?: string }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
@@ -27,6 +34,12 @@ export default async function CustomersPage({
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const sort = parseCustomersSort({ sort: sp.sort, dir: sp.dir });
+  const filters: CustomerFilters = parseCustomerFilters({
+    segment: sp.segment,
+    ticket: sp.ticket,
+    freq: sp.freq,
+    vip: sp.vip,
+  });
 
   let rows: EditableCustomer[] = [];
   let totalCount = 0;
@@ -35,6 +48,10 @@ export default async function CustomersPage({
   let synced = false;
   let pendingCount = 0;
   let duplicateCount = 0;
+  let meta: CustomerFilterMeta | null = null;
+  let shopCurrency: string | null = null;
+  let marketId: string | null = null;
+  let marketLabel: string | null = null;
 
   if (connected && dbReady) {
     try {
@@ -43,9 +60,15 @@ export default async function CustomersPage({
         error = "Tienda aún sin sincronizar. Presiona Sincronizar.";
       } else {
         synced = true;
-        pendingCount = (await pendingDomains(storeId)).length;
-        duplicateCount = await countDuplicateEmails(storeId);
-        const fetchPage = (p: number) => queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort);
+        // Filtro global por país/mercado (?market= del header).
+        // NULL-comodín: los sin compras se ven en todo filtro.
+        const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
+        marketId = scope?.market?.id ?? null;
+        marketLabel = scope?.market ? displayMarket(scope.market) : null;
+        pendingCount = (await pendingDomains(storeId, scope).catch(() => [])).length;
+        duplicateCount = await countDuplicateEmails(storeId, scope).catch(() => 0);
+        const fetchPage = (p: number) =>
+          queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort, filters, scope);
         let res = await fetchPage(page);
         totalCount = res.totalCount;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -55,6 +78,18 @@ export default async function CustomersPage({
         }
         rows = res.rows;
         totalCount = res.totalCount;
+        // Meta para los dropdowns (conteos + cuartiles). Si falla, la tabla
+        // sigue funcionando; los filtros quedan sin opciones.
+        const [metaRes, storeRes] = await Promise.all([
+          getCustomerFilterMeta(storeId, scope).catch(() => null),
+          getSupabase()
+            .from("stores")
+            .select("shop_currency")
+            .eq("id", storeId)
+            .maybeSingle(),
+        ]);
+        meta = metaRes;
+        shopCurrency = (storeRes.data?.shop_currency as string | null) ?? null;
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
@@ -64,7 +99,9 @@ export default async function CustomersPage({
   return (
     <div className="flex w-full flex-col gap-6 p-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold tracking-tight">Customers</h1>
+        <h1 className="text-lg font-semibold tracking-tight">
+          Customers{marketLabel ? ` · ${marketLabel}` : ""}
+        </h1>
         <span className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             {!connected ? "sin conexión" : !dbReady ? "sin BD" : `${totalCount} en BD`}
@@ -74,7 +111,7 @@ export default async function CustomersPage({
               {synced && <EnrichmentControls pending={pendingCount} />}
               {synced && duplicateCount > 0 && (
                 <Button
-                  render={<Link href="/customers/duplicates" />}
+                  render={<Link href={withMarketParam("/customers/duplicates", marketId)} />}
                   nativeButton={false}
                   variant="outline"
                   size="sm"
@@ -127,7 +164,19 @@ export default async function CustomersPage({
       )}
 
       {synced && !error && (
-        <CustomersView rows={rows} totalCount={totalCount} q={q} page={page} pageSize={PAGE_SIZE} sortKey={sort.key} sortDir={sort.dir} />
+        <CustomersView
+          rows={rows}
+          totalCount={totalCount}
+          q={q}
+          page={page}
+          pageSize={PAGE_SIZE}
+          sortKey={sort.key}
+          sortDir={sort.dir}
+          filters={filters}
+          meta={meta}
+          shopCurrency={shopCurrency}
+          marketId={marketId}
+        />
       )}
     </div>
   );

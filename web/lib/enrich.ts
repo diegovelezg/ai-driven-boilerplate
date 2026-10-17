@@ -9,6 +9,7 @@ import { extractFirmographics } from "@/lib/ai/enrich";
 import { judgeBusinessDomain, B2B_GATE_THRESHOLD } from "@/lib/ai/decisions";
 import { searchSearxng, scrapable } from "@/lib/prospect";
 import { mapPool } from "@/lib/parallel";
+import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 
 const UA = "Mozilla/5.0 (compatible; RetainEngineBot/0.1)";
 // Sitios legítimos responden en <3s (medido); colgados = muertos. 8s acota el
@@ -109,7 +110,8 @@ function hostOf(url: string): string {
 /**
  * Capa 3 (rescue): si el fetch directo falló, buscar el negocio en la web con
  * queries deterministas y verificar identidad (guard v1) antes de extraer.
- * Solo para dominios con compradores (filtro de valor): el resto muere en failed.
+ * Todos los dominios registrados interesan (aunque tengan 0 compras): se
+ * intenta rescue siempre.
  * Guard v1 (smoke 2026-10-16): host contiene etiqueta, o título contiene
  * etiqueta/empresa declarada. Denylist social vía `scrapable()` (prospector).
  * Ambiguos (homónimos tipo servex0) se aceptan y quedan auditables por source_url.
@@ -118,10 +120,6 @@ async function rescueDomain(
   domain: string,
   users: DomainUsers,
 ): Promise<{ text: string; url: string } | null> {
-  if (users.buyers === 0) {
-    log(`${domain} capa=rescue veredicto=saltado-sin-compradores`);
-    return null;
-  }
   const label = domain.split(".")[0].toLowerCase();
   const tld = domain.split(".").pop()?.toLowerCase() ?? "";
   const Label = label.length > 0 ? label[0].toUpperCase() + label.slice(1) : label;
@@ -172,18 +170,24 @@ export interface EnrichSummary {
 
 /**
  * Dominios de negocio/institucionales presentes entre los customers de la tienda
- * que aún no tienen fila en `domains`. (Se calcula en JS: PostgREST no hace split_part.)
+ * que aún no están resueltos en `domains`. Terminal = business/institutional/
+ * personal, o unreachable con failed_attempts >= MAX_DOMAIN_ATTEMPTS.
+ * Los unreachable con intentos restantes siguen pendientes (reintentan en la
+ * próxima automática). (Se calcula en JS: PostgREST no hace split_part.)
  */
-export async function pendingDomains(storeId: string): Promise<string[]> {
+export async function pendingDomains(
+  storeId: string,
+  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
+): Promise<string[]> {
   const db = getSupabase();
 
   const domains = new Set<string>();
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await db
-      .from("customers")
-      .select("email")
-      .eq("store_id", storeId)
-      .range(from, from + 999);
+    const { data, error } = await applyScopeFilter(
+      db.from("customers").select("email").eq("store_id", storeId),
+      scope,
+      "id",
+    ).range(from, from + 999);
     if (error) throw new Error(`Customers read: ${error.message}`);
     for (const r of data ?? []) {
       const d = domainFromEmail(String(r.email ?? ""));
@@ -194,16 +198,38 @@ export async function pendingDomains(storeId: string): Promise<string[]> {
   if (domains.size === 0) return [];
 
   const list = [...domains];
-  const existing = new Set<string>();
+  const terminal = new Set<string>();
   for (let i = 0; i < list.length; i += 500) {
-    const { data, error } = await db
+    // failed_attempts/last_error existen desde 20261016000016; si la migración
+    // aún no se aplicó, se degrada al comportamiento anterior (toda fila = terminal).
+    let rows: Array<Record<string, unknown>> | null = null;
+    const attempt = await db
       .from("domains")
-      .select("domain")
+      .select("domain,domain_type,failed_attempts")
       .in("domain", list.slice(i, i + 500));
-    if (error) throw new Error(`Domains read: ${error.message}`);
-    for (const r of data ?? []) existing.add(String(r.domain));
+    if (attempt.error) {
+      const fallback = await db
+        .from("domains")
+        .select("domain")
+        .in("domain", list.slice(i, i + 500));
+      if (fallback.error) throw new Error(`Domains read: ${fallback.error.message}`);
+      for (const r of fallback.data ?? []) terminal.add(String((r as Record<string, unknown>).domain));
+      continue;
+    }
+    rows = (attempt.data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      const t = String(r.domain_type ?? "");
+      const n = Number(r.failed_attempts ?? 0);
+      if (t === "business" || t === "institutional" || t === "personal") {
+        terminal.add(String(r.domain));
+      } else if (t === "unreachable") {
+        if (n >= MAX_DOMAIN_ATTEMPTS) terminal.add(String(r.domain));
+      } else {
+        terminal.add(String(r.domain));
+      }
+    }
   }
-  return list.filter((d) => !existing.has(d));
+  return list.filter((d) => !terminal.has(d));
 }
 
 export type EnrichDomainResult = "enriched" | "skipped" | "failed";
@@ -236,6 +262,47 @@ async function domainUsers(domain: string): Promise<DomainUsers> {
   };
 }
 
+/** Intentos fetch+rescue antes de marcar un dominio como terminal (unreachable). */
+export const MAX_DOMAIN_ATTEMPTS = 3;
+
+/**
+ * Persiste un fallo fetch+rescue: incrementa failed_attempts y guarda last_error.
+ * A partir de MAX_DOMAIN_ATTEMPTS el dominio es terminal (sale del automático;
+ * el reintento manual con force=true sigue posible).
+ * Si la migración 20261016000016 aún no se aplicó, no persiste (comportamiento
+ * anterior: el dominio seguirá pendiente).
+ */
+async function recordFailure(domain: string, lastError: string): Promise<number> {
+  const db = getSupabase();
+  let attempts = 1;
+  try {
+    const { data } = await db
+      .from("domains")
+      .select("failed_attempts")
+      .eq("domain", domain)
+      .maybeSingle();
+    attempts = Number((data as Record<string, unknown> | null)?.failed_attempts ?? 0) + 1;
+  } catch {
+    return 1;
+  }
+  const { error } = await db.from("domains").upsert(
+    {
+      domain,
+      domain_type: "unreachable",
+      company_name: null,
+      failed_attempts: attempts,
+      last_error: lastError,
+      enriched_at: new Date().toISOString(),
+    },
+    { onConflict: "domain" },
+  );
+  if (error) {
+    log(`${domain} no se pudo persistir el fallo (${error.message}); seguirá pendiente`);
+    return attempts;
+  }
+  return attempts;
+}
+
 /** Enriquece un dominio. `force` re-scrapea aunque ya exista. */
 export async function enrichDomain(
   domain: string,
@@ -245,13 +312,35 @@ export async function enrichDomain(
   const db = getSupabase();
 
   if (!force) {
-    const { data, error } = await db
-      .from("domains")
-      .select("domain")
-      .eq("domain", d)
-      .maybeSingle();
-    if (error) throw new Error(`Domains read: ${error.message}`);
-    if (data) return "skipped";
+    // Fila terminal (enriquecido/personal/unreachable agotado) → skipped.
+    // Unreachable con intentos restantes → se reintenta.
+    let row: Record<string, unknown> | null = null;
+    try {
+      const { data, error } = await db
+        .from("domains")
+        .select("domain,domain_type,failed_attempts")
+        .eq("domain", d)
+        .maybeSingle();
+      if (error) throw new Error(`Domains read: ${error.message}`);
+      row = (data as Record<string, unknown> | null) ?? null;
+    } catch (e) {
+      const { data, error } = await db
+        .from("domains")
+        .select("domain")
+        .eq("domain", d)
+        .maybeSingle();
+      if (error) throw new Error(`Domains read: ${error.message}`);
+      if (data) return "skipped";
+      row = null;
+      log(`${d} sin columnas de reintento (${e instanceof Error ? e.message : e}); se sigue`);
+    }
+    if (row) {
+      const t = String(row.domain_type ?? "");
+      const n = Number(row.failed_attempts ?? 0);
+      if (t === "business" || t === "institutional" || t === "personal") return "skipped";
+      if (t === "unreachable" && n >= MAX_DOMAIN_ATTEMPTS) return "skipped";
+      if (t !== "unreachable") return "skipped";
+    }
   }
 
   // PILOTO gate B2B (Decisions, con contexto local de quién usa el dominio):
@@ -274,6 +363,8 @@ export async function enrichDomain(
           company_name: null,
           model: "openai/gpt-6-luna:gate",
           confidence: v.probability,
+          failed_attempts: 0,
+          last_error: null,
           enriched_at: new Date().toISOString(),
         },
         { onConflict: "domain" },
@@ -291,7 +382,12 @@ export async function enrichDomain(
   if (!page) {
     log(`${d} capa=fetch resultado=fallo ms=${now() - tFetch}`);
     const rescued = await rescueDomain(d, users);
-    if (!rescued) return "failed";
+    if (!rescued) {
+      const attempts = await recordFailure(d, "fetch-directo+rescue sin éxito (detalle en log)");
+      const terminal = attempts >= MAX_DOMAIN_ATTEMPTS;
+      log(`${d} → failed intento=${attempts}/${MAX_DOMAIN_ATTEMPTS} ${terminal ? "terminal=unreachable" : "reintentable"}`);
+      return "failed";
+    }
     page = rescued;
   } else {
     log(`${d} capa=fetch url=${page.url} chars=${page.text.length} ms=${now() - tFetch}`);
@@ -312,6 +408,8 @@ export async function enrichDomain(
       source_url: page.url,
       model: f.model,
       confidence: f.confidence,
+      failed_attempts: 0,
+      last_error: null,
       enriched_at: new Date().toISOString(),
     },
     { onConflict: "domain" },

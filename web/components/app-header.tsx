@@ -1,19 +1,29 @@
 "use client";
 
+import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { UserMenu } from "@/components/user-menu";
+import { MarketSelector } from "@/components/market-selector";
+import type { TenantMarket } from "@/lib/markets";
 
 const titles = [
+  { href: "/finanzas", label: "Finanzas" },
   { href: "/review", label: "Review Inbox" },
-  { href: "/chat", label: "Chat" },
   { href: "/customers", label: "Customers" },
   { href: "/campaigns", label: "Campaigns" },
   { href: "/settings", label: "Settings" },
   { href: "/", label: "Dashboard" },
 ];
 
-export function AppHeader() {
+export function AppHeader({
+  stores = [],
+  marketsByStore = {},
+}: {
+  stores?: Array<{ id: string }>;
+  marketsByStore?: Record<string, TenantMarket[]>;
+}) {
   const pathname = usePathname();
   const title =
     titles.find((t) =>
@@ -21,10 +31,16 @@ export function AppHeader() {
     )?.label ?? "Dashboard";
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+    <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-4">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-2 h-4" />
       <span className="text-sm font-medium">{title}</span>
+      <span className="ms-auto flex items-center gap-2">
+        <Suspense>
+          <MarketSelector stores={stores} marketsByStore={marketsByStore} />
+        </Suspense>
+        <UserMenu />
+      </span>
     </header>
   );
 }

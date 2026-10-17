@@ -1,10 +1,7 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AppHeader } from "@/components/app-header";
-import { AppSidebar } from "@/components/app-sidebar";
-import { BackgroundStatus } from "@/components/background-status";
 import { ThemeProvider } from "@/components/theme-provider";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -22,7 +19,9 @@ export const metadata: Metadata = {
   description: "Customer retention AI for e-commerce",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+// Layout raíz mínimo: solo tema. El chrome del dashboard (sidebar/header)
+// vive en app/(dashboard)/layout.tsx; /login queda totalmente independiente.
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
@@ -36,15 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <BackgroundStatus>
-            <SidebarProvider defaultOpen={false}>
-              <AppSidebar />
-              <SidebarInset>
-                <AppHeader />
-                {children}
-              </SidebarInset>
-            </SidebarProvider>
-          </BackgroundStatus>
+          {children}
         </ThemeProvider>
       </body>
     </html>

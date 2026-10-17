@@ -3,7 +3,24 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
+import {
+  classifyPopulation,
+  freqBucketIndex,
+  SEGMENT_ORDER,
+  tierBoundsOf,
+  tierIndexOf,
+  type PopulationRow,
+  type SegmentKey,
+  type TierBounds,
+} from "@/lib/insights";
 import type { CanonicalCustomer } from "@/lib/medusa";
+import { resolveShopCurrency, resolveTenantCycleDays } from "@/lib/store-profiles";
+import {
+  applyScopeFilter,
+  effectiveScopeFilter,
+  isEmptyScope,
+  type MarketScope,
+} from "@/lib/markets";
 
 export async function resolveStoreId(medusaUrl: string): Promise<string | null> {
   if (!isSupabaseConfigured()) return null;
@@ -39,6 +56,8 @@ export interface EditableCustomer extends CanonicalCustomer {
   /** UUID de la fila en Supabase (para writes). `id` sigue siendo el external_id. */
   dbId: string;
   customerType: string;
+  /** ISO2 atribuido por mercado (moda de sus órdenes). null = sin país. */
+  country: string | null;
   /** companyName proviene del enriquecimiento (no de Medusa ni edición manual). */
   companyNameEnriched: boolean;
   base: {
@@ -90,6 +109,7 @@ export function toEditableCustomer(
     companyName: smartTitleCase(companyName),
     companyNameEnriched,
     customerType: eff(overrides, "customer_type", baseCustomerType) ?? "B2C",
+    country: (r.country as string) ?? null,
     createdAt: (r.external_created_at as string) ?? null,
     ordersCount,
     totalSpent,
@@ -208,19 +228,268 @@ async function loadEnrichedByDomain(
   return map;
 }
 
+export interface CustomerFilters {
+  segment: SegmentKey | null;
+  /** 0–3 = cuartil del ticket medio (misma regla que el dashboard). */
+  ticketTier: number | null;
+  /** 0–3 = tramo de frecuencia (1, 2, 3–5, 6+). */
+  freqBucket: number | null;
+  /** Solo insignia "No los pierdas" (top gasto + inactivo). */
+  noLosPierdas: boolean;
+}
+
+export const NO_CUSTOMER_FILTERS: CustomerFilters = {
+  segment: null,
+  ticketTier: null,
+  freqBucket: null,
+  noLosPierdas: false,
+};
+
+/** Valida segment/ticket/freq/vip de searchParams; lo inválido se ignora. */
+export function parseCustomerFilters(sp: {
+  segment?: string;
+  ticket?: string;
+  freq?: string;
+  vip?: string;
+}): CustomerFilters {
+  const segment = SEGMENT_ORDER.includes(sp.segment as SegmentKey)
+    ? (sp.segment as SegmentKey)
+    : null;
+  const t = sp.ticket === undefined ? NaN : Number.parseInt(sp.ticket, 10);
+  const ticketTier = t >= 0 && t <= 3 ? t : null;
+  const fr = sp.freq === undefined ? NaN : Number.parseInt(sp.freq, 10);
+  const freqBucket = fr >= 0 && fr <= 3 ? fr : null;
+  return { segment, ticketTier, freqBucket, noLosPierdas: sp.vip === "1" };
+}
+
+export function hasCustomerFilters(f: CustomerFilters): boolean {
+  return (
+    f.segment !== null || f.ticketTier !== null || f.freqBucket !== null || f.noLosPierdas
+  );
+}
+
+export interface CustomerFilterMeta {
+  segments: Array<{ key: SegmentKey; count: number }>;
+  tierBounds: TierBounds | null;
+  buyers: number;
+  freqBuckets: Array<{ label: string; count: number }>;
+  /** Cuántos llevan la insignia "No los pierdas" (no es segmento, es tratamiento). */
+  noLosPierdas: number;
+}
+
+/** Población completa para clasificar (segmento + tier). Misma fuente que el dashboard. */
+async function loadPopulationRows(
+  storeId: string,
+  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
+): Promise<PopulationRow[]> {
+  const db = getSupabase();
+  const all: PopulationRow[] = [];
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await applyScopeFilter(
+      db
+        .from("customers")
+        .select("orders_count,total_spent,last_order_at,currency,customer_type")
+        .eq("store_id", storeId),
+      scope,
+      "id",
+    ).range(off, off + 999);
+    if (error) throw new Error(`DB read: ${error.message}`);
+    all.push(
+      ...(((data as Array<Record<string, unknown>>) ?? []).map((r) => ({
+        orders_count: Number(r.orders_count ?? 0),
+        total_spent: Number(r.total_spent ?? 0),
+        last_order_at: (r.last_order_at as string | null) ?? null,
+        currency: (r.currency as string | null) ?? null,
+        customer_type: (r.customer_type as string | null) ?? null,
+      })) satisfies PopulationRow[]),
+    );
+    if (!data || data.length < 1000) break;
+  }
+  return all;
+}
+
+/** Conteos por segmento + cuartiles del ticket (para los dropdowns de filtro). */
+export async function getCustomerFilterMeta(
+  storeId: string,
+  scope: MarketScope | null = null,
+): Promise<CustomerFilterMeta> {
+  const pop = await loadPopulationRows(storeId, scope);
+  // Techo absoluto de R por ciclo del tenant (no corromper filtros si falla).
+  // Tiers en la moneda del market filtrado (MX→MXN); sin filtro, la tienda.
+  const [cycleDays, shopCurrency] = await Promise.all([
+    resolveTenantCycleDays(storeId).catch(() => null),
+    resolveShopCurrency(storeId).catch(() => null),
+  ]);
+  const tierCurrency = scope?.market?.currency?.toUpperCase() ?? shopCurrency;
+  const classified = classifyPopulation(pop, Date.now(), cycleDays, tierCurrency);
+  const counts = new Map<SegmentKey, number>();
+  const avgs: number[] = [];
+  let noLosPierdas = 0;
+  const freqBuckets = [
+    { label: "1 compra", count: 0 },
+    { label: "2 compras", count: 0 },
+    { label: "3–5 compras", count: 0 },
+    { label: "6+ compras", count: 0 },
+  ];
+  for (let i = 0; i < classified.length; i += 1) {
+    const c = classified[i];
+    counts.set(c.segment, (counts.get(c.segment) ?? 0) + 1);
+    if (c.noLosPierdas) noLosPierdas += 1;
+    const b = freqBucketIndex(c.frequency);
+    if (b !== null) freqBuckets[b].count += 1;
+    // Tiers solo cohorte shop-currency (nunca mezclar PEN con MXN).
+    const cur = pop[i]?.currency;
+    if (c.avgTicketMinor === null) continue;
+    if (tierCurrency !== null && cur != null && cur.toUpperCase() !== tierCurrency.toUpperCase()) continue;
+    avgs.push(c.avgTicketMinor);
+  }
+  return {
+    segments: SEGMENT_ORDER.map((key) => ({ key, count: counts.get(key) ?? 0 })).filter(
+      (s) => s.count > 0,
+    ),
+    tierBounds: tierBoundsOf(avgs),
+    buyers: pop.filter((r) => Number(r.orders_count ?? 0) > 0).length,
+    freqBuckets,
+    noLosPierdas,
+  };
+}
+
 export async function queryStoreCustomers(
   storeId: string,
   q: string,
   page: number,
   pageSize: number,
   sort: CustomersSort = { key: "email", dir: "asc" },
+  filters: CustomerFilters = NO_CUSTOMER_FILTERS,
+  // Filtro global por mercado (null = todos). Por ISO2 (corto); IDs solo en
+  // el fallback sin países (ver resolveMarketScope en lib/markets).
+  // NULL-comodín: los sin país (r.country null) pasan cualquier filtro.
+  market: MarketScope | null = null,
 ): Promise<DbCustomersPage> {
+  // Predicado JS (misma semántica que applyScopeFilter) para los caminos
+  // que resuelven en memoria. NULL-comodín: sin país pasa todo filtro.
+  const inMarket = (r: Record<string, unknown>): boolean => {
+    if (!market || (!market.countries && !market.customerIds)) return true;
+    if (isEmptyScope(market)) return r.country == null;
+    const { countries, ids } = effectiveScopeFilter(market);
+    if (countries) return r.country == null || countries.includes(String(r.country));
+    if (ids) return r.country == null || ids.includes(String(r.id));
+    return true;
+  };
   const db = getSupabase();
   const from = (page - 1) * pageSize;
   const ascending = sort.dir === "asc";
   const term = q.trim();
   const like = term ? `%${term.replace(/[%_\\]/g, "\\$&")}%` : null;
   const searchOr = `email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like}`;
+
+  // Con filtros (segmento/ticket) se resuelve en JS sobre la población:
+  // con mercado, segmento y ticket son relativos AL MERCADO (quintiles y
+  // cuartiles de su cohorte, misma regla que el dashboard y los dropdowns).
+  if (hasCustomerFilters(filters)) {
+    const all: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 1000) {
+      const { data, error } = await db
+        .from("customers")
+        .select("*")
+        .eq("store_id", storeId)
+        .range(off, off + 999);
+      if (error) throw new Error(`DB read: ${error.message}`);
+      all.push(...((data as Array<Record<string, unknown>>) ?? []));
+      if (!data || data.length < 1000) break;
+    }
+    const scoped = all.filter(inMarket);
+    const pop: PopulationRow[] = scoped.map((r) => ({
+      orders_count: Number(r.orders_count ?? 0),
+      total_spent: Number(r.total_spent ?? 0),
+      last_order_at: (r.last_order_at as string | null) ?? null,
+      currency: (r.currency as string | null) ?? null,
+      customer_type: (r.customer_type as string | null) ?? null,
+    }));
+    const [fcycleDays, fshopCurrency] = await Promise.all([
+      resolveTenantCycleDays(storeId).catch(() => null),
+      resolveShopCurrency(storeId).catch(() => null),
+    ]);
+    // Tiers en la moneda del market filtrado (MX→MXN); sin filtro, la tienda.
+    const ftierCurrency = market?.market?.currency?.toUpperCase() ?? fshopCurrency;
+    const classified = classifyPopulation(pop, Date.now(), fcycleDays, ftierCurrency);
+    const bounds = tierBoundsOf(
+      classified.flatMap((c, i) => {
+        if (c.avgTicketMinor === null) return [];
+        // Tiers solo cohorte de la moneda vista.
+        const cur = pop[i]?.currency;
+        if (
+          ftierCurrency !== null &&
+          cur != null &&
+          cur.toUpperCase() !== ftierCurrency.toUpperCase()
+        )
+          return [];
+        return [c.avgTicketMinor];
+      }),
+    );
+    const enriched = await loadEnrichedByDomain(db, scoped);
+    const needle = term.toLowerCase();
+    const matched: EditableCustomer[] = [];
+    scoped.forEach((r, i) => {
+      const c = classified[i];
+      if (filters.segment !== null && c.segment !== filters.segment) return;
+      if (filters.noLosPierdas && !c.noLosPierdas) return;
+      if (filters.ticketTier !== null) {
+        if (c.avgTicketMinor === null || bounds === null) return;
+        // Cuartiles en la moneda vista: fuera de ella el tramo no aplica.
+        const cur = String(r.currency ?? "");
+        if (
+          ftierCurrency !== null &&
+          cur !== "" &&
+          cur.toUpperCase() !== ftierCurrency.toUpperCase()
+        )
+          return;
+        if (tierIndexOf(c.avgTicketMinor, bounds) !== filters.ticketTier) return;
+      }
+      if (filters.freqBucket !== null && freqBucketIndex(c.frequency) !== filters.freqBucket) {
+        return;
+      }
+      if (needle) {
+        const hay = [r.email, r.first_name, r.last_name, r.phone].map((v) =>
+          String(v ?? "").toLowerCase(),
+        );
+        if (!hay.some((h) => h.includes(needle))) return;
+      }
+      matched.push(toEditableCustomer(r, enriched));
+    });
+    const dir = ascending ? 1 : -1;
+    matched.sort((a, b) => {
+      // Desempate estable por email asc (igual que en SQL).
+      const emailTie = a.email.localeCompare(b.email, "es", { sensitivity: "base" });
+      switch (sort.key) {
+        case "name": {
+          const an = `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim();
+          const bn = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
+          return dir * an.localeCompare(bn, "es", { sensitivity: "base" }) || emailTie;
+        }
+        case "phone":
+          return (
+            dir * (a.phone ?? "").localeCompare(b.phone ?? "", "es", { sensitivity: "base" }) ||
+            emailTie
+          );
+        case "company": {
+          const av = (a.companyName ?? "").trim();
+          const bv = (b.companyName ?? "").trim();
+          if (!av && !bv) return emailTie;
+          if (!av) return 1; // vacíos al final
+          if (!bv) return -1;
+          return dir * av.localeCompare(bv, "es", { sensitivity: "base" }) || emailTie;
+        }
+        case "orders":
+          return dir * (a.ordersCount - b.ordersCount) || emailTie;
+        case "total":
+          return dir * (a.totalSpent - b.totalSpent) || emailTie;
+        default:
+          return dir * emailTie;
+      }
+    });
+    return { rows: matched.slice(from, from + pageSize), totalCount: matched.length };
+  }
 
   // "Empresa" se ordena por el nombre EFECTIVO (manual > Medusa > enriquecido),
   // que puede venir del enriquecimiento por dominio → se resuelve en JS.
@@ -235,7 +504,7 @@ export async function queryStoreCustomers(
       if (!data || data.length < 1000) break;
     }
     const enriched = await loadEnrichedByDomain(db, all);
-    const rows = all.map((r) => toEditableCustomer(r, enriched));
+    const rows = all.filter(inMarket).map((r) => toEditableCustomer(r, enriched));
     rows.sort((a, b) => {
       const av = (a.companyName ?? "").trim();
       const bv = (b.companyName ?? "").trim();
@@ -248,7 +517,11 @@ export async function queryStoreCustomers(
     return { rows: rows.slice(from, from + pageSize), totalCount: rows.length };
   }
 
-  let query = db.from("customers").select("*", { count: "exact" }).eq("store_id", storeId);
+  let query = applyScopeFilter(
+    db.from("customers").select("*", { count: "exact" }).eq("store_id", storeId),
+    market,
+    "id",
+  );
   switch (sort.key) {
     case "email":
       query = query.order("email", { ascending });

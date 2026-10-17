@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -112,6 +113,18 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     const t = setTimeout(dismiss, succeeded ? AUTO_HIDE_MS : ERROR_HIDE_MS);
     return () => clearTimeout(t);
   }, [finished, succeeded, dismiss]);
+
+  // El run terminó mientras lo vigilábamos (al menos un tick de polling):
+  // refresca el server render para que los skeletons se resuelvan en datos.
+  // `now === null` = la página cargó con el run ya terminado: no refrescar.
+  const watchedRun = useRef(false);
+  useEffect(() => {
+    if (running) watchedRun.current = true;
+    if (watchedRun.current && finished && now !== null) {
+      watchedRun.current = false;
+      router.refresh();
+    }
+  }, [running, finished, now, router]);
 
   const total = run?.total ?? 0;
   const processed = run?.processed ?? 0;

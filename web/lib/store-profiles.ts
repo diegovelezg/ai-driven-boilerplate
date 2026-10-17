@@ -260,3 +260,28 @@ export async function upsertStoreProfile(p: StoreProfile): Promise<void> {
   );
   if (error) throw new Error(`DB write: ${error.message}`);
 }
+
+/**
+ * Ciclo de recompra del tenant en días (dinámico por tienda): ciclo declarado
+ * → default del arquetipo → null (sin ancla). Úsalo como techo absoluto para
+ * que en bases dormidas un R relativo no corone "Campeones" de hace 200 días.
+ */
+export async function resolveTenantCycleDays(storeId: string): Promise<number | null> {
+  const profile = await getStoreProfile(storeId).catch(() => null);
+  if (!profile) return null;
+  return (
+    profile.repurchaseCycleDays ?? ARCHETYPES[profile.archetype]?.defaultCycleDays ?? null
+  );
+}
+
+/** Moneda de la tienda (universo monetario: nunca mezclar PEN con MXN). */
+export async function resolveShopCurrency(storeId: string): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  const { data, error } = await getSupabase()
+    .from("stores")
+    .select("shop_currency")
+    .eq("id", storeId)
+    .maybeSingle();
+  if (error) return null;
+  return (data?.shop_currency as string | null) ?? null;
+}

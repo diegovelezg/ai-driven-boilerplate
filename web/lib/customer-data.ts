@@ -4,6 +4,7 @@ import { getSupabase } from "@/lib/supabase";
 import { isRealOrder } from "@/lib/medusa";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
+import { absoluteRecencyScore } from "@/lib/insights";
 
 export interface CustomerOrderItem {
   title: string;
@@ -28,6 +29,8 @@ export interface CustomerRfm {
   m: number | null;
   /** Segmento RFM simplificado: Nuevo|Campeón|Recurrente|Ocasional|En riesgo|Inactivo|Sin compras */
   segment: string;
+  /** Insignia "No los pierdas" (Can't Lose Them): top gasto + inactivo. */
+  noLosPierdas: boolean;
   /** Ciclo esperado de recompra (días): mediana del cliente → ciclo de la tienda → default del arquetipo. */
   expectedCycleDays: number | null;
   /** De dónde salió el ciclo: cliente|tienda|arquetipo. */
@@ -55,7 +58,9 @@ export interface CustomerFirmographics {
   enrichedAt: string | null;
 }
 
-/** Mediana de intervalos entre compras (días). null si F<2 o sin fechas. */
+/** Mediana de intervalos entre compras (días). null si F<2 o sin fechas.
+ *  Un solo gap no es ritmo: se exigen ≥2 gaps (≥3 sesiones); si no, null y el
+ *  ciclo cae a tienda/arquetipo. */
 export function medianInterval(datesAsc: Date[]): number | null {
   if (datesAsc.length < 2) return null;
   // Sesiones: pedidos con <1d de separación son una sola compra en cuotas
@@ -70,6 +75,7 @@ export function medianInterval(datesAsc: Date[]): number | null {
   for (let i = 1; i < sessions.length; i += 1) {
     gaps.push((sessions[i].getTime() - sessions[i - 1].getTime()) / 86_400_000);
   }
+  if (gaps.length < 2) return null;
   gaps.sort((a, b) => a - b);
   const mid = Math.floor(gaps.length / 2);
   const med = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
@@ -176,7 +182,9 @@ export async function loadCustomerOrdersAndRfm(
 
   const f = frequency > 0 ? quintile(fPop, frequency) : null;
   const m = frequency > 0 ? quintile(mPop, monetary) : null;
-  const r = recencyDays !== null && frequency > 0 ? 6 - quintile(rPop, recencyDays) : null;
+  // R con techo absoluto por ciclo del tenant (misma regla que insights.ts):
+  // en bases dormidas el quintil relativo corona "Campeones" de hace 200 días.
+  const rQuint = recencyDays !== null && frequency > 0 ? 6 - quintile(rPop, recencyDays) : null;
 
   // Ciclo esperado: mediana del cliente → ciclo declarado de la tienda →
   // default del arquetipo. El perfil del tenant por fin alimenta el motor.
@@ -192,6 +200,9 @@ export async function loadCustomerOrdersAndRfm(
     ? (ARCHETYPES[tenantProfile.archetype]?.defaultCycleDays ?? null)
     : null;
   const expectedCycleDays = customerMedian ?? tenantCycle ?? archetypeCycle;
+  // R final con techo absoluto por ciclo del tenant (misma regla que insights.ts).
+  const rCap = absoluteRecencyScore(recencyDays, tenantCycle ?? archetypeCycle);
+  const r = rQuint !== null && rCap !== null ? Math.min(rQuint, rCap) : rQuint;
   const cycleSource =
     customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
   const churnMultiplier = tenantProfile?.churnMultiplier ?? 1.25;
@@ -220,6 +231,7 @@ export async function loadCustomerOrdersAndRfm(
       f,
       m,
       segment: segment(r, frequency),
+      noLosPierdas: m === 5 && r !== null && r <= 2,
       expectedCycleDays,
       cycleSource,
       churnMultiplier,

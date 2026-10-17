@@ -10,9 +10,14 @@ import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 
 const log = createLogger("scout");
 
+/** Versión del criterio detector. Sube cuando cambia la regla. */
+export const SCOUT_GEN = "scout:v1:median";
+
 const DAY_MS = 86_400_000;
 
-/** Mediana de intervalos entre sesiones de compra (gaps <1d = una sola compra en cuotas). */
+/** Mediana de intervalos entre sesiones de compra (gaps <1d = una sola compra en cuotas).
+ *  Un solo gap no es ritmo: se exigen ≥2 gaps (≥3 sesiones); si no, null y el
+ *  ciclo cae a tienda/arquetipo. */
 function medianInterval(datesAsc: Date[]): number | null {
   if (datesAsc.length < 2) return null;
   const sessions: Date[] = [datesAsc[0]];
@@ -26,6 +31,7 @@ function medianInterval(datesAsc: Date[]): number | null {
   for (let i = 1; i < sessions.length; i += 1) {
     gaps.push((sessions[i].getTime() - sessions[i - 1].getTime()) / DAY_MS);
   }
+  if (gaps.length < 2) return null;
   gaps.sort((a, b) => a - b);
   const mid = Math.floor(gaps.length / 2);
   const med = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
@@ -38,6 +44,8 @@ interface ScoutCustomer {
   orders_count: number;
   total_spent: number;
   last_order_at: string | null;
+  /** ISO2 atribuido (para el filtro global; lo escribe en la señal). */
+  country: string | null;
 }
 
 function isRealRow(o: Record<string, unknown>): boolean {
@@ -73,14 +81,16 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     const multiplier = profile?.churnMultiplier ?? 1.25;
     log(`run ${runId} start store=${storeId} ciclo_tienda=${tenantCycle} ciclo_arquetipo=${archetypeCycle} mult=${multiplier}`);
 
-    // Buyers con última compra conocida (los sin compras no pueden estar "vencidos").
+    // Solo F>=2: sin recurrencia no hay churn que detectar (una sola compra no
+    // establece ritmo; esos van por playbook de 2ª compra, no por señal).
+    // Los sin compras tampoco pueden estar "vencidos".
     const customers: ScoutCustomer[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db
         .from("customers")
-        .select("id,email,orders_count,total_spent,last_order_at")
+        .select("id,email,orders_count,total_spent,last_order_at,country")
         .eq("store_id", storeId)
-        .gt("orders_count", 0)
+        .gte("orders_count", 2)
         .range(from, from + 999);
       if (error) throw new Error(`Customers read: ${error.message}`);
       for (const r of (data ?? []) as Array<Record<string, unknown>>) {
@@ -90,6 +100,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           orders_count: Number(r.orders_count ?? 0),
           total_spent: Number(r.total_spent ?? 0),
           last_order_at: (r.last_order_at as string | null) ?? null,
+          country: (r.country as string | null) ?? null,
         });
       }
       if (!data || data.length < 1000) break;
@@ -122,14 +133,20 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
 
         const { data: existing } = await db
           .from("churn_signals")
-          .select("id,score")
+          .select("id,score,status")
           .eq("store_id", storeId)
           .eq("customer_id", c.id)
-          .in("status", ["open", "prioritized"])
+          .in("status", ["open", "prioritized", "actioned"])
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        const prev = (existing ?? null) as { id: string; score: number | null } | null;
+        const prev = (existing ?? null) as { id: string; score: number | null; status: string } | null;
+        // Ya gestionada (con borrador): no duplicar señal ni borrador. El loop
+        // se cierra por analyst (conversión) o por rechazo humano en Review.
+        if (prev?.status === "actioned") {
+          log(`run ${runId} ${c.email} skip ya gestionada (${prev.id})`);
+          continue;
+        }
 
         if (recency === null || expected === null) {
           if (scanned % 200 === 0) log(`run ${runId} ${c.email} skip recency=${recency} expected=${expected}`);
@@ -143,7 +160,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           if (prev) {
             const { error } = await db
               .from("churn_signals")
-              .update({ score, reason })
+              .update({ score, reason, country: c.country })
               .eq("id", prev.id);
             if (error) throw new Error(`Signal update: ${error.message}`);
             updated += 1;
@@ -152,10 +169,12 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
             const { error } = await db.from("churn_signals").insert({
               store_id: storeId,
               customer_id: c.id,
+              country: c.country,
               kind: "churn_risk",
               score,
               reason,
               status: "open",
+              evidence_json: { generator: SCOUT_GEN, run_id: runId, at: new Date().toISOString() },
             });
             if (error) throw new Error(`Signal insert: ${error.message}`);
             created += 1;

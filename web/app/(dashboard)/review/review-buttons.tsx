@@ -43,8 +43,7 @@ export function ApprovePair({
   );
 }
 
-export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) {
-  const router = useRouter();
+export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);
   return (
     <Button
@@ -63,5 +62,42 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
     >
       Descartar
     </Button>
+  );
+}
+
+/** Regenera borradores con criterios viejos (los borra y redacta de nuevo). */
+export function RegenerateButton({
+  count,
+  onRegenerate,
+}: {
+  count: number;
+  onRegenerate: () => Promise<{ ok: boolean; message: string }>;
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  if (count <= 0) return null;
+  return (
+    <span className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        title="Borra los pendientes con criterios viejos y los redacta de nuevo. No toca aprobados ni enviados."
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await onRegenerate();
+            setMsg(r.message);
+            router.refresh();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Regenerando…" : `Regenerar ${count} con criterios actuales`}
+      </Button>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
   );
 }

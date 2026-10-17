@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
+import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
 import { formatMoney } from "@/lib/medusa";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
@@ -21,17 +22,29 @@ import { MergeAllBar } from "./merge-all-button";
 
 export const instant = false;
 
-export default async function DuplicatesPage() {
+export default async function DuplicatesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ market?: string }>;
+}) {
   const conn = await readConnections();
   const ready = Boolean(conn.medusaUrl) && isSupabaseConfigured();
+  const sp = await searchParams;
 
   let groups: Awaited<ReturnType<typeof findDuplicateGroups>> = [];
   let error: string | null = null;
+  let marketId: string | null = null;
+  let marketLabel: string | null = null;
   if (ready) {
     try {
       const storeId = await resolveStoreId(conn.medusaUrl);
       if (!storeId) error = "Tienda sin sincronizar.";
-      else groups = await findDuplicateGroups(storeId);
+      else {
+        const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
+        marketId = scope?.market?.id ?? null;
+        marketLabel = scope?.market ? displayMarket(scope.market) : null;
+        groups = await findDuplicateGroups(storeId, scope);
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : "Error al leer duplicados.";
     }
@@ -44,7 +57,7 @@ export default async function DuplicatesPage() {
       <header className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Button
-            render={<Link href="/customers" />}
+            render={<Link href={withMarketParam("/customers", marketId)} />}
             nativeButton={false}
             variant="ghost"
             size="icon-sm"
@@ -53,7 +66,9 @@ export default async function DuplicatesPage() {
             <ArrowLeft aria-hidden />
           </Button>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Posibles duplicados</h1>
+            <h1 className="text-lg font-semibold tracking-tight">
+              Posibles duplicados{marketLabel ? ` · ${marketLabel}` : ""}
+            </h1>
             <p className="text-xs text-muted-foreground">
               {groups.length} email{groups.length === 1 ? "" : "s"} con más de una ficha
               {extraRows > 0 && ` · ${extraRows} fila${extraRows === 1 ? "" : "s"} extra`}. Solo lectura.
