@@ -314,6 +314,51 @@ export function isRealOrder(o: Pick<CanonicalOrder, "status" | "paymentStatus" |
   return true;
 }
 
+/**
+ * País canónico ISO2 de una orden — general medusa v1/v2 + shopify.
+ * Cascada (primera que resuelva gana):
+ *   1. country crudo: shipping_address.country_code → billing_address.country_code
+ *      (Medusa v1/v2 y Shopify exponen ISO2 aquí cuando hay dirección).
+ *   2. market.countries con un único ISO2 (region de un solo país).
+ *   3. nombre del market si es ISO2 ("PE", "MX", "CL").
+ *   4. null = sin país (bienes digitales, checkout sin dirección).
+ * Shopify mapea igual: shipping/billing country_code → shopify_market.
+ */
+export function resolveOrderCountry(
+  raw: string | null | undefined,
+  market: Pick<CanonicalMarketRef, "name" | "countries"> | null,
+): string | null {
+  const iso = (v: string | null | undefined): string | null => {
+    const t = (v ?? "").trim().toUpperCase();
+    return /^[A-Z]{2}$/.test(t) ? t : null;
+  };
+  const fromRaw = iso(raw);
+  if (fromRaw) return fromRaw;
+  if (market) {
+    const only = (market.countries ?? []).map((c) => iso(c)).filter((c) => c !== null);
+    if (only.length === 1) return only[0];
+    const fromName = iso(market.name);
+    if (fromName) return fromName;
+  }
+  return null;
+}
+
+/**
+ * Moda con desempate alfabético determinista (para atribuciones por país:
+ * customer ← órdenes, lead ← referencias). null si no hay votos.
+ */
+export function modeCountry(votes: Map<string, number>): string | null {
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [c, n] of votes) {
+    if (n > bestN || (n === bestN && (best === null || c < best))) {
+      best = c;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
 /** Mapea una order cruda de Medusa v1 al modelo canónico (channel + market + moneda). */
 export function medusaOrderToCanonical(
   o: Record<string, unknown>,
@@ -331,6 +376,15 @@ export function medusaOrderToCanonical(
   const items = (o.items as Array<Record<string, unknown>> | undefined) ?? [];
   // canceled_at sin status cancelado ocurre: normalizar a 'canceled'.
   const status = o.canceled_at ? "canceled" : ((o.status as string) ?? null);
+  const market: CanonicalOrder["market"] = regionId
+    ? {
+        source: "medusa_region",
+        sourceId: String(regionId),
+        name: String(region?.name ?? reg?.name ?? regionId),
+        currency: ((region?.currency_code as string) ?? reg?.currency ?? currency).toLowerCase(),
+        countries: reg?.countries ?? [],
+      }
+    : null;
   return {
     sourceOrderId: String(id),
     customerEmail: String(o.email ?? ""),
@@ -342,19 +396,13 @@ export function medusaOrderToCanonical(
           name: String(sc.name ?? sc.id),
         }
       : null,
-    market: regionId
-      ? {
-          source: "medusa_region",
-          sourceId: String(regionId),
-          name: String(region?.name ?? reg?.name ?? regionId),
-          currency: ((region?.currency_code as string) ?? reg?.currency ?? currency).toLowerCase(),
-          countries: reg?.countries ?? [],
-        }
-      : null,
+    market,
     totalAmount: orderAmount(o).amount,
     currency,
-    country:
+    country: resolveOrderCountry(
       (ship?.country_code as string) ?? (bill?.country_code as string) ?? null,
+      market,
+    ),
     placedAt: (o.created_at as string) ?? null,
     status,
     paymentStatus: (o.payment_status as string) ?? null,

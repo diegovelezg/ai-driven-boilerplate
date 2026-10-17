@@ -115,6 +115,12 @@ Mapping:
 
 - Medusa `order.region` → `market` (`source='medusa_region'`), `order.sales_channel` → `channel`. `countries` comes from `/admin/regions` (often `[]` — currency is the reliable axis).
 - Shopify `presentmentCurrency + country` → `market` (`source='shopify_market'`, `market_id` inferred via `country → Market` when absent), `order.sourceName/app` → `channel`.
+- País canónico por orden (`resolveOrderCountry` en `web/lib/medusa.ts`, general
+  medusa v1/v2 + shopify): `shipping/billing country_code` → `market.countries`
+  si es único → nombre del market si es ISO2 (`"PE"`, `"MX"`) → `null`.
+  El sync guarda la moda por customer (`customers.country`) y los writers la
+  desnormalizan en `churn_signals`/`proposed_actions` para el filtro global
+  `?market=` (siempre por ISO2, nunca por miles de IDs).
 
 ## 3. Data Classification & Enrichment Pipeline
 

@@ -8,6 +8,7 @@ import {
   listMedusaOrdersRaw,
   listMedusaRegions,
   medusaOrderToCanonical,
+  modeCountry,
   type CanonicalOrder,
   type MedusaVersion,
 } from "@/lib/medusa";
@@ -215,6 +216,19 @@ export async function syncStoreFromMedusa(
     }
   }
 
+  // País atribuido por customer: moda del país resuelto de sus órdenes
+  // reales (ver resolveOrderCountry). null = sin compras o sin país.
+  const countryVotesByCustomer = new Map<string, Map<string, number>>();
+  for (const o of orders) {
+    if (!isRealOrder(o) || !o.country || !o.customerExternalId) continue;
+    const key = resolveExt(o.customerExternalId);
+    const votes = countryVotesByCustomer.get(key) ?? new Map<string, number>();
+    votes.set(o.country, (votes.get(o.country) ?? 0) + 1);
+    countryVotesByCustomer.set(key, votes);
+  }
+  const topCountry = (externalId: string): string | null =>
+    modeCountry(countryVotesByCustomer.get(externalId) ?? new Map());
+
   // 5. Upsert customers con stats (un solo upsert).
   // orders_count/total_spent/currency = SOLO moneda primaria (nunca mezclar);
   // el desglose completo va en stats_by_currency.
@@ -233,6 +247,7 @@ export async function syncStoreFromMedusa(
         first_name: c.firstName,
         last_name: c.lastName,
         company_name: c.companyName,
+        country: topCountry(resolveExt(c.id)),
         orders_count: primary?.ordersCount ?? 0,
         total_spent: primary?.totalSpent ?? 0,
         currency: primary?.currency ?? null,
