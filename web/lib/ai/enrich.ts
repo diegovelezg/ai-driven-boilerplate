@@ -1,6 +1,7 @@
 import "server-only";
 import { createLogger } from "../log";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "./llm-config";
+import { logLlmUsage, parseChatUsage } from "./usage";
 
 const log = createLogger("enrichment");
 
@@ -32,6 +33,7 @@ async function complete(
   maxTokens: number,
   reasoningEffort?: string | null,
   jsonMode: "none" | "native" = "native",
+  meter?: { storeId?: string | null; process?: string; usedFallback?: boolean },
 ): Promise<string> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
@@ -43,6 +45,7 @@ async function complete(
   };
   if (jsonMode === "native") body.response_format = { type: "json_object" };
   Object.assign(body, reasoningBody(ref.provider, ref.model, reasoningEffort));
+  const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -52,6 +55,21 @@ async function complete(
     throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }
   const data = await res.json();
+  const usage = parseChatUsage(data);
+  if (meter?.storeId && usage) {
+    void logLlmUsage({
+      storeId: meter.storeId,
+      process: meter.process ?? "enrichment",
+      provider: ref.provider,
+      model: ref.model,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      reasoningTokens: usage.reasoningTokens,
+      latencyMs: Date.now() - t0,
+      usedFallback: meter.usedFallback ?? false,
+    });
+  }
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim()) {
     throw new Error(`${ref.provider}: respuesta vacía`);
@@ -67,6 +85,7 @@ function str(v: unknown): string | null {
 export async function extractFirmographics(
   domain: string,
   text: string,
+  opts: { storeId?: string | null } = {},
 ): Promise<FirmographicsResult> {
   const cfg = getLlmConfig("enrichment");
   const messages = [
@@ -79,14 +98,16 @@ export async function extractFirmographics(
 
   let content: string;
   let used: ModelRef;
+  let usedFallback = false;
   try {
     used = cfg.primary;
-    content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode);
+    content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode, { storeId: opts.storeId, process: "enrichment" });
   } catch (e) {
     if (!cfg.fallback) throw e;
     log(`capa=extract primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
     used = cfg.fallback;
-    content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode);
+    usedFallback = true;
+    content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode, { storeId: opts.storeId, process: "enrichment", usedFallback });
   }
 
   const parsed = JSON.parse(content) as Record<string, unknown>;

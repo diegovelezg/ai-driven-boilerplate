@@ -1,6 +1,7 @@
 import { BaseLlm, type BaseLlmConnection, type LlmRequest, type LlmResponse } from "@google/adk";
 import type { Content, Part } from "@google/genai";
 import { chatCompletionParams, reasoningBody } from "@/lib/ai/llm-config";
+import { logLlmUsage, parseChatUsage } from "@/lib/ai/usage";
 import { createLogger } from "@/lib/log";
 import { googleSchemaToJsonSchema } from "./json-schema";
 
@@ -134,7 +135,25 @@ export class OpenAiCompatibleLlm extends BaseLlm {
         };
         finish_reason?: string;
       }>;
+      usage?: unknown;
+      usageMetadata?: unknown;
     };
+    const usage = parseChatUsage(data);
+    const meterStoreId = typeof config.storeId === "string" ? config.storeId : null;
+    const meterProcess = typeof config.process === "string" ? config.process : "customer_chat";
+    if (meterStoreId && usage) {
+      void logLlmUsage({
+        storeId: meterStoreId,
+        process: meterProcess,
+        provider,
+        model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        reasoningTokens: usage.reasoningTokens,
+        latencyMs: Date.now() - t0,
+      });
+    }
     const choice = data.choices?.[0];
     if (!choice) throw new Error("Sin choices en la respuesta OpenAI-compatible.");
 

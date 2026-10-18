@@ -29,6 +29,9 @@ async function postStream(
     messages,
     ...chatCompletionParams(ref.provider, ref.model, temperature, maxTokens),
     stream: true,
+    // Metering por tenant (issue #15): el usage llega en el ultimo chunk SSE.
+    // El route handler lo captura con TransformStream; sin esto no hay conteo.
+    stream_options: { include_usage: true },
   };
   if (jsonMode === "native") body.response_format = { type: "json_object" };
   Object.assign(body, reasoningBody(ref.provider, ref.model, reasoningEffort));

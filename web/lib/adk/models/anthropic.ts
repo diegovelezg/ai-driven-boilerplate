@@ -1,6 +1,7 @@
 import { BaseLlm, type BaseLlmConnection, type LlmRequest, type LlmResponse } from "@google/adk";
 import type { Content, Part } from "@google/genai";
 import { getAnthropicEffort } from "@/lib/ai/llm-config";
+import { logLlmUsage, parseChatUsage } from "@/lib/ai/usage";
 import { createLogger } from "@/lib/log";
 import { googleSchemaToJsonSchema } from "./json-schema";
 
@@ -120,7 +121,25 @@ export class AnthropicLlm extends BaseLlm {
         | { type: string }
       >;
       stop_reason?: string;
+      usage?: unknown;
+      usageMetadata?: unknown;
     };
+    const usage = parseChatUsage(data);
+    const meterStoreId = typeof config.storeId === "string" ? config.storeId : null;
+    const meterProcess = typeof config.process === "string" ? config.process : "customer_chat";
+    if (meterStoreId && usage) {
+      void logLlmUsage({
+        storeId: meterStoreId,
+        process: meterProcess,
+        provider: "anthropic",
+        model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        reasoningTokens: usage.reasoningTokens,
+        latencyMs: Date.now() - t0,
+      });
+    }
 
     const parts: Part[] = [];
     for (const block of data.content ?? []) {

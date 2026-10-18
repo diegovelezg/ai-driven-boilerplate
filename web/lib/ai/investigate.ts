@@ -1,4 +1,5 @@
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "./llm-config";
+import { logLlmUsage, parseChatUsage } from "./usage";
 // Logger sin "server-only" (el set perfilador corre también en smoke tsx).
 import { createProfilerLogger } from "@/lib/profiling/log";
 import { isKnownTaxonomyId, taxonomyPromptFragment } from "@/lib/taxonomy";
@@ -91,7 +92,12 @@ Reglas:
 
 ${taxonomyPromptFragment()}`;
 
-async function completeJson(ref: ModelRef, system: string, user: string): Promise<string> {
+async function completeJson(
+  ref: ModelRef,
+  system: string,
+  user: string,
+  opts: { storeId?: string | null; usedFallback?: boolean } = {},
+): Promise<string> {
   const resolved = getLlmConfig("customer_classify");
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
@@ -108,6 +114,7 @@ async function completeJson(ref: ModelRef, system: string, user: string): Promis
     response_format: { type: "json_object" },
     ...reasoningBody(ref.provider, ref.model, effort),
   };
+  const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -117,6 +124,21 @@ async function completeJson(ref: ModelRef, system: string, user: string): Promis
   const data = await res.json();
   const choice = data?.choices?.[0] ?? {};
   const content = choice?.message?.content;
+  const usage = parseChatUsage(data);
+  if (opts.storeId && usage) {
+    void logLlmUsage({
+      storeId: opts.storeId,
+      process: "customer_classify",
+      provider: ref.provider,
+      model: ref.model,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+      reasoningTokens: usage.reasoningTokens,
+      latencyMs: Date.now() - t0,
+      usedFallback: opts.usedFallback ?? false,
+    });
+  }
   if (typeof content !== "string" || !content.trim()) {
     log(`investigate ${ref.provider}/${ref.model} vacía: finish=${choice?.finish_reason ?? "?"} usage=${JSON.stringify(data?.usage?.completion_tokens_details ?? null)}`);
     throw new Error(`${ref.provider}: respuesta vacía`);
@@ -145,6 +167,7 @@ const VALID_CONF = new Set(["alta", "media", "baja"]);
 export async function investigateBusiness(
   description: string,
   extraContext?: string,
+  opts: { storeId?: string | null } = {},
 ): Promise<InvestigateResult> {
   const desc = (description ?? "").trim();
   if (desc.length < 10) throw new Error("Describe tu negocio en al menos una frase (10 caracteres).");
@@ -167,11 +190,11 @@ export async function investigateBusiness(
 
   async function callOnce(): Promise<string> {
     try {
-      return await completeJson(cfg.primary, SYSTEM, user);
+      return await completeJson(cfg.primary, SYSTEM, user, { storeId: opts.storeId });
     } catch (e) {
       log(`investigate primario ${cfg.primary.provider}/${cfg.primary.model} falló (${e instanceof Error ? e.message : e})`);
       if (!cfg.fallback) throw e;
-      return await completeJson(cfg.fallback, SYSTEM, user);
+      return await completeJson(cfg.fallback, SYSTEM, user, { storeId: opts.storeId, usedFallback: true });
     }
   }
 

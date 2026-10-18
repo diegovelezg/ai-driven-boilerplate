@@ -48,6 +48,10 @@ export function getCustomerAgent(ctx: AgentContext): LlmAgent {
     generateContentConfig: {
       temperature: cfg.temperature,
       maxOutputTokens: cfg.maxTokens,
+      // Metering LLM por tenant (issue #15): los adaptadores ADK leen
+      // config.storeId/config.process para loguear usage en llm_usage.
+      storeId: ctx.storeId ?? null,
+      process: CUSTOMER_AGENT_PROCESS,
       ...getGeminiThinkingConfig(thinkingProvider, cfg.reasoningEffort),
     } as never,
   });

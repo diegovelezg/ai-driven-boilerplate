@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { UserMenu } from "@/components/user-menu";
 import { MarketSelector } from "@/components/market-selector";
+import { UsagePill } from "@/components/usage-pill";
 import type { TenantMarket } from "@/lib/markets";
 
 const titles = [
@@ -37,6 +38,7 @@ export function AppHeader({
       <span className="text-sm font-medium">{title}</span>
       <span className="ms-auto flex items-center gap-2">
         <Suspense>
+          <UsagePill stores={stores} />
           <MarketSelector stores={stores} marketsByStore={marketsByStore} />
         </Suspense>
         <UserMenu />
