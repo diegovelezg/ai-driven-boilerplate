@@ -1,11 +1,10 @@
-// Ranking único de la mira (SSOT), modelo D validado en laboratorio:
-// valor = ticket × prior(segmento) × exp(-días/120) × (1+lnF)/2.
-// Sin score del scout (mide overdue, no probabilidad) y sin acantilados: la
-// insignia "No los pierdas" es bandera visual + tier, no criterio de orden.
+// Ranking único de la mira (SSOT): ordena por valor esperado del motor
+// probabilístico (`valor_esperado_minor` desc, desempate `p_recompra_h` desc).
+// Sin predicción (tienda sin corrida aún), la fila queda al final ordenada por
+// antigüedad (hecho temporal, sinscores ni segmentos).
 // Lo consumen Overview, Review, Copywriter y Strategist.
 import { getSupabase } from "@/lib/supabase";
-import { classifyPopulation, type SegmentKey } from "@/lib/insights";
-import { resolveShopCurrency, resolveTenantCycleDays } from "@/lib/store-profiles";
+import { resolveShopCurrency } from "@/lib/store-profiles";
 import { applyScopeFilter } from "@/lib/markets";
 
 export interface MiraRow {
@@ -28,10 +27,15 @@ export interface MiraRow {
   currency: string | null;
   /** ISO2 atribuido (filtro global por mercado; lo escribe el copywriter). */
   country: string | null;
-  segment: string;
-  noLosPierdas: boolean;
+  /** Empresa del cliente (company_name; el brief dossier-first la usa como identidad). */
+  companyName: string | null;
   /** Último borrador de la señal (para el CTA correcto en Hoy). */
   draftStatus: "none" | "pending" | "approved" | "dispatched";
+  /** Motor probabilístico (opcional para no romper consumidores). */
+  pRecompraH?: number | null;
+  decision?: string | null;
+  expectedDays?: number | null;
+  valorEsperadoMinor?: number | null;
 }
 
 /** Días sin comprar extraídos del motivo crudo (null = otros tipos de señal). */
@@ -46,38 +50,6 @@ export function avgTicket(totalSpent: number, ordersCount: number): number {
   return ordersCount > 0 ? totalSpent / ordersCount : 0;
 }
 
-/** Prior de retorno por segmento (hipótesis explícitas, calibrar con medición). */
-const PRIORS: Record<SegmentKey, number> = {
-  "En riesgo": 0.3,
-  "Campeón": 0.25,
-  "Recurrente": 0.2,
-  "Ocasional": 0.12,
-  "Nuevo": 0.1,
-  "Inactivo": 0.04,
-  "Sin compras": 0,
-};
-
-/** La probabilidad de retorno decae con la antigüedad: intacta ≤180d, luego 180/días. */
-export function recencyFactor(daysSince: number | null): number {
-  if (daysSince === null) return 1;
-  return Math.min(1, 180 / Math.max(1, daysSince));
-}
-
-/**
- * Valor esperado (modelo D): ticket × prior(segmento) × exp(-días/120) × (1+lnF)/2.
- * Premia frecuencia real, castiga antigüedad en continuo y no usa el score.
- */
-export function expectedValue(
-  a: Pick<MiraRow, "totalSpent" | "ordersCount" | "segment" | "daysSince"> & {
-    score?: number | null;
-  },
-): number {
-  const prior = PRIORS[a.segment as SegmentKey] ?? 0;
-  const decay = a.daysSince === null ? 1 : Math.exp(-a.daysSince / 120);
-  const freqW = (1 + Math.log1p(Math.max(0, a.ordersCount))) / 2;
-  return avgTicket(a.totalSpent, a.ordersCount) * prior * decay * freqW;
-}
-
 /**
  * Toda la mira (open + prioritized) rankeada con el criterio único, separada
  * por universo monetario: NUNCA se mezclan PEN con MXN en un mismo ranking ni
@@ -90,8 +62,7 @@ export function expectedValue(
 export async function getRankedMira(
   storeId: string,
   limit = 100,
-  // null = sin filtro de mercado (toda la tienda). Con mercado, segmentos y
-  // tiers relativos a su cohorte (misma regla que overview y dropdowns).
+  // null = sin filtro de mercado (toda la tienda).
   scope: { countries?: string[] | null; customerIds?: string[] | null; currency?: string | null } | null = null,
 ): Promise<{ rows: MiraRow[]; foreign: MiraRow[] }> {
   // Filtro global por mercado: ISO2 cortos (nunca miles de IDs en la URL).
@@ -114,13 +85,12 @@ export async function getRankedMira(
   if (sigs.length === 0) return { rows: [], foreign: [] };
 
   const ids = [...new Set(sigs.map((r) => String(r.customer_id ?? "")))];
-  const [{ data: custRows }, cycleDays, shopCurrency, { data: actRows }] = await Promise.all([
+  const [{ data: custRows }, shopCurrency, { data: actRows }, { data: predRows }] = await Promise.all([
     db
       .from("customers")
-      .select("id,email,first_name,last_name,phone,orders_count,total_spent,currency,country")
+      .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent,currency,country")
       .eq("store_id", storeId)
       .in("id", ids),
-    resolveTenantCycleDays(storeId).catch(() => null),
     resolveShopCurrency(storeId).catch(() => null),
     // Última acción por señal (la más reciente manda: rejected → redactable).
     db
@@ -133,7 +103,33 @@ export async function getRankedMira(
       )
       .order("created_at", { ascending: false })
       .limit(500),
+    // Última predicción por cliente (el ranking principal).
+    db
+      .from("customer_predictions")
+      .select("customer_id,valor_esperado_minor,p_recompra_h,decision,expected_days,as_of")
+      .eq("store_id", storeId)
+      .in("customer_id", ids)
+      .order("as_of", { ascending: false })
+      .limit(1000)
+      .then(
+        (res) => res,
+        () => ({ data: null as null }),
+      ),
   ]);
+  const predByCust = new Map<
+    string,
+    { valor: number | null; p: number | null; decision: string | null; expectedDays: number | null }
+  >();
+  for (const r of ((predRows ?? []) as Array<Record<string, unknown>> | null) ?? []) {
+    const cid = String(r.customer_id ?? "");
+    if (!cid || predByCust.has(cid)) continue;
+    predByCust.set(cid, {
+      valor: r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
+      p: r.p_recompra_h == null ? null : Number(r.p_recompra_h),
+      decision: (r.decision as string | null) ?? null,
+      expectedDays: r.expected_days == null ? null : Number(r.expected_days),
+    });
+  }
   const draftBySignal = new Map<string, MiraRow["draftStatus"]>();
   for (const a of ((actRows ?? []) as Array<Record<string, unknown>>)) {
     const sid = String(a.signal_id ?? "");
@@ -147,29 +143,10 @@ export async function getRankedMira(
   for (const c of ((custRows ?? []) as Array<Record<string, unknown>>))
     custById.set(String(c.id ?? ""), c);
 
-  const { data: popRows } = await applyScopeFilter(
-    db
-      .from("customers")
-      .select("id,orders_count,total_spent,last_order_at,currency")
-      .eq("store_id", storeId),
-    scope,
-    "id",
-  ).limit(5000);
-  const population = ((popRows ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id ?? ""),
-    orders_count: Number(r.orders_count ?? 0),
-    total_spent: Number(r.total_spent ?? 0),
-    last_order_at: (r.last_order_at as string | null) ?? null,
-    currency: (r.currency as string | null) ?? null,
-  }));
-  const segById = new Map(
-    classifyPopulation(population, Date.now(), cycleDays, scope?.currency ?? shopCurrency).map((c, i) => [population[i].id, c]),
-  );
-
   const allRows: MiraRow[] = sigs.map((r) => {
     const c = custById.get(String(r.customer_id ?? "")) ?? {};
-    const seg = segById.get(String(r.customer_id ?? ""));
     const raw = (r.reason as string | null) ?? null;
+    const pred = predByCust.get(String(r.customer_id ?? "")) ?? null;
     return {
       signalId: String(r.id),
       customerDbId: String(r.customer_id ?? ""),
@@ -182,15 +159,37 @@ export async function getRankedMira(
       firstName: (c.first_name as string | null) ?? null,
       lastName: (c.last_name as string | null) ?? null,
       phone: (c.phone as string | null) ?? null,
+      companyName: (c.company_name as string | null) ?? null,
       ordersCount: Number(c.orders_count ?? 0),
       totalSpent: Number(c.total_spent ?? 0),
       currency: (c.currency as string | null) ?? null,
       country: (c.country as string | null) ?? null,
-      segment: seg?.segment ?? "—",
-      noLosPierdas: seg?.noLosPierdas ?? false,
       draftStatus: draftBySignal.get(String(r.id)) ?? "none",
+      pRecompraH: pred?.p ?? null,
+      decision: pred?.decision ?? null,
+      expectedDays: pred?.expectedDays ?? null,
+      valorEsperadoMinor: pred?.valor ?? null,
     };
   });
+  // Ranking principal: valor_esperado_minor desc, desempate p_recompra_h desc.
+  // Sin predicción (tienda sin corrida aún): al final, por antigüedad.
+  const rankKey = (r: MiraRow): [number, number, number] => [
+    r.valorEsperadoMinor ?? -1,
+    r.pRecompraH ?? -1,
+    r.daysSince ?? -1,
+  ];
+  const cmp = (a: MiraRow, b: MiraRow) => {
+    const ka = rankKey(a);
+    const kb = rankKey(b);
+    // Sin predicción queda al final, ordenado por antigüedad.
+    if ((a.valorEsperadoMinor == null) !== (b.valorEsperadoMinor == null)) {
+      return a.valorEsperadoMinor == null ? 1 : -1;
+    }
+    for (let i = 0; i < 3; i += 1) {
+      if (kb[i] !== ka[i]) return kb[i] - ka[i];
+    }
+    return 0;
+  };
   // Universos separados: misma moneda rankea junta; la foránea no contamina
   // el ranking ni las sumas de la tienda (pero sigue su propio ranking).
   // Con filtro de mercado el market YA es el universo: todo va a rows.
@@ -202,7 +201,7 @@ export async function getRankedMira(
     r.currency.toUpperCase() === shopCurrency.toUpperCase();
   const rows = allRows.filter(inShop);
   const foreign = allRows.filter((r) => !inShop(r));
-  rows.sort((a, b) => expectedValue(b) - expectedValue(a));
-  foreign.sort((a, b) => expectedValue(b) - expectedValue(a));
+  rows.sort(cmp);
+  foreign.sort(cmp);
   return { rows, foreign };
 }

@@ -99,7 +99,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const recovery = new FunctionTool({
     name: "get_recovery_stats",
     description:
-      "ÚNICA fuente de 'cuánto recuperamos': revenue_attributed medido por el analyst (clientes que volvieron tras acción, ventana 14d). Devuelve rescatado del mes calendario actual y de últimos 30d + nº de conversiones. Si es 0/vacío, NO sustituyas con ventas: di 'aún sin recupero medido'.",
+      "ÚNICA fuente de 'cuánto recuperamos': revenue_attributed medido por el analyst (clientes que volvieron tras acción, ventana según arquetipo). Devuelve rescatado del mes calendario actual y de últimos 30d + nº de conversiones. Si es 0/vacío, NO sustituyas con ventas: di 'aún sin recupero medido'.",
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -150,7 +150,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const signals = new FunctionTool({
     name: "list_signals",
     description:
-      "Señales de churn de la tienda (quién se está enfriando, con motivo y score). Por defecto abiertas y priorizadas. Si el merchant pide una cantidad ('los 3 primeros', 'dame 5'), pásala en 'limit' (1-20, default 10).",
+      "Señales del scout (quién debería haber recomprado, con motivo). Insumo interno del loop, no vocabulario del merchant: para sus preguntas usa las decisiones del motor (filter_customers: actuar, vigilar…) y responde en el chat. Si el merchant pide una cantidad ('los 3 primeros', 'dame 5'), pásala en 'limit' (1-20, default 10).",
     parameters: z.object({
       status: z.enum(["open", "prioritized", "actioned", "closed", "dismissed"]).optional(),
       limit: z.number().int().min(1).max(20).optional(),
@@ -246,7 +246,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const find = new FunctionTool({
     name: "find_customer",
     description:
-      "Busca un customer por email, nombre, teléfono o empresa —incluida la empresa enriquecida (nombre, industria, descripción/qué es, sede, dominio)— o por lo que pauta en pantallas (marca/categoría anunciada, ej. 'fisioterapia', 'K-pop', 'muebles') y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta). Ej.: 'PUCP', 'universidad', 'educación superior'.",
+      "Busca un customer por email, nombre, teléfono o empresa —incluida la empresa enriquecida (nombre, industria, descripción/qué es, sede, dominio)— o por lo que compra/contrata (marca/categoría, ej. 'fisioterapia', 'K-pop', 'muebles') y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta). Ej.: 'PUCP', 'universidad', 'educación superior'.",
     parameters: z.object({ q: z.string().min(2) }),
     execute: async ({ q }: { q: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -332,42 +332,40 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
 
   const noCustomer = { error: "Sin customer en contexto: abre su ficha o usa find_customer para localizarlo." };
 
-  const SEGMENTS = [
-    "Campeón",
-    "Recurrente",
-    "Ocasional",
-    "En riesgo",
-    "Inactivo",
-    "Nuevo",
-    "Sin compras",
+  const DECISIONS = [
+    "actuar",
+    "vigilar",
+    "no-tocar",
+    "organico",
+    "dormido",
+    "sin_canal",
+    "contactado_reciente",
+    "revision_humana",
   ] as const;
 
   /** Filtra la tabla de Customers: la vista muestra, aquí solo se cuenta.
-   *  Los filtros son los mismos de la tabla (?segment=&ticket=&freq=&vip=&q=):
+   *  Los filtros son los mismos de la tabla (?decision=&vista=&q=):
    *  el chat los escribe, no los duplica. Lo omitido no filtra. */
   const filterCustomers = new FunctionTool({
     name: "filter_customers",
     description:
-      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). Segmento: Campeón, Recurrente, Ocasional, En riesgo, Inactivo, Nuevo o Sin compras. ticketTier 0-3 = cuartil de ticket (3 = top). freqBucket 0-3 = 1, 2, 3–5, 6+ compras. vip = solo insignia 'No los pierdas'. q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
+      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días. ritmo: con-ritmo, primera o sin-compras (segmentación estructural). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
     parameters: z.object({
       q: z.string().min(2).max(100).optional(),
-      segment: z.enum(SEGMENTS).optional(),
-      ticketTier: z.number().int().min(0).max(3).optional(),
-      freqBucket: z.number().int().min(0).max(3).optional(),
-      vip: z.boolean().optional(),
+      decision: z.enum(DECISIONS).optional(),
+      vista: z.enum(["ventana7"]).optional(),
+      ritmo: z.enum(["con-ritmo", "primera", "sin-compras"] as const).optional(),
     }),
     execute: async ({
       q,
-      segment,
-      ticketTier,
-      freqBucket,
-      vip,
+      decision,
+      vista,
+      ritmo,
     }: {
       q?: string;
-      segment?: string;
-      ticketTier?: number;
-      freqBucket?: number;
-      vip?: boolean;
+      decision?: string;
+      vista?: string;
+      ritmo?: string;
     }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const scope: MarketScope = {
@@ -382,20 +380,18 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         1,
         undefined,
         {
-          segment: (segment as (typeof SEGMENTS)[number] | undefined) ?? null,
-          ticketTier: ticketTier ?? null,
-          freqBucket: freqBucket ?? null,
-          noLosPierdas: vip ?? false,
+          decision: (decision as (typeof DECISIONS)[number] | undefined) ?? null,
+          vista: vista === "ventana7" ? "ventana7" : null,
+          ritmo: ritmo ?? null,
         },
         scope,
       );
       return {
         filter: {
           q: q?.trim() || null,
-          segment: segment ?? null,
-          ticket: ticketTier ?? null,
-          freq: freqBucket ?? null,
-          vip: vip ? true : null,
+          decision: decision ?? null,
+          vista: vista ?? null,
+          ritmo: ritmo ?? null,
         },
         count: res.totalCount,
       };
@@ -462,13 +458,20 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const orders = new FunctionTool({
     name: "get_customer_orders",
     description:
-      "Historial de compras del customer en contexto (más reciente primero) con ítems y resumen RFM (recencia, frecuencia, gasto, ticket, scores 1-5 vs la tienda y segmento). Para compras, churn o recompra.",
+      "Historial de compras del customer en contexto (más reciente primero) con ítems, hechos temporales (recencia, frecuencia, gasto, ticket, ciclo esperado) y, si hay corrida del motor, su predicción (decisión, ventana, probabilidad con rango). Para compras, churn o recompra.",
     parameters: z.object({}),
     execute: async () => {
       if (!customerId) return noCustomer;
       const result = await loadCustomerOrdersAndRfm(customerId, 30);
       if (!result) return { error: "Customer no encontrado." };
-      return result;
+      const { data: pred } = await getSupabase()
+        .from("customer_predictions")
+        .select("model,p_recompra_h,p_low,p_high,horizon_days,expected_days,p25_days,p75_days,ticket_esperado_minor,valor_esperado_minor,decision,confidence,as_of")
+        .eq("customer_id", customerId)
+        .order("as_of", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return { ...result, prediction: pred ?? null };
     },
   });
 
@@ -581,31 +584,31 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       name: "start_scout_run",
       label: "Scout",
       description:
-        "Lanza el scout: detecta quién debería haber recomprado (RFM + intervalo) y abre señales en churn_signals. Tarda ~1 min en background; devuelve run_id. Si ya corre uno, devuelve ese.",
+        "Vigila tu base y marca quién necesita un mensaje hoy. Tarda ~1 min en background; devuelve run_id. Si ya corre uno, devuelve ese.",
     },
     {
       name: "start_strategist_run",
       label: "Estratega",
       description:
-        "Lanza el estratega: prioriza las señales abiertas (valor × score) con objetivo winback|nurture|vip_care. Corre tras el scout; devuelve run_id.",
+        "Ordena por valor y ventana: dice por quién empezar. Corre tras el scout; devuelve run_id.",
     },
     {
       name: "start_copywriter_run",
-      label: "Copywriter",
+      label: "Redactor",
       description:
-        "Lanza el copywriter: redacta con LLM un WhatsApp/email por señal priorizada (historial real) a pending_review para /review. Nunca envía. Gasta LLM; límite 10 por corrida. Devuelve run_id.",
+        "Deja borradores listos para tu visto bueno en /review (WhatsApp/email con historial real). Nunca envía. Gasta LLM; límite 10 por corrida. Devuelve run_id.",
     },
     {
       name: "start_dispatcher_run",
-      label: "Dispatcher",
+      label: "Mensajero",
       description:
-        "Lanza el dispatcher: envía las acciones aprobadas. STUB sin proveedor real (WhatsApp/email pendiente de decisión comercial): sin RETAIN_DISPATCH_STUB no cambia nada. Devuelve run_id.",
+        "Envía solo lo que aprobaste, nada sin tu permiso. Sin canal conectado (WhatsApp/email) queda en espera y te pide conectar. Devuelve run_id.",
     },
     {
       name: "start_analyst_run",
-      label: "Analyst",
+      label: "Analista",
       description:
-        "Lanza el analyst: mide conversiones en ventana 14d post-envío (revenue_attributed) y cierra señales. Devuelve run_id.",
+        "Mide si volvieron y cuánta plata se recuperó tras el envío. Devuelve run_id.",
     },
   ] as const;
 

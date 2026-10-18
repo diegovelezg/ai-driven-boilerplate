@@ -14,8 +14,11 @@ export function TopCustomers({
   currency: string | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const selected = rows.find((r) => r.customer.dbId === selectedId)?.customer ?? null;
   if (rows.length === 0) return null;
+  const visible = expanded ? rows : rows.slice(0, 5);
+  const hiddenCount = rows.length - 5;
   return (
     <section aria-label="Mejores clientes">
       <Card>
@@ -23,7 +26,7 @@ export function TopCustomers({
           <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Mejores clientes · 12m
           </span>
-          {rows.map(({ customer, revenueMinor, orders }) => {
+          {visible.map(({ customer, revenueMinor, orders }) => {
             const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ");
             return (
               <button
@@ -43,6 +46,15 @@ export function TopCustomers({
               </button>
             );
           })}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-1 cursor-pointer self-start px-1 text-[13px] font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+            >
+              {expanded ? "Ver menos" : `Ver más... (${hiddenCount} más)`}
+            </button>
+          )}
         </CardContent>
       </Card>
       <p className="mt-2 text-xs text-muted-foreground">

@@ -6,9 +6,9 @@ import { useStreamChat } from "@/components/chat/use-stream-chat";
 import type { ChatMessage } from "@/components/chat/types";
 
 const SUGGESTED = [
-  "Resúmelo en 2 líneas",
-  "¿Está en riesgo de irse? ¿Por qué?",
+  "¿Va a volver? ¿Cuándo y con qué probabilidad?",
   "¿Qué compró y cuándo fue lo último?",
+  "¿Qué valor esperado tiene este customer?",
   "¿Qué oferta le harías para que vuelva?",
 ];
 

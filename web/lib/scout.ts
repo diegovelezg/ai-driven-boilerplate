@@ -1,67 +1,33 @@
-// Scout (Detectar, Fase A): RFM global + intervalo medio de recompra por
-// customer → upsert en `churn_signals`. Determinista, sin LLM:
-// la regla es auditable y el proceso `scout_scan` de llm_models.json queda
-// reservado para casos ambiguos futuros.
+// Scout (Detectar, Fase B): lee `customer_predictions` del día (motor
+// probabilístico retention:v1) → upsert en `churn_signals`. Determinista,
+// sin LLM. La máquina de estados (open/prioritized/actioned/closed) y la
+// idempotencia se mantienen; lo que cambia es el criterio: solo `actuar`
+// (y `revision_humana` como `vip_care`) abren señal, con score = pRecompraH.
 // Corre en background con `background_runs` kind `scout`.
 import { getSupabase } from "@/lib/supabase";
-import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { advanceRun, finishRun, setRunTotal, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
-import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 
 const log = createLogger("scout");
 
 /** Versión del criterio detector. Sube cuando cambia la regla. */
-export const SCOUT_GEN = "scout:v1:median";
-
-const DAY_MS = 86_400_000;
-
-/** Mediana de intervalos entre sesiones de compra (gaps <1d = una sola compra en cuotas).
- *  Un solo gap no es ritmo: se exigen ≥2 gaps (≥3 sesiones); si no, null y el
- *  ciclo cae a tienda/arquetipo. */
-function medianInterval(datesAsc: Date[]): number | null {
-  if (datesAsc.length < 2) return null;
-  const sessions: Date[] = [datesAsc[0]];
-  for (let i = 1; i < datesAsc.length; i += 1) {
-    if (datesAsc[i].getTime() - sessions[sessions.length - 1].getTime() >= DAY_MS) {
-      sessions.push(datesAsc[i]);
-    }
-  }
-  if (sessions.length < 2) return null;
-  const gaps: number[] = [];
-  for (let i = 1; i < sessions.length; i += 1) {
-    gaps.push((sessions[i].getTime() - sessions[i - 1].getTime()) / DAY_MS);
-  }
-  if (gaps.length < 2) return null;
-  gaps.sort((a, b) => a - b);
-  const mid = Math.floor(gaps.length / 2);
-  const med = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
-  return Math.max(1, Math.round(med));
-}
-
-interface ScoutCustomer {
-  id: string;
-  email: string;
-  orders_count: number;
-  total_spent: number;
-  last_order_at: string | null;
-  /** ISO2 atribuido (para el filtro global; lo escribe en la señal). */
-  country: string | null;
-}
-
-function isRealRow(o: Record<string, unknown>): boolean {
-  if (o.is_test === true) return false;
-  const st = typeof o.status === "string" ? o.status.toLowerCase() : "";
-  const pay = typeof o.payment_status === "string" ? o.payment_status.toLowerCase() : "";
-  if (["cancelled", "canceled", "archived", "refunded"].includes(st)) return false;
-  if (["refunded", "voided"].includes(pay)) return false;
-  return true;
-}
+export const SCOUT_GEN = "scout:v2:retention";
 
 export interface ScoutSummary {
   scanned: number;
   created: number;
   updated: number;
   closed: number;
+}
+
+interface PredRow {
+  customer_id: string;
+  model: string;
+  p_recompra_h: number | null;
+  p25_days: number | null;
+  p75_days: number | null;
+  decision: string;
+  evidence_json: Record<string, unknown> | null;
 }
 
 /** Escaneo completo de la tienda. Idempotente: re-ejecutar actualiza/cierra, no duplica. */
@@ -75,22 +41,76 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     advanceRun(runId, { processed: scanned, failed: 0, current });
 
   try {
-    const profile = await getStoreProfile(storeId).catch(() => null);
-    const tenantCycle = profile?.repurchaseCycleDays ?? null;
-    const archetypeCycle = profile ? (ARCHETYPES[profile.archetype]?.defaultCycleDays ?? null) : null;
-    const multiplier = profile?.churnMultiplier ?? 1.25;
-    log(`run ${runId} start store=${storeId} ciclo_tienda=${tenantCycle} ciclo_arquetipo=${archetypeCycle} mult=${multiplier}`);
+    // Predicciones frescas del día: si no hay as_of de hoy, correr el modelo
+    // aquí mismo (no se asume cron existente).
+    const dayStart = new Date(
+      Date.UTC(
+        new Date().getUTCFullYear(),
+        new Date().getUTCMonth(),
+        new Date().getUTCDate(),
+      ),
+    ).toISOString();
+    const { data: fresh } = await db
+      .from("customer_predictions")
+      .select("id")
+      .eq("store_id", storeId)
+      .gte("as_of", dayStart)
+      .limit(1);
+    if (!fresh || fresh.length === 0) {
+      log(`run ${runId} sin predicciones de hoy: corriendo retention primero`);
+      const { runRetentionModel } = await import("@/lib/retention");
+      try {
+        const r = await runRetentionModel(storeId, new Date());
+        log(`run ${runId} retention predicted=${r.predicted} actuar=${r.actuar}`);
+      } catch (e) {
+        log(`run ${runId} retention ERROR ${e instanceof Error ? e.message : e}`);
+      }
+    }
 
-    // Solo F>=2: sin recurrencia no hay churn que detectar (una sola compra no
-    // establece ritmo; esos van por playbook de 2ª compra, no por señal).
-    // Los sin compras tampoco pueden estar "vencidos".
-    const customers: ScoutCustomer[] = [];
+    // Última predicción por cliente (las de hoy si existen, si no las últimas).
+    const predByCust = new Map<string, PredRow>();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db
+        .from("customer_predictions")
+        .select("customer_id,model,p_recompra_h,p25_days,p75_days,decision,evidence_json,as_of")
+        .eq("store_id", storeId)
+        .order("as_of", { ascending: false })
+        .range(from, from + 999);
+      if (error) throw new Error(`Predictions read: ${error.message}`);
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        const cid = String(r.customer_id ?? "");
+        if (!cid || predByCust.has(cid)) continue;
+        predByCust.set(cid, {
+          customer_id: cid,
+          model: String(r.model ?? ""),
+          p_recompra_h: r.p_recompra_h == null ? null : Number(r.p_recompra_h),
+          p25_days: r.p25_days == null ? null : Number(r.p25_days),
+          p75_days: r.p75_days == null ? null : Number(r.p75_days),
+          decision: String(r.decision ?? ""),
+          evidence_json: (r.evidence_json as Record<string, unknown> | null) ?? null,
+        });
+      }
+      if (!rows || rows.length < 1000) break;
+      // Suficiente para cubrir la tienda en la práctica; el loop completo
+      // garantiza última-por-cliente aunque haya varias fechas.
+      if (from > 9000) break;
+    }
+    log(`run ${runId} predicciones=${predByCust.size}`);
+
+    // Clientes con ≥1 compra (F=1 incluido: la distinción la hace el modelo).
+    const customers: Array<{
+      id: string;
+      email: string;
+      orders_count: number;
+      country: string | null;
+    }> = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db
         .from("customers")
-        .select("id,email,orders_count,total_spent,last_order_at,country")
+        .select("id,email,orders_count,country")
         .eq("store_id", storeId)
-        .gte("orders_count", 2)
+        .gte("orders_count", 1)
         .range(from, from + 999);
       if (error) throw new Error(`Customers read: ${error.message}`);
       for (const r of (data ?? []) as Array<Record<string, unknown>>) {
@@ -98,39 +118,19 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           id: String(r.id),
           email: String(r.email ?? ""),
           orders_count: Number(r.orders_count ?? 0),
-          total_spent: Number(r.total_spent ?? 0),
-          last_order_at: (r.last_order_at as string | null) ?? null,
           country: (r.country as string | null) ?? null,
         });
       }
       if (!data || data.length < 1000) break;
     }
     log(`run ${runId} buyers=${customers.length}`);
+    await setRunTotal(runId, customers.length).catch(() => {});
 
     for (const c of customers) {
       scanned += 1;
-      if (scanned % 25 === 0) await step(c.email || c.id);
+      if (scanned % 25 === 0) await step(null);
       try {
-        const last = c.last_order_at ? new Date(c.last_order_at) : null;
-        const recency =
-          last && !Number.isNaN(last.getTime())
-            ? Math.max(0, Math.floor((Date.now() - last.getTime()) / DAY_MS))
-            : null;
-
-        const { data: orders } = await db
-          .from("orders")
-          .select("placed_at,status,payment_status,is_test")
-          .eq("customer_id", c.id)
-          .order("placed_at", { ascending: true })
-          .limit(200);
-        const dates = (((orders ?? []) as Array<Record<string, unknown>>).filter(isRealRow))
-          .map((o) => (o.placed_at ? new Date(o.placed_at as string) : null))
-          .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
-          .sort((a, b) => a.getTime() - b.getTime());
-        const customerMedian = medianInterval(dates);
-        const expected = customerMedian ?? tenantCycle ?? archetypeCycle;
-        const source = customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
-
+        const pred = predByCust.get(c.id) ?? null;
         const { data: existing } = await db
           .from("churn_signals")
           .select("id,score,status")
@@ -141,36 +141,74 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           .limit(1)
           .maybeSingle();
         const prev = (existing ?? null) as { id: string; score: number | null; status: string } | null;
-        // Ya gestionada (con borrador): no duplicar señal ni borrador. El loop
-        // se cierra por analyst (conversión) o por rechazo humano en Review.
-        if (prev?.status === "actioned") {
-          log(`run ${runId} ${c.email} skip ya gestionada (${prev.id})`);
-          continue;
+        // Anti-duplicado por customer (issue #9): un cliente = una señal viva.
+        // Se conserva la más reciente (prev) y se cierran las demás
+        // open/prioritized, esté gestionada o no. Antes solo se limpiaba con
+        // prev actioned: dos open del mismo cliente sobrevivían y el
+        // copywriter redactaba dos borradores al mismo WhatsApp (dedup por
+        // signal_id, no por customer).
+        if (prev) {
+          try {
+            const { data: dupes } = await db
+              .from("churn_signals")
+              .select("id")
+              .eq("store_id", storeId)
+              .eq("customer_id", c.id)
+              .in("status", ["open", "prioritized"])
+              .neq("id", prev.id)
+              .limit(10);
+            let dupClosed = 0;
+            for (const d of (dupes ?? []) as Array<Record<string, unknown>>) {
+              const { error } = await db
+                .from("churn_signals")
+                .update({ status: "closed", closed_at: new Date().toISOString() })
+                .eq("id", String(d.id));
+              if (!error) dupClosed += 1;
+            }
+            closed += dupClosed;
+          } catch {
+            // Limpieza best-effort: no rompe el escaneo.
+          }
+          if (prev.status === "actioned") continue;
         }
 
-        if (recency === null || expected === null) {
-          if (scanned % 200 === 0) log(`run ${runId} ${c.email} skip recency=${recency} expected=${expected}`);
-          continue;
-        }
-
-        if (recency > expected * multiplier) {
-          const overdue = recency - expected;
-          const score = Math.round((0.5 + 0.5 * Math.min(1, overdue / expected)) * 100) / 100;
-          const reason = `sin comprar hace ${recency}d (media ${expected}d, ${c.orders_count} compras, ciclo ${source})`;
+        const actionable =
+          pred?.decision === "actuar" || pred?.decision === "revision_humana";
+        if (actionable && pred) {
+          const kind = pred.decision === "revision_humana" ? "vip_care" : "churn_risk";
+          // score = probabilidad real (no heurístico).
+          const score =
+            pred.p_recompra_h == null
+              ? null
+              : Math.round(Math.min(1, Math.max(0, pred.p_recompra_h)) * 100) / 100;
+          const ev = pred.evidence_json ?? {};
+          const t = ev.t_days != null ? Math.round(Number(ev.t_days)) : null;
+          const ciclo =
+            ev.cycle_days != null ? Math.round(Number(ev.cycle_days)) : null;
+          const p25 = pred.p25_days != null ? Math.round(pred.p25_days) : null;
+          const p75 = pred.p75_days != null ? Math.round(pred.p75_days) : null;
+          // Prefijo "sin comprar hace {t}d" parseable por mira/copywriter.
+          const reason =
+            t !== null && ciclo !== null && p25 !== null && p75 !== null
+              ? `sin comprar hace ${t}d (ciclo ~${ciclo}d, vuelve típicamente entre ${p25}–${p75}d)`
+              : t !== null && ciclo !== null
+                ? `sin comprar hace ${t}d (ciclo ~${ciclo}d)`
+                : t !== null
+                  ? `sin comprar hace ${t}d`
+                  : `retention ${pred.decision}`;
           if (prev) {
             const { error } = await db
               .from("churn_signals")
-              .update({ score, reason, country: c.country })
+              .update({ score, reason, kind, country: c.country })
               .eq("id", prev.id);
             if (error) throw new Error(`Signal update: ${error.message}`);
             updated += 1;
-            log(`run ${runId} ${c.email} → update score=${score} ${reason}`);
           } else {
             const { error } = await db.from("churn_signals").insert({
               store_id: storeId,
               customer_id: c.id,
               country: c.country,
-              kind: "churn_risk",
+              kind,
               score,
               reason,
               status: "open",
@@ -178,27 +216,77 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
             });
             if (error) throw new Error(`Signal insert: ${error.message}`);
             created += 1;
-            log(`run ${runId} ${c.email} → open score=${score} ${reason}`);
           }
         } else if (prev) {
-          // Volvió a comprar: la señal abierta ya no aplica.
+          // Ya no es accionable (vigilar/orgánico/dormido/suprimido o sin
+          // predicción): la señal abierta ya no aplica.
           const { error } = await db
             .from("churn_signals")
             .update({ status: "closed", closed_at: new Date().toISOString() })
             .eq("id", prev.id);
           if (error) throw new Error(`Signal close: ${error.message}`);
           closed += 1;
-          log(`run ${runId} ${c.email} → closed (al día: ${recency}d vs ${expected}d)`);
         }
       } catch (e) {
         log(`run ${runId} ${c.email || c.id} ERROR ${e instanceof Error ? e.message : e}`);
       }
     }
 
+    // Barrido de huérfanas: señales open/prioritized de clientes sin
+    // predicción (0 sesiones reales o fuera del loop) y sin borrador vivo.
+    // Limpia basura de la era v1 (p. ej. cuentas test) sin tocar lo gestionado.
+    try {
+      const { data: orphans, error: oErr } = await db
+        .from("churn_signals")
+        .select("id,customer_id")
+        .eq("store_id", storeId)
+        .in("status", ["open", "prioritized"])
+        .limit(1000);
+      if (oErr) throw new Error(`Orphans read: ${oErr.message}`);
+      const rows = (orphans ?? []) as Array<Record<string, unknown>>;
+      const noPred = rows.filter((r) => !predByCust.has(String(r.customer_id ?? "")));
+      if (noPred.length > 0) {
+        const { data: busy } = await db
+          .from("proposed_actions")
+          .select("signal_id")
+          .eq("store_id", storeId)
+          .in("status", ["pending_review", "approved"])
+          .not("signal_id", "is", null)
+          .limit(500);
+        const busySet = new Set(
+          ((busy ?? []) as Array<Record<string, unknown>>).map((a) => String(a.signal_id ?? "")),
+        );
+        const stale = noPred.filter((r) => !busySet.has(String(r.id ?? "")));
+        for (const r of stale) {
+          const { error } = await db
+            .from("churn_signals")
+            .update({ status: "closed", closed_at: new Date().toISOString() })
+            .eq("id", String(r.id));
+          if (!error) closed += 1;
+        }
+        if (stale.length > 0) log(`run ${runId} huérfanas cerradas=${stale.length}`);
+      }
+    } catch (e) {
+      log(`run ${runId} orphans ERROR ${e instanceof Error ? e.message : e}`);
+    }
+
     await step(null);
     const status: RunStatus = "done";
-    const summary: string = `${scanned} revisados · ${created} nuevas · ${updated} actualizadas · ${closed} cerradas`;
-    await finishRun(runId, { status, processed: scanned, failed: 0, summary });
+    // Filosofía TeamPulse: outcome humano, no contadores de log. El detalle
+    // (nuevas/actualizadas/cerradas) queda en el log, no en el summary.
+    log(`run ${runId} detalle nuevas=${created} actualizadas=${updated} cerradas=${closed}`);
+    const ready = created + updated;
+    const summary: string =
+      ready > 0
+        ? `Vigiló ${scanned} · ${ready} listos para actuar`
+        : `Vigiló ${scanned}, nadie necesita mensaje · no quemamos descuentos`;
+    await finishRun(runId, {
+      status,
+      processed: scanned,
+      failed: 0,
+      summary,
+      pulseState: ready > 0 ? "active" : "paused",
+    });
     log(`run ${runId} ${status} ${summary}`);
   } catch (e) {
     await finishRun(runId, {

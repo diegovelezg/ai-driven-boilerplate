@@ -3,15 +3,32 @@
 // ...) registra aquí su estado y la UI lo muestra con un solo componente.
 // Sin `server-only`: los scripts tsx (enrich-once, prospect-once) lo importan;
 // ningún componente cliente lo importa en runtime (solo el tipo BackgroundRun).
+//
+// Contrato de `summary` (filosofía TeamPulse): 1 línea, lenguaje humano,
+// outcome + $ cuando aplique, pausa intencional explicada. Nunca jerga de logs
+// ("revisados/nuevas/actualizadas", "medidas", "fallidos", "[STUB]", emails).
+// Formatos por agente:
+// - scout: "Vigiló N · X listos para actuar" | "Vigiló N, nadie necesita mensaje · no quemamos descuentos"
+// - strategist: "X ordenados, empieza por {nombre}" | "Sin ordenar, nada urgente"
+// - copywriter: "X listos para tu visto bueno" | "Sin borradores, no había a quién escribir"
+// - prospect: "X parecidos a tu ideal por revisar" | "En pausa, primero recuperamos lo tuyo"
+// - dispatcher: "X listos, conecta WhatsApp/email para enviar" | "X enviadas, solo lo aprobado"
+// - analyst: "X volvieron · {monto} recuperado" | "Observando X enviados, mide en N días"
+// El `failed` va en su columna, no en el texto. `current` nunca lleva PII (emails).
 import { getSupabase } from "@/lib/supabase";
 
 export type RunStatus = "running" | "done" | "error";
+
+/** Estado TeamPulse que cada corrida declara al cerrar: la SSOT para ordenar
+ *  needs > active > paused. `null` = corrida vieja (pre-migración). */
+export type PulseState = "needs" | "active" | "paused";
 
 export interface BackgroundRun {
   id: string;
   kind: string;
   label: string;
   status: RunStatus;
+  pulseState: PulseState | null;
   total: number;
   processed: number;
   failed: number;
@@ -28,6 +45,7 @@ function mapRun(r: Record<string, unknown>): BackgroundRun {
     kind: (r.kind as string) ?? "",
     label: (r.label as string) ?? "",
     status: (r.status as RunStatus) ?? "running",
+    pulseState: ((r.pulse_state as PulseState | null) ?? null),
     total: Number(r.total ?? 0),
     processed: Number(r.processed ?? 0),
     failed: Number(r.failed ?? 0),
@@ -81,6 +99,12 @@ export async function startRun(
   return String(data.id);
 }
 
+/** Actualiza el total de una corrida en curso (para progreso honesto 0/0 → N). */
+export async function setRunTotal(runId: string, total: number): Promise<void> {
+  const db = getSupabase();
+  await db.from("background_runs").update({ total }).eq("id", runId);
+}
+
 /** Actualiza el progreso en vivo de una corrida. */
 export async function advanceRun(
   runId: string,
@@ -102,19 +126,26 @@ export async function finishRun(
     failed: number;
     summary?: string | null;
     error?: string | null;
+    pulseState?: PulseState | null;
   },
 ): Promise<void> {
   const db = getSupabase();
-  await db
-    .from("background_runs")
-    .update({
-      status: p.status,
-      processed: p.processed,
-      failed: p.failed,
-      summary: p.summary ?? null,
-      error: p.error ?? null,
-      current: null,
-      finished_at: new Date().toISOString(),
-    })
-    .eq("id", runId);
+  const base = {
+    status: p.status,
+    processed: p.processed,
+    failed: p.failed,
+    summary: p.summary ?? null,
+    error: p.error ?? null,
+    current: null,
+    finished_at: new Date().toISOString(),
+  };
+  if (p.pulseState) {
+    // Migración 20261019000000: si la DB aún no la tiene, reintenta sin ella.
+    const { error } = await db
+      .from("background_runs")
+      .update({ ...base, pulse_state: p.pulseState })
+      .eq("id", runId);
+    if (!error) return;
+  }
+  await db.from("background_runs").update(base).eq("id", runId);
 }

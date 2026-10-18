@@ -162,11 +162,6 @@ export function ChatShell({
               ) : (
                 <div key={i} className="flex justify-start">
                   <div className="max-w-[95%] rounded-2xl rounded-bl-md bg-muted px-4 py-2.5">
-                    {m.via && (
-                      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                        {m.via}
-                      </p>
-                    )}
                     {m.content ? (
                       <ChatMarkdown content={m.content} />
                     ) : (

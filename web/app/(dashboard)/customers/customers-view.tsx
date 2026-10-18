@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ChevronsUpDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,12 @@ import {
 } from "@/components/ui/table";
 import { formatMoney, type CanonicalCustomer } from "@/lib/medusa";
 import type {
-  CustomerFilterMeta,
   CustomerFilters,
   CustomersSortDir,
   CustomersSortKey,
   EditableCustomer,
 } from "@/lib/customers-db";
+import { ventanaLabel, type CustomerPredictionLite } from "@/lib/customer-predictions";
 import {
   updateCustomerAction,
   type UpdateCustomerState,
@@ -44,10 +44,13 @@ interface Props {
   sortKey: CustomersSortKey;
   sortDir: CustomersSortDir;
   filters: CustomerFilters;
-  meta: CustomerFilterMeta | null;
   shopCurrency: string | null;
   /** Filtro global por mercado (?market= del header): se preserva al navegar. */
   marketId: string | null;
+  /** Foto del día del motor por dbId (solo filas visibles). */
+  preds: Record<string, CustomerPredictionLite>;
+  /** Resumen "entran en ventana en 7 días" (solo con ?vista=ventana7). */
+  ventana7: { n: number; sumaMinor: number } | null;
 }
 
 /** Celda con edición inline: click -> input; Enter/blur guarda, Escape cancela. */
@@ -135,6 +138,28 @@ function EditableCell({
   );
 }
 
+/** Chip de decisión del motor (texto llano, sin scores ni segmentos internos). */
+function decisionChip(decision: string | undefined): ReactNode {
+  switch (decision) {
+    case "actuar":
+      return <span className="font-medium">Para actuar</span>;
+    case "revision_humana":
+      return <span className="font-medium">Revisar 1 a 1</span>;
+    case "vigilar":
+      return <span className="text-muted-foreground">Vigilar</span>;
+    case "organico":
+      return <span className="text-muted-foreground">Volverá solo</span>;
+    case "dormido":
+      return <span className="text-muted-foreground">Dormido</span>;
+    case "sin_canal":
+      return <span className="text-muted-foreground">Sin canal</span>;
+    case "contactado_reciente":
+      return <span className="text-muted-foreground">Contactado</span>;
+    default:
+      return <span className="text-muted-foreground/60">—</span>;
+  }
+}
+
 export function CustomersView({
   rows,
   totalCount,
@@ -144,9 +169,10 @@ export function CustomersView({
   sortKey,
   sortDir,
   filters,
-  meta,
   shopCurrency,
   marketId,
+  preds,
+  ventana7,
 }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -158,10 +184,9 @@ export function CustomersView({
       page?: number;
       sort?: string;
       dir?: string;
-      segment?: string | null;
-      ticket?: string | null;
-      freq?: string | null;
-      vip?: boolean | null;
+      decision?: string | null;
+      vista?: string | null;
+      ritmo?: string | null;
     }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
@@ -169,20 +194,12 @@ export function CustomersView({
       params.set("page", String(overrides.page ?? page));
       params.set("sort", overrides.sort ?? sortKey);
       params.set("dir", overrides.dir ?? sortDir);
-      const seg = overrides.segment !== undefined ? overrides.segment : filters.segment;
-      if (seg) params.set("segment", seg);
-      const tick = overrides.ticket !== undefined ? overrides.ticket : (
-        filters.ticketTier === null ? null : String(filters.ticketTier)
-      );
-      if (tick) params.set("ticket", tick);
-      const fr = overrides.freq !== undefined ? overrides.freq : (
-        filters.freqBucket === null ? null : String(filters.freqBucket)
-      );
-      if (fr) params.set("freq", fr);
-      const vip = overrides.vip !== undefined ? overrides.vip : (
-        filters.noLosPierdas ? true : null
-      );
-      if (vip) params.set("vip", "1");
+      const dec = overrides.decision !== undefined ? overrides.decision : filters.decision;
+      if (dec) params.set("decision", dec);
+      const vis = overrides.vista !== undefined ? overrides.vista : filters.vista;
+      if (vis) params.set("vista", vis);
+      const rit = overrides.ritmo !== undefined ? overrides.ritmo : filters.ritmo;
+      if (rit) params.set("ritmo", rit);
       if (marketId) params.set("market", marketId);
       return params.toString();
     },
@@ -198,28 +215,13 @@ export function CustomersView({
     });
   };
 
-  const setFilter = (patch: { segment?: string | null; ticket?: string | null; freq?: string | null; vip?: boolean | null }) => {
+  const setFilter = (patch: { decision?: string | null; vista?: string | null; ritmo?: string | null }) => {
     startTransition(() => {
       router.replace(`/customers?${buildParams({ page: 1, ...patch })}`);
     });
   };
 
-  const ticketOptions = (() => {
-    if (!meta?.tierBounds) return [];
-    const [q1, med, q3] = meta.tierBounds;
-    const f = (n: number) => formatMoney(n, shopCurrency);
-    return [
-      { value: "0", label: `Q1 · ticket ≤ ${f(q1)}` },
-      { value: "1", label: `Q2 · ${f(q1)}–${f(med)}` },
-      { value: "2", label: `Q3 · ${f(med)}–${f(q3)}` },
-      { value: "3", label: `Q4 · ticket > ${f(q3)}` },
-    ];
-  })();
-  const filtersActive =
-    filters.segment !== null ||
-    filters.ticketTier !== null ||
-    filters.freqBucket !== null ||
-    filters.noLosPierdas;
+  const filtersActive = filters.decision !== null || filters.vista !== null || filters.ritmo !== null;
 
   // Sincroniza el input cuando el `q` commiteado cambia por navegación externa
   // (botones paginación, atrás/adelante). setState en callback: sin cascading render.
@@ -289,7 +291,7 @@ export function CustomersView({
             onKeyDown={(e) => {
               if (e.key === "Escape" && query) setQuery("");
             }}
-            placeholder="Buscar por email, nombre o teléfono…"
+            placeholder="Buscar por email, nombre, empresa o qué es…"
             className="pr-8"
           />
           {query && (
@@ -304,54 +306,44 @@ export function CustomersView({
           )}
         </div>
         <Select
-          value={filters.segment ?? "all"}
-          onValueChange={(v) => setFilter({ segment: v === "all" ? null : v })}
-          disabled={!meta}
+          value={filters.decision ?? "all"}
+          onValueChange={(v) => setFilter({ decision: v === "all" ? null : v })}
         >
-          <SelectTrigger className="w-44" aria-label="Filtrar por segmento RFM">
-            <SelectValue placeholder="Segmento" />
+          <SelectTrigger className="w-44" aria-label="Filtrar por decisión del motor">
+            <SelectValue placeholder="Decisión" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos los segmentos</SelectItem>
-            {(meta?.segments ?? []).map((s) => (
-              <SelectItem key={s.key} value={s.key}>
-                {s.key} ({s.count})
-              </SelectItem>
-            ))}
+            <SelectItem value="all">Toda decisión</SelectItem>
+            <SelectItem value="actuar">Para actuar</SelectItem>
+            <SelectItem value="vigilar">Vigilar</SelectItem>
+            <SelectItem value="no-tocar">No tocar (todos)</SelectItem>
+            <SelectItem value="organico">· volverán solos</SelectItem>
+            <SelectItem value="dormido">· dormidos</SelectItem>
+            <SelectItem value="contactado_reciente">· contactados</SelectItem>
+            <SelectItem value="sin_canal">· sin canal</SelectItem>
           </SelectContent>
         </Select>
-        <Select
-          value={filters.ticketTier === null ? "all" : String(filters.ticketTier)}
-          onValueChange={(v) => setFilter({ ticket: v === "all" ? null : v })}
-          disabled={ticketOptions.length === 0}
+        <Button
+          variant={filters.vista === "ventana7" ? "default" : "outline"}
+          size="sm"
+          disabled={isPending}
+          onClick={() => setFilter({ vista: filters.vista === "ventana7" ? null : "ventana7" })}
+          title="Vigilar que entra en ventana en 7 días"
         >
-          <SelectTrigger className="w-44" aria-label="Filtrar por cuartil de ticket">
-            <SelectValue placeholder="Ticket" />
+          Entran en ventana (7d)
+        </Button>
+        <Select
+          value={filters.ritmo ?? "all"}
+          onValueChange={(v) => setFilter({ ritmo: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-44" aria-label="Filtrar por ritmo de recompra">
+            <SelectValue placeholder="Ritmo" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos los tickets</SelectItem>
-            {ticketOptions.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={filters.freqBucket === null ? "all" : String(filters.freqBucket)}
-          onValueChange={(v) => setFilter({ freq: v === "all" ? null : v })}
-          disabled={!meta}
-        >
-          <SelectTrigger className="w-40" aria-label="Filtrar por frecuencia de compra">
-            <SelectValue placeholder="Frecuencia" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Toda frecuencia</SelectItem>
-            {(meta?.freqBuckets ?? []).map((b, i) => (
-              <SelectItem key={b.label} value={String(i)}>
-                {b.label} ({b.count})
-              </SelectItem>
-            ))}
+            <SelectItem value="all">Todo ritmo</SelectItem>
+            <SelectItem value="con-ritmo">Con ritmo</SelectItem>
+            <SelectItem value="primera">Primera recompra</SelectItem>
+            <SelectItem value="sin-compras">Sin compras</SelectItem>
           </SelectContent>
         </Select>
         {filtersActive && (
@@ -359,26 +351,23 @@ export function CustomersView({
             variant="ghost"
             size="sm"
             disabled={isPending}
-            onClick={() => setFilter({ segment: null, ticket: null, freq: null, vip: null })}
+            onClick={() => setFilter({ decision: null, vista: null, ritmo: null })}
           >
             Limpiar
           </Button>
         )}
-        <Button
-          variant={filters.noLosPierdas ? "default" : "outline"}
-          size="sm"
-          disabled={isPending}
-          onClick={() => setFilter({ vip: filters.noLosPierdas ? null : true })}
-          title="Top gasto + inactivos: prioridad de recuperación personal"
-        >
-          No los pierdas{meta ? ` (${meta.noLosPierdas})` : ""}
-        </Button>
         <span className="ms-auto text-xs text-muted-foreground tabular-nums">
           {isPending
             ? "Buscando…"
             : `${totalCount} resultado${totalCount === 1 ? "" : "s"}`}
         </span>
       </div>
+
+      {filters.vista === "ventana7" && ventana7 && (
+        <p className="text-[13px] text-muted-foreground tabular-nums">
+          Próximos 7 días: ~{ventana7.n} clientes · ~{formatMoney(ventana7.sumaMinor, shopCurrency)} en juego.
+        </p>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -413,6 +402,13 @@ export function CustomersView({
                 <TableHead className="px-4 h-12 text-right" aria-sort={sortKey === "total" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("total")} className={sortButtonClass("total", true)} aria-label="Ordenar por total">
                     Total {getSortIcon("total")}
+                  </button>
+                </TableHead>
+                <TableHead className="px-4 h-12">Decisión</TableHead>
+                <TableHead className="px-4 h-12">Ventana</TableHead>
+                <TableHead className="px-4 h-12 text-right" aria-sort={sortKey === "valor" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                  <button type="button" onClick={() => toggleSort("valor")} className={sortButtonClass("valor", true)} aria-label="Ordenar por valor esperado">
+                    Valor esp. {getSortIcon("valor")}
                   </button>
                 </TableHead>
               </TableRow>
@@ -450,11 +446,22 @@ export function CustomersView({
                   <TableCell className="px-4 py-4 text-right tabular-nums">
                     {formatMoney(c.totalSpent, c.currency)}
                   </TableCell>
+                  <TableCell className="px-4 py-4 text-[13px]">
+                    {decisionChip(preds[c.dbId]?.decision)}
+                  </TableCell>
+                  <TableCell className="px-4 py-4 text-[13px] text-muted-foreground tabular-nums">
+                    {ventanaLabel(preds[c.dbId])}
+                  </TableCell>
+                  <TableCell className="px-4 py-4 text-right tabular-nums">
+                    {preds[c.dbId]?.valorEsperadoMinor != null
+                      ? formatMoney(preds[c.dbId].valorEsperadoMinor as number, c.currency)
+                      : <span className="text-muted-foreground/60">—</span>}
+                  </TableCell>
                 </TableRow>
               ))}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
                     {q ? `Sin resultados para “${q}”.` : "Sin customers en Medusa."}
                   </TableCell>
                 </TableRow>
@@ -493,7 +500,6 @@ export function CustomersView({
           key={selected.id}
           customer={selected}
           initialTab="compras"
-          tierBounds={meta?.tierBounds ?? null}
           onClose={() => setSelectedId(null)}
         />
       )}

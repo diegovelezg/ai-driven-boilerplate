@@ -19,6 +19,12 @@ export const metadata: Metadata = {
   description: "Customer retention AI for e-commerce",
 };
 
+// Sin script de bloqueo inline: React/Next 16 avisa en consola ante CUALQUIER
+// `<script>` (crudo o vía `next/script`) renderizado por un componente, así
+// que el tema se aplica en el cliente al montar (ThemeProvider). El primer
+// pintado usa el tema por defecto; el parpadeo posible se asume a cambio de
+// cero errores en consola.
+
 // Layout raíz mínimo: solo tema. El chrome del dashboard (sidebar/header)
 // vive en app/(dashboard)/layout.tsx; /login queda totalmente independiente.
 export default function RootLayout({ children }: { children: ReactNode }) {

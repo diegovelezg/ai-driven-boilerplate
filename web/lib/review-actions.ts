@@ -44,6 +44,26 @@ export async function rejectActionAction(id: string): Promise<ReviewOp> {
   return setActionStatus(id, "rejected");
 }
 
+/** Revoca una aprobación aún no enviada (approved → rejected, solo si
+ *  dispatched_at es null). Sin esto, lo aprobado es invisible en Review
+ *  (solo lista pending) y el dispatcher lo enviaría sin remedio. */
+export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const { data, error } = await getSupabase()
+    .from("proposed_actions")
+    .update({ status: "rejected" })
+    .eq("id", id)
+    .eq("status", "approved")
+    .is("dispatched_at", null)
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya enviada o inexistente: no se puede revocar." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Aprobación revocada: no se enviará." };
+}
+
 export async function approveLeadAction(id: string): Promise<ReviewOp> {
   return setLeadStatus(id, "approved");
 }
@@ -111,17 +131,47 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
     isStaleDraft((r.evidence_json as Record<string, unknown> | null) ?? null),
   );
   if (stale.length === 0) return { ok: true, message: "Nada que regenerar: todo con criterios actuales." };
-  const ids = stale.map((r) => String(r.id));
-  const signalIds = [...new Set(stale.map((r) => String(r.signal_id ?? "")).filter(Boolean))];
+  // Antirreinyección legacy (issue #9): solo se regenera lo atado a señales
+  // retention:v1 (reason "ciclo ~Nd"). Los pendientes de señales del motor
+  // viejo o sin señal se dejan intactos: los cubre refresh-retention-v1.ts,
+  // no este botón. Sin esto, regenerar reinyecta a la cola lo que el refresh
+  // purgó.
+  const withSignal = stale.filter((r) => String(r.signal_id ?? ""));
+  const noSignal = stale.length - withSignal.length;
+  const v1Ids: string[] = [];
+  const legacyIds: string[] = [];
+  if (withSignal.length > 0) {
+    const sids = [...new Set(withSignal.map((r) => String(r.signal_id)))];
+    const { data: sigRows } = await db
+      .from("churn_signals")
+      .select("id,reason")
+      .in("id", sids);
+    const reasonById = new Map(
+      ((sigRows ?? []) as Array<Record<string, unknown>>).map((s) => [String(s.id), String(s.reason ?? "")]),
+    );
+    for (const sid of sids) {
+      const reason = reasonById.get(sid) ?? "";
+      if (/ciclo ~\d+d/i.test(reason)) v1Ids.push(sid);
+      else legacyIds.push(sid);
+    }
+  }
+  const regenIds = new Set(v1Ids);
+  const ids = withSignal.filter((r) => regenIds.has(String(r.signal_id))).map((r) => String(r.id));
+  const skipped = stale.length - ids.length;
+  if (ids.length === 0) {
+    return {
+      ok: true,
+      message: `Nada que regenerar por aquí: ${legacyIds.length} legacy + ${noSignal} sin señal intactos (cúbrelos con scripts/refresh-retention-v1.ts).`,
+    };
+  }
   const { error: delErr } = await db.from("proposed_actions").delete().in("id", ids);
   if (delErr) return { ok: false, message: delErr.message };
-  if (signalIds.length > 0) {
-    await db.from("churn_signals").update({ status: "prioritized" }).in("id", signalIds).eq("status", "actioned");
-  }
+  await db.from("churn_signals").update({ status: "prioritized" }).in("id", v1Ids).eq("status", "actioned");
   revalidatePath("/review");
   const started = await startCopywriterAction();
+  const extra = skipped > 0 ? ` ${skipped} intacto(s) legacy/sin señal (van por refresh).` : "";
   return {
     ok: started.ok,
-    message: `${stale.length} borrador(es) viejo(s) a regenerar. ${started.message}`,
+    message: `${ids.length} borrador(es) viejo(s) a regenerar.${extra} ${started.message}`,
   };
 }

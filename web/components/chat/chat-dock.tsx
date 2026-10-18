@@ -131,16 +131,15 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
       // los filtros humanos) y la vista obedece. Sin tarjetas paralelas.
       if (artifact.tool === "filter_customers") {
         const d = (artifact.data ?? {}) as {
-          filter?: { q?: string | null; segment?: string | null; ticket?: number | null; freq?: number | null; vip?: boolean | null };
+          filter?: { q?: string | null; decision?: string | null; vista?: string | null; ritmo?: string | null };
         };
         const f = d.filter ?? {};
         const qs = new URLSearchParams();
         if (dock.marketId) qs.set("market", dock.marketId);
         if (f.q) qs.set("q", f.q);
-        if (f.segment) qs.set("segment", f.segment);
-        if (f.ticket != null) qs.set("ticket", String(f.ticket));
-        if (f.freq != null) qs.set("freq", String(f.freq));
-        if (f.vip) qs.set("vip", "1");
+        if (f.decision) qs.set("decision", f.decision);
+        if (f.vista) qs.set("vista", f.vista);
+        if (f.ritmo) qs.set("ritmo", f.ritmo);
         const href = `/customers?${qs.toString()}`;
         if (pathname === "/customers") router.replace(href);
         else router.push(href);
@@ -151,9 +150,7 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
           ? "actionIds"
           : artifact.tool === "list_leads"
             ? "leadIds"
-            : artifact.tool === "list_signals"
-              ? "signalIds"
-              : null;
+            : null;
       if (!param) return;
       const ids = rowsOfArtifact(artifact).slice(0, 20);
       if (ids.length === 0) return;
@@ -184,9 +181,6 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
             <div className="flex items-start justify-between gap-2 border-b px-4 py-3">
               <div className="min-w-0">
                 <p className="text-sm font-semibold tracking-tight">Pregunta a tu equipo de agentes</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {dock.storeName} · Scout · Estratega · Redactor · Analista
-                </p>
               </div>
               <div className="flex shrink-0 items-center">
                 <button

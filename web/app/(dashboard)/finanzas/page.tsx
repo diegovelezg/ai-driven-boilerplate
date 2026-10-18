@@ -8,6 +8,7 @@ import { formatMoney } from "@/lib/medusa";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getActiveStore, type TenantStore } from "@/lib/tenant";
 import { FinanceStrip } from "../finance-strip";
+import { ItemsRanking } from "./items-ranking";
 import { TopCustomers } from "./top-customers";
 
 export const instant = false;
@@ -111,7 +112,7 @@ export default async function FinanzasPage({
     }));
     buckets = bucketMonthly(finOrders, viewCurrency);
     kpis = computeFinanceKpis(finOrders, viewCurrency);
-    items = rankItems(finOrders, viewCurrency);
+    items = rankItems(finOrders, viewCurrency, 10);
     const attributed: AttributedRevenue[] = (
       (revRows.data ?? []) as Array<Record<string, unknown>>
     ).map((r) => ({
@@ -119,9 +120,9 @@ export default async function FinanzasPage({
       at: ((r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null),
     }));
     recoveredMinor = attributed.reduce((a, r) => a + r.amount, 0);
-    // Fichas del top: una sola query por ~5 ids (nunca miles).
+    // Fichas del top: una sola query por ~10 ids (nunca miles).
     // toEditableCustomer ya aplica propercase (misma regla que Customers).
-    const ranked = rankCustomers(finOrders, viewCurrency);
+    const ranked = rankCustomers(finOrders, viewCurrency, 10);
     if (ranked.length > 0) {
       const { data: custRows, error: custErr } = await db
         .from("customers")
@@ -237,42 +238,7 @@ export default async function FinanzasPage({
 
       {items.top.length > 0 && (
         <section aria-label="Items que más y menos venden">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Card>
-              <CardContent className="flex flex-col gap-2 p-4">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Lo que más vende · 12m
-                </span>
-                {items.top.map((it) => (
-                  <div key={it.title} className="flex items-baseline justify-between gap-2 rounded px-1 py-0.5 text-[13px]">
-                    <span className="truncate">{it.title}</span>
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
-                      {it.quantity} uds · {it.orders} {it.orders === 1 ? "pedido" : "pedidos"} ·{" "}
-                      <strong className="text-foreground">{formatMoney(it.revenueMinor, viewCurrency)}</strong>
-                    </span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-            {items.bottom.length > 0 && (
-              <Card>
-                <CardContent className="flex flex-col gap-2 p-4">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Lo que menos vende · 12m
-                  </span>
-                  {items.bottom.map((it) => (
-                    <div key={it.title} className="flex items-baseline justify-between gap-2 rounded px-1 py-0.5 text-[13px]">
-                      <span className="truncate">{it.title}</span>
-                      <span className="shrink-0 tabular-nums text-muted-foreground">
-                        {it.quantity} uds · {it.orders} {it.orders === 1 ? "pedido" : "pedidos"} ·{" "}
-                        <strong className="text-foreground">{formatMoney(it.revenueMinor, viewCurrency)}</strong>
-                      </span>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-          </div>
+          <ItemsRanking top={items.top} bottom={items.bottom} currency={viewCurrency} />
           <p className="mt-2 text-xs text-muted-foreground">
             Entre lo que sí se vendió: sin feed de productos no se ven los items con cero ventas.
             Montos en {(viewCurrency ?? "PEN").toUpperCase()}.

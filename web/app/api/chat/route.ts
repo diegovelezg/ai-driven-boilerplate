@@ -33,8 +33,10 @@ function sse(text: string): string {
 
 /** Tools cuyos resultados son listas accionables: se reenvían al cliente como
  *  artefacto para pintarlos en el panel lateral (canvas), no en el chat.
- *  El resumen (get_store_summary) NO es artefacto: se responde en el chat. */
-const ARTIFACT_TOOLS = ["list_signals", "list_actions", "list_leads", "filter_customers"];
+ *  El resumen (get_store_summary) NO es artefacto: se responde en el chat.
+ *  list_signals tampoco: las señales son insumo interno del loop; al merchant
+ *  se le responde con decisiones del motor (filter_customers), en el chat. */
+const ARTIFACT_TOOLS = ["list_actions", "list_leads", "filter_customers"];
 
 function artifactSse(tool: string, data: unknown, query: unknown): string {
   const rows = Array.isArray(data) ? data.slice(0, 20) : data;

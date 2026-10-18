@@ -4,7 +4,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured, getSupabase } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
-import { RetentionControls } from "./retention-controls";
 import {
   ReviewLists,
   type ActionRow,
@@ -25,6 +24,7 @@ export default async function ReviewPage({
 }: {
   searchParams: Promise<{
     market?: string;
+    tab?: string;
     /** Filtro del chat ("muéstrame los 3"): IDs exactos por sección. */
     actionIds?: string;
     leadIds?: string;
@@ -37,6 +37,8 @@ export default async function ReviewPage({
   const sp = await searchParams;
 
   let actions: ActionRow[] = [];
+  /** Aprobadas aún no enviadas (invisibles hasta hoy: solo se listaba pending). */
+  let approvedActions: ActionRow[] = [];
   let leads: LeadRow[] = [];
   let signals: SignalRow[] = [];
   let runningKinds = new Set<string>();
@@ -45,6 +47,8 @@ export default async function ReviewPage({
   const customerDomains = new Set<string>();
   let shopCurrency: string | null = null;
   let marketLabel: string | null = null;
+  let ultimaCompraLabel = "última compra";
+  let isB2BReview = true;
 
   if (connected && dbReady) {
     try {
@@ -57,18 +61,30 @@ export default async function ReviewPage({
         // señales filtran por sus customers; leads no tienen país (van todos).
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketLabel = scope?.market ? displayMarket(scope.market) : null;
-        const [{ data: a, error: aErr }, { data: l, error: lErr }, { data: br }] =
+        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: l, error: lErr }, { data: br }] =
           await Promise.all([
             (async () => {
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "pending_review"),
                 scope,
               );
               return aq.order("created_at", { ascending: false }).limit(30);
+            })(),
+            (async () => {
+              const aq = applyScopeFilter(
+                db
+                  .from("proposed_actions")
+                  .select("id,customer_id,channel,subject,body,status,created_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+                  .eq("store_id", storeId)
+                  .eq("status", "approved")
+                  .is("dispatched_at", null),
+                scope,
+              );
+              return aq.order("created_at", { ascending: true }).limit(30);
             })(),
             applyScopeFilter(
               db
@@ -90,13 +106,14 @@ export default async function ReviewPage({
               .limit(10),
           ]);
         if (aErr) throw new Error(`Actions read: ${aErr.message}`);
+        if (apErr) throw new Error(`Approved read: ${apErr.message}`);
         if (lErr) throw new Error(`Leads read: ${lErr.message}`);
         runningKinds = new Set(
           ((br ?? []) as Array<Record<string, unknown>>)
             .filter((r) => r.status === "running")
             .map((r) => String(r.kind ?? "")),
         );
-        actions = ((a ?? []) as Array<Record<string, unknown>>).map((r) => {
+        const toActionRow = (r: Record<string, unknown>) => {
           const c = (r.customers ?? {}) as Record<string, unknown>;
           const sig = (r.churn_signals ?? {}) as Record<string, unknown>;
           const name =
@@ -108,6 +125,7 @@ export default async function ReviewPage({
             body: String(r.body ?? ""),
             status: String(r.status ?? ""),
             created_at: String(r.created_at ?? ""),
+            customerId: String(r.customer_id ?? ""),
             email: String(c.email ?? ""),
             name,
             reason: (sig.reason as string | null) ?? null,
@@ -115,7 +133,76 @@ export default async function ReviewPage({
             kind: (sig.kind as string | null) ?? null,
             generator: ((r.evidence_json as Record<string, unknown> | null)?.generator as string | null) ?? null,
           };
-        });
+        };
+        actions = ((a ?? []) as Array<Record<string, unknown>>).map(toActionRow);
+        approvedActions = ((ap ?? []) as Array<Record<string, unknown>>).map(toActionRow);
+        // Sustento del motor: última predicción por cliente + última orden real.
+        // Un join en JS sobre dos queries bulk (sin N+1).
+        try {
+          const { getStoreProfile } = await import("@/lib/store-profiles");
+          const profile = await getStoreProfile(storeId).catch(() => null);
+          const cat = profile?.catalogType ?? null;
+          ultimaCompraLabel = cat === "servicio" || cat === "digital" ? "última pauta" : "última compra";
+          isB2BReview = profile?.archetype === "b2b_proyecto" || profile?.archetype === "b2b_recurrente";
+          const custIds = [...new Set(actions.map((x) => x.customerId).filter(Boolean))];
+          if (custIds.length > 0) {
+            const [{ data: pr }, { data: or }] = await Promise.all([
+              db
+                .from("customer_predictions")
+                .select("customer_id,decision,p_recompra_h,p_low,p_high,horizon_days,ticket_esperado_minor,confidence,evidence_json")
+                .eq("store_id", storeId)
+                .in("customer_id", custIds)
+                .order("as_of", { ascending: false })
+                .limit(500),
+              db
+                .from("orders")
+                .select("customer_id,placed_at,items_json")
+                .eq("store_id", storeId)
+                .in("customer_id", custIds)
+                .order("placed_at", { ascending: false })
+                .limit(500),
+            ]);
+            const predById = new Map<string, Record<string, unknown>>();
+            for (const r of (pr ?? []) as Array<Record<string, unknown>>) {
+              const cid = String(r.customer_id ?? "");
+              if (cid && !predById.has(cid)) predById.set(cid, r);
+            }
+            const lastById = new Map<string, { at: string; items: string[] }>();
+            for (const r of (or ?? []) as Array<Record<string, unknown>>) {
+              const cid = String(r.customer_id ?? "");
+              if (!cid || lastById.has(cid)) continue;
+              const items = Array.isArray(r.items_json)
+                ? (r.items_json as Array<Record<string, unknown>>)
+                    .map((i) => String(i.title ?? "").trim())
+                    .filter((t) => t && t !== "—")
+                    .slice(0, 3)
+                : [];
+              lastById.set(cid, { at: String(r.placed_at ?? "").slice(0, 10), items });
+            }
+            actions = actions.map((x) => {
+              const p = predById.get(x.customerId ?? "");
+              const o = lastById.get(x.customerId ?? "");
+              if (!p) return x;
+              const ev = (p.evidence_json as Record<string, unknown> | null) ?? {};
+              return {
+                ...x,
+                predCycleDays: ev.cycle_days == null ? null : Number(ev.cycle_days),
+                predTDays: ev.t_days == null ? null : Number(ev.t_days),
+                predHorizon: p.horizon_days == null ? null : Number(p.horizon_days),
+                predP: p.p_recompra_h == null ? null : Number(p.p_recompra_h),
+                predPLow: p.p_low == null ? null : Number(p.p_low),
+                predPHigh: p.p_high == null ? null : Number(p.p_high),
+                predTicketMinor:
+                  p.ticket_esperado_minor == null ? null : Number(p.ticket_esperado_minor),
+                predConfidence: (p.confidence as string | null) ?? null,
+                lastOrderAt: o?.at ?? null,
+                lastOrderItems: o?.items ?? null,
+              };
+            });
+          }
+        } catch {
+          // Sin predicciones: las tarjetas usan el texto de respaldo.
+        }
         leads = ((l ?? []) as Array<Record<string, unknown>>).map((r) => ({
           id: String(r.id),
           company: (r.company as string | null) ?? null,
@@ -192,9 +279,15 @@ export default async function ReviewPage({
   const showActions = !chatFiltered || Boolean(actionFilter);
   const showLeads = !chatFiltered || Boolean(leadFilter);
   const showSignals = !chatFiltered || Boolean(signalFilter);
-  const clearChatFilter = sp.market
-    ? `/review?market=${encodeURIComponent(sp.market)}`
-    : "/review";
+  // Tab inicial: con filtro del chat manda lo pedido; si no, ?tab= (deep-link).
+  const initialTab =
+    actionFilter ? "actions" : leadFilter ? "leads" : signalFilter ? "signals"
+    : sp.tab === "leads" || sp.tab === "signals" ? sp.tab : "actions";
+  const clearParams = new URLSearchParams();
+  if (sp.market) clearParams.set("market", sp.market);
+  if (sp.tab === "leads" || sp.tab === "signals") clearParams.set("tab", sp.tab);
+  const clearQs = clearParams.toString();
+  const clearChatFilter = `/review${clearQs ? `?${clearQs}` : ""}`;
 
   return (
     <div className="flex w-full flex-col gap-6 p-6">
@@ -202,7 +295,6 @@ export default async function ReviewPage({
         <h1 className="text-lg font-semibold tracking-tight">
           Review{marketLabel ? ` · ${marketLabel}` : ""}
         </h1>
-        {connected && dbReady && !error && <RetentionControls />}
       </header>
 
       {chatFiltered && (
@@ -241,7 +333,9 @@ export default async function ReviewPage({
       {connected && dbReady && !error && (
         <>
           <ReviewLists
+            key={initialTab}
             actions={actions}
+            approvedActions={approvedActions}
             leads={leads}
             signals={signals}
             visible={{ actions: showActions, leads: showLeads, signals: showSignals }}
@@ -250,6 +344,9 @@ export default async function ReviewPage({
             customerDomains={[...customerDomains]}
             shopCurrency={shopCurrency}
             filtered={Boolean(chatFiltered)}
+            initialTab={initialTab as "actions" | "leads" | "signals"}
+            ultimaCompraLabel={ultimaCompraLabel}
+            isB2B={isB2BReview}
           />
 
         </>

@@ -1,20 +1,24 @@
 // Lead stream (prospector, Fase B): ICP manual → queries LLM → SearXNG →
 // scrape (Crawlee Cheerio) → score LLM vs ICP → proposed_leads PENDING_REVIEW.
 // El prospector propone; nunca contacta solo.
-import { join } from "node:path";
-import { CheerioCrawler } from "@crawlee/cheerio";
 import { getSupabase } from "@/lib/supabase";
 import { modeCountry } from "@/lib/medusa";
 import { classifyDomain, domainFromEmail } from "@/lib/domains";
-import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { getLlmConfig } from "@/lib/ai/llm-config";
+import {
+  buildQueries,
+  completeJson,
+  hostOf,
+  scrapeCandidates,
+  scrapable,
+  searchSearxng,
+  type Scraped,
+  type SearchHit,
+} from "@/lib/retrieval";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 
-process.env.CRAWLEE_STORAGE_DIR ??= join(process.cwd(), ".data", "crawlee");
-
 const log = createLogger("prospect");
-
-const SEARXNG_URL = (process.env.SEARXNG_URL ?? "http://localhost:8888").replace(/\/+$/, "");
 
 /** Versión del criterio prospector. Sube cuando cambia scoring/retrieval. */
 export const PROSPECT_GEN = "prospect:v3:hybrid";
@@ -95,32 +99,6 @@ export async function buildAutoIcp(storeId: string, profile?: Record<string, unk
   return lines.join("\n");
 }
 
-async function completeJson(ref: ModelRef, temp: number, maxTokens: number, effort: string | null, system: string, user: string): Promise<string> {
-  const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
-  if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
-  const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
-  const body: Record<string, unknown> = {
-    model: ref.model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    ...chatCompletionParams(ref.provider, ref.model, temp, maxTokens),
-    response_format: { type: "json_object" },
-    ...reasoningBody(ref.provider, ref.model, effort),
-  };
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
-  return content;
-}
-
 async function prospectComplete(system: string, user: string): Promise<string> {
   const cfg = getLlmConfig("prospect_scan");
   // 3 intentos [primario, fallback, fallback]: el vaciado intermitente
@@ -138,59 +116,6 @@ async function prospectComplete(system: string, user: string): Promise<string> {
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-}
-
-export async function buildQueries(icp: string, n = 3, focus?: string | null): Promise<string[]> {
-  const raw = await prospectComplete(
-    "Generas queries de búsqueda web para encontrar negocios parecidos al ICP. Responde SOLO JSON: {\"queries\": [string]}. Queries en español, variadas. Prefiere queries que devuelvan webs de empresas y directorios indexables; evita site:linkedin.com y redes sociales (muro de login, no scrapeables).",
-    `ICP:\n${icp.slice(0, 1500)}\n${focus ? `\nEnfoque de ESTA corrida (manda sobre lo general): ${focus}\n` : ""}\nNº de queries: ${n}`,
-  );
-  const parsed = JSON.parse(raw) as { queries?: unknown };
-  const qs = Array.isArray(parsed.queries) ? parsed.queries.filter((q): q is string => typeof q === "string" && q.trim().length > 0) : [];
-  if (qs.length === 0) throw new Error("El LLM no devolvió queries.");
-  return qs.slice(0, n);
-}
-
-export interface SearchHit {
-  url: string;
-  title: string;
-  snippet: string;
-}
-
-export async function searchSearxng(query: string, perQuery = 5): Promise<SearchHit[]> {
-  const u = `${SEARXNG_URL}/search?q=${encodeURIComponent(query)}&format=json&language=es-PE`;
-  const res = await fetch(u);
-  if (!res.ok) throw new Error(`SearXNG ${res.status} (¿contenedor caído? ${SEARXNG_URL})`);
-  const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
-  return ((data.results ?? []).slice(0, perQuery)).map((r) => ({
-    url: String(r.url ?? ""),
-    title: String(r.title ?? ""),
-    snippet: String(r.content ?? ""),
-  })).filter((h) => h.url.startsWith("http"));
-}
-
-export interface Scraped {
-  url: string;
-  title: string;
-  text: string;
-}
-
-/** Scrape estático (Cheerio, sin browser): suficiente para webs de empresas y directorios. */
-export async function scrapeCandidates(urls: string[]): Promise<Scraped[]> {
-  const out: Scraped[] = [];
-  const crawler = new CheerioCrawler({
-    maxConcurrency: 3,
-    requestHandlerTimeoutSecs: 25,
-    async requestHandler({ $, request }) {
-      $("script,style,nav,footer,header,noscript,iframe").remove();
-      const raw = ($("article").text() || $("main").text() || $("body").text() || "").replace(/\s+/g, " ").trim();
-      if (raw.length < 200) return; // pared de login/bot o página vacía: se descarta en silencio
-      out.push({ url: request.url, title: $("title").first().text().trim().slice(0, 200), text: raw.slice(0, 4000) });
-    },
-  });
-  await crawler.addRequests(urls);
-  await crawler.run();
-  return out;
 }
 
 export interface SimilarPoolEntry {
@@ -402,25 +327,6 @@ async function scoreChunk(
     }));
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-/** Dominios no scrapeables (login/bot wall): se filtran antes de gastar requests. */
-const UNSCRAPABLE = ["linkedin.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com"];
-
-export function scrapable(urls: string[]): { ok: string[]; skipped: number } {
-  const ok = urls.filter((u) => {
-    const h = hostOf(u);
-    return h && !UNSCRAPABLE.some((d) => h === d || h.endsWith(`.${d}`));
-  });
-  return { ok, skipped: urls.length - ok.length };
-}
-
 /** Dedupe: ni URLs ya propuestas ni dominios que ya son customers. Devuelve índices a guardar. */
 export async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]): Promise<Scored[]> {
   const db = getSupabase();
@@ -460,12 +366,12 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
 
   try {
     const icp = await getIcp(storeId);
-    await step("queries");
+    await step(null);
     const queries = await buildQueries(icp.text, nQ, focus);
 
     const hits: SearchHit[] = [];
     for (const q of queries) {
-      await step(`search: ${q.slice(0, 60)}`);
+      await step(null);
       try {
         hits.push(...(await searchSearxng(q, perQuery)));
       } catch {
@@ -473,12 +379,12 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
       }
     }
     const urls = [...new Set(hits.map((h) => h.url))].slice(0, maxCands * 2);
-    if (urls.length === 0) throw new Error("SearXNG no devolvió URLs (¿contenedor caído o queries vacías?).");
-    const { ok: scrapableUrls, skipped } = scrapable(urls);
+    if (urls.length === 0) throw new Error("Sin resultados esta vez, lo reintentamos solo.");
+    const { ok: scrapableUrls } = scrapable(urls);
     const targets = scrapableUrls.slice(0, maxCands);
-    if (targets.length === 0) throw new Error("Solo muros de login (LinkedIn/redes): ajusta las queries a webs indexables.");
+    if (targets.length === 0) throw new Error("Solo encontramos redes cerradas, ajustamos la búsqueda.");
 
-    await step(`scrape (${targets.length}${skipped > 0 ? `, ${skipped} muros saltados` : ""})`);
+    await step(null);
     const scraped = await scrapeCandidates(targets);
     failed += targets.length - scraped.length;
     if (scraped.length === 0) throw new Error("Scrape sin texto útil (muros de login/bot en todas).");
@@ -539,8 +445,20 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
     }
     processed = fresh.length;
     const status: RunStatus = "done";
+    // Filosofía TeamPulse: outcome humano. El foco es lenguaje del usuario,
+    // se conserva; los fallidos van en su columna.
     const focusTag = focus ? ` · foco: ${focus.slice(0, 60)}` : "";
-    await finishRun(runId, { status, processed, failed, summary: `${processed} leads propuestos · ${failed} fallidos${focusTag}` });
+    const summary =
+      processed > 0
+        ? `${processed} parecidos a tu ideal por revisar${focusTag}`
+        : `En pausa, primero recuperamos lo tuyo${focusTag}`;
+    await finishRun(runId, {
+      status,
+      processed,
+      failed,
+      summary,
+      pulseState: processed > 0 ? "needs" : "paused",
+    });
   } catch (e) {
     await finishRun(runId, {
       status: "error",

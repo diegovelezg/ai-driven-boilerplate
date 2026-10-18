@@ -5,7 +5,6 @@ import { isRealOrder } from "@/lib/medusa";
 import { enrichOrderItems } from "@/lib/media-context";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
-import { absoluteRecencyScore } from "@/lib/insights";
 
 export interface CustomerOrderItem {
   title: string;
@@ -34,13 +33,6 @@ export interface CustomerRfm {
   monetary: number;
   currency: string | null;
   avgTicket: number;
-  r: number | null;
-  f: number | null;
-  m: number | null;
-  /** Segmento RFM simplificado: Nuevo|Campeón|Recurrente|Ocasional|En riesgo|Inactivo|Sin compras */
-  segment: string;
-  /** Insignia "No los pierdas" (Can't Lose Them): top gasto + inactivo. */
-  noLosPierdas: boolean;
   /** Ciclo esperado de recompra (días): mediana del cliente → ciclo de la tienda → default del arquetipo. */
   expectedCycleDays: number | null;
   /** De dónde salió el ciclo: cliente|tienda|arquetipo. */
@@ -52,7 +44,7 @@ export interface CustomerRfm {
   overdueDays: number | null;
 }
 
-/** Estado vs el ciclo esperado (puro: lo usan la ficha y measure-risk). */
+/** Estado vs el ciclo esperado (puro: lo usa la ficha). */
 export function dueStatusFor(
   recencyDays: number | null,
   expectedCycleDays: number | null,
@@ -104,32 +96,12 @@ export function medianInterval(datesAsc: Date[]): number | null {
   return Math.max(1, Math.round(med));
 }
 
-/** Quintil 1-5 por ranking medio (empates promediados). n<=1 => 3 neutral. */
-function quintile(sortedAsc: number[], v: number): number {
-  const n = sortedAsc.length;
-  if (n <= 1) return 3;
-  const below = sortedAsc.filter((x) => x < v).length;
-  const equal = sortedAsc.filter((x) => x === v).length;
-  const rankMid = below + (equal - 1) / 2;
-  return Math.min(5, 1 + Math.floor((rankMid / (n - 1)) * 5));
-}
-
-function segment(r: number | null, f: number): string {
-  if (f === 0) return "Sin compras";
-  if (f === 1 && (r ?? 0) >= 4) return "Nuevo";
-  if ((r ?? 0) >= 4 && f >= 4) return "Campeón";
-  if ((r ?? 0) >= 3 && f >= 3) return "Recurrente";
-  if ((r ?? 5) <= 2 && f >= 3) return "En riesgo";
-  if ((r ?? 5) <= 2) return "Inactivo";
-  return "Ocasional";
-}
-
 export interface CustomerOrdersAndRfm {
   orders: CustomerOrder[];
   summary: CustomerRfm;
 }
 
-/** Compras (más reciente primero) + RFM vs la distribución de la tienda. */
+/** Compras (más reciente primero) + hechos temporales del cliente. */
 export async function loadCustomerOrdersAndRfm(
   dbId: string,
   orderLimit = 20,
@@ -142,20 +114,13 @@ export async function loadCustomerOrdersAndRfm(
     .maybeSingle();
   if (custErr || !customer) return null;
 
-  const [{ data: orders, error }, { data: population }] = await Promise.all([
-    db
-      .from("orders")
-      .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
-      .eq("customer_id", dbId)
-      .order("placed_at", { ascending: false })
-      // Traer de más: las test/canceladas se filtran abajo (misma regla que el sync).
-      .limit(Math.max(orderLimit * 3, 60)),
-    db
-      .from("customers")
-      .select("orders_count,total_spent,last_order_at")
-      .eq("store_id", customer.store_id as string)
-      .limit(5000),
-  ]);
+  const { data: orders, error } = await db
+    .from("orders")
+    .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
+    .eq("customer_id", dbId)
+    .order("placed_at", { ascending: false })
+    // Traer de más: las test/canceladas se filtran abajo (misma regla que el sync).
+    .limit(Math.max(orderLimit * 3, 60));
   if (error) throw new Error(error.message);
 
   // Solo compras reales: misma regla que los agregados del sync
@@ -199,27 +164,6 @@ export async function loadCustomerOrdersAndRfm(
       ? Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86_400_000))
       : null;
 
-  const pop = ((population as Array<Record<string, unknown>>) ?? []).filter(
-    (p) => Number(p.orders_count ?? 0) > 0,
-  );
-  const fPop = pop.map((p) => Number(p.orders_count ?? 0)).sort((a, b) => a - b);
-  const mPop = pop.map((p) => Number(p.total_spent ?? 0)).sort((a, b) => a - b);
-  const rPop = pop
-    .map((p) => {
-      const d = p.last_order_at ? new Date(p.last_order_at as string) : null;
-      return d && !Number.isNaN(d.getTime())
-        ? Math.max(0, Math.floor((Date.now() - d.getTime()) / 86_400_000))
-        : null;
-    })
-    .filter((d): d is number => d !== null)
-    .sort((a, b) => a - b);
-
-  const f = frequency > 0 ? quintile(fPop, frequency) : null;
-  const m = frequency > 0 ? quintile(mPop, monetary) : null;
-  // R con techo absoluto por ciclo del tenant (misma regla que insights.ts):
-  // en bases dormidas el quintil relativo corona "Campeones" de hace 200 días.
-  const rQuint = recencyDays !== null && frequency > 0 ? 6 - quintile(rPop, recencyDays) : null;
-
   // Ciclo esperado: mediana del cliente → ciclo declarado de la tienda →
   // default del arquetipo. El perfil del tenant por fin alimenta el motor.
   const orderDatesAsc = realRows
@@ -234,9 +178,6 @@ export async function loadCustomerOrdersAndRfm(
     ? (ARCHETYPES[tenantProfile.archetype]?.defaultCycleDays ?? null)
     : null;
   const expectedCycleDays = customerMedian ?? tenantCycle ?? archetypeCycle;
-  // R final con techo absoluto por ciclo del tenant (misma regla que insights.ts).
-  const rCap = absoluteRecencyScore(recencyDays, tenantCycle ?? archetypeCycle);
-  const r = rQuint !== null && rCap !== null ? Math.min(rQuint, rCap) : rQuint;
   const cycleSource =
     customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
   const churnMultiplier = tenantProfile?.churnMultiplier ?? 1.25;
@@ -254,11 +195,6 @@ export async function loadCustomerOrdersAndRfm(
       monetary,
       currency,
       avgTicket: frequency > 0 ? Math.round(monetary / frequency) : 0,
-      r,
-      f,
-      m,
-      segment: segment(r, frequency),
-      noLosPierdas: m === 5 && r !== null && r <= 2,
       expectedCycleDays,
       cycleSource,
       churnMultiplier,

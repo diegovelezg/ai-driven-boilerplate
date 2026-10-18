@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   Select,
@@ -60,6 +60,12 @@ export function MarketSelector({
 
   if (markets.length < 2) return null;
 
+  // Base UI resuelve <Select.Value> contra `items` cuando el popup (Portal)
+  // aún no montó los <SelectItem>: sin esto el trigger muestra el UUID crudo
+  // en lugar de la etiqueta humana.
+  const items: Record<string, ReactNode> = { all: "Todos los países" };
+  for (const m of markets) items[m.id] = displayMarket(m);
+
   const onChange = (v: string | null) => {
     if (!v) return;
     try {
@@ -77,7 +83,7 @@ export function MarketSelector({
   };
 
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value} onValueChange={onChange} items={items}>
       <SelectTrigger className="h-8 w-40" aria-label="Filtrar por país">
         <SelectValue placeholder="Todos los países" />
       </SelectTrigger>

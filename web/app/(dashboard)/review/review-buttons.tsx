@@ -65,8 +65,7 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
   );
 }
 
-/** Regenera borradores con criterios viejos (los borra y redacta de nuevo). */
-export function RegenerateButton({
+/** Regenera borradores con criterios viejos (los borra y redacta de nuevo). */export function RegenerateButton({
   count,
   onRegenerate,
 }: {
@@ -96,6 +95,36 @@ export function RegenerateButton({
         }}
       >
         {busy ? "Regenerando…" : `Regenerar ${count} con criterios actuales`}
+      </Button>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
+/** Revoca una aprobación aún no enviada (approved → rejected). */
+export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <span className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        title="Revoca la aprobación antes de que se envíe. No toca lo ya enviado."
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await onRevoke(id);
+            setMsg(r.message);
+            router.refresh();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Revocando…" : "Revocar aprobación"}
       </Button>
       {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>

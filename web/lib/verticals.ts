@@ -2,9 +2,10 @@
 // Se investiga una vez (web + LLM), se cachea en `vertical_profiles` y se
 // reusa entre tenants. La precisión del tenant la pone la Fase B con datos.
 // Solo server/scripts (usa Crawlee + service_role); sin "server-only" para
-// que los smoke scripts (tsx) puedan importarlo, igual que lib/prospect.ts.
+// que los smoke scripts (tsx) puedan importarlo. El retrieval web vive en
+// lib/retrieval.ts (también sin server-only) por la misma razón.
 import { getSupabase } from "@/lib/supabase";
-import { buildQueries, searchSearxng, scrapeCandidates, scrapable, type Scraped } from "@/lib/prospect";
+import { buildQueries, searchSearxng, scrapeCandidates, scrapable, type Scraped } from "@/lib/retrieval";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
 
 export interface BuyerPersona {

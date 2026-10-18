@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { CustomerFilterMeta, CustomerFilters, EditableCustomer } from "@/lib/customers-db";
+import type { CustomerFilters, CustomerPredictionLite, EditableCustomer } from "@/lib/customers-db";
 import {
-  getCustomerFilterMeta,
+  getPredictionsMap,
+  getVentana7Summary,
   parseCustomerFilters,
   parseCustomersSort,
   queryStoreCustomers,
@@ -25,7 +26,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; segment?: string; ticket?: string; freq?: string; vip?: string; market?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; market?: string }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
@@ -35,10 +36,9 @@ export default async function CustomersPage({
   const q = (sp.q ?? "").trim();
   const sort = parseCustomersSort({ sort: sp.sort, dir: sp.dir });
   const filters: CustomerFilters = parseCustomerFilters({
-    segment: sp.segment,
-    ticket: sp.ticket,
-    freq: sp.freq,
-    vip: sp.vip,
+    decision: sp.decision,
+    vista: sp.vista,
+    ritmo: sp.ritmo,
   });
 
   let rows: EditableCustomer[] = [];
@@ -48,10 +48,11 @@ export default async function CustomersPage({
   let synced = false;
   let pendingCount = 0;
   let duplicateCount = 0;
-  let meta: CustomerFilterMeta | null = null;
   let shopCurrency: string | null = null;
   let marketId: string | null = null;
   let marketLabel: string | null = null;
+  let preds: Record<string, CustomerPredictionLite> = {};
+  let ventana7: { n: number; sumaMinor: number } | null = null;
 
   if (connected && dbReady) {
     try {
@@ -78,18 +79,22 @@ export default async function CustomersPage({
         }
         rows = res.rows;
         totalCount = res.totalCount;
-        // Meta para los dropdowns (conteos + cuartiles). Si falla, la tabla
-        // sigue funcionando; los filtros quedan sin opciones.
-        const [metaRes, storeRes] = await Promise.all([
-          getCustomerFilterMeta(storeId, scope).catch(() => null),
-          getSupabase()
-            .from("stores")
-            .select("shop_currency")
-            .eq("id", storeId)
-            .maybeSingle(),
-        ]);
-        meta = metaRes;
-        shopCurrency = (storeRes.data?.shop_currency as string | null) ?? null;
+        const { data: storeRes } = await getSupabase()
+          .from("stores")
+          .select("shop_currency")
+          .eq("id", storeId)
+          .maybeSingle();
+        shopCurrency = (storeRes?.shop_currency as string | null) ?? null;
+        // Foto del día para las columnas del motor (un join en JS, sin N+1).
+        const predMap = await getPredictionsMap(storeId).catch(() => new Map());
+        preds = {};
+        for (const r of rows) {
+          const p = predMap.get(r.dbId);
+          if (p) preds[r.dbId] = p;
+        }
+        if (filters.vista === "ventana7") {
+          ventana7 = await getVentana7Summary(storeId).catch(() => null);
+        }
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
@@ -173,9 +178,10 @@ export default async function CustomersPage({
           sortKey={sort.key}
           sortDir={sort.dir}
           filters={filters}
-          meta={meta}
           shopCurrency={shopCurrency}
           marketId={marketId}
+          preds={preds}
+          ventana7={ventana7}
         />
       )}
     </div>

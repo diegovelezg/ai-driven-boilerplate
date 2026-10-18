@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import { runProfiler } from "@/lib/profiling/pipeline";
+import { startRun, finishRun } from "@/lib/background";
 import { ARCHETYPES, upsertStoreProfile, type ArchetypeId } from "@/lib/store-profiles";
 
 async function main() {
@@ -18,6 +19,8 @@ async function main() {
   if (!store) throw new Error("Sin store para esta conexión.");
   const storeId = store.id as string;
 
+  // Cerebro visible en la cinta + TeamPulse: sin run, su trabajo es invisible.
+  const runId = await startRun(storeId, "profiler", "Cerebro", 1);
   const { synthesis: s, critic } = await runProfiler(storeId, description);
   let archetype = s.archetype;
   for (const c of critic.corrections ?? []) {
@@ -53,6 +56,14 @@ async function main() {
   console.log(
     `perfil guardado: ${s.businessModel}/${archetype} ciclo=${s.cycleDays ?? "auto"} conf=${s.confidence} critic=${critic.verdict}`,
   );
+  // Filosofía TeamPulse: 1 línea outcome, no "perfil guardado: modelo/arquetipo".
+  await finishRun(runId, {
+    status: "done",
+    processed: 1,
+    failed: 0,
+    summary: `Calibrado · ciclo ~${s.cycleDays ?? "?"}d · confianza ${s.confidence ?? "media"}`,
+    pulseState: "paused",
+  });
 }
 
 main().catch((e) => {

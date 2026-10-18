@@ -25,15 +25,21 @@ export interface AttentionItem {
   reason: string | null;
   /** Días sin comprar (null = otros tipos de señal). Para el ranking por valor. */
   daysSince: number | null;
-  /** Segmento RFM e insignia "No los pierdas" (tratamiento, no segmento). */
-  segment: string;
-  noLosPierdas: boolean;
   /** Último borrador de la señal (define el CTA: Redactar/Revisar/estado). */
   draftStatus: "none" | "pending" | "approved" | "dispatched";
   email: string;
   name: string;
   ordersCount: number;
   totalSpent: number;
+  /** Predicción del día (opcionales: sin predicción la fila cae al formato actual). */
+  decision?: string | null;
+  tDays?: number | null;
+  p25Days?: number | null;
+  p75Days?: number | null;
+  pRecompraH?: number | null;
+  ticketEsperadoMinor?: number | null;
+  predCurrency?: string | null;
+  confidence?: string | null;
 }
 
 export function AttentionTable({
@@ -49,10 +55,9 @@ export function AttentionTable({
   const [draftErrorId, setDraftErrorId] = useState<string | null>(null);
   const router = useRouter();
 
-  // La fila habla tratamiento (qué hago), no identidad (el segmento vive en la
-  // ficha y los filtros). Mismo idioma que el briefing: 3 tiers excluyentes.
+  // La fila habla tratamiento (qué hago), no identidad. Sin predicción del
+  // motor, la antigüedad decide: lo vencido va 1-a-1, lo antiguo a masiva.
   const tierOf = (row: AttentionItem): { text: string; hot: boolean } => {
-    if (row.noLosPierdas) return { text: "No los pierdas", hot: true };
     if (row.daysSince === null || row.daysSince <= 365) return { text: "Para contactar", hot: false };
     return { text: "Reactivación masiva", hot: false };
   };
@@ -96,6 +101,28 @@ export function AttentionTable({
         <TableBody>
           {rows.map((row) => {
             const tier = tierOf(row);
+            const pred = row.decision === "actuar" || row.decision === "revision_humana"
+              ? row
+              : null;
+            const chip = row.decision === "revision_humana"
+              ? "Revisar 1 a 1"
+              : pred
+                ? "Para actuar"
+                : null;
+            const ventana =
+              pred && row.tDays !== null && row.tDays !== undefined && row.p25Days != null && row.p75Days != null
+                ? `lleva ${Math.round(row.tDays)}d · suele volver ${Math.round(row.p25Days)}–${Math.round(row.p75Days)}d` +
+                  (row.tDays > row.p75Days ? ` (+${Math.round(row.tDays - row.p75Days)}d de su ventana)` : "")
+                : null;
+            const frecuencia =
+              pred && row.pRecompraH != null
+                ? `de cada 10 similares, ~${Math.round(row.pRecompraH * 10)} vuelven sin escribir` +
+                  (row.confidence === "baja" ? " (estimación inicial)" : "")
+                : null;
+            const ticket =
+              pred && row.ticketEsperadoMinor != null
+                ? `ticket esp. ${formatMoney(row.ticketEsperadoMinor, row.predCurrency ?? currency)} · sin descuento`
+                : null;
             return (
             <TableRow
               key={row.signalId}
@@ -105,12 +132,29 @@ export function AttentionTable({
               <TableCell className="font-medium">
                 {loadingId === row.customerDbId ? "Cargando…" : row.name}
                 <span className="block text-xs font-normal text-muted-foreground">
-                  {row.email} ·{" "}
-                  <span className={tier.hot ? "font-medium text-destructive" : undefined}>
-                    {tier.text}
-                  </span>{" "}
-                  · ticket ~{formatMoney(Math.round(row.totalSpent / Math.max(1, row.ordersCount)), currency)}
+                  {row.email}{" "}
+                  {chip ? (
+                    <span className="font-medium text-foreground">· {chip}</span>
+                  ) : (
+                    <>
+                      ·{" "}
+                      <span className={tier.hot ? "font-medium text-destructive" : undefined}>
+                        {tier.text}
+                      </span>
+                    </>
+                  )}{" "}
+                  {ticket ?? `· ticket ~${formatMoney(Math.round(row.totalSpent / Math.max(1, row.ordersCount)), currency)}`}
                 </span>
+                {ventana && (
+                  <span className="block text-xs font-normal text-muted-foreground tabular-nums">
+                    {ventana}
+                  </span>
+                )}
+                {frecuencia && (
+                  <span className="block text-xs font-normal text-muted-foreground tabular-nums">
+                    {frecuencia}
+                  </span>
+                )}
               </TableCell>
               <TableCell className="text-muted-foreground">
                 {row.reason ?? row.kind}

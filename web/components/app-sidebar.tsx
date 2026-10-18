@@ -93,13 +93,21 @@ function AppSidebarNav() {
                     <SidebarMenuButton
                       render={<Link href={item.href} />}
                       isActive={active}
-                      tooltip={item.label}
+                      tooltip={
+                        item.badge ? `${item.label} (${item.badge})` : item.label
+                      }
                     >
                       <item.icon strokeWidth={1.75} />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
                     {item.badge && (
-                      <SidebarMenuBadge>{item.badge}</SidebarMenuBadge>
+                      <>
+                        <SidebarMenuBadge>{item.badge}</SidebarMenuBadge>
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute top-1 right-1 hidden size-2 rounded-full bg-destructive ring-2 ring-sidebar group-data-[collapsible=icon]:block"
+                        />
+                      </>
                     )}
                   </SidebarMenuItem>
                 );

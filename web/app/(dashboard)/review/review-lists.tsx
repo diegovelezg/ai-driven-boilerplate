@@ -1,6 +1,10 @@
 "use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { cn } from "cn";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
@@ -11,8 +15,9 @@ import {
   regenerateStaleDraftsAction,
   rejectActionAction,
   rejectLeadAction,
+  revokeApprovalAction,
 } from "@/lib/review-actions";
-import { ApprovePair, DismissButton, RegenerateButton } from "./review-buttons";
+import { ApprovePair, DismissButton, RegenerateButton, RevokeButton } from "./review-buttons";
 
 export interface ActionRow {
   id: string;
@@ -21,12 +26,24 @@ export interface ActionRow {
   body: string;
   status: string;
   created_at: string;
+  customerId?: string;
   email: string;
   name: string;
   reason: string | null;
   score: number | null;
   kind: string | null;
   generator: string | null;
+  /** Evidencia del motor (opcionales: borradores viejos usan el respaldo). */
+  predCycleDays?: number | null;
+  predTDays?: number | null;
+  predHorizon?: number | null;
+  predP?: number | null;
+  predPLow?: number | null;
+  predPHigh?: number | null;
+  predTicketMinor?: number | null;
+  predConfidence?: string | null;
+  lastOrderAt?: string | null;
+  lastOrderItems?: string[] | null;
 }
 
 export interface LeadRow {
@@ -62,12 +79,16 @@ export interface SignalRow {
   name: string;
 }
 
+/** Tab del inbox: una cola por trabajo (retención vs adquisición vs contexto). */
+export type ReviewTab = "actions" | "leads" | "signals";
+
 /** Listas del inbox: UN renderer para /review y para el canvas del chat.
  *  Recibe filas ya filtradas; `visible` decide qué secciones se muestran
  *  (con filtro del chat, solo lo pedido). Mutaciones por las mismas
  *  server actions en ambos hosts. */
 export function ReviewLists({
   actions,
+  approvedActions = [],
   leads,
   signals,
   visible,
@@ -76,8 +97,14 @@ export function ReviewLists({
   customerDomains = null,
   shopCurrency = null,
   filtered = false,
+  initialTab = "actions",
+  ultimaCompraLabel = "última compra",
+  /** true = tenant B2B: sin barra de aprobación en lote. Default seguro. */
+  isB2B = true,
 }: {
   actions: ActionRow[];
+  /** Aprobadas aún no enviadas: visibles para poder revocarlas. */
+  approvedActions?: ActionRow[];
   leads: LeadRow[];
   signals: SignalRow[];
   visible: { actions: boolean; leads: boolean; signals: boolean };
@@ -88,16 +115,82 @@ export function ReviewLists({
   shopCurrency?: string | null;
   /** Filtro del chat activo: vacíos con mensaje de filtro, no de inbox. */
   filtered?: boolean;
+  initialTab?: ReviewTab;
+  ultimaCompraLabel?: string;
+  isB2B?: boolean;
 }) {
+  const router = useRouter();
+  const tabs: Array<{ id: ReviewTab; label: string; show: boolean }> = [
+    { id: "actions", label: `Acciones (${actions.length})`, show: visible.actions },
+    { id: "leads", label: `Leads (${leads.length})`, show: visible.leads },
+    { id: "signals", label: `Señales (${signals.length})`, show: visible.signals },
+  ];
+  const shown = tabs.filter((t) => t.show);
+  const fallback = shown[0]?.id ?? "actions";
+  const [active, setActive] = useState<ReviewTab>(
+    tabs.some((t) => t.id === initialTab && t.show) ? initialTab : fallback,
+  );
+  const selectTab = (id: ReviewTab) => {
+    setActive(id);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", id);
+    router.replace(`?${params.toString()}`, { scroll: false });
+  };
+  // Aprobación en lote (solo no-B2B): reutiliza approveActionAction por id.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const approveSelected = async () => {
+    if (batchBusy || selected.size === 0) return;
+    setBatchBusy(true);
+    setBatchMsg(null);
+    let ok = 0;
+    for (const id of selected) {
+      const r = await approveActionAction(id);
+      if (r.ok) ok += 1;
+    }
+    setBatchMsg(`${ok} de ${selected.size} aprobadas.`);
+    setSelected(new Set());
+    setBatchBusy(false);
+    router.refresh();
+  };
   const emptyActions = filtered
     ? "Sin resultados para ese filtro."
-    : "Sin borradores pendientes. Corre Scout → Estratega → Copywriter.";
+    : "Sin borradores pendientes. Pídelos en el chat o desde Overview.";
   const emptyLeads = filtered ? "Sin resultados para ese filtro." : "Sin leads pendientes.";
 
   return (
     <>
-      {visible.actions && (
-      <section className="flex flex-col gap-3">
+      {shown.length > 1 && (
+        <div role="tablist" aria-label="Colas de revisión" className="flex w-fit gap-1 rounded-lg bg-muted p-1">
+          {shown.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={active === t.id}
+              onClick={() => selectTab(t.id)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
+                active === t.id
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {visible.actions && active === "actions" && (
+      <section className="flex flex-col gap-3" role="tabpanel">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">
             Acciones propuestas ({actions.length})
@@ -110,6 +203,18 @@ export function ReviewLists({
             onRegenerate={regenerateStaleDraftsAction}
           />
         </div>
+        {!isB2B && actions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              disabled={batchBusy || selected.size === 0}
+              onClick={() => void approveSelected()}
+            >
+              {batchBusy ? "Aprobando…" : `Aprobar seleccionados (${selected.size})`}
+            </Button>
+            {batchMsg && <span className="text-xs text-muted-foreground">{batchMsg}</span>}
+          </div>
+        )}
         {actions.length === 0 &&
           (runningKinds.includes("copywriter") ? (
             <Card>
@@ -124,17 +229,33 @@ export function ReviewLists({
               </CardContent>
             </Card>
           ))}
-        {actions.map((a) => (
+        {actions.map((a) => {
+          const hasPred = a.predHorizon != null && a.predP != null;
+          const n10 = hasPred ? Math.round((a.predP ?? 0) * 10) : null;
+          const nLow = hasPred && a.predPLow != null ? Math.round(a.predPLow * 10) : null;
+          const nHigh = hasPred && a.predPHigh != null ? Math.round(a.predPHigh * 10) : null;
+          const hecho = hasPred
+            ? `ciclo ~${a.predCycleDays ?? "?"}d · lleva ${a.predTDays ?? "?"}d · ${ultimaCompraLabel} ${a.lastOrderAt ?? "—"}${a.lastOrderItems && a.lastOrderItems.length > 0 ? ` (${a.lastOrderItems.join(" · ")})` : ""}`
+            : null;
+          return (
           <Card key={a.id}>
             <CardContent className="flex flex-col gap-2 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[13px] font-medium">
+                <span className="flex items-center gap-2 text-[13px] font-medium">
+                  {!isB2B && (
+                    <input
+                      type="checkbox"
+                      checked={selected.has(a.id)}
+                      onChange={() => toggleSelect(a.id)}
+                      aria-label={`Seleccionar borrador de ${a.name}`}
+                      className="size-4 accent-primary"
+                    />
+                  )}
                   {a.name} <span className="font-normal text-muted-foreground">· {a.email}</span>
                 </span>
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {a.channel}
                   {a.kind ? ` · ${a.kind}` : ""}
-                  {a.score != null ? ` · score ${a.score}` : ""}
                 </span>
               </div>
               {a.reason && (
@@ -147,21 +268,41 @@ export function ReviewLists({
                   Por qué se propone (sustento)
                 </summary>
                 <div className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
-                  <span>
-                    <strong className="text-foreground">Regla:</strong>{" "}
-                    {a.kind === "vip_care"
-                      ? "3+ compras y gasto en el top 20% → cuidado VIP, vale 1-a-1"
-                      : a.kind === "winback"
-                        ? "1 sola compra y vencido → winback, la 2ª compra define si se queda"
-                        : a.kind === "nurture"
-                          ? "2+ compras, gasto medio → nurture, reactivar hábito"
-                          : "señal de churn vencida → recupero"}{" "}
-                    {a.score != null ? `· score ${a.score}` : ""} {a.reason ? `· ${a.reason}` : ""}
-                  </span>
-                  <span>
-                    Canal {a.channel}: {a.channel === "whatsapp" ? "hay teléfono, se prefiere WhatsApp (≤400 chars)" : "sin teléfono a la vista, se usa email"} ·
-                    el texto usa solo historial real, sin cifras inventadas.
-                  </span>
+                  {hasPred ? (
+                    <>
+                      <span>
+                        <strong className="text-foreground">Hecho:</strong> {hecho}
+                      </span>
+                      <span>
+                        <strong className="text-foreground">Evidencia:</strong> sin escribirle,
+                        de cada 10 similares vuelven ~{n10} en {a.predHorizon}d (rango {nLow}–{nHigh})
+                        {a.predConfidence === "baja" ? " (estimación inicial: aún hay pocos datos de esta tienda)" : ""}.
+                      </span>
+                      <span>
+                        <strong className="text-foreground">Impacto:</strong> ticket esperado{" "}
+                        {a.predTicketMinor != null ? formatMoney(a.predTicketMinor, shopCurrency) : "—"} · sin
+                        descuento · canal {a.channel} ({a.channel === "whatsapp" ? "hay teléfono, se prefiere WhatsApp (≤400 chars)" : "sin teléfono a la vista, se usa email"}).
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        <strong className="text-foreground">Regla:</strong>{" "}
+                        {a.kind === "vip_care"
+                          ? "3+ compras y gasto en el top 20% → cuidado VIP, vale 1-a-1"
+                          : a.kind === "winback"
+                            ? "1 sola compra y vencido → winback, la 2ª compra define si se queda"
+                            : a.kind === "nurture"
+                              ? "2+ compras, gasto medio → nurture, reactivar hábito"
+                              : "señal de churn vencida → recupero"}{" "}
+                        {a.score != null ? `· score ${a.score}` : ""} {a.reason ? `· ${a.reason}` : ""}
+                      </span>
+                      <span>
+                        Canal {a.channel}: {a.channel === "whatsapp" ? "hay teléfono, se prefiere WhatsApp (≤400 chars)" : "sin teléfono a la vista, se usa email"} ·
+                        el texto usa solo historial real, sin cifras inventadas.
+                      </span>
+                    </>
+                  )}
                   <span>
                     {a.generator === COPYWRITER_GEN
                       ? "✓ criterios actuales"
@@ -172,12 +313,42 @@ export function ReviewLists({
               <ApprovePair id={a.id} onApprove={approveActionAction} onReject={rejectActionAction} />
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
+        {approvedActions.length > 0 && (
+          <div className="mt-2 flex flex-col gap-3">
+            <h3 className="text-sm font-medium">
+              Aprobadas por enviar ({approvedActions.length})
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                salen con el dispatcher; revoca aquí si alguna ya no va
+              </span>
+            </h3>
+            {approvedActions.map((a) => (
+              <Card key={a.id}>
+                <CardContent className="flex flex-col gap-2 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-[13px] font-medium">
+                      {a.name} <span className="font-normal text-muted-foreground">· {a.email}</span>
+                    </span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {a.channel}
+                      {a.kind ? ` · ${a.kind}` : ""}
+                      {a.generator !== COPYWRITER_GEN ? " · ⚠ criterios anteriores" : ""}
+                    </span>
+                  </div>
+                  {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
+                  <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+                  <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </section>
       )}
 
-      {visible.leads && (
-      <section className="flex flex-col gap-3">
+      {visible.leads && active === "leads" && (
+      <section className="flex flex-col gap-3" role="tabpanel">
         <h2 className="text-sm font-medium">
           Leads propuestos ({leads.length})
           {marketLabel && (
@@ -264,8 +435,8 @@ export function ReviewLists({
       </section>
       )}
 
-      {visible.signals && (
-      <section className="flex flex-col gap-3">
+      {visible.signals && active === "signals" && (
+      <section className="flex flex-col gap-3" role="tabpanel">
         <h2 className="text-sm font-medium">Señales abiertas ({signals.length})</h2>
         {signals.length === 0 &&
           (runningKinds.includes("scout") || runningKinds.includes("strategist")) && (

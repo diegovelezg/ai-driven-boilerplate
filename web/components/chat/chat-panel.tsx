@@ -6,25 +6,27 @@ import type { ChatArtifact } from "@/components/chat/types";
 import { useStreamChat } from "@/components/chat/use-stream-chat";
 import type { ChatMessage } from "@/components/chat/types";
 
-/** Pool grande de presets inteligentes: cubre riesgo, recupero, borradores,
- *  priorización, VIPs, ticket, leads y resumen. Cada apertura muestra 3 al azar. */
+/** Pool de presets alineados al motor: decisiones (actuar/vigilar/no-tocar),
+ *  ventanas de recompra, recupero medido, borradores, leads y resumen.
+ *  Cada preset mapea a una tool real. Cada apertura muestra 3 al azar. */
 export const SUGGESTION_POOL = [
-  "¿Quién está en riesgo esta semana y por qué?",
+  "¿A quién debo actuar hoy y por qué?",
   "¿Cuánto recuperamos este mes?",
   "Muéstrame los borradores pendientes",
   "¿Qué hago primero hoy?",
   "Dame el resumen de la tienda",
-  "¿Qué VIP están en riesgo?",
-  "Filtra customers de ticket alto",
+  "¿Qué clientes valiosos piden actuar hoy?",
+  "Filtra customers en vigilancia",
   "¿Qué leads nuevos encontró el prospector?",
-  "¿Qué señales de churn hay activas?",
+  "¿Quién entra en ventana esta semana?",
   "Muéstrame borradores de WhatsApp pendientes",
   "¿Cuál es la facturación bruta por moneda?",
   "¿Cuántos compradores vs customers tenemos?",
   "¿Cuánto recupero atribuido llevamos en 30 días?",
-  "¿Quiénes compraron una sola vez y no volvieron?",
+  "¿Quiénes están en primera recompra sin volver?",
   "¿Qué borradores puedo aprobar ya?",
-  "¿Qué clientes valiosos se enfriaron últimamente?",
+  "¿A quién no tocamos hoy y por qué?",
+  "¿Cuántos volverán solos sin que hagamos nada?",
 ];
 
 /** 3 al azar sin repetir (Fisher-Yates parcial). */
@@ -38,10 +40,9 @@ export function pickRandomSuggestions(pool: string[], n = 3): string[] {
 }
 
 /** Panel de chat store-scoped: lo usa el dock del dashboard.
- *  Chat único sin selector: el orquestador decide qué especialista responde
- *  (el badge `via` de cada burbuja lo indica). El dato estructurado siempre
- *  se eleva vía `onArtifact`: el host decide (navegar al Review filtrado).
- *  Este panel nunca pinta datos. */
+ *  Chat único sin selector: el orquestador decide qué especialista responde.
+ *  El dato estructurado siempre se eleva vía `onArtifact`: el host decide
+ *  (navegar al Review filtrado). Este panel nunca pinta datos. */
 export function ChatPanel({
   storeId,
   marketId = null,

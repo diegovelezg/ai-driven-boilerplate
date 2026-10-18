@@ -85,7 +85,7 @@ export async function postChatStream(opts: {
       if (m.length === 0) return m;
       const copy = [...m];
       const last = copy[copy.length - 1];
-      copy[copy.length - 1] = { role: "assistant", content: last.content + token };
+      copy[copy.length - 1] = { ...last, role: "assistant", content: last.content + token };
       return copy;
     });
   try {

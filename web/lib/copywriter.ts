@@ -5,6 +5,7 @@
 // background con `background_runs` kind `copywriter`.
 import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
+import { JUDGE_GEN, judgeContactability, type JudgeItem } from "@/lib/contactability";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
@@ -18,6 +19,21 @@ import { COPYWRITER_GEN } from "./copywriter-gen";
 
 export { COPYWRITER_GEN };
 
+/** Sustantivo neutro para el brief según catálogo (el LLM repite esta palabra).
+ *  Sin esto, todo tenant suena a vía pública ("pauta", "circuito", "zona"). */
+export function briefNoun(catalog: CatalogType | null): {
+  last: string;
+  repeat: string;
+  empty: string;
+} {
+  switch (catalog) {
+    case "servicio":
+    case "digital":
+      return { last: "Última contratación", repeat: "suele contratar", empty: "contratación sin detalle" };
+    default:
+      return { last: "Última compra", repeat: "suele comprar", empty: "compra sin detalle" };
+  }
+}
 /** Verbo de compra según qué vende el tenant. Sin esto, el redactor habla
  *  como bodega (“llevaste un Rp Cajamarca”) aunque venda espacios/servicios. */
 export function purchaseLanguage(
@@ -42,11 +58,11 @@ export function purchaseLanguage(
   }
 }
 
-const SYSTEM = `Redactas WhatsApp B2B de recupero para vía pública (español Perú, directo, profesional, cero cursi).
+const SYSTEM = `Redactas mensajes de recupero 1-a-1 para el negocio descrito abajo (español Perú, directo, profesional, cero cursi).
 Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 {"channel": "whatsapp"|"email", "subject": string|null, "body": string}
 Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradores: aperturas, orden y cierres distintos):
-- Usa los datos del brief (fechas, lugares, contenido, situación): al menos uno debe aparecer reconocible en el texto. PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
+- Usa los datos de respaldo solo si encajan natural en una frase sobre el negocio del cliente: PROHIBIDO recitar fecha+lugar como telegrama. Toda cifra o lugar debe aparecer dentro de una frase sobre su negocio (qué vende, a quién, en qué temporada). PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
 - PROHIBIDAS las frases de plantilla y call center (hay control automático: si las usas el borrador se rechaza).
 - PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA propuesta accionable de máximo 15 palabras, con tu propia fórmula.
 - Nunca menciones score, media, ciclo, arquetipo ni cifras internas: solo lo que el cliente reconocería.
@@ -68,6 +84,12 @@ const BANNED = [
   "¿te interesa?",
   "¿te gustaria retomarlo?",
   "¿te gustaría retomarlo?",
+  "se interrumpió el ritmo",
+  "se interrumpio el ritmo",
+  "muestran un patrón claro",
+  "muestran un patron claro",
+  "tu última pauta fue",
+  "tu ultima pauta fue",
 ];
 
 function hasBanned(body: string): boolean {
@@ -82,7 +104,13 @@ function hasAnchor(body: string, tokens: Array<string | null>): boolean {
   return tokens.some((t) => !!t && t.length >= 4 && b.includes(t.toLowerCase()));
 }
 
-/** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes. */
+/** El juez dijo no-contactable: no es un fallo (no suma a failed), es una
+ *  omisión auditada. Lleva el motivo para el log y el flag en evidence. */
+export class ContactabilitySkip extends Error {}
+
+/** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes.
+ *  Acepta también el formato retention:v1
+ *  "sin comprar hace 38d (ciclo ~30d, vuelve típicamente entre 25–37d)". */
 function parseReason(reason: string | null): {
   days: number | null;
   expected: number | null;
@@ -90,11 +118,11 @@ function parseReason(reason: string | null): {
 } {
   if (!reason) return { days: null, expected: null, source: null };
   const m = reason.match(/sin comprar hace (\d+)d\s*\(media (\d+)d,[^,]*,\s*ciclo (\w+)\)/i);
-  if (!m) {
-    const d = reason.match(/sin comprar hace (\d+)d/i);
-    return { days: d ? Number(d[1]) : null, expected: null, source: null };
-  }
-  return { days: Number(m[1]), expected: Number(m[2]), source: m[3] };
+  if (m) return { days: Number(m[1]), expected: Number(m[2]), source: m[3] };
+  const n = reason.match(/sin comprar hace (\d+)d\s*\(ciclo ~(\d+)d/i);
+  if (n) return { days: Number(n[1]), expected: Number(n[2]), source: null };
+  const d = reason.match(/sin comprar hace (\d+)d/i);
+  return { days: d ? Number(d[1]) : null, expected: null, source: null };
 }
 
 /** Fecha "2025-04-06" → "6 de abril" (lo que el cliente reconoce). */
@@ -168,8 +196,13 @@ interface Prioritized {
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
+  /** Empresa del cliente (company_name; dossier-first la abre). */
+  companyName?: string | null;
   /** ISO2 atribuido (filtro global; se escribe en la acción). */
   country: string | null;
+  /** Motor retention:v1 (para estratificar el holdout futuro). */
+  decision?: string | null;
+  pRecompraH?: number | null;
 }
 
 type Db = ReturnType<typeof getSupabase>;
@@ -213,6 +246,7 @@ async function draftForSignal(
   );
   const enrichedFlat = await enrichOrderItems(storeId, rawPerOrder.flat());
   let cur = 0;
+  const noun = briefNoun(stamp.catalog);
   const histLines = real.map((o, oi) => {
     const iso = String(o.placed_at ?? "?").slice(0, 10);
     const f = fechaCorta(String(o.placed_at ?? "")) ?? iso;
@@ -222,12 +256,12 @@ async function draftForSignal(
     const extras: string[] = [];
     for (const it of items.slice(0, 2)) {
       if (it.contiene) extras.push(`contiene "${it.contiene}"${it.categoria ? ` [${it.categoria}]` : ""}`);
-      if (it.pauta) extras.push(`pauta ${it.pauta}`);
+      if (it.pauta) extras.push(`periodo ${it.pauta}`);
       if (it.clienteDijo) extras.push(`cliente dijo: "${it.clienteDijo.slice(0, 120)}"`);
       const det = Object.entries(it.detalles ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ");
       if (det) extras.push(det);
     }
-    return `- ${f} (${iso}): ${titles || "pauta sin detalle"}${extras.length > 0 ? ` — ${extras.join("; ")}` : ""}`;
+    return `- ${f} (${iso}): ${titles || noun.empty}${extras.length > 0 ? ` — ${extras.join("; ")}` : ""}`;
   });
   const hist = histLines.join("\n") || "(sin compras visibles)";
   // Patrón del cliente: ¿repite circuito o explora? (top ubicación por frecuencia)
@@ -242,7 +276,7 @@ async function draftForSignal(
   const distinct = counts.size;
   const r = parseReason(s.reason);
   const days = r.days;
-  // Patrón cualitativo (sin conteos: evita "cinco pautas"/"zona fuerte" con n bajo).
+  // Patrón cualitativo (sin conteos: evita sobredimensionar con n bajo).
   // El estado por ratio fija el tono; los números citables son solo fecha+lugar+silencio.
   const catCounts = new Map<string, number>();
   const marcaByCat = new Map<string, string>();
@@ -265,13 +299,13 @@ async function draftForSignal(
           : "dormido: OBLIGATORIO abrir reconociendo el tiempo (ej. «sé que ha pasado más de un año»). PROHIBIDO escribir como si la pausa fuera reciente";
   const patron =
     topCat && topCat[1] >= 2
-      ? `CONTENIDO: suele pautar "${topCat[0]}"${marcaByCat.get(topCat[0]) ? ` (ej. ${marcaByCat.get(topCat[0])})` : ""}. Tono: continuidad de su línea`
+      ? `CONTENIDO: ${noun.repeat} "${topCat[0]}"${marcaByCat.get(topCat[0]) ? ` (ej. ${marcaByCat.get(topCat[0])})` : ""}. Tono: continuidad de su línea`
       : top && top[1] >= 2
         ? `REPITE: suele volver a "${top[0]}". Tono: volver a lo que le funciona`
         : distinct >= 3
-          ? `EXPLORA: prueba zonas distintas. Tono: novedad y cobertura`
+          ? `EXPLORA: prueba opciones distintas. Tono: novedad`
           : top
-            ? `última zona "${top[0]}"`
+            ? `última elección "${top[0]}"`
             : "sin patrón legible";
   const firstName = (s.first_name ?? "").trim().split(/\s+/)[0] || s.email;
   const lastIso = real[0] ? String(real[0].placed_at ?? "").slice(0, 10) : null;
@@ -283,19 +317,55 @@ async function draftForSignal(
         ? "winback: 1-2 compras, simple y baja fricción"
         : "nurture: tenía hábito y se cortó, nombra el quiebre + 1 lectura útil";
 
-  // Menú de jugadas: variedad real de oferta (misma restricción, distinto movimiento).
+  // Menú de jugadas en lenguaje de invitación (disponibilidad, reserva,
+  // temporada del rubro). Coherencia jugada↔BANNED (issue #9): la jugada ya
+  // no ordena "repetir circuito con prioridad de espacios", así el BANNED
+  // puede prohibir las muletillas sin fabricar descartes (el modelo obedece
+  // al brief y el control lo rechaza → gasta el único reintento → failed++).
+  // Neutro por catálogo: solo servicio/digital hablan de espacios/zonas.
   const jugada =
-    patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
-      ? "repetir su circuito habitual con prioridad de espacios, o proponerle una zona de su historial distinta a la última"
-      : patron.startsWith("EXPLORA")
-        ? "ampliar cobertura a una zona que aún no prueba, o consolidar su mejor zona"
-        : "retomar su última zona con una propuesta simple y concreta";
+    stamp.catalog === "servicio" || stamp.catalog === "digital"
+      ? patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
+        ? "invitarle a reservar con prioridad según disponibilidad en su línea habitual, o avisarle de la temporada de su rubro"
+        : patron.startsWith("EXPLORA")
+          ? "invitarle a apartar un espacio que aún no prueba según disponibilidad, o a asegurar su mejor ubicación para la temporada"
+          : "invitarle a retomar con una reserva simple según disponibilidad"
+      : patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
+        ? "invitarle a reservar su favorito habitual según disponibilidad, o a probar algo distinto de su línea en esta temporada"
+        : patron.startsWith("EXPLORA")
+          ? "invitarle a probar algo nuevo de su línea según disponibilidad, o a asegurar su favorito para la temporada"
+          : "invitarle a retomar con una propuesta simple según disponibilidad";
+
+  // Dossier-first (issue #9): quién es + por-qué-ahora abren; fecha/lugares
+  // van a datos de respaldo ("úsalos solo si encajan natural"). company_name
+  // hoy ni se leía en el brief: se trae del Prioritized o de customers.
+  let companyName = (s.companyName ?? "").trim() || null;
+  if (!companyName) {
+    const { data: cRow } = await db
+      .from("customers")
+      .select("company_name")
+      .eq("id", s.customer_id)
+      .maybeSingle();
+    const cn = (cRow as Record<string, unknown> | null)?.company_name;
+    if (typeof cn === "string" && cn.trim()) companyName = cn.trim().slice(0, 120);
+  }
+  const marcas: string[] = [];
+  const categorias: string[] = [];
+  for (const it of enrichedFlat) {
+    const m = it.contiene?.split(":")[0]?.trim() ?? "";
+    if (m && m.length >= 3 && !marcas.includes(m)) marcas.push(m);
+    if (it.categoria && !categorias.includes(it.categoria)) categorias.push(it.categoria);
+  }
+  const quien = companyName ?? marcas[0] ?? categorias[0] ?? null;
+  const dossier = quien
+    ? `Cliente: ${firstName} — ${quien}${companyName && marcas[0] && marcas[0] !== companyName ? ` (en sus piezas: ${marcas[0]}${categorias[0] ? ` · ${categorias[0]}` : ""})` : categorias[0] && categorias[0] !== quien ? ` (${categorias[0]})` : ""} (objetivo ${objetivo})`
+    : `Cliente: ${firstName} (objetivo ${objetivo})`;
 
   const user = [
-    `Cliente: ${firstName} (objetivo ${objetivo})`,
-    `Última pauta: ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días. Situación: ${estado}.`,
-    `Patrón: ${patron}.`,
+    dossier,
+    `Por-qué-ahora en una línea: ${estado}. ${patron}.`,
     `Jugada (elige UNA, no las combines): ${jugada}.`,
+    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.`,
     `Historial real (usa nombres tal cual, no inventes):`,
     hist,
     s.phone ? "Canal: whatsapp (tiene teléfono)." : "Canal: email (sin teléfono).",
@@ -310,6 +380,67 @@ async function draftForSignal(
     return { channel, body, subject };
   };
 
+  // Puerta de contactabilidad (issue #9): el juez LLM pone la sensatez con el
+  // mismo dossier enriquecido del brief, ANTES de gastar el draft. Sin listas
+  // en código: el modelo razona sobre contenido + ventanas + hoy.
+  const winOf = (md: unknown, key: "dateStart" | "dateEnd"): string | null => {
+    const m = (md as Record<string, unknown> | null) ?? null;
+    const v = m?.[key];
+    return typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v.trim()) ? v.trim().slice(0, 10) : null;
+  };
+  const flatMeta: Array<{ dateStart: string | null; dateEnd: string | null }> = [];
+  rawPerOrder.forEach((arr) => {
+    for (const r of arr) {
+      flatMeta.push({ dateStart: winOf(r.metadata, "dateStart"), dateEnd: winOf(r.metadata, "dateEnd") });
+    }
+  });
+  const judgeItems: JudgeItem[] = enrichedFlat.map((en, i) => ({
+    title: en.title,
+    contiene: en.contiene,
+    categoria: en.categoria,
+    clienteDijo: en.clienteDijo,
+    dateStart: flatMeta[i]?.dateStart ?? null,
+    dateEnd: flatMeta[i]?.dateEnd ?? null,
+  }));
+  const verdict = await judgeContactability({
+    firstName,
+    companyName,
+    objetivo,
+    daysSince: days,
+    todayIso: new Date().toISOString().slice(0, 10),
+    items: judgeItems,
+  });
+  if (!verdict.contactable) {
+    // Flag auditado en la señal (sin estados ni columnas nuevas): por qué no
+    // se redactó. La señal sigue prioritized; el próximo run rejuzga (el
+    // contenido o el aniversario pueden cambiar el veredicto).
+    try {
+      const { data: sigRow } = await db
+        .from("churn_signals")
+        .select("evidence_json")
+        .eq("id", s.id)
+        .maybeSingle();
+      const prev = ((sigRow as Record<string, unknown> | null)?.evidence_json as Record<string, unknown> | null) ?? {};
+      await db
+        .from("churn_signals")
+        .update({
+          evidence_json: {
+            ...prev,
+            contactability: {
+              eligible: false,
+              reason: verdict.reason,
+              at: new Date().toISOString(),
+              generator: JUDGE_GEN,
+            },
+          },
+        })
+        .eq("id", s.id);
+    } catch {
+      // El flag es auditoría: nunca bloquea la omisión.
+    }
+    throw new ContactabilitySkip(verdict.reason);
+  }
+
   let { channel, body, subject } = await attempt(null);
   if (!body) throw new Error("El LLM devolvió body vacío.");
   if (hasBanned(body)) {
@@ -317,15 +448,27 @@ async function draftForSignal(
     if (hasBanned(retry.body)) throw new Error("Borrador con frase plantilla (rechazado por control de calidad).");
     ({ channel, body, subject } = retry);
   }
-  // Ancla programática: fecha o lugar del brief debe aparecer (posición libre).
-  const anchorTokens = [lastIso, lastF, ...[...counts.keys()].slice(0, 3)];
+  // Ancla de identidad (issue #9): marca, empresa, categoría/tópico y, en
+  // última opción, ubicación. La fecha ISO puede aparecer pero NO valida
+  // (antes imponía el telegrama por código con reintento/descarte). Se
+  // conserva la prueba anti-alucinación sin recitar fecha+lugar.
+  const identityTokens = [
+    companyName,
+    ...marcas.slice(0, 2),
+    ...categorias.slice(0, 2),
+    ...[...counts.keys()].slice(0, 3),
+  ];
+  const anchorTokens =
+    identityTokens.some((t) => !!t && t.length >= 3)
+      ? identityTokens
+      : [lastF];
   if (!hasAnchor(body, anchorTokens)) {
-    const retry = await attempt("tu borrador no incluye ningún dato reconocible del brief (fecha o lugar): reescribe incluyéndolo de forma natural.");
+    const retry = await attempt("tu borrador no nombra de forma reconocible al cliente o su negocio (marca, empresa o línea): reescribe integrándolo de forma natural en una frase.");
     if (!hasAnchor(retry.body, anchorTokens)) throw new Error("Borrador sin ancla (rechazado por control de calidad).");
     ({ channel, body, subject } = retry);
   }
-  if (channel === "whatsapp" && body.length > 600) throw new Error("WhatsApp demasiado largo (>600).");
-  if (body.length > 2000) throw new Error("Body demasiado largo (>2000).");
+  if (channel === "whatsapp" && body.length > 450) throw new Error("WhatsApp demasiado largo (>450).");
+  if (body.length > 1300) throw new Error("Body demasiado largo (>1300).");
 
   const { error: insErr } = await db.from("proposed_actions").insert({
     store_id: storeId,
@@ -341,6 +484,19 @@ async function draftForSignal(
             run_id: stamp.runId,
             catalog: stamp.catalog,
             at: new Date().toISOString(),
+            // Puerta del juez (issue #9): veredicto auditado junto al borrador.
+            contactability: {
+              eligible: true,
+              reason: verdict.reason,
+              fail_open: verdict.failOpen,
+              generator: JUDGE_GEN,
+            },
+            // Para estratificar el holdout futuro (issue #5, Paso 7).
+            decision: s.decision ?? null,
+            p_recompra_h: s.pRecompraH ?? null,
+            // Auditoría humana: por qué esta propuesta (visible en Review/logs).
+            kind: s.kind ?? null,
+            reason: s.reason ?? null,
           },
         });
   if (insErr) throw new Error(`Action insert: ${insErr.message}`);
@@ -368,12 +524,23 @@ export async function draftSingleSignal(
   const db = getSupabase();
   const { data: busy } = await db
     .from("proposed_actions")
-    .select("id")
+    .select("id,signal_id,customer_id")
     .eq("signal_id", signalId)
     .in("status", ["pending_review", "approved"])
     .limit(1);
   if ((busy ?? []).length > 0) {
     return { ok: false, message: "Ya tiene un borrador en Review." };
+  }
+  // Uno por cliente aunque sea otra señal: dos señales vivas del mismo
+  // cliente con dos clics generaban dos borradores al mismo WhatsApp.
+  const { data: busyCust } = await db
+    .from("proposed_actions")
+    .select("id")
+    .eq("customer_id", found.customerDbId)
+    .in("status", ["pending_review", "approved"])
+    .limit(1);
+  if ((busyCust ?? []).length > 0) {
+    return { ok: false, message: "Este cliente ya tiene un borrador en Review (otra señal)." };
   }
   try {
     const { system, catalog } = await buildSystem(storeId);
@@ -387,10 +554,16 @@ export async function draftSingleSignal(
       first_name: found.firstName,
       last_name: found.lastName,
       phone: found.phone,
+      companyName: found.companyName ?? null,
       country: found.country,
+      decision: found.decision ?? null,
+      pRecompraH: found.pRecompraH ?? null,
     }, { runId: null, catalog });
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
+    if (e instanceof ContactabilitySkip) {
+      return { ok: false, message: `Omitido por el juez: ${e.message}` };
+    }
     return { ok: false, message: e instanceof Error ? e.message : "No se pudo redactar." };
   }
 }
@@ -423,47 +596,87 @@ export async function runCopywriter(
         first_name: r.firstName,
         last_name: r.lastName,
         phone: r.phone,
+        companyName: r.companyName ?? null,
         country: r.country,
+        decision: r.decision ?? null,
+        pRecompraH: r.pRecompraH ?? null,
       }) satisfies Prioritized);
     log(`run ${runId} start priorizadas=${rows.length} limite=${limit}`);
     // Trazabilidad del ranking: si el top se discute, el log dice quién era.
     log(`run ${runId} top10=${rows.slice(0, 10).map((r) => r.email || r.customer_id).join(",")}`);
 
-    // Sin borrador pendiente/aprobado para la misma señal (no duplicar).
+    // Sin borrador pendiente/aprobado para el mismo cliente (no duplicar).
+    // La clave es customer, no signal: dos señales del mismo cliente con dos
+    // signal_id distintos pasaban el filtro viejo y generaban dos borradores
+    // al mismo WhatsApp (caso Plaza Hogar: "media 15d, 21 compras" + "media
+    // 22d, 20 compras"). Además, uno por cliente por corrida.
     const { data: existing } = await db
       .from("proposed_actions")
-      .select("signal_id")
+      .select("signal_id,customer_id")
       .eq("store_id", storeId)
       .in("status", ["pending_review", "approved"])
-      .not("signal_id", "is", null)
       .limit(500);
-    const busy = new Set(
-      ((existing ?? []) as Array<Record<string, unknown>>).map((a) => String(a.signal_id)),
+    const busySignal = new Set(
+      ((existing ?? []) as Array<Record<string, unknown>>)
+        .map((a) => String(a.signal_id ?? ""))
+        .filter(Boolean),
     );
-    const fresh = rows.filter((r) => !busy.has(r.id));
-    const batch = fresh.slice(0, Math.max(0, limit));
-    log(`run ${runId} candidatas=${batch.length} (con borrador: ${rows.length - fresh.length})`);
+    const busyCustomer = new Set(
+      ((existing ?? []) as Array<Record<string, unknown>>)
+        .map((a) => String(a.customer_id ?? ""))
+        .filter(Boolean),
+    );
+    const fresh = rows.filter((r) => !busySignal.has(r.id) && !busyCustomer.has(r.customer_id));
+    log(`run ${runId} candidatas=${fresh.length} (con borrador: ${rows.length - fresh.length})`);
 
     // Lenguaje de compra del tenant (1 query por corrida, no por borrador):
     // sin esto el redactor trata todo como bodega (“llevaste un Rp Cajamarca”).
     const { system, catalog } = await buildSystem(storeId);
 
-    for (const s of batch) {
-      await step(s.email || s.customer_id);
+    // La puerta del juez puede omitir: se recorre el ranking hasta llenar el
+    // límite (orden determinista + sensatez LLM). Omitidos ≠ fallidos.
+    // Uno por cliente por corrida aunque queden dos señales vivas del mismo.
+    let skipped = 0;
+    const draftedCustomer = new Set<string>();
+    for (const s of fresh) {
+      if (drafted >= Math.max(0, limit)) break;
+      if (draftedCustomer.has(s.customer_id)) continue;
+      await step(null);
       try {
         const { channel, chars } = await draftForSignal(db, storeId, system, s, { runId, catalog });
         drafted += 1;
+        draftedCustomer.add(s.customer_id);
         log(`run ${runId} ${s.email} → ${channel} (${chars} chars)`);
       } catch (e) {
-        failed += 1;
-        log(`run ${runId} ${s.email || s.customer_id} ERROR ${e instanceof Error ? e.message : e}`);
+        if (e instanceof ContactabilitySkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (juez): ${e.message}`);
+        } else {
+          failed += 1;
+          log(`run ${runId} ${s.email || s.customer_id} ERROR ${e instanceof Error ? e.message : e}`);
+        }
       }
+    }
+    if (skipped > 0) {
+      const seen = drafted + failed + skipped;
+      log(`run ${runId} omitidos_juez=${skipped}/${seen} tasa=${Math.round((skipped / Math.max(1, seen)) * 100)}%`);
     }
 
     await step(null);
     const status: RunStatus = drafted === 0 && failed > 0 ? "error" : "done";
-    const summary = `${drafted} borradores · ${failed} fallidos`;
-    await finishRun(runId, { status, processed: drafted, failed, summary });
+    // Filosofía TeamPulse: outcome + ahorro de tiempo. Los fallidos van en su
+    // columna, no en el texto.
+    const summary =
+      drafted > 0
+        ? `${drafted} ${drafted === 1 ? "listo" : "listos"} para tu visto bueno · te ahorran ~${drafted * 15} min`
+        : "Sin borradores, no había a quién escribir · no invento mensajes";
+    await finishRun(runId, {
+      status,
+      processed: drafted,
+      failed,
+      summary,
+      pulseState: drafted > 0 ? "needs" : "paused",
+    });
     log(`run ${runId} ${status} ${summary}`);
   } catch (e) {
     await finishRun(runId, {

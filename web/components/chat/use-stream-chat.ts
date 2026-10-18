@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { postChatStream } from "./sse";
-import { agentBadgeForTool, type ChatArtifact, type ChatMessage } from "./types";
+import type { ChatArtifact, ChatMessage } from "./types";
 
 /**
  * Estado + streaming para todo chat SSE (store y ficha).
@@ -36,21 +36,7 @@ export function useStreamChat(opts: {
           url,
           body: buildBody(next),
           setMessages,
-          onArtifact: (a) => {
-            // Badge orgánico: la tool usada firma la burbuja del turno.
-            const via = agentBadgeForTool(a.tool);
-            if (via) {
-              setMessages((m) => {
-                if (m.length === 0) return m;
-                const copy = [...m];
-                const last = copy[copy.length - 1];
-                if (last.role !== "assistant") return m;
-                copy[copy.length - 1] = { ...last, via };
-                return copy;
-              });
-            }
-            onArtifact?.(a);
-          },
+          onArtifact,
         });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Falló el chat.");

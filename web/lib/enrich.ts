@@ -7,7 +7,7 @@ import { createLogger } from "@/lib/log";
 import { classifyDomain, domainFromEmail } from "@/lib/domains";
 import { extractFirmographics } from "@/lib/ai/enrich";
 import { judgeBusinessDomain, B2B_GATE_THRESHOLD } from "@/lib/ai/decisions";
-import { searchSearxng, scrapable } from "@/lib/prospect";
+import { searchSearxng, scrapable } from "@/lib/retrieval";
 import { mapPool } from "@/lib/parallel";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 
@@ -113,7 +113,7 @@ function hostOf(url: string): string {
  * Todos los dominios registrados interesan (aunque tengan 0 compras): se
  * intenta rescue siempre.
  * Guard v1 (smoke 2026-10-16): host contiene etiqueta, o título contiene
- * etiqueta/empresa declarada. Denylist social vía `scrapable()` (prospector).
+ * etiqueta/empresa declarada. Denylist social vía `scrapable()` (retrieval).
  * Ambiguos (homónimos tipo servex0) se aceptan y quedan auditables por source_url.
  */
 async function rescueDomain(

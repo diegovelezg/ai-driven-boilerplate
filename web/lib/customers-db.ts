@@ -4,18 +4,12 @@ import { searchContentCustomerIds } from "@/lib/media-context";
 import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
-import {
-  classifyPopulation,
-  freqBucketIndex,
-  SEGMENT_ORDER,
-  tierBoundsOf,
-  tierIndexOf,
-  type PopulationRow,
-  type SegmentKey,
-  type TierBounds,
-} from "@/lib/insights";
 import type { CanonicalCustomer } from "@/lib/medusa";
-import { resolveShopCurrency, resolveTenantCycleDays } from "@/lib/store-profiles";
+import {
+  matchesDecisionFilter,
+  RITMO_VALUES,
+  type CustomerPredictionLite,
+} from "@/lib/customer-predictions";
 import {
   applyScopeFilter,
   effectiveScopeFilter,
@@ -186,7 +180,7 @@ export async function markCustomerProcessed(
   return (data?.length ?? 0) > 0;
 }
 
-export type CustomersSortKey = "email" | "name" | "phone" | "company" | "orders" | "total";
+export type CustomersSortKey = "email" | "name" | "phone" | "company" | "orders" | "total" | "valor";
 export type CustomersSortDir = "asc" | "desc";
 export interface CustomersSort {
   key: CustomersSortKey;
@@ -200,6 +194,7 @@ const SORT_KEYS: readonly CustomersSortKey[] = [
   "company",
   "orders",
   "total",
+  "valor",
 ];
 
 /** Valida sort/dir de searchParams; default estable email/asc (orden previo). */
@@ -287,129 +282,201 @@ function matchesEnrichedFirm(needle: string, firm: EnrichedFirm | undefined): bo
 }
 
 export interface CustomerFilters {
-  segment: SegmentKey | null;
-  /** 0–3 = cuartil del ticket medio (misma regla que el dashboard). */
-  ticketTier: number | null;
-  /** 0–3 = tramo de frecuencia (1, 2, 3–5, 6+). */
-  freqBucket: number | null;
-  /** Solo insignia "No los pierdas" (top gasto + inactivo). */
-  noLosPierdas: boolean;
+  /** Decisión del motor (foto del día): actuar|vigilar|no-tocar|organico|dormido|sin_canal|contactado_reciente|revision_humana. */
+  decision: string | null;
+  /** Vista prearmada "ventana7": vigilar que entra en ventana en 7 días. */
+  vista: string | null;
+  /** Ritmo estructural: con-ritmo|primera|sin-compras. */
+  ritmo: string | null;
 }
 
 export const NO_CUSTOMER_FILTERS: CustomerFilters = {
-  segment: null,
-  ticketTier: null,
-  freqBucket: null,
-  noLosPierdas: false,
+  decision: null,
+  vista: null,
+  ritmo: null,
 };
 
-/** Valida segment/ticket/freq/vip de searchParams; lo inválido se ignora. */
+const DECISION_VALUES = new Set([
+  "actuar",
+  "vigilar",
+  "no-tocar",
+  "organico",
+  "dormido",
+  "sin_canal",
+  "contactado_reciente",
+  "revision_humana",
+]);
+
+/** Valida decision/vista/ritmo de searchParams; lo inválido se ignora. */
 export function parseCustomerFilters(sp: {
-  segment?: string;
-  ticket?: string;
-  freq?: string;
-  vip?: string;
+  decision?: string;
+  vista?: string;
+  ritmo?: string;
 }): CustomerFilters {
-  const segment = SEGMENT_ORDER.includes(sp.segment as SegmentKey)
-    ? (sp.segment as SegmentKey)
-    : null;
-  const t = sp.ticket === undefined ? NaN : Number.parseInt(sp.ticket, 10);
-  const ticketTier = t >= 0 && t <= 3 ? t : null;
-  const fr = sp.freq === undefined ? NaN : Number.parseInt(sp.freq, 10);
-  const freqBucket = fr >= 0 && fr <= 3 ? fr : null;
-  return { segment, ticketTier, freqBucket, noLosPierdas: sp.vip === "1" };
+  const decision =
+    sp.decision && DECISION_VALUES.has(sp.decision) ? sp.decision : null;
+  const vista = sp.vista === "ventana7" ? "ventana7" : null;
+  const ritmo = sp.ritmo && RITMO_VALUES.has(sp.ritmo) ? sp.ritmo : null;
+  return { decision, vista, ritmo };
 }
 
 export function hasCustomerFilters(f: CustomerFilters): boolean {
-  return (
-    f.segment !== null || f.ticketTier !== null || f.freqBucket !== null || f.noLosPierdas
-  );
+  return f.decision !== null || f.vista !== null || f.ritmo !== null;
 }
 
-export interface CustomerFilterMeta {
-  segments: Array<{ key: SegmentKey; count: number }>;
-  tierBounds: TierBounds | null;
-  buyers: number;
-  freqBuckets: Array<{ label: string; count: number }>;
-  /** Cuántos llevan la insignia "No los pierdas" (no es segmento, es tratamiento). */
-  noLosPierdas: number;
-}
+/** Predicción mínima para columnas/filtros (foto del día, solo lectura).
+ *  Re-export client-safe: los Client Components deben importar el tipo y
+ *  `ventanaLabel`/`matchesDecisionFilter` desde `lib/customer-predictions`
+ *  (este módulo arrastra `server-only` vía sync). */
+export type { CustomerPredictionLite } from "@/lib/customer-predictions";
 
-/** Población completa para clasificar (segmento + tier). Misma fuente que el dashboard. */
-async function loadPopulationRows(
+/** Última predicción por cliente (una foto, no historia; tope 5000). */
+export async function getPredictionsMap(
   storeId: string,
-  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
-): Promise<PopulationRow[]> {
+): Promise<Map<string, CustomerPredictionLite>> {
   const db = getSupabase();
-  const all: PopulationRow[] = [];
-  for (let off = 0; ; off += 1000) {
-    const { data, error } = await applyScopeFilter(
-      db
-        .from("customers")
-        .select("orders_count,total_spent,last_order_at,currency,customer_type")
-        .eq("store_id", storeId),
-      scope,
-      "id",
-    ).range(off, off + 999);
-    if (error) throw new Error(`DB read: ${error.message}`);
-    all.push(
-      ...(((data as Array<Record<string, unknown>>) ?? []).map((r) => ({
-        orders_count: Number(r.orders_count ?? 0),
-        total_spent: Number(r.total_spent ?? 0),
-        last_order_at: (r.last_order_at as string | null) ?? null,
-        currency: (r.currency as string | null) ?? null,
-        customer_type: (r.customer_type as string | null) ?? null,
-      })) satisfies PopulationRow[]),
-    );
-    if (!data || data.length < 1000) break;
+  const map = new Map<string, CustomerPredictionLite>();
+  const { data, error } = await db
+    .from("customer_predictions")
+    .select("customer_id,decision,model,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
+    .eq("store_id", storeId)
+    .order("as_of", { ascending: false })
+    .limit(5000);
+  if (error) return map;
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    const cid = String(r.customer_id ?? "");
+    if (!cid || map.has(cid)) continue;
+    const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+    map.set(cid, {
+      decision: String(r.decision ?? ""),
+      model: (r.model as string | null) ?? null,
+      tDays: ev.t_days == null ? null : Number(ev.t_days),
+      p25Days: r.p25_days == null ? null : Number(r.p25_days),
+      p75Days: r.p75_days == null ? null : Number(r.p75_days),
+      valorEsperadoMinor:
+        r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
+    });
   }
-  return all;
+  return map;
 }
 
-/** Conteos por segmento + cuartiles del ticket (para los dropdowns de filtro). */
-export async function getCustomerFilterMeta(
+/** ¿La predicción calza con el filtro `decision`? Ver `lib/customer-predictions`. */
+export { matchesDecisionFilter } from "@/lib/customer-predictions";
+
+/** Etiqueta de ventana desde t y p25/p75. Ver `lib/customer-predictions`. */
+export { ventanaLabel } from "@/lib/customer-predictions";
+
+/** Resumen "entran en ventana en 7 días" (vigilar con p25−t ∈ [0,7]). */
+export async function getVentana7Summary(
   storeId: string,
-  scope: MarketScope | null = null,
-): Promise<CustomerFilterMeta> {
-  const pop = await loadPopulationRows(storeId, scope);
-  // Techo absoluto de R por ciclo del tenant (no corromper filtros si falla).
-  // Tiers en la moneda del market filtrado (MX→MXN); sin filtro, la tienda.
-  const [cycleDays, shopCurrency] = await Promise.all([
-    resolveTenantCycleDays(storeId).catch(() => null),
-    resolveShopCurrency(storeId).catch(() => null),
-  ]);
-  const tierCurrency = scope?.market?.currency?.toUpperCase() ?? shopCurrency;
-  const classified = classifyPopulation(pop, Date.now(), cycleDays, tierCurrency);
-  const counts = new Map<SegmentKey, number>();
-  const avgs: number[] = [];
-  let noLosPierdas = 0;
-  const freqBuckets = [
-    { label: "1 compra", count: 0 },
-    { label: "2 compras", count: 0 },
-    { label: "3–5 compras", count: 0 },
-    { label: "6+ compras", count: 0 },
-  ];
-  for (let i = 0; i < classified.length; i += 1) {
-    const c = classified[i];
-    counts.set(c.segment, (counts.get(c.segment) ?? 0) + 1);
-    if (c.noLosPierdas) noLosPierdas += 1;
-    const b = freqBucketIndex(c.frequency);
-    if (b !== null) freqBuckets[b].count += 1;
-    // Tiers solo cohorte shop-currency (nunca mezclar PEN con MXN).
-    const cur = pop[i]?.currency;
-    if (c.avgTicketMinor === null) continue;
-    if (tierCurrency !== null && cur != null && cur.toUpperCase() !== tierCurrency.toUpperCase()) continue;
-    avgs.push(c.avgTicketMinor);
+): Promise<{ n: number; sumaMinor: number }> {
+  const map = await getPredictionsMap(storeId).catch(
+    () => new Map<string, CustomerPredictionLite>(),
+  );
+  let n = 0;
+  let sumaMinor = 0;
+  for (const p of map.values()) {
+    if (p.decision !== "vigilar" || p.tDays === null || p.p25Days === null) continue;
+    const diff = p.p25Days - p.tDays;
+    if (diff >= 0 && diff <= 7) {
+      n += 1;
+      sumaMinor += p.valorEsperadoMinor ?? 0;
+    }
   }
-  return {
-    segments: SEGMENT_ORDER.map((key) => ({ key, count: counts.get(key) ?? 0 })).filter(
-      (s) => s.count > 0,
-    ),
-    tierBounds: tierBoundsOf(avgs),
-    buyers: pop.filter((r) => Number(r.orders_count ?? 0) > 0).length,
-    freqBuckets,
-    noLosPierdas,
-  };
+  return { n, sumaMinor };
+}
+
+/** Ritmo de un cliente para filtro: del modelo, o sin-compras si no hay
+ *  predicción y nunca compró. Clientes con compras pero sin predicción
+ *  (alta posterior a la corrida) no calzan en ningún ritmo. */
+export function matchesRitmoFilter(
+  pred: CustomerPredictionLite | undefined,
+  ordersCount: number,
+  filter: string,
+): boolean {
+  if (filter === "con-ritmo") return pred?.model === "renovacion";
+  if (filter === "primera") return pred?.model === "segunda_compra";
+  if (filter === "sin-compras") return !pred && ordersCount === 0;
+  return false;
+}
+
+export interface RitmoSummary {
+  conRitmo: RitmoBucket;
+  primera: RitmoBucket;
+  sinCompras: number;
+}
+
+export interface RitmoBucket {
+  n: number;
+  valorMinor: number;
+  pasado: { n: number; valorMinor: number };
+  enVentana: { n: number; valorMinor: number };
+  entra: { n: number; valorMinor: number };
+}
+
+function emptyBucket(): RitmoBucket {
+  const z = { n: 0, valorMinor: 0 };
+  return { n: 0, valorMinor: 0, pasado: { ...z }, enVentana: { ...z }, entra: { ...z } };
+}
+
+/** La base en 3 ritmos (conteos + $ en juego intra-moneda, sin mezclar),
+ *  con apertura por posición en ventana (pasó / en ventana / entra). */
+export async function getRitmoSummary(
+  storeId: string,
+  viewCurrency: string | null,
+): Promise<RitmoSummary> {
+  const db = getSupabase();
+  const out: RitmoSummary = { conRitmo: emptyBucket(), primera: emptyBucket(), sinCompras: 0 };
+  const [photo, sinN] = await Promise.all([
+    db
+      .from("customer_predictions")
+      .select("customer_id,model,currency,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
+      .eq("store_id", storeId)
+      .order("as_of", { ascending: false })
+      .limit(5000)
+      .then(
+        (res) => res.data as Array<Record<string, unknown>> | null,
+        () => null as Array<Record<string, unknown>> | null,
+      ),
+    db
+      .from("customers")
+      .select("id", { count: "exact", head: true })
+      .eq("store_id", storeId)
+      .eq("orders_count", 0)
+      .then(
+        (res) => res.count ?? 0,
+        () => 0,
+      ),
+  ]);
+  const seen = new Set<string>();
+  for (const r of photo ?? []) {
+    const cid = String(r.customer_id ?? "");
+    if (!cid || seen.has(cid)) continue;
+    seen.add(cid);
+    const cur = (r.currency as string | null) ?? null;
+    const inView =
+      viewCurrency === null || cur === null || cur.toUpperCase() === viewCurrency.toUpperCase();
+    const target =
+      r.model === "renovacion" ? out.conRitmo : r.model === "segunda_compra" ? out.primera : null;
+    if (!target) continue;
+    target.n += 1;
+    const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
+    if (inView && v !== null) target.valorMinor += v;
+    const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+    const t = ev.t_days == null ? null : Number(ev.t_days);
+    const p25 = r.p25_days == null ? null : Number(r.p25_days);
+    const p75 = r.p75_days == null ? null : Number(r.p75_days);
+    const seg =
+      t !== null && p75 !== null && t > p75
+        ? target.pasado
+        : t !== null && p25 !== null && t >= p25
+          ? target.enVentana
+          : target.entra;
+    seg.n += 1;
+    if (inView && v !== null) seg.valorMinor += v;
+  }
+  out.sinCompras = sinN;
+  return out;
 }
 
 export async function queryStoreCustomers(
@@ -453,10 +520,9 @@ export async function queryStoreCustomers(
     ? `email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},company_name.ilike.${like}${enrichedEmailOr ? `,${enrichedEmailOr}` : ""}${contentIdOr}`
     : null;
 
-  // Con filtros (segmento/ticket) se resuelve en JS sobre la población:
-  // con mercado, segmento y ticket son relativos AL MERCADO (quintiles y
-  // cuartiles de su cohorte, misma regla que el dashboard y los dropdowns).
-  if (hasCustomerFilters(filters)) {
+  // Con filtros de decisión o sort por valor se resuelve en JS sobre la
+  // población completa (misma cohorte de mercado que el resto de la vista).
+  if (hasCustomerFilters(filters) || sort.key === "valor") {
     const all: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
       const { data, error } = await db
@@ -469,59 +535,31 @@ export async function queryStoreCustomers(
       if (!data || data.length < 1000) break;
     }
     const scoped = all.filter(inMarket);
-    const pop: PopulationRow[] = scoped.map((r) => ({
-      orders_count: Number(r.orders_count ?? 0),
-      total_spent: Number(r.total_spent ?? 0),
-      last_order_at: (r.last_order_at as string | null) ?? null,
-      currency: (r.currency as string | null) ?? null,
-      customer_type: (r.customer_type as string | null) ?? null,
-    }));
-    const [fcycleDays, fshopCurrency] = await Promise.all([
-      resolveTenantCycleDays(storeId).catch(() => null),
-      resolveShopCurrency(storeId).catch(() => null),
-    ]);
-    // Tiers en la moneda del market filtrado (MX→MXN); sin filtro, la tienda.
-    const ftierCurrency = market?.market?.currency?.toUpperCase() ?? fshopCurrency;
-    const classified = classifyPopulation(pop, Date.now(), fcycleDays, ftierCurrency);
-    const bounds = tierBoundsOf(
-      classified.flatMap((c, i) => {
-        if (c.avgTicketMinor === null) return [];
-        // Tiers solo cohorte de la moneda vista.
-        const cur = pop[i]?.currency;
-        if (
-          ftierCurrency !== null &&
-          cur != null &&
-          cur.toUpperCase() !== ftierCurrency.toUpperCase()
-        )
-          return [];
-        return [c.avgTicketMinor];
-      }),
-    );
     const firms = await loadEnrichedFirmsByDomain(db, scoped);
     const enriched = new Map<string, string>();
+    // Foto del día para filtro/sort del motor (una sola query, sin N+1).
+    const needPred =
+      filters.decision !== null ||
+      filters.vista !== null ||
+      filters.ritmo !== null ||
+      sort.key === "valor";
+    const predMap = needPred ? await getPredictionsMap(storeId).catch(() => new Map()) : new Map<string, CustomerPredictionLite>();
     for (const [domain, firm] of firms) {
       if (firm.company) enriched.set(domain, firm.company);
     }
     const needle = term.toLowerCase();
     const matched: EditableCustomer[] = [];
-    scoped.forEach((r, i) => {
-      const c = classified[i];
-      if (filters.segment !== null && c.segment !== filters.segment) return;
-      if (filters.noLosPierdas && !c.noLosPierdas) return;
-      if (filters.ticketTier !== null) {
-        if (c.avgTicketMinor === null || bounds === null) return;
-        // Cuartiles en la moneda vista: fuera de ella el tramo no aplica.
-        const cur = String(r.currency ?? "");
-        if (
-          ftierCurrency !== null &&
-          cur !== "" &&
-          cur.toUpperCase() !== ftierCurrency.toUpperCase()
-        )
-          return;
-        if (tierIndexOf(c.avgTicketMinor, bounds) !== filters.ticketTier) return;
+    scoped.forEach((r) => {
+      const pred = predMap.get(String(r.id ?? ""));
+      if (filters.decision !== null && !matchesDecisionFilter(pred, filters.decision)) return;
+      if (filters.ritmo !== null) {
+        const oc = Number(r.orders_count ?? 0);
+        if (!matchesRitmoFilter(pred, oc, filters.ritmo)) return;
       }
-      if (filters.freqBucket !== null && freqBucketIndex(c.frequency) !== filters.freqBucket) {
-        return;
+      if (filters.vista === "ventana7") {
+        if (!pred || pred.decision !== "vigilar" || pred.tDays === null || pred.p25Days === null) return;
+        const diff = pred.p25Days - pred.tDays;
+        if (diff < 0 || diff > 7) return;
       }
       if (needle) {
         const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
@@ -570,6 +608,14 @@ export async function queryStoreCustomers(
           return dir * (a.ordersCount - b.ordersCount) || emailTie;
         case "total":
           return dir * (a.totalSpent - b.totalSpent) || emailTie;
+        case "valor": {
+          const av = predMap.get(a.dbId)?.valorEsperadoMinor ?? null;
+          const bv = predMap.get(b.dbId)?.valorEsperadoMinor ?? null;
+          if (av === null && bv === null) return emailTie;
+          if (av === null) return 1;
+          if (bv === null) return -1;
+          return dir * (av - bv) || emailTie;
+        }
         default:
           return dir * emailTie;
       }

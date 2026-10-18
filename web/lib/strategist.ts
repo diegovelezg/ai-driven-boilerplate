@@ -6,13 +6,13 @@
 // Corre en background con `background_runs` kind `strategist`.
 import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
-import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { advanceRun, finishRun, setRunTotal, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("strategist");
 
 /** Versión del criterio de priorización. Sube cuando cambia la regla. */
-export const STRATEGIST_GEN = "strategist:v1:mira";
+export const STRATEGIST_GEN = "strategist:v2:retention";
 
 interface OpenSignal {
   id: string;
@@ -31,7 +31,7 @@ export interface StrategistOpts {
   limit?: number;
 }
 
-/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente; winback = 1 compra; resto nurture. */
+/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente; winback = 1 compra (incluye 2ª compra del Modelo B); resto nurture. */
 function objective(o: OpenSignal, vipSpend: number): "winback" | "nurture" | "vip_care" {
   if (o.orders_count >= 3 && o.total_spent >= vipSpend) return "vip_care";
   if (o.orders_count <= 1) return "winback";
@@ -49,8 +49,11 @@ export async function runStrategist(
   try {
     // Mismo ranking que Overview/Review/Copywriter (lib/mira): se prioriza el
     // top real, no empates arbitrarios de score. La foránea va después.
+    // Solo señales cuyo cliente esté en actuar/revision_humana (motor
+    // retention:v1); si aún no hay predicciones, se prioriza sin filtrar
+    // (compat pre-migración).
     const mira = await getRankedMira(storeId, 200);
-    const rows = [...mira.rows, ...mira.foreign]
+    let rows = [...mira.rows, ...mira.foreign]
       .filter((r) => r.status === "open")
       .map((r) => ({
         id: r.signalId,
@@ -62,7 +65,27 @@ export async function runStrategist(
         last_name: r.lastName,
         orders_count: r.ordersCount,
         total_spent: r.totalSpent,
-      }) satisfies OpenSignal);
+        decision: r.decision ?? null,
+      }) satisfies OpenSignal & { decision: string | null });
+    const withPred = rows.filter((r) => r.decision !== null);
+    if (withPred.length > 0) {
+      rows = rows.filter((r) => r.decision === "actuar" || r.decision === "revision_humana");
+    }
+    // Uno por cliente (issue #9): el ranking ya viene ordenado, se queda la
+    // primera señal de cada customer. Dos priorizadas del mismo cliente
+    // terminan en dos borradores al mismo WhatsApp.
+    {
+      const seen = new Set<string>();
+      const before = rows.length;
+      rows = rows.filter((r) => {
+        if (seen.has(r.customer_id)) return false;
+        seen.add(r.customer_id);
+        return true;
+      });
+      if (rows.length !== before) {
+        log(`run ${runId} dedup_customer=${before - rows.length} señales repetidas del mismo cliente fuera`);
+      }
+    }
     const spends = [...rows.map((r) => r.total_spent)].sort((a, b) => a - b);
     const vipSpend = spends.length > 0 ? spends[Math.floor(spends.length * 0.8)] : 0;
     log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend}`);
@@ -70,10 +93,15 @@ export async function runStrategist(
     log(`run ${runId} top5=${rows.slice(0, 5).map((r) => r.email || r.customer_id).join(",")}`);
 
     const batch = rows.slice(0, Math.max(0, limit));
+    await setRunTotal(runId, rows.length).catch(() => {});
+    const topName =
+      batch.length > 0
+        ? [batch[0].first_name, batch[0].last_name].filter(Boolean).join(" ") || batch[0].email || "tu top"
+        : null;
     let i = 0;
     for (const s of batch) {
       i += 1;
-      await advanceRun(runId, { processed: prioritized, failed: 0, current: s.email || s.customer_id });
+      await advanceRun(runId, { processed: prioritized, failed: 0, current: null });
       const kind = objective(s, vipSpend);
       const { error: upErr } = await db
         .from("churn_signals")
@@ -89,8 +117,19 @@ export async function runStrategist(
 
     await advanceRun(runId, { processed: prioritized, failed: 0, current: null });
     const status: RunStatus = "done";
-    const summary = `${prioritized} priorizadas de ${rows.length} abiertas`;
-    await finishRun(runId, { status, processed: prioritized, failed: 0, summary });
+    // Filosofía TeamPulse: outcome + siguiente paso, no "X de Y abiertas".
+    const leftover = rows.length - batch.length;
+    const summary =
+      prioritized > 0
+        ? `Ordenó ${prioritized}, empieza por ${topName}${leftover > 0 ? ` · ${leftover} quedan` : ""}`
+        : "Sin ordenar, nada urgente · no hay a quién priorizar";
+    await finishRun(runId, {
+      status,
+      processed: prioritized,
+      failed: 0,
+      summary,
+      pulseState: prioritized > 0 ? "active" : "paused",
+    });
     log(`run ${runId} ${status} ${summary}`);
   } catch (e) {
     await finishRun(runId, {

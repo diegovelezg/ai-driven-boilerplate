@@ -183,6 +183,10 @@ export function FinanceStrip({
   cycleDays = null,
   /** Segunda fila de KPIs (retención). undefined = no se muestra. */
   retention,
+  /** En juego probabilístico (foto del día: actuar+vigilar). null = respaldo clásico. */
+  enJuegoProb = null,
+  /** Orgánicos del día (vuelven solos, sin inventar ahorro). */
+  organicosEnAuto = null,
 }: {
   buckets: MonthBucket[];
   kpis: FinanceKpis;
@@ -195,6 +199,8 @@ export function FinanceStrip({
   cycleDays?: number | null;
   /** Segunda fila de KPIs (retención). undefined = no se muestra. */
   retention?: RetentionKpis | null;
+  enJuegoProb?: { minor: number; low: number; high: number; count: number } | null;
+  organicosEnAuto?: number | null;
 }) {
   const total12 = buckets.reduce((a, b) => a + b.salesMinor, 0);
   if (total12 === 0 && kpis.orders30d === 0) return null;
@@ -244,14 +250,29 @@ export function FinanceStrip({
                   <Delta pct={retention.rescatadoDeltaPct} />
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] text-muted-foreground">En juego hoy</span>
-                  <span className="text-xl font-semibold tabular-nums tracking-tight">
-                    {formatMoney(retention.enJuegoNowMinor, currency)}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {retention.enJuegoNowCount}{" "}
-                    {retention.enJuegoNowCount === 1 ? "vencido" : "vencidos"} × ticket
-                  </span>
+                  <span className="text-[11px] text-muted-foreground">En juego hoy (esperado)</span>
+                  {enJuegoProb ? (
+                    <>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(enJuegoProb.minor, currency)}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {enJuegoProb.count}{" "}
+                        {enJuegoProb.count === 1 ? "cliente" : "clientes"} · rango{" "}
+                        {formatMoney(enJuegoProb.low, currency)}–{formatMoney(enJuegoProb.high, currency)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(retention.enJuegoNowMinor, currency)}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {retention.enJuegoNowCount}{" "}
+                        {retention.enJuegoNowCount === 1 ? "vencido" : "vencidos"} × ticket
+                      </span>
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -265,6 +286,9 @@ export function FinanceStrip({
               : ""}
             {fused && cycleDays !== null
               ? `Verde = rescatado; el gap con la línea punteada (en juego, ciclo ~${cycleDays}d) es tu fuga. `
+              : ""}
+            {organicosEnAuto !== null && organicosEnAuto > 0
+              ? `${organicosEnAuto} volverán solos y no les escribimos. `
               : ""}
             {rescate === null
               ? "Sin ciclo calibrado: enseña tu negocio en Settings para ver en juego vs rescatado. "
