@@ -67,19 +67,23 @@ function buildJudgeDossier(d: JudgeDossier): string {
   return lines.join("\n");
 }
 
-async function completeJudge(ref: ModelRef, system: string, user: string, meter?: { storeId?: string | null; usedFallback?: boolean }): Promise<string> {
+async function completeJudge(ref: ModelRef, system: string, user: string, opts: { maxTokens: number; effort: string | null; meter?: { storeId?: string | null; usedFallback?: boolean } }): Promise<string> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
   const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const meter = opts.meter;
   const body: Record<string, unknown> = {
     model: ref.model,
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    ...chatCompletionParams(ref.provider, ref.model, 0.1, 300),
+    // Sin hardcodear: el presupuesto viene de llm_models.json
+    // (contactability_judge: 800). Con 300 fijos el thinking consumía todo
+    // y la respuesta salía vacía (finish=length) en ambos proveedores.
+    ...chatCompletionParams(ref.provider, ref.model, 0.1, opts.maxTokens),
     response_format: { type: "json_object" },
-    ...reasoningBody(ref.provider, ref.model, "low"),
+    ...reasoningBody(ref.provider, ref.model, opts.effort),
   };
   const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
@@ -132,11 +136,11 @@ export async function judgeContactability(dossier: JudgeDossier, opts: { storeId
     const cfg = getLlmConfig("contactability_judge");
     let raw: string;
     try {
-      raw = await completeJudge(cfg.primary, JUDGE_SYSTEM, user, { storeId: opts.storeId });
+      raw = await completeJudge(cfg.primary, JUDGE_SYSTEM, user, { maxTokens: cfg.maxTokens, effort: cfg.reasoningEffort, meter: { storeId: opts.storeId } });
     } catch (e) {
       if (!cfg.fallback) throw e;
       log(`primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
-      raw = await completeJudge(cfg.fallback, JUDGE_SYSTEM, user, { storeId: opts.storeId, usedFallback: true });
+      raw = await completeJudge(cfg.fallback, JUDGE_SYSTEM, user, { maxTokens: cfg.maxTokens, effort: cfg.reasoningEffort, meter: { storeId: opts.storeId, usedFallback: true } });
     }
     const parsed = parseJudgeResponse(raw);
     return { ...parsed, failOpen: false };
