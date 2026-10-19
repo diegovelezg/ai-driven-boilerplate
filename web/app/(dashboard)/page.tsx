@@ -850,9 +850,9 @@ export default async function DashboardPage({
             }
             footer={
               <span className="flex flex-wrap items-center gap-2">
-                {(hoyActuar > 0 || pending > 0) && (
+                {(hoyActuar > 0 || pending > 0 || leadsPending > 0 || open + prioritized > 0) && (
                   <Button render={<Link href={reviewHref} />} nativeButton={false} size="sm">
-                    Ir al inbox · {formatNumber(hoyActuar + pending)} por gestionar
+                    Ir al inbox · {formatNumber(pending + leadsPending + open + prioritized)} por gestionar
                   </Button>
                 )}
               </span>
