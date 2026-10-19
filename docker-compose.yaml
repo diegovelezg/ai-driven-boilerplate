@@ -146,6 +146,8 @@ services:
 
   migrator:
     image: postgres:17-alpine
+    # Contenedor one-shot: no determina la salud del deploy (doc oficial Coolify).
+    exclude_from_hc: true
     depends_on:
       db:
         condition: service_healthy
