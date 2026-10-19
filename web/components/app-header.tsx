@@ -15,6 +15,7 @@ const titles = [
   { href: "/customers", label: "Customers" },
   { href: "/campaigns", label: "Campaigns" },
   { href: "/settings", label: "Settings" },
+  { href: "/ayuda", label: "Ayuda" },
   { href: "/", label: "Dashboard" },
 ];
 

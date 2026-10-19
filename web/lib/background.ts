@@ -16,6 +16,13 @@
 // - analyst: "X volvieron · {monto} recuperado" | "Observando X enviados, mide en N días"
 // El `failed` va en su columna, no en el texto. `current` nunca lleva PII (emails).
 import { getSupabase } from "@/lib/supabase";
+import {
+  conflictMessage,
+  findConflict,
+  type ActiveOp,
+  type ErrorCode,
+  type ScopeKind,
+} from "@/lib/operations";
 
 export type RunStatus = "running" | "done" | "error";
 
@@ -37,9 +44,22 @@ export interface BackgroundRun {
   error: string | null;
   startedAt: string;
   finishedAt: string | null;
+  /** Acotación del lock (issue #16 Fase 0): `global` = toda la tienda,
+   *  `signal`/`customer`/`domain` + `scopeId` = una sola unidad. */
+  scopeKind: ScopeKind;
+  scopeId: string | null;
+  /** Heartbeat de los workers (último `advanceRun`/`touchRun`). */
+  updatedAt: string | null;
+  /** Cierre tipado para la UI (veto ≠ fallo). */
+  errorCode: ErrorCode | null;
 }
 
+const SCOPE_KINDS: ScopeKind[] = ["global", "signal", "customer", "domain"];
+const ERROR_CODES: ErrorCode[] = ["judge_veto", "busy", "llm_fail", "stale", "conflict"];
+
 function mapRun(r: Record<string, unknown>): BackgroundRun {
+  const scopeKind = r.scope_kind as ScopeKind | null;
+  const errorCode = r.error_code as ErrorCode | null;
   return {
     id: String(r.id),
     kind: (r.kind as string) ?? "",
@@ -54,6 +74,10 @@ function mapRun(r: Record<string, unknown>): BackgroundRun {
     error: (r.error as string) ?? null,
     startedAt: String(r.started_at ?? ""),
     finishedAt: (r.finished_at as string) ?? null,
+    scopeKind: (scopeKind && SCOPE_KINDS.includes(scopeKind) ? scopeKind : "global"),
+    scopeId: (r.scope_id as string | null) ?? null,
+    updatedAt: (r.updated_at as string | null) ?? null,
+    errorCode: (errorCode && ERROR_CODES.includes(errorCode) ? errorCode : null),
   };
 }
 
@@ -70,17 +94,80 @@ export async function getLatestRun(storeId: string): Promise<BackgroundRun | nul
   return data ? mapRun(data as Record<string, unknown>) : null;
 }
 
-export async function hasRunningRun(storeId: string): Promise<boolean> {
+export async function hasRunningRun(
+  storeId: string,
+  filter?: { kinds?: string[]; scopeKind?: ScopeKind; scopeId?: string | null },
+): Promise<boolean> {
+  // Sin filtro: vía rápida legacy (1 fila, sin leer el universo).
+  if (!filter) {
+    const db = getSupabase();
+    const { data, error } = await db
+      .from("background_runs")
+      .select("id")
+      .eq("store_id", storeId)
+      .eq("status", "running")
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(`Runs read: ${error.message}`);
+    return Boolean(data);
+  }
+  const running = await getRunningRuns(storeId);
+  return running.some(
+    (r) =>
+      (!filter.kinds || filter.kinds.includes(r.kind)) &&
+      (!filter.scopeKind || r.scopeKind === filter.scopeKind) &&
+      (filter.scopeId === undefined || r.scopeId === filter.scopeId),
+  );
+}
+
+/** Todas las corridas en curso (el lock granular y la cinta las leen de aquí). */
+export async function getRunningRuns(storeId: string): Promise<BackgroundRun[]> {
   const db = getSupabase();
   const { data, error } = await db
     .from("background_runs")
-    .select("id")
+    .select("*")
     .eq("store_id", storeId)
     .eq("status", "running")
-    .limit(1)
-    .maybeSingle();
+    .order("started_at", { ascending: false });
   if (error) throw new Error(`Runs read: ${error.message}`);
-  return Boolean(data);
+  return ((data ?? []) as Array<Record<string, unknown>>).map(mapRun);
+}
+
+/** Fuente de la cinta multi-run (Fase 2): en curso + últimos terminados. */
+export async function getActiveRuns(storeId: string, finishedLimit = 3): Promise<BackgroundRun[]> {
+  const running = await getRunningRuns(storeId);
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("background_runs")
+    .select("*")
+    .eq("store_id", storeId)
+    .neq("status", "running")
+    .order("started_at", { ascending: false })
+    .limit(finishedLimit);
+  if (error) throw new Error(`Runs read: ${error.message}`);
+  const finished = ((data ?? []) as Array<Record<string, unknown>>).map(mapRun);
+  return [...running, ...finished];
+}
+
+function toActiveOp(r: BackgroundRun): ActiveOp {
+  return { kind: r.kind, scopeKind: r.scopeKind, scopeId: r.scopeId, label: r.label };
+}
+
+/** Primitiva del lock por compatibilidad (Fase 3): la corrida en curso
+ *  incompatible con `{kind, scope}`, o `null` si hay vía libre. */
+export async function hasConflict(
+  storeId: string,
+  op: { kind: string; scopeKind?: ScopeKind; scopeId?: string | null },
+): Promise<BackgroundRun | null> {
+  const running = await getRunningRuns(storeId);
+  const hit = findConflict(op, running.map(toActiveOp));
+  if (!hit) return null;
+  return running.find((r) => r.kind === hit.kind && r.scopeId === hit.scopeId && r.label === hit.label) ?? null;
+}
+
+/** Mensaje de rechazo por lock (`En curso: Copywriter…`). */
+export function busyMessage(conflict: BackgroundRun): string {
+  return conflictMessage(toActiveOp(conflict));
 }
 
 export async function startRun(
@@ -88,15 +175,25 @@ export async function startRun(
   kind: string,
   label: string,
   total: number,
+  opts?: { scopeKind?: ScopeKind; scopeId?: string | null },
 ): Promise<string> {
   const db = getSupabase();
+  const scopeKind = opts?.scopeKind ?? "global";
+  const scopeId = opts?.scopeId ?? null;
+  // Migración 20261021000000: si la DB aún no la tiene, reintenta legacy.
   const { data, error } = await db
+    .from("background_runs")
+    .insert({ store_id: storeId, kind, label, total, status: "running", scope_kind: scopeKind, scope_id: scopeId })
+    .select("id")
+    .single();
+  if (!error && data) return String(data.id);
+  const legacy = await db
     .from("background_runs")
     .insert({ store_id: storeId, kind, label, total, status: "running" })
     .select("id")
     .single();
-  if (error || !data) throw new Error(`Run insert: ${error?.message}`);
-  return String(data.id);
+  if (legacy.error || !legacy.data) throw new Error(`Run insert: ${legacy.error?.message ?? error?.message}`);
+  return String(legacy.data.id);
 }
 
 /** Actualiza el total de una corrida en curso (para progreso honesto 0/0 → N). */
@@ -105,16 +202,35 @@ export async function setRunTotal(runId: string, total: number): Promise<void> {
   await db.from("background_runs").update({ total }).eq("id", runId);
 }
 
-/** Actualiza el progreso en vivo de una corrida. */
+/** Actualiza el progreso en vivo de una corrida (con heartbeat). En DBs
+ *  sin `updated_at` reintenta sin él: el progreso nunca se pierde. */
 export async function advanceRun(
   runId: string,
   p: { processed: number; failed: number; current: string | null },
 ): Promise<void> {
   const db = getSupabase();
+  const now = new Date().toISOString();
+  const { error } = await db
+    .from("background_runs")
+    .update({ current: p.current, processed: p.processed, failed: p.failed, updated_at: now })
+    .eq("id", runId);
+  if (!error) return;
   await db
     .from("background_runs")
     .update({ current: p.current, processed: p.processed, failed: p.failed })
     .eq("id", runId);
+}
+
+/** Heartbeat explícito para tramos largos sin progreso (nunca lanza). */
+export async function touchRun(runId: string): Promise<void> {
+  try {
+    await getSupabase()
+      .from("background_runs")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", runId);
+  } catch {
+    // Best-effort: el heartbeat nunca rompe el worker.
+  }
 }
 
 /** Cierra una corrida con su resultado final. */
@@ -127,6 +243,7 @@ export async function finishRun(
     summary?: string | null;
     error?: string | null;
     pulseState?: PulseState | null;
+    errorCode?: ErrorCode | null;
   },
 ): Promise<void> {
   const db = getSupabase();
@@ -139,11 +256,16 @@ export async function finishRun(
     current: null,
     finished_at: new Date().toISOString(),
   };
-  if (p.pulseState) {
-    // Migración 20261019000000: si la DB aún no la tiene, reintenta sin ella.
+  if (p.pulseState || p.errorCode) {
+    // Migraciones 20261019000000/20261021000000: si la DB aún no las
+    // tiene, reintenta sin ellas.
     const { error } = await db
       .from("background_runs")
-      .update({ ...base, pulse_state: p.pulseState })
+      .update({
+        ...base,
+        ...(p.pulseState ? { pulse_state: p.pulseState } : null),
+        ...(p.errorCode ? { error_code: p.errorCode } : null),
+      })
       .eq("id", runId);
     if (!error) return;
   }

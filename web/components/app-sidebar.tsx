@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import {
+  CircleHelp,
   Inbox,
   LayoutDashboard,
   MessagesSquare,
@@ -34,6 +35,7 @@ const nav = [
   { href: "/review", label: "Review Inbox", icon: Inbox, badge: "14" },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/ayuda", label: "Ayuda", icon: CircleHelp },
 ];
 
 export function AppSidebar() {

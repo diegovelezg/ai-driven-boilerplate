@@ -24,6 +24,8 @@ interface OpenSignal {
   last_name: string | null;
   orders_count: number;
   total_spent: number;
+  model: string | null;
+  currency: string | null;
 }
 
 export interface StrategistOpts {
@@ -31,10 +33,13 @@ export interface StrategistOpts {
   limit?: number;
 }
 
-/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente; winback = 1 compra (incluye 2ª compra del Modelo B); resto nurture. */
+/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente; winback = 1 compra (incluye 2ª compra del Modelo B); resto nurture.
+ *  Issue #11: F por sesiones/modelo del motor, no por orders_count (pago partido mismo día = 1 sesión). */
 function objective(o: OpenSignal, vipSpend: number): "winback" | "nurture" | "vip_care" {
   if (o.orders_count >= 3 && o.total_spent >= vipSpend) return "vip_care";
-  if (o.orders_count <= 1) return "winback";
+  // Modelo B (segunda_compra) o 1 sola sesión real → winback aunque
+  // orders_count cuente 2 por pago partido.
+  if (o.model === "segunda_compra" || o.orders_count <= 1) return "winback";
   return "nurture";
 }
 
@@ -53,6 +58,8 @@ export async function runStrategist(
     // retention:v1); si aún no hay predicciones, se prioriza sin filtrar
     // (compat pre-migración).
     const mira = await getRankedMira(storeId, 200);
+    // Issue #11: percentil VIP intra-moneda-tienda. mira.rows ya es el
+    // universo de la tienda; foreign (otra moneda) no entra al umbral.
     let rows = [...mira.rows, ...mira.foreign]
       .filter((r) => r.status === "open")
       .map((r) => ({
@@ -65,6 +72,8 @@ export async function runStrategist(
         last_name: r.lastName,
         orders_count: r.ordersCount,
         total_spent: r.totalSpent,
+        model: r.model ?? null,
+        currency: r.currency ?? null,
         decision: r.decision ?? null,
       }) satisfies OpenSignal & { decision: string | null });
     const withPred = rows.filter((r) => r.decision !== null);
@@ -86,7 +95,7 @@ export async function runStrategist(
         log(`run ${runId} dedup_customer=${before - rows.length} señales repetidas del mismo cliente fuera`);
       }
     }
-    const spends = [...rows.map((r) => r.total_spent)].sort((a, b) => a - b);
+    const spends = [...rows.filter((r) => mira.rows.some((m) => m.signalId === r.id)).map((r) => r.total_spent)].sort((a, b) => a - b);
     const vipSpend = spends.length > 0 ? spends[Math.floor(spends.length * 0.8)] : 0;
     log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend}`);
     // Trazabilidad del ranking: si el top se discute, el log dice quién era.
@@ -103,9 +112,12 @@ export async function runStrategist(
       i += 1;
       await advanceRun(runId, { processed: prioritized, failed: 0, current: null });
       const kind = objective(s, vipSpend);
+      // Issue #11 P1: kind (origen) ya no se pisa. El tratamiento va en
+      // objective; kind se conserva. Ciclo scout→strategist→scout conserva
+      // winback y revision_humana (test dedicado).
       const { error: upErr } = await db
         .from("churn_signals")
-        .update({ status: "prioritized", kind, evidence_json: { generator: STRATEGIST_GEN, run_id: runId, at: new Date().toISOString() } })
+        .update({ status: "prioritized", objective: kind, evidence_json: { generator: STRATEGIST_GEN, run_id: runId, at: new Date().toISOString() } })
         .eq("id", s.id);
       if (upErr) {
         log(`run ${runId} ${s.email} ERROR ${upErr.message}`);

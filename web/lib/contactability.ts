@@ -14,14 +14,12 @@ import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from
 const log = createLogger("contactability");
 
 /** Sello del criterio juez. Sube cuando cambia el prompt/reglas. */
-export const JUDGE_GEN = "contactability:v1:llm-judge";
+export const JUDGE_GEN = "contactability:v2:llm-judge";
 
-const JUDGE_SYSTEM = `Eres el filtro de contactabilidad de un motor de retención (español Perú).
-Decides si TIENE SENTIDO contactar HOY a este cliente por este contenido.
+const JUDGE_SYSTEM = `Eres el filtro de pertinencia de un motor de retención (español Perú).
+El dossier es HISTORIAL de compras pasadas, no la invitación futura. Una ventana pasada es lo normal y NUNCA es motivo de veto.
 Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reason": "una línea, máx 140 caracteres"}.
-NO contactable: homenaje o cumpleaños fuera de su aniversario; evento, función, estreno o campaña cuya ventana ya pasó (dateEnd pasado sin aniversario cercano); pieza fechada ya vencida ("ahora en cines", fechas concretas pasadas).
-SÍ contactable: negocio continuo (tienda, marca, servicio vigente) aunque su última pauta haya terminado hace tiempo. El fin del vuelo publicitario NO es el fin del negocio: si el cliente sigue operando, se le puede invitar a volver.
-Basa tu decisión SOLO en los datos del dossier. Si dudas por falta de información, contactable=true.`;
+Veta (false) SOLO si todas las piezas son saludo, homenaje o cumpleaños y hoy está lejos de esa fecha. Todo lo demás (feria, promo, campaña, temporada o lanzamiento pasados) es contactable=true. Ante cualquier duda, true.`;
 
 export interface JudgeItem {
   title: string;
@@ -47,7 +45,7 @@ export function buildJudgeDossier(d: JudgeDossier): string {
   const lines = [
     `Cliente: ${d.firstName}${d.companyName ? ` — ${d.companyName}` : ""} (objetivo ${d.objetivo})`,
     `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}.`,
-    `Contenido real (usa solo esto para decidir):`,
+    `Historial pasado (no es la oferta; no vetes por fechas):`,
   ];
   for (const it of d.items.slice(0, 6)) {
     const bits = [

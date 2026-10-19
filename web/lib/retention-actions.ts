@@ -10,8 +10,9 @@ import { runCopywriter } from "@/lib/copywriter";
 import { runDispatcher } from "@/lib/dispatcher";
 import { runAnalyst } from "@/lib/analyst";
 import {
+  busyMessage,
   getLatestRun,
-  hasRunningRun,
+  hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
@@ -38,8 +39,11 @@ async function startWorker(
   try {
     const storeId = await resolveStoreId(conn.medusaUrl);
     if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", run: null };
-    if (await hasRunningRun(storeId)) {
-      return { ok: true, message: "Ya hay una corrida en curso.", run: await getLatestRun(storeId) };
+    // Lock por compatibilidad (issue #16 Fase 3): solo lo incompatible
+    // frena; el resto corre en paralelo y suma su chip a la cinta.
+    const conflict = await hasConflict(storeId, { kind });
+    if (conflict) {
+      return { ok: false, message: busyMessage(conflict), run: conflict };
     }
     const runId = await startRun(storeId, kind, label, total);
     after(() => work(runId, storeId));

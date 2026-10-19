@@ -37,6 +37,56 @@ export interface Prediction {
   valorEsperadoMinor: number | null;
   decision: Decision;
   confidence: "alta" | "media" | "baja";
+  /** Ejes de segmentación (issue #14A): decision es función pura de ellos. */
+  ritmo: "con-ritmo" | "primera";
+  ventana: "antes" | "en" | "pasada" | "dormido";
+  bandaP: "organico-probable" | "recuperable" | "lejos";
+  valorDecil: number | null;
+  elegibilidad: "ok" | "sin-canal" | "contacto-reciente";
+  decisionVersion: string;
+}
+
+/** Versión de la función de decisión (auditable, re-ejecutable). */
+export const DECISION_VERSION = "v2:axes";
+
+/** Ejes de entrada de la decisión (testeable sin modelo). */
+export interface DecisionAxes {
+  ritmo: Prediction["ritmo"];
+  ventana: Prediction["ventana"];
+  bandaP: Prediction["bandaP"];
+  valorDecil: number | null;
+  elegibilidad: Prediction["elegibilidad"];
+}
+
+/** decision = función pura y versionada de los ejes (issue #14A).
+ *  Reglas (mismas que el bloque inline anterior, ahora auditables):
+ *  elegibilidad manda (sin-canal/contacto-reciente) → organico-probable
+ *  en ventana temprana es organico → dormido (salvo top B2B) →
+ *  recuperable en ventana con confianza e intervalo acotados es actuar →
+ *  resto vigilar. */
+export function decideFromAxes(
+  axes: DecisionAxes,
+  opts: {
+    isB2B: boolean;
+    confidence: Prediction["confidence"];
+    ventanaAcotada: boolean;
+    intervaloAncho: boolean;
+    topDecil: boolean;
+  },
+): Decision {
+  if (axes.elegibilidad === "sin-canal") return "sin_canal";
+  if (axes.elegibilidad === "contacto-reciente") return "contactado_reciente";
+  if (axes.bandaP === "organico-probable" && axes.ventana === "antes") return "organico";
+  if (axes.ventana === "dormido") {
+    return opts.topDecil && opts.isB2B ? "revision_humana" : "dormido";
+  }
+  if (axes.bandaP !== "lejos" && axes.ventana !== "antes") {
+    if (!opts.ventanaAcotada || opts.confidence === "baja" || opts.intervaloAncho) {
+      return "vigilar";
+    }
+    return "actuar";
+  }
+  return "vigilar";
 }
 
 export interface StoreModelInput {
@@ -118,9 +168,9 @@ function muGrid(): number[] {
   return out;
 }
 
-function sigmaGrid(): number[] {
+function sigmaGrid(step = 0.05): number[] {
   const out: number[] = [];
-  for (let s = 0.25; s <= 1.4 + 1e-9; s += 0.05) {
+  for (let s = 0.25; s <= 1.4 + 1e-9; s += step) {
     // Redondeo para evitar deriva flotante en la grilla.
     out.push(Math.round(s * 100) / 100);
   }
@@ -129,10 +179,12 @@ function sigmaGrid(): number[] {
 
 const MU_VALS = muGrid();
 const SIGMA_VALS = sigmaGrid();
+const SIGMA_COARSE = sigmaGrid(0.1);
 
 /**
  * Grilla bayesiana determinista (log-espacio).
- * prior mu ~ Normal(priorMu, priorSigmaMu); prior sigma uniforme en grilla.
+ * prior mu ~ Normal(priorMu, priorSigmaMu); prior sigma ~ Normal(sigma0, 0.3)
+ * evaluado en la grilla (issue #10 P2: sigma0 operativo, antes uniforme).
  * likelihood = prod pdf(gaps) * prod S(censurados).
  */
 function fitGrid(
@@ -140,16 +192,22 @@ function fitGrid(
   censurados: number[],
   priorMu: number,
   priorSigmaMu: number,
+  sigma0 = 0.7,
+  sigmaVals: number[] = SIGMA_VALS,
 ): GridCell[] {
   const cells: GridCell[] = [];
   const logW: number[] = [];
   const inv2v = 1 / (2 * priorSigmaMu * priorSigmaMu);
+  const sigmaSd = 0.3;
+  const inv2vs = 1 / (2 * sigmaSd * sigmaSd);
   let maxLog = Number.NEGATIVE_INFINITY;
   for (const mu of MU_VALS) {
     const dmu = mu - priorMu;
     const logPriorMu = -dmu * dmu * inv2v;
-    for (const sigma of SIGMA_VALS) {
-      let ll = logPriorMu;
+    for (const sigma of sigmaVals) {
+      const ds = sigma - sigma0;
+      const logPriorSigma = -ds * ds * inv2vs;
+      let ll = logPriorMu + logPriorSigma;
       let bad = false;
       for (const g of gapsCompletados) {
         if (g <= 0) continue;
@@ -196,62 +254,55 @@ function fitGrid(
     return cells;
   }
   for (const c of cells) c.w /= total;
+  // Poda de celdas insignificantes (rendimiento, issue #5): el posterior
+  // LogNormal es picudo; celdas con w<1e-4 no mueven p ni cuantiles pero
+  // cuestan ~2600 CDFs por iteración de bisección. Podar + renormalizar.
+  let kept = 0;
+  for (const c of cells) {
+    if (c.w < 1e-4) c.w = 0;
+    else kept += 1;
+  }
+  if (kept === 0) {
+    const u = 1 / cells.length;
+    for (const c of cells) c.w = u;
+    return cells;
+  }
+  let total2 = 0;
+  for (const c of cells) total2 += c.w;
+  for (const c of cells) c.w /= total2;
   return cells;
 }
 
-/** Posterior del cliente = prior de tienda × likelihood propia. */
+/** Media posterior de mu de una grilla (para shrinkage jerárquico). */
+function gridMuMean(grid: GridCell[]): number {
+  let m = 0;
+  for (const c of grid) m += c.w * c.mu;
+  return m;
+}
+
+/** Posterior del cliente con shrinkage jerárquico real (issue #10 P1-2).
+ *  Diseño: el posterior de tienda NO se usa como prior multiplicativo
+ *  (eso era doble conteo: datos del cliente ×2, tienda grande ⇒ cliente
+ *  no se aparta, tienda chica ⇒ intervalos angostos al revés).
+ *  En su lugar: prior paramétrico Normal(storeMu, sqrt(priorSigmaMu²+tau²))
+ *  × prior sigma centrado en sigma0, evaluado solo con los datos del
+ *  cliente (una sola vez). tau=0.4 = dispersión entre clientes
+ *  (documentado, fijo Día 1; se recalibra con datos en el Paso 5 de #5).
+ *  Efecto: tienda grande ⇒ el atípico sí se aparta; tienda chica ⇒
+ *  intervalos más anchos (el prior pesa menos que un posterior angosto). */
 function fitClientGrid(
-  storeGrid: GridCell[],
+  storeMu: number,
+  priorSigmaMu: number,
+  sigma0: number,
   gaps: number[],
   censoredT: number,
 ): GridCell[] {
-  const out: GridCell[] = storeGrid.map((c) => ({ mu: c.mu, sigma: c.sigma, w: 0 }));
-  const logW: number[] = [];
-  let maxLog = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < storeGrid.length; i += 1) {
-    const cell = storeGrid[i];
-    const priorW = cell.w;
-    const logPrior = priorW > 0 ? Math.log(priorW) : Number.NEGATIVE_INFINITY;
-    if (!Number.isFinite(logPrior)) {
-      logW.push(Number.NEGATIVE_INFINITY);
-      continue;
-    }
-    let ll = logPrior;
-    let bad = false;
-    for (const g of gaps) {
-      if (g <= 0) continue;
-      const lp = logNormalLogPdf(g, cell.mu, cell.sigma);
-      if (!Number.isFinite(lp)) {
-        bad = true;
-        break;
-      }
-      ll += lp;
-    }
-    if (bad) {
-      logW.push(Number.NEGATIVE_INFINITY);
-      continue;
-    }
-    const t = Math.max(0, censoredT);
-    if (t > 0) {
-      const s = 1 - logNormalCdf(t, cell.mu, cell.sigma);
-      ll += s <= 0 ? Math.log(1e-300) : Math.log(s);
-    }
-    logW.push(ll);
-    if (ll > maxLog) maxLog = ll;
-  }
-  let total = 0;
-  for (let i = 0; i < out.length; i += 1) {
-    const lw = logW[i];
-    const w = Number.isFinite(lw) ? Math.exp(lw - maxLog) : 0;
-    out[i].w = w;
-    total += w;
-  }
-  if (total <= 0 || !Number.isFinite(total)) {
-    // Sin verosimilitud útil: heredar el prior de tienda tal cual.
-    return storeGrid.map((c) => ({ mu: c.mu, sigma: c.sigma, w: c.w }));
-  }
-  for (const c of out) c.w /= total;
-  return out;
+  const tau = 0.4;
+  const sd = Math.sqrt(priorSigmaMu * priorSigmaMu + tau * tau);
+  // Grilla sigma gruesa en el nivel cliente (rendimiento): el posterior del
+  // cliente con 0-4 gaps no resuelve sigma a 0.05; la tienda/cohorte usan la
+  // grilla fina. Reduce celdas ~50% (≈1320 vs 2640).
+  return fitGrid(gaps, censoredT > 0 ? [censoredT] : [], storeMu, sd, sigma0, SIGMA_COARSE);
 }
 
 interface GridPrediction {
@@ -268,39 +319,71 @@ function predictiveCdf(x: number, grid: GridCell[]): number {
   if (x <= 0) return 0;
   let acc = 0;
   for (const c of grid) {
-    if (c.w === 0) continue;
+    if (c.w < 1e-12) continue;
     acc += c.w * logNormalCdf(x, c.mu, c.sigma);
   }
   return Math.min(1, Math.max(0, acc));
 }
 
-function predictiveQuantile(q: number, grid: GridCell[]): number | null {
-  // Búsqueda binaria sobre F_mix monótona en [0.5, 3000].
-  const hi0 = 3000;
-  if (predictiveCdf(hi0, grid) < q) return null;
-  let lo = 0.5;
-  let hi = hi0;
-  for (let i = 0; i < 40; i += 1) {
+/** Cuantil CONDICIONAL (issue #10 P1-1): F⁻¹(F(t) + q·S(t)).
+ *  El cuantil incondicional podía caer en el pasado (t=100 → p25=40d).
+ *  El condicional nunca es < t (salvo t=0) y es coherente con pRecompraH.
+ *  Si S(t)≈0 (ya debería haber vuelto con certeza), retorna null. */
+function predictiveQuantile(q: number, grid: GridCell[], t = 0): number | null {
+  const tt = Math.max(0, t);
+  if (tt <= 0) {
+    // Sin censura: cuantil incondicional clásico.
+    const hi0 = 3000;
+    if (predictiveCdf(hi0, grid) < q) return null;
+    let lo = 0.5;
+    let hi = hi0;
+    for (let i = 0; i < 16; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (predictiveCdf(mid, grid) < q) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  const fT = predictiveCdf(tt, grid);
+  const sT = 1 - fT;
+  if (sT <= 1e-9) return null;
+  const target = fT + q * sT;
+  if (target >= 1) return null;
+  // Búsqueda binaria en [t, t+3000]: F_mix monótona. 32 iteraciones bastan
+  // para precisión <1 día en ventana de 3000d (3000/2^32 ≪ 1).
+  let lo = tt;
+  let hi = tt + 3000;
+  if (predictiveCdf(hi, grid) < target) return null;
+  for (let i = 0; i < 16; i += 1) {
     const mid = (lo + hi) / 2;
-    if (predictiveCdf(mid, grid) < q) lo = mid;
+    if (predictiveCdf(mid, grid) < target) lo = mid;
     else hi = mid;
   }
-  return (lo + hi) / 2;
+  return Math.max(tt, (lo + hi) / 2);
 }
 
-function predictFromGrid(grid: GridCell[], t: number, H: number): GridPrediction {
+function predictFromGrid(
+  grid: GridCell[],
+  t: number,
+  H: number,
+  cureProb = 0,
+): GridPrediction {
   const tt = Math.max(0, t);
+  const pi = Math.min(0.8, Math.max(0, cureProb));
   const pCells: Array<{ p: number; w: number }> = [];
   let pMean = 0;
   for (const c of grid) {
-    if (c.w === 0) {
+    if (c.w < 1e-12) {
       continue;
     }
     const ft = tt <= 0 ? 0 : logNormalCdf(tt, c.mu, c.sigma);
     const fth = logNormalCdf(tt + H, c.mu, c.sigma);
     const st = 1 - ft;
+    // Mezcla cura (issue #10 P1-3): S_mix = π + (1-π)·S.
+    // P(vuelve en H | sobrevive t) = (1-π)(F(t+H)-F(t)) / (π + (1-π)S(t)).
+    const sMix = pi + (1 - pi) * st;
     let p = 0;
-    if (st > 1e-12) p = (fth - ft) / st;
+    if (sMix > 1e-12) p = ((1 - pi) * (fth - ft)) / sMix;
     else p = 0;
     if (!Number.isFinite(p)) p = 0;
     p = Math.min(1, Math.max(0, p));
@@ -308,7 +391,9 @@ function predictFromGrid(grid: GridCell[], t: number, H: number): GridPrediction
     pMean += c.w * p;
   }
   pMean = Math.min(1, Math.max(0, pMean));
-  // Percentiles 10/90 ponderados sobre p por celda.
+  // Percentiles 10/90 ponderados sobre p por celda (incertidumbre
+  // paramétrica pura: NO se fuerzan a contener la media — forzarlos
+  // enmascaraba miscalibración, issue #10 P2).
   pCells.sort((a, b) => a.p - b.p);
   let acc = 0;
   let pLow = pCells.length > 0 ? pCells[0].p : 0;
@@ -325,18 +410,30 @@ function predictFromGrid(grid: GridCell[], t: number, H: number): GridPrediction
       break;
     }
   }
-  const sT = 1 - predictiveCdf(tt, grid);
-  const q25 = predictiveQuantile(0.25, grid);
-  const q50 = predictiveQuantile(0.5, grid);
-  const q75 = predictiveQuantile(0.75, grid);
+  // S(t) de la mezcla para dormido/churn (ver predictStore).
+  const sLognormal = 1 - predictiveCdf(tt, grid);
+  const sT = pi + (1 - pi) * sLognormal;
+  // Cuantiles condicionales (issue #10 P1-1): tiempo DESDE la última
+  // sesión, coherente con t (nunca < t salvo t=0). expectedDays = mediana
+  // condicional (documentado: no es esperanza ni tiempo restante neto,
+  // es el cuantil 50 de T_next | T_next > t medido desde la última compra).
+  const q25 = predictiveQuantile(0.25, grid, tt);
+  const q50 = predictiveQuantile(0.5, grid, tt);
+  const q75 = predictiveQuantile(0.75, grid, tt);
+  const clampQ = (q: number | null): number | null => {
+    if (q === null) return null;
+    // Coherencia con t (redondeo puede dar t-1): nunca por debajo de t.
+    const v = Math.max(tt, q);
+    return Math.max(1, Math.round(v));
+  };
   return {
     pMean,
-    pLow: Math.min(pLow, pMean),
-    pHigh: Math.max(pHigh, pMean),
+    pLow,
+    pHigh,
     sT: Math.min(1, Math.max(0, sT)),
-    expDays: q50 === null ? null : Math.max(1, Math.round(q50)),
-    p25: q25 === null ? null : Math.max(1, Math.round(q25)),
-    p75: q75 === null ? null : Math.max(1, Math.round(q75)),
+    expDays: clampQ(q50),
+    p25: clampQ(q25),
+    p75: clampQ(q75),
   };
 }
 
@@ -369,12 +466,6 @@ export function sessionize(
   return out;
 }
 
-function sameCurrency(a: string | null, b: string | null): boolean {
-  if (a === null && b === null) return true;
-  if (a === null || b === null) return true; // null = universo comodín (como insights)
-  return a.toUpperCase() === b.toUpperCase();
-}
-
 function medianOf(xs: number[]): number | null {
   if (xs.length === 0) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -391,6 +482,10 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   const H = input.horizonDays > 0 && Number.isFinite(input.horizonDays) ? input.horizonDays : 30;
   const priorMu0 = Math.log(Math.max(1, cycle));
   const priorSigmaMu = 0.35;
+  // sigma0 operativo (issue #10 P2): centro del prior de sigma. Si el caller
+  // no lo trae, se usa el neutro 0.7.
+  const sigma0 =
+    Number.isFinite(input.sigma0) && input.sigma0 > 0 ? input.sigma0 : 0.7;
 
   interface PerCustomer {
     id: string;
@@ -411,15 +506,18 @@ export function predictStore(input: StoreModelInput): Prediction[] {
     return { id: c.customerId, sessions, gaps, t, lastAt };
   });
 
-  // Grilla de tienda: todos los gaps completados + censurados (Modelo A).
+  // Grilla de tienda SOLO con F>=2 (issue #10 P1-3): los censurados F=1
+  // (que mayormente jamás vuelven) contaminaban μ/σ de la prior de
+  // renovación. El Modelo A aprende solo de renovadores reales.
   const storeGaps: number[] = [];
   const storeCens: number[] = [];
   for (const p of per) {
-    if (p.sessions.length === 0) continue;
+    if (p.sessions.length < 2) continue;
     for (const g of p.gaps) storeGaps.push(g);
     storeCens.push(p.t);
   }
-  const storeGrid = fitGrid(storeGaps, storeCens, priorMu0, priorSigmaMu);
+  const storeGrid = fitGrid(storeGaps, storeCens, priorMu0, priorSigmaMu, sigma0);
+  const storeMu = gridMuMean(storeGrid);
 
   // Cohorte F=1: tiempo hasta la 2ª sesión (completado) o censura.
   const cohortGaps: number[] = [];
@@ -433,13 +531,31 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       cohortCens.push(p.t);
     }
   }
-  const cohortGrid = fitGrid(cohortGaps, cohortCens, priorMu0, priorSigmaMu);
+  const cohortGrid = fitGrid(cohortGaps, cohortCens, priorMu0, priorSigmaMu, sigma0);
 
+  // Fracción cura por nivel (issue #10 P1-3): proporción de censurados
+  // viejos que probablemente jamás vuelvan. Acotada para no matar la señal.
+  // Renovación: viejos = t > 3*ciclo entre F>=2. Segunda compra: t > 2*ciclo.
+  const renewalOld = per.filter((p) => p.sessions.length >= 2 && p.t > 3 * cycle).length;
+  const renewalTotal = Math.max(1, per.filter((p) => p.sessions.length >= 2).length);
+  const f1Old = cohortCens.filter((t) => t > 2 * cycle).length;
+  const f1Total = Math.max(1, cohortCens.length + cohortGaps.length);
+  const cureRenewal = Math.min(0.4, renewalOld / renewalTotal);
+  const cureSecond = Math.min(0.7, Math.max(0.2, f1Old / f1Total));
+
+  // Moneda estricta para ticket (issue #10 P2): null ya no es comodín.
+  // Sin sesiones en la moneda de la tienda ⇒ ticket=null, valor=null
+  // (antes se fabricaba la mediana).
+  const strictSameCurrency = (sessionCur: string | null, shopCur: string | null): boolean => {
+    if (shopCur === null) return true;
+    if (sessionCur === null) return false;
+    return sessionCur.toUpperCase() === shopCur.toUpperCase();
+  };
   // Ticket: m0 = mediana de ticket de sesión en la moneda de la tienda.
   const poolTickets: number[] = [];
   for (const p of per) {
     for (const s of p.sessions) {
-      if (sameCurrency(s.currency, input.shopCurrency)) poolTickets.push(s.ticketMinor);
+      if (strictSameCurrency(s.currency, input.shopCurrency)) poolTickets.push(s.ticketMinor);
     }
   }
   const m0 = medianOf(poolTickets);
@@ -447,30 +563,39 @@ export function predictStore(input: StoreModelInput): Prediction[] {
 
   // Ticket* por cliente (para el decil superior B2B).
   const ticketById = new Map<string, number | null>();
+  const sessionsInShopById = new Map<string, number>();
   for (const p of per) {
     let sum = 0;
     let n = 0;
     for (const s of p.sessions) {
-      if (sameCurrency(s.currency, input.shopCurrency)) {
+      if (strictSameCurrency(s.currency, input.shopCurrency)) {
         sum += s.ticketMinor;
         n += 1;
       }
     }
+    sessionsInShopById.set(p.id, n);
     let ticket: number | null = null;
-    if (m0 !== null) {
-      ticket = Math.round((K * m0 + sum) / (K + n));
-    } else if (n > 0) {
-      ticket = Math.round(sum / n);
-    } else {
+    if (n === 0) {
       ticket = null;
+    } else if (m0 !== null) {
+      ticket = Math.round((K * m0 + sum) / (K + n));
+    } else {
+      ticket = Math.round(sum / n);
     }
     ticketById.set(p.id, ticket);
   }
   const ticketVals = [...ticketById.values()].filter((v): v is number => v !== null).sort(
     (a, b) => a - b,
   );
-  const topDecilThreshold =
-    ticketVals.length > 0 ? ticketVals[Math.floor(0.9 * (ticketVals.length - 1))] : null;
+  // Decil real con n mínimo (issue #10 P2): con n<10 el floor(0.9·(n-1))
+  // marcaba 33% como top en tiendas de 6. Ahora: n<10 ⇒ solo el máximo
+  // es top; n>=10 ⇒ umbral ceil(0.9·n).
+  let topDecilThreshold: number | null = null;
+  if (ticketVals.length >= 10) {
+    topDecilThreshold = ticketVals[Math.min(ticketVals.length - 1, Math.ceil(0.9 * ticketVals.length) - 1)];
+  } else if (ticketVals.length > 0) {
+    topDecilThreshold = ticketVals[ticketVals.length - 1];
+  }
 
   const nStoreWithGaps = per.filter((p) => p.gaps.length >= 1).length;
   const cohortCases = cohortGaps.length + cohortCens.length;
@@ -481,8 +606,13 @@ export function predictStore(input: StoreModelInput): Prediction[] {
     if (p.sessions.length === 0 || p.lastAt === null) continue;
     const nSessions = p.sessions.length;
     const isRenewal = nSessions >= 2;
-    const grid = isRenewal ? fitClientGrid(storeGrid, p.gaps, p.t) : cohortGrid;
-    const pr = predictFromGrid(grid, p.t, H);
+    // Jerárquico real (issue #10 P1-2): prior paramétrico desde la media de
+    // tienda + dispersión entre clientes, datos del cliente una sola vez.
+    const grid = isRenewal
+      ? fitClientGrid(storeMu, priorSigmaMu, sigma0, p.gaps, p.t)
+      : cohortGrid;
+    const cure = isRenewal ? cureRenewal : cureSecond;
+    const pr = predictFromGrid(grid, p.t, H, cure);
     const ticket = ticketById.get(p.id) ?? null;
     const valor = ticket === null ? null : Math.round(pr.pMean * ticket);
 
@@ -497,35 +627,41 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       confidence = "media";
     }
 
-    // Decisión (el primero que aplica gana).
-    // Desviación documentada vs el texto literal del issue para satisfacer los
-    // ejemplos de control con LogNormal:
-    // - `organico` solo cuando aún hay tiempo (t < 0.8*ciclo). Un vencido con
-    //   p alta igual necesita nudge (ej. regular 28d con t=38 → actuar).
-    // - `actuar` sin techo superior cuando ya venció (p>=0.15 y t>=0.8*ciclo).
-    //   El techo 0.60 solo tendría sentido sin vencer; vencido con p~1 sigue
-    //   siendo "para actuar hoy".
+    // Ejes de segmentación (issue #14A) + decisión versionada.
+    // Desviación documentada vs el texto literal del issue #5 para los
+    // ejemplos de control: organico solo en ventana temprana (t<0.8ciclo);
+    // actuar sin techo superior una vez vencido.
     const sup = input.suppressed.get(p.id);
-    let decision: Decision;
-    if (sup === "sin_canal") {
-      decision = "sin_canal";
-    } else if (sup === "contactado_reciente") {
-      decision = "contactado_reciente";
-    } else if (pr.pMean > 0.6 && p.t < 0.8 * cycle) {
-      decision = "organico";
-    } else if (pr.sT < 0.1 && p.t > 3 * cycle) {
-      const isTop =
-        ticket !== null && topDecilThreshold !== null && ticket >= topDecilThreshold;
-      decision = isTop && isB2B ? "revision_humana" : "dormido";
-    } else if (pr.pMean >= 0.15 && p.t >= 0.8 * cycle) {
-      // Techo de incertidumbre (issue #9): actuar exige ventana localizable.
-      // Un p75 de años con sparse data no es intención de recompra, es ruido
-      // (casos reales: "vuelve típicamente entre 109–724d" saliendo a actuar).
-      const ventanaAcotada = pr.p75 !== null && pr.p75 <= 4 * cycle;
-      decision = ventanaAcotada ? "actuar" : "vigilar";
+    const elegibilidad: Prediction["elegibilidad"] =
+      sup === "sin_canal" ? "sin-canal" : sup === "contactado_reciente" ? "contacto-reciente" : "ok";
+    const ritmo: Prediction["ritmo"] = isRenewal ? "con-ritmo" : "primera";
+    const bandaP: Prediction["bandaP"] =
+      pr.pMean > 0.6 ? "organico-probable" : pr.pMean >= 0.15 ? "recuperable" : "lejos";
+    let ventana: Prediction["ventana"];
+    if (p.t > 3 * cycle) {
+      const sLn = Math.max(0, Math.min(1, 1 - predictiveCdf(p.t, grid)));
+      const pChurn = cure > 0 ? cure / (cure + (1 - cure) * Math.max(1e-9, sLn)) : 1 - sLn > 0.9 ? 1 : 0;
+      const isDormido = cure > 0 ? pChurn > 0.7 : pr.sT < 0.1;
+      ventana = isDormido ? "dormido" : pr.p75 !== null && p.t > pr.p75 ? "pasada" : "en";
+    } else if (p.t < 0.8 * cycle) {
+      ventana = "antes";
+    } else if (pr.p75 !== null && p.t > pr.p75) {
+      ventana = "pasada";
     } else {
-      decision = "vigilar";
+      ventana = "en";
     }
+    let valorDecil: number | null = null;
+    if (ticket !== null && ticketVals.length > 0) {
+      const rank = ticketVals.filter((v) => v <= ticket).length;
+      valorDecil = Math.min(10, Math.max(1, Math.ceil((rank / ticketVals.length) * 10)));
+    }
+    const ventanaAcotada = pr.p75 !== null && pr.p75 <= 4 * cycle;
+    const intervaloAncho = pr.pHigh - pr.pLow > 0.6;
+    const topDecil = ticket !== null && topDecilThreshold !== null && ticket >= topDecilThreshold;
+    const decision = decideFromAxes(
+      { ritmo, ventana, bandaP, valorDecil, elegibilidad },
+      { isB2B, confidence, ventanaAcotada, intervaloAncho, topDecil },
+    );
 
     out.push({
       customerId: p.id,
@@ -540,6 +676,12 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       valorEsperadoMinor: valor,
       decision,
       confidence,
+      ritmo,
+      ventana,
+      bandaP,
+      valorDecil,
+      elegibilidad,
+      decisionVersion: DECISION_VERSION,
     });
   }
   return out;

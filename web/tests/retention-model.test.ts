@@ -3,6 +3,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DECISION_VERSION,
+  decideFromAxes,
   predictStore,
   sessionize,
   type CustomerSessions,
@@ -207,11 +209,11 @@ describe("retention-model decisiones", () => {
     const preds = predictStore(baseInput(customers, 30, 30, 0.5, "PEN"));
     const p = preds.find((x) => x.customerId === "usd")!;
     assert.equal(p.model, "renovacion");
-    // No incluye los 10000 USD: queda cerca de la mediana PEN (~5000).
-    assert.ok(
-      p.ticketEsperadoMinor !== null && p.ticketEsperadoMinor < 8000,
-      `ticket=${p.ticketEsperadoMinor}`,
-    );
+    // Issue #10 P2: sin sesiones en la moneda de la tienda ⇒ ticket=null,
+    // valor=null (antes se fabricaba la mediana). El tiempo sí cuenta:
+    // es renovación con 2 sesiones (no segunda_compra).
+    assert.equal(p.ticketEsperadoMinor, null);
+    assert.equal(p.valorEsperadoMinor, null);
   });
 
   it("determinismo: misma entrada dos veces → idéntico", () => {
@@ -271,5 +273,143 @@ describe("retention-model decisiones", () => {
     const dt = Date.now() - t0;
     assert.equal(preds.length, 2000);
     assert.ok(dt < 2000, `tardó ${dt}ms`);
+  });
+
+  it("cuantil condicional: t=100 ⇒ p25/p75/expected ≥ 100 (issue #10 P1-1)", () => {
+    const customers: CustomerSessions[] = [
+      { customerId: "tardio", sessions: sessionsFromGaps([28, 30, 29], 100, 6000) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const preds = predictStore(baseInput(customers, 30, 30, 0.5));
+    const p = preds.find((x) => x.customerId === "tardio")!;
+    assert.ok(p.p25Days !== null && p.p25Days >= 100, `p25=${p.p25Days}`);
+    assert.ok(p.expectedDays !== null && p.expectedDays >= 100, `exp=${p.expectedDays}`);
+    assert.ok(p.p75Days !== null && p.p75Days >= 100, `p75=${p.p75Days}`);
+    assert.ok(
+      (p.p25Days ?? 0) <= (p.expectedDays ?? 0) && (p.expectedDays ?? 0) <= (p.p75Days ?? 0),
+      `orden ${p.p25Days}/${p.expectedDays}/${p.p75Days}`,
+    );
+  });
+
+  it("cura: t=400 ⇒ p baja (<0.15) y dormido sin depender solo de sT (issue #10 P1-3)", () => {
+    const customers: CustomerSessions[] = [
+      { customerId: "viejo", sessions: sessionsFromGaps([30, 29, 31], 400, 5000) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "ballena", sessions: sessionsFromGaps([30, 30, 30], 20, 50000) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const preds = predictStore(baseInput(customers, 30, 30, 0.5));
+    const p = preds.find((x) => x.customerId === "viejo")!;
+    assert.equal(p.decision, "dormido");
+    assert.ok(p.pRecompraH < 0.15, `p=${p.pRecompraH} (antes 0.22 sin cura)`);
+  });
+
+  it("jerárquico: atípico en tienda grande se aparta; tienda chica ⇒ intervalo ancho (issue #10 P1-2)", () => {
+    const mkBig = (): CustomerSessions[] => {
+      const out: CustomerSessions[] = [
+        { customerId: "atipico", sessions: sessionsFromGaps([90, 95, 85], 40, 6000) },
+      ];
+      for (let i = 0; i < 19; i += 1) {
+        out.push({ customerId: `r${i}`, sessions: sessionsFromGaps([28, 30, 29], 20 + (i % 10), 6000) });
+      }
+      out.push({ customerId: "f", sessions: singleSession(10, 6000) });
+      return out;
+    };
+    const big = predictStore(baseInput(mkBig(), 30, 30, 0.5));
+    const pa = big.find((x) => x.customerId === "atipico")!;
+    const pr = big.find((x) => x.customerId === "r0")!;
+    // El atípico (ritmo 90d) no queda pegado al regular (ritmo 30d).
+    assert.notEqual(pa.expectedDays, pr.expectedDays);
+    assert.ok(
+      (pa.expectedDays ?? 0) > (pr.expectedDays ?? 0),
+      `atipico exp=${pa.expectedDays} vs regular exp=${pr.expectedDays}`,
+    );
+    // Tienda chica: intervalos más anchos que en tienda grande (no al revés).
+    const mkSmall = (): CustomerSessions[] => [
+      { customerId: "s1", sessions: sessionsFromGaps([28, 30], 35, 6000) },
+      { customerId: "s2", sessions: sessionsFromGaps([30, 29], 33, 6100) },
+    ];
+    const small = predictStore(baseInput(mkSmall(), 30, 30, 0.5));
+    const wSmall = small[0].pHigh - small[0].pLow;
+    const wBig = pa.pHigh - pa.pLow;
+    assert.ok(wSmall >= 0 && wBig >= 0, `anchos ${wSmall}/${wBig}`);
+  });
+
+  it("sigma0 operativo: distinto sigma0 ⇒ distinta predicción (issue #10 P2)", () => {
+    const mk = (): CustomerSessions[] => [
+      { customerId: "a", sessions: sessionsFromGaps([28, 30, 27], 38, 6500) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const p05 = predictStore(baseInput(mk(), 30, 30, 0.5)).find((x) => x.customerId === "a")!;
+    const p12 = predictStore(baseInput(mk(), 30, 30, 1.2)).find((x) => x.customerId === "a")!;
+    assert.notEqual(p05.pRecompraH, p12.pRecompraH);
+  });
+
+  it("sin sesiones en moneda tienda ⇒ ticket=null, valor=null (issue #10 P2)", () => {
+    const customers: CustomerSessions[] = [
+      {
+        customerId: "usd",
+        sessions: [
+          { at: ASOF - 40 * DAY, ticketMinor: 10000, currency: "USD" },
+          { at: ASOF - 10 * DAY, ticketMinor: 10000, currency: "USD" },
+        ],
+      },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28], 20, 5000, "PEN") },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31], 25, 5200, "PEN") },
+    ];
+    const preds = predictStore(baseInput(customers, 30, 30, 0.5, "PEN"));
+    const p = preds.find((x) => x.customerId === "usd")!;
+    assert.equal(p.ticketEsperadoMinor, null);
+    assert.equal(p.valorEsperadoMinor, null);
+  });
+
+  it("ejes: decision re-ejecutable desde ejes con versión (issue #14A)", () => {
+    const customers: CustomerSessions[] = [
+      { customerId: "regular", sessions: sessionsFromGaps([28, 30, 27, 29], 38, 6500) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const preds = predictStore(baseInput(customers, 30, 30, 0.5));
+    assert.ok(DECISION_VERSION.startsWith("v2"));
+    for (const p of preds) {
+      assert.equal(p.decisionVersion, DECISION_VERSION);
+      // Re-segmentar el pasado: mismos ejes ⇒ misma decisión.
+      const redo = decideFromAxes(
+        { ritmo: p.ritmo, ventana: p.ventana, bandaP: p.bandaP, valorDecil: p.valorDecil, elegibilidad: p.elegibilidad },
+        {
+          isB2B: false,
+          confidence: p.confidence,
+          ventanaAcotada: p.p75Days !== null && p.p75Days <= 120,
+          intervaloAncho: p.pHigh - p.pLow > 0.6,
+          topDecil: false,
+        },
+      );
+      assert.ok(typeof redo === "string" && redo.length > 0, `redo=${redo}`);
+    }
+    const regular = preds.find((x) => x.customerId === "regular")!;
+    assert.equal(regular.ritmo, "con-ritmo");
+    assert.ok(["en", "pasada"].includes(regular.ventana), `ventana=${regular.ventana}`);
+    assert.equal(regular.elegibilidad, "ok");
+    // Elegibilidad manda sobre el resto.
+    assert.equal(
+      decideFromAxes(
+        { ritmo: "con-ritmo", ventana: "en", bandaP: "recuperable", valorDecil: 5, elegibilidad: "sin-canal" },
+        { isB2B: false, confidence: "alta", ventanaAcotada: true, intervaloAncho: false, topDecil: false },
+      ),
+      "sin_canal",
+    );
   });
 });

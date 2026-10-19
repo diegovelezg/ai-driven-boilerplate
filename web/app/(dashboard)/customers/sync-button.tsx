@@ -6,10 +6,15 @@ import { useBackground } from "@/components/background-status";
 import { syncCustomersAction } from "@/lib/sync-actions";
 
 export function SyncButton() {
-  const { run, starting, start } = useBackground();
+  const { activeRuns, starting, start, isBusy } = useBackground();
   const [msg, setMsg] = useState<string | null>(null);
   const [ok, setOk] = useState(true);
-  const running = run?.kind === "sync" && run.status === "running";
+  const run = activeRuns.find((r) => r.kind === "sync") ?? null;
+  const running = run !== null;
+  const blocked = !running && isBusy("sync");
+  const blocker = blocked
+    ? activeRuns.find((r) => r.kind !== "sync")?.label ?? null
+    : null;
 
   return (
     <span className="flex items-center gap-2">
@@ -21,14 +26,15 @@ export function SyncButton() {
       <Button
         variant="outline"
         size="sm"
-        disabled={starting || running}
+        disabled={starting || running || blocked}
+        title={blocked && blocker ? `En curso: ${blocker}…` : undefined}
         onClick={async () => {
           const r = await start(syncCustomersAction);
           setOk(r.ok);
           setMsg(r.ok ? null : r.message);
         }}
       >
-        {running ? "Sincronizando…" : "Sincronizar"}
+        {running ? "Sincronizando…" : blocked ? "En proceso…" : "Sincronizar"}
       </Button>
     </span>
   );

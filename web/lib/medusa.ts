@@ -314,6 +314,23 @@ export function isRealOrder(o: Pick<CanonicalOrder, "status" | "paymentStatus" |
   return true;
 }
 
+/** true si una fila DB de orders cuenta como compra real (issue #11/#12).
+ *  Unifica el criterio: analyst y copywriter usaban un filtro inline que
+ *  ignoraba payment_status y requires_action. */
+export function isRealDbOrder(o: {
+  status?: string | null;
+  payment_status?: string | null;
+  paymentStatus?: string | null;
+  is_test?: boolean | null;
+  isTest?: boolean | null;
+}): boolean {
+  return isRealOrder({
+    status: o.status ?? null,
+    paymentStatus: (o.payment_status ?? o.paymentStatus ?? null) as string | null,
+    isTest: Boolean(o.is_test ?? o.isTest ?? false),
+  });
+}
+
 /**
  * País canónico ISO2 de una orden — general medusa v1/v2 + shopify.
  * Cascada (primera que resuelva gana):

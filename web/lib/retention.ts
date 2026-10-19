@@ -152,7 +152,14 @@ export async function runRetentionModel(
       .not("dispatched_at", "is", null)
       .gte("dispatched_at", contactSince)
       .range(from, from + 999);
-    if (error) break;
+    if (error) {
+      // Issue #11: fail-open auditado. Ante error BD se supone "no
+      // suprimido" (se contacta de más, no se vacía la cola), pero se
+      // deja constancia en vez de break silencioso.
+      const { createLogger } = await import("@/lib/log");
+      createLogger("retention")(`supresiones dispatched read ERROR ${error.message}`);
+      break;
+    }
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     for (const r of rows) {
       const cid = String(r.customer_id ?? "");
@@ -169,7 +176,11 @@ export async function runRetentionModel(
       .eq("status", "dismissed")
       .gte("closed_at", dismissSince)
       .range(from, from + 999);
-    if (error) break;
+    if (error) {
+      const { createLogger } = await import("@/lib/log");
+      createLogger("retention")(`supresiones dismissed read ERROR ${error.message}`);
+      break;
+    }
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     for (const r of rows) {
       const cid = String(r.customer_id ?? "");
@@ -237,6 +248,12 @@ export async function runRetentionModel(
     currency: shopCurrency,
     decision: p.decision,
     confidence: p.confidence,
+    ritmo: p.ritmo,
+    ventana: p.ventana,
+    banda_p: p.bandaP,
+    valor_decil: p.valorDecil,
+    elegibilidad: p.elegibilidad,
+    decision_version: p.decisionVersion,
     evidence_json: {
       gaps: gapsById.get(p.customerId) ?? 0,
       t_days: Math.round((tById.get(p.customerId) ?? 0) * 10) / 10,

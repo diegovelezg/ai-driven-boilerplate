@@ -4,9 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { countDuplicateEmails } from "@/lib/duplicates";
 import { pendingDomains } from "@/lib/enrich";
 import { formatMoney } from "@/lib/medusa";
-import { resolveTenantCycleDays } from "@/lib/store-profiles";
+import { getStoreProfile, resolveTenantCycleDays } from "@/lib/store-profiles";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { getRitmoSummary, type RitmoSummary } from "@/lib/customers-db";
+import { getRitmoSummary, getPredEnJuegoByMonth, type RitmoSummary } from "@/lib/customers-db";
 import { applyScopeFilter, displayMarket, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
 import {
   displayStoreName,
@@ -15,14 +15,16 @@ import {
 } from "@/lib/tenant";
 import { AgentCard } from "./ask-agent";
 import { TeamPulse } from "./team-pulse";
-import { AttentionTable, type AttentionItem } from "./attention-table";
+import { AttentionTable, AttentionEmptyState, type AttentionItem } from "./attention-table";
 import { HoyHeroActions } from "./hoy-hero-actions";
 import { FinanceStrip } from "./finance-strip";
-import { SectionLoading } from "@/components/section-loading";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   bucketMonthly,
   computeFinanceKpis,
   computeRetentionKpis,
+  last12MonthKeys,
+  monthEndMs,
   rescateMonthly,
   type AttributedRevenue,
   type FinanceKpis,
@@ -77,21 +79,30 @@ async function countExact(
   return count ?? 0;
 }
 
-/** "sin comprar hace 64d (media 30d, ...)" → "Hace 64 días que no compra · suele volver cada 30d".
- *  Acepta también retention:v1 "sin comprar hace 38d (ciclo ~30d, vuelve típicamente entre 25–37d)".
+/** "sin comprar hace 86d (ciclo ~60d, vuelve típicamente entre 108–208d)" →
+ *  "Hace 86 días que no pauta · suele volver entre los 108–208d".
+ *  Usa la ventana personal (la que decide), no el ciclo de la tienda: mostrar
+ *  "cada 60d" junto a "108–208d" contradice la fila. Verbo según tenant
+ *  (pauta en servicio/digital, compra en el resto).
  *  Chequeo de contradicción: si lleva 10× su ciclo sin comprar, el ciclo ya no
  *  es creíble y decir "suele volver cada 2d" es absurdo. */
-function humanReason(raw: string | null, fallbackKind: string): string {
+function humanReason(raw: string | null, verb: string, fallbackKind: string): string {
   if (!raw) return fallbackKind;
+  const no = verb === "pauta" ? "no pauta" : "no compra";
+  const since = raw.match(/sin comprar hace (\d+)d/i);
+  const win = raw.match(/vuelve t[ií]picamente entre (\d+)[–-](\d+)d/i);
+  if (since && win) {
+    return `Hace ${since[1]} días que ${no} · suele volver entre los ${win[1]}–${win[2]}d`;
+  }
   const m =
     raw.match(/sin comprar hace (\d+)d \(media (\d+)d/i) ??
     raw.match(/sin comprar hace (\d+)d \(ciclo ~(\d+)d/i);
   if (m) {
-    const since = Number(m[1]);
+    const s = Number(m[1]);
     const cycle = Math.max(1, Number(m[2]));
-    if (since > 10 * cycle)
-      return `Hace ${m[1]} días que no compra · sin ritmo detectable de recompra`;
-    return `Hace ${m[1]} días que no compra · suele volver cada ${m[2]}d`;
+    if (s > 10 * cycle)
+      return `Hace ${m[1]} días que ${no} · sin ritmo detectable de recompra`;
+    return `Hace ${m[1]} días que ${no} · suele volver cada ${m[2]}d`;
   }
   return raw;
 }
@@ -138,7 +149,7 @@ function RitmoRow({
         <Link href={href} className="underline">
           {bucket.n} {noun}
         </Link>{" "}
-        · {money(bucket.valorMinor)} en juego
+        · {money(bucket.valorMinor)} valor esperado
       </p>
       {bucket.n > 0 && (
         <>
@@ -250,6 +261,11 @@ export default async function DashboardPage({
   let recentOrders = 0;
   let miraValue = 0;
   let masivos = 0;
+  // Valor en juego por etapa del embudo (borrador/aprobados): Σ valor
+  // esperado de sus clientes. Sin esto el funnel muestra plata solo en los
+  // extremos y las etapas intermedias no se pueden comparar.
+  let valorBorrador = 0;
+  let valorAprobados = 0;
   let topLead: AttentionRow | null = null;
   let foreignLines: Array<{ code: string; n: number; value: number }> = [];
   let financeBuckets: MonthBucket[] = [];
@@ -260,6 +276,10 @@ export default async function DashboardPage({
   let hoyActuar = 0;
   let hoyVigilar = 0;
   let hoyAuto = 0;
+  // Issue #14 B2: el héroe sumaba plata sin descontar estimaciones débiles.
+  // Se cuenta aparte y se declara en el subtítulo (no se descuenta en
+  // silencio: el dueño decide si actuar igual).
+  let hoyDebiles = 0;
   // Foto del día del motor por cliente (héroe, fila, "No tocamos", Finanzas).
   const predByCust = new Map<
     string,
@@ -290,6 +310,9 @@ export default async function DashboardPage({
   let juegoHigh = 0;
   let juegoCount = 0;
   let hasJuego = false;
+  // Verbo del tenant para motivos ("pauta" en servicio/digital, "compra" en
+  // el resto): la fila de Hoy no puede hablar como bodega en TuPantalla.
+  let purchaseVerb = "compra";
   let ritmo: RitmoSummary | null = null;
   let team: TeamProfile = { vertical: null, buyerType: null, cycle: null, archetype: null, confidence: null, learnedAt: null };
   // Filtro global por país/mercado (?market= del header). Lo que se filtra es
@@ -315,6 +338,7 @@ export default async function DashboardPage({
       runRows,
       profileRow,
       finRows,
+      actRows,
     ] = await Promise.all([
       countExact("churn_signals", active.id, (q) => q.in("status", ["open"]), scope),
       countExact("churn_signals", active.id, (q) => q.eq("status", "prioritized"), scope),
@@ -375,6 +399,26 @@ export default async function DashboardPage({
         if (scope.market) fq = fq.or(`market_id.eq.${scope.market.id},country.is.null`);
         return fq.limit(5000);
       })(),
+      // Clientes con borrador/aprobado (para plata por etapa del embudo).
+      (async () => {
+        try {
+          const q = applyScopeFilter(
+            db
+              .from("proposed_actions")
+              .select("customer_id,status")
+              .eq("store_id", active.id)
+              .in("status", ["pending_review", "approved"]),
+            scope,
+          );
+          const { data } = await q.limit(500);
+          return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+            cid: String(r.customer_id ?? ""),
+            st: String(r.status ?? ""),
+          }));
+        } catch {
+          return [] as Array<{ cid: string; st: string }>;
+        }
+      })(),
     ]);
     open = openN;
     prioritized = priN;
@@ -394,6 +438,12 @@ export default async function DashboardPage({
     converted = revs.filter((v) => v > 0).length;
 
     const tenantCycleDays = await resolveTenantCycleDays(active.id).catch(() => null);
+    try {
+      const prof = await getStoreProfile(active.id).catch(() => null);
+      if (prof?.catalogType === "servicio" || prof?.catalogType === "digital") purchaseVerb = "pauta";
+    } catch {
+      // Sin perfil: se queda "compra".
+    }
 
     // Finanzas simples: solo moneda de la vista, nunca se mezclan monedas.
     // Límite 5000 igual que popRows: suficiente para el MVP, se refina si crece.
@@ -415,7 +465,14 @@ export default async function DashboardPage({
         at: ((r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null),
       }));
       cycleDays = tenantCycleDays;
-      rescate = rescateMonthly(finOrders, attributed, tenantCycleDays, viewCur);
+      // En juego con origen por punto (issue #12): meses con foto del motor
+      // usan valor esperado; meses sin foto, reconstrucción pre-motor.
+      const predSnap = await getPredEnJuegoByMonth(
+        active.id,
+        last12MonthKeys(Date.now()).map((k) => ({ key: k.key, endMs: monthEndMs(k.key) })),
+        viewCur,
+      ).catch(() => new Map<string, { minor: number; count: number }>());
+      rescate = rescateMonthly(finOrders, attributed, tenantCycleDays, viewCur, Date.now(), predSnap);
       retention = computeRetentionKpis(finOrders, attributed, tenantCycleDays, viewCur);
     }
 
@@ -431,7 +488,7 @@ export default async function DashboardPage({
     const miraValorDe = (a: { valorEsperadoMinor?: number | null }): number =>
       a.valorEsperadoMinor ?? 0;
     // Hoy = solo accionable 1-a-1 (decisión del motor o, sin predicción,
-    // antigüedad ≤365d), tope 5 ("tus 5 de hoy").
+    // antigüedad ≤365d), tope 5.
     // La masa antigua no se lista fila por fila: va con reactivación masiva.
     // El resto espera en Review (inbox): el dashboard no satura.
     const actionable = pool.filter(
@@ -448,19 +505,21 @@ export default async function DashboardPage({
           customerDbId: r.customerDbId,
           kind: r.kind,
           score: r.score,
-          reason: humanReason(r.reason, r.kind),
+          reason: humanReason(r.reason, purchaseVerb, r.kind),
           daysSince: r.daysSince,
           email: r.email,
           name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
           ordersCount: r.ordersCount,
           totalSpent: r.totalSpent,
           draftStatus: r.draftStatus,
+          contactability: r.contactability ?? null,
           decision: pred?.decision ?? r.decision ?? null,
           tDays: pred?.t ?? null,
           p25Days: pred?.p25 ?? null,
           p75Days: pred?.p75 ?? null,
           pRecompraH: pred?.p ?? r.pRecompraH ?? null,
           ticketEsperadoMinor: pred?.ticket ?? null,
+          valorEsperadoMinor: r.valorEsperadoMinor ?? pred?.valor ?? null,
           predCurrency: pred?.currency ?? null,
           confidence: pred?.confidence ?? null,
         };
@@ -521,9 +580,17 @@ export default async function DashboardPage({
       let nextIn: number | null = null;
       for (const r of predRows) {
         const d = String(r.decision ?? "");
+        // Con filtro de mercado el market es el universo también en conteos:
+        // sin esto el héroe cuenta MX bajo un header "viendo PE · PEN"
+        // mientras Finanzas suma solo PE (45 vs 44).
+        const cur = (r.currency as string | null) ?? null;
+        const inView =
+          viewCur === null || cur === null || cur.toUpperCase() === viewCur.toUpperCase();
+        if (scope.market && !inView) continue;
         if (d === "actuar" || d === "revision_humana") hoyActuar += 1;
         else if (d === "vigilar") hoyVigilar += 1;
         else hoyAuto += 1;
+        if ((r.confidence as string | null) === "baja" && (d === "actuar" || d === "revision_humana")) hoyDebiles += 1;
         if (d === "organico") hoyGroups.organico += 1;
         else if (d === "dormido") hoyGroups.dormido += 1;
         else if (d === "contactado_reciente") hoyGroups.contactado_reciente += 1;
@@ -545,9 +612,6 @@ export default async function DashboardPage({
         };
         if (cid) predByCust.set(cid, entry);
         // Σ solo intra-moneda (nunca PEN+MXN); el resto va en línea aparte.
-        const cur = (r.currency as string | null) ?? null;
-        const inView =
-          viewCur === null || cur === null || cur.toUpperCase() === viewCur.toUpperCase();
         const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
         const tk = r.ticket_esperado_minor == null ? null : Number(r.ticket_esperado_minor);
         if (d === "actuar" || d === "revision_humana") {
@@ -594,6 +658,41 @@ export default async function DashboardPage({
       }
     } catch {
       // Sin tabla/migración aún: se omite el conteo "Hoy", el resto sigue.
+    }
+    // Issue #14 B2: predByCust se llenaba DESPUÉS de mapear attention
+    // (confidence=null en cada fila). Re-enriquecer aquí con la foto del día.
+    if (predByCust.size > 0 && attention.length > 0) {
+      attention = attention.map((row) => {
+        const pred = predByCust.get(row.customerDbId) ?? null;
+        if (!pred) return row;
+        return {
+          ...row,
+          decision: pred.decision ?? row.decision ?? null,
+          tDays: pred.t ?? row.tDays ?? null,
+          p25Days: pred.p25 ?? row.p25Days ?? null,
+          p75Days: pred.p75 ?? row.p75Days ?? null,
+          pRecompraH: pred.p ?? row.pRecompraH ?? null,
+          ticketEsperadoMinor: pred.ticket ?? row.ticketEsperadoMinor ?? null,
+          valorEsperadoMinor: pred.valor ?? row.valorEsperadoMinor ?? null,
+          predCurrency: pred.currency ?? row.predCurrency ?? null,
+          confidence: pred.confidence ?? row.confidence ?? null,
+        };
+      });
+      topLead = attention[0] ?? null;
+    }
+    // Plata por etapa del embudo con la foto del día (misma moneda de la vista).
+    {
+      const viewCur = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
+      for (const a of actRows) {
+        if (!a.cid) continue;
+        const pred = predByCust.get(a.cid) ?? null;
+        const v = pred?.valor ?? null;
+        if (v === null) continue;
+        const cur = pred?.currency ?? null;
+        if (viewCur !== null && cur !== null && cur.toUpperCase() !== viewCur.toUpperCase()) continue;
+        if (a.st === "pending_review") valorBorrador += v;
+        else if (a.st === "approved") valorAprobados += v;
+      }
     }
     // La base en 3 ritmos (conteos + $ en juego, sin mezclar monedas).
     try {
@@ -723,7 +822,7 @@ export default async function DashboardPage({
                   <span className="text-3xl font-semibold tabular-nums">{hoyActuar}</span>
                   <span className="text-[15px]">para actuar hoy</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {money(hoyValor)} en juego
+                    {money(hoyValor)} en juego · solo actuar
                   </span>
                 </div>
               ) : pending > 0 ? (
@@ -740,6 +839,7 @@ export default async function DashboardPage({
                 {hoyActuar > 0 ? (
                   <>
                     {hoyVigilar} vigilando · {hoyAuto} en automático · entre {money(hoyLow)} y {money(hoyHigh)}
+                    {hoyDebiles > 0 ? ` · incluye ${hoyDebiles} estimación${hoyDebiles === 1 ? "" : "es"} inicial${hoyDebiles === 1 ? "" : "es"} (pocos datos)` : ""}
                     {hoyForeign.map((fl) => (
                       <span key={fl.code}>
                         {" "}+{fl.n} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
@@ -780,20 +880,20 @@ export default async function DashboardPage({
       )}
       <section id="hoy-tabla">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium">Tus 5 de hoy</h2>
+          <h2 className="text-sm font-medium">En la mira hoy ({attention.length})</h2>
           <span className="text-xs text-muted-foreground">
-            {atRisk > 0 ? (
-              <>
-                {atRisk} en la mira · redacta y pasan a{" "}
-                <Link href={reviewHref} className="underline">
-                  Review
-                </Link>
-              </>
-            ) : pending > 0 ? (
+            {pending > 0 ? (
               <>
                 en Review con borrador ·{" "}
                 <Link href={reviewHref} className="underline">
                   revisar ahora
+                </Link>
+              </>
+            ) : atRisk > 0 ? (
+              <>
+                {atRisk} en la mira · redacta y pasan a{" "}
+                <Link href={reviewHref} className="underline">
+                  Review
                 </Link>
               </>
             ) : (
@@ -804,28 +904,12 @@ export default async function DashboardPage({
         <Card>
           <CardContent className="p-0">
             {attention.length === 0 ? (
-              bgRunning(["scout", "strategist"]) ? (
-                <div className="p-4">
-                  <SectionLoading label="clientes en la mira" rows={2} />
-                </div>
-              ) : pending > 0 ? (
-                <p className="p-4 text-[13px] text-muted-foreground">
-                  Los de hoy ya tienen borrador: están en{" "}
-                  <Link href={reviewHref} className="underline">
-                    Review
-                  </Link>{" "}
-                  esperando tu aprobación.
-                </p>
-              ) : masivos > 0 ? (
-                <p className="p-4 text-[13px] text-muted-foreground">
-                  Tu mira son solo inactivos antiguos: van con reactivación masiva,
-                  no 1-a-1.
-                </p>
-              ) : (
-                <p className="p-4 text-[13px] text-muted-foreground">
-                  Todo al día — ningún cliente vencido. Tu equipo IA sigue vigilando.
-                </p>
-              )
+              <AttentionEmptyState
+                initialRunning={bgRunning(["scout", "strategist"])}
+                pending={pending}
+                masivos={masivos}
+                reviewHref={reviewHref}
+              />
             ) : (
               <>
                 <AttentionTable rows={attention} currency={viewCurrency} />
@@ -844,7 +928,7 @@ export default async function DashboardPage({
               No tocamos hoy ({hoyGroups.organico + hoyGroups.dormido + hoyGroups.contactado_reciente + hoyGroups.sin_canal})
             </summary>
             <p className="mt-1 text-xs text-muted-foreground">
-              El motor también decide a quién NO escribir: esto ahorra mensajes y descuentos.
+              El motor también decide a quién NO escribir: esto ahorra mensajes, no se escribe por escribir.
             </p>
             <ul className="mt-2 flex flex-col gap-1 text-[13px] tabular-nums">
               <li>
@@ -911,7 +995,7 @@ export default async function DashboardPage({
         <Card>
           <CardContent className="flex flex-col gap-1 p-4">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Por recuperar
+              Por contactar
             </span>
             <span className="text-2xl font-semibold tabular-nums tracking-tight">
               {hasMotor ? hoyActuar : atRisk}
@@ -933,7 +1017,7 @@ export default async function DashboardPage({
             <span className="text-2xl font-semibold tabular-nums tracking-tight">{pending}</span>
             <span className="text-xs text-muted-foreground">
               {pending > 0 ? (
-                <>para revisar y enviar por WhatsApp · <Link href={reviewHref} className="underline">revisar ahora</Link></>
+                <>para revisar y enviar · <Link href={reviewHref} className="underline">revisar ahora</Link></>
               ) : (
                 "sin borradores pendientes"
               )}
@@ -943,10 +1027,10 @@ export default async function DashboardPage({
         <Card>
           <CardContent className="flex flex-col gap-1 p-4">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Recuperado
+              Recuperado · atribuido
             </span>
             <span className="text-2xl font-semibold tabular-nums tracking-tight">{money(revenue)}</span>
-            <span className="text-xs text-muted-foreground">{converted} clientes volvieron</span>
+            <span className="text-xs text-muted-foreground">{converted} clientes volvieron tras el mensaje</span>
           </CardContent>
         </Card>
       </section>
@@ -957,18 +1041,112 @@ export default async function DashboardPage({
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Embudo de recuperación
             </span>
-            <p className="text-[13px] tabular-nums">
-              En la mira <strong>{atRisk}</strong> ({money(miraValue)})
-              {foreignLines.map((fl) => (
-                <span key={fl.code}>
-                  {" "}+{fl.n} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
-                </span>
-              ))}
-              {" → "}Con
-              borrador <strong>{pending}</strong>{" → "}Aprobados{" "}
-              <strong>{approved}</strong>{" → "}Recuperados{" "}
-              <strong>{converted}</strong> ({money(revenue)})
-            </p>
+            {(() => {
+              // Funnel completo: empieza en el barrido del motor (el filtro
+              // más importante es a quién NO tocar) y termina en recupero.
+              // Cada nombre lleva tooltip humano con ejemplo (title nativo:
+              // sin cursor ni subrayado). Anchos relativos a vigilados: la
+              // historia honesta es la selectividad (de 375 solo 1 llega).
+              const vigilados = hoyActuar + hoyVigilar + hoyAuto;
+              const base = vigilados > 0 ? vigilados : atRisk;
+              const ejemploActuar =
+                topLead && topLead.valorEsperadoMinor != null
+                  ? ` Ej.: ${topLead.name} (${money(topLead.valorEsperadoMinor)} en juego).`
+                  : "";
+              const etapas = [
+                {
+                  key: "vigilados",
+                  label: "Vigilados hoy",
+                  n: vigilados,
+                  minor: null as number | null,
+                  tip: `El motor revisó hoy a cada cliente con compras y decidió: actuar, vigilar o dejar en automático. Ej.: hoy ${vigilados} (${hoyActuar} para actuar, ${hoyVigilar} en vigilancia, ${hoyAuto} en automático).`,
+                },
+                {
+                  key: "actuar",
+                  label: "Para actuar",
+                  n: hoyActuar,
+                  minor: hoyActuar > 0 ? hoyValor : null,
+                  tip: `Lo que dice el modelo hoy, sin memoria: a quién conviene escribir (probabilidad + ventana + valor). Mañana puede decir otra cosa.${ejemploActuar}`,
+                },
+                {
+                  key: "mira",
+                  label: "En la mira",
+                  n: atRisk,
+                  minor: atRisk > 0 ? miraValue : null,
+                  tip: "El trabajo pendiente: casos abiertos esperando gestión. Es una cola con memoria, no se borra sola aunque el motor cambie de opinión mañana.",
+                },
+                {
+                  key: "borrador",
+                  label: "Con borrador",
+                  n: pending,
+                  minor: pending > 0 ? valorBorrador : null,
+                  tip: "Casos con mensaje ya redactado, esperando tu visto bueno en Review. Nada se envía sin tu aprobación.",
+                },
+                {
+                  key: "aprobados",
+                  label: "Aprobados",
+                  n: approved,
+                  minor: approved > 0 ? valorAprobados : null,
+                  tip: "Borradores que aprobaste y están listos para que el mensajero los envíe.",
+                },
+                {
+                  key: "recuperados",
+                  label: "Recuperados",
+                  n: converted,
+                  minor: converted > 0 ? revenue : null,
+                  tip: "Clientes que volvieron a comprar tras tu mensaje dentro de la ventana. Es atribuido, no incremental: sin grupo de control no se puede afirmar que fue gracias al mensaje.",
+                },
+              ];
+              return (
+                <TooltipProvider delay={300}>
+                <ol className="flex flex-col gap-2">
+                  {etapas.map((e, i) => {
+                    const pct = base > 0 ? Math.round((e.n / base) * 100) : 0;
+                    const prev = i === 0 ? null : etapas[i - 1];
+                    const conv = prev === null || prev.n === 0 ? null : Math.round((e.n / prev.n) * 100);
+                    return (
+                      <li key={e.key}>
+                        <div className="flex items-baseline justify-between gap-2 text-[13px]">
+                          <span>
+                            <Tooltip>
+                              <TooltipTrigger render={<span>{e.label}</span>} />
+                              <TooltipContent side="top" className="max-w-sm">
+                                {e.tip}
+                              </TooltipContent>
+                            </Tooltip>{" "}
+                            <strong className="tabular-nums">{e.n}</strong>
+                            {e.minor !== null && (
+                              <span className="text-muted-foreground tabular-nums"> · {money(e.minor)}</span>
+                            )}
+                          </span>
+                          {conv !== null && (
+                            <span className="text-xs text-muted-foreground tabular-nums">{conv}% avanza</span>
+                          )}
+                        </div>
+                        <div
+                          className="mt-1 h-2 overflow-hidden rounded-full bg-muted"
+                          role="img"
+                          aria-label={`${e.label}: ${e.n} (${pct}% de los vigilados)`}
+                        >
+                          {e.n > 0 && (
+                            <div
+                              className="h-full rounded-full bg-primary/70"
+                              style={{ width: `${Math.max(4, pct)}%` }}
+                            />
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+                </TooltipProvider>
+              );
+            })()}
+            {foreignLines.map((fl) => (
+              <span key={fl.code} className="text-xs text-muted-foreground tabular-nums">
+                +{fl.n} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)}) fuera de esta moneda
+              </span>
+            ))}
             <p className="text-[13px]">
               Lo próximo:{" "}
               {pending > 0 ? (
@@ -985,12 +1163,14 @@ export default async function DashboardPage({
               {topLead && (
                 <>
                   {" "}· Empieza por {topLead.name} (
-                  {money(avgTicket(topLead.totalSpent, topLead.ordersCount))} ticket).
+                  {topLead.valorEsperadoMinor != null
+                    ? `${money(topLead.valorEsperadoMinor)} en juego`
+                    : `${money(avgTicket(topLead.totalSpent, topLead.ordersCount))} ticket medio`}).
                 </>
               )}
             </p>
             <p className="text-xs text-muted-foreground tabular-nums">
-              {recentOrders} {recentOrders === 1 ? "compra" : "compras"} últimos 7
+              {recentOrders} {purchaseVerb === "pauta" ? "pautas" : "compras"} últimos 7
               días.
             </p>
           </CardContent>
@@ -1020,7 +1200,7 @@ export default async function DashboardPage({
         <AgentCard storeId={active.id} storeName={storeName}>
           <TeamPulse
             teamVertical={team.vertical}
-            teamCycle={team.cycle}
+            teamCycle={team.cycle ?? cycleDays}
             teamConfidence={team.confidence}
             learnedAgo={learnedAgo}
             needsRecheck={needsRecheck}
@@ -1056,6 +1236,7 @@ export default async function DashboardPage({
               dispatcher: dispatcherRun?.pulseState ?? null,
               analyst: analystRun?.pulseState ?? null,
             }}
+            runningLabels={runs.filter((r) => r.status === "running").map((r) => r.label)}
           />
         </AgentCard>
       </section>

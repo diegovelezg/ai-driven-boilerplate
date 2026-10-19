@@ -5,14 +5,17 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ListChecks, PenLine, Radar, RefreshCw, Send, TrendingUp, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
-import { getBackgroundStatusAction } from "@/lib/background-actions";
+import { getActiveRunsAction } from "@/lib/background-actions";
 import type { BackgroundRun } from "@/lib/background";
+import { errorCodeMessage, isCompatible } from "@/lib/operations";
+import { isJudgeVetoMessage } from "@/lib/single-audit";
 
 export interface BackgroundTaskResult {
   ok: boolean;
@@ -21,9 +24,14 @@ export interface BackgroundTaskResult {
 }
 
 interface BackgroundCtxValue {
-  run: BackgroundRun | null;
+  /** En curso + últimos terminados (la cinta los apila como chips). */
+  runs: BackgroundRun[];
+  activeRuns: BackgroundRun[];
   starting: boolean;
   start: (action: () => Promise<BackgroundTaskResult>) => Promise<BackgroundTaskResult>;
+  /** ¿Esta operación chocaría con algo en curso? (botones que se
+   *  desactivan solos según incompatibilidad real). */
+  isBusy: (kind: string, scopeId?: string | null) => boolean;
 }
 
 const BackgroundCtx = createContext<BackgroundCtxValue | null>(null);
@@ -34,158 +42,283 @@ export function useBackground(): BackgroundCtxValue {
   return ctx;
 }
 
+/** `null` fuera del provider (hosts sin cinta, p.ej. canvas del chat):
+ *  el llamador usa su vía local en vez de romper. */
+export function useBackgroundOrNull(): BackgroundCtxValue | null {
+  return useContext(BackgroundCtx);
+}
+
 const ICONS: Record<string, LucideIcon> = {
   enrichment: Wand2,
+  enrich_single: Wand2,
   sync: RefreshCw,
   scout: Radar,
   strategist: ListChecks,
   copywriter: PenLine,
+  copywriter_single: PenLine,
+  regenerate: RefreshCw,
+  approve_batch: Check,
   dispatcher: Send,
   analyst: TrendingUp,
   prospect: Wand2,
 };
 
-const DISMISS_KEY = "background:dismissedRun";
+const DISMISS_KEY = "background:dismissedRuns";
+const LEGACY_DISMISS_KEY = "background:dismissedRun";
 const STALE_MS = 20 * 60 * 1000;
 const AUTO_HIDE_MS = 5000;
 const ERROR_HIDE_MS = 15000;
 
+function readDismissed(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(DISMISS_KEY);
+    const ids = raw ? (JSON.parse(raw) as string[]) : [];
+    const legacy = window.localStorage.getItem(LEGACY_DISMISS_KEY);
+    if (legacy) ids.push(legacy);
+    return new Set(ids.filter((id) => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** ¿La corrida es un veto del juez? (`error_code` nuevo, o el summary en
+ *  DBs aún sin migrar.) El veto es omisión, no éxito ni fallo. */
+export function isVetoRun(run: BackgroundRun): boolean {
+  return run.errorCode === "judge_veto" || (run.summary ? isJudgeVetoMessage(run.summary) : false);
+}
+
 /**
- * Cinta global de procesos en segundo plano (SSOT). Muestra el estado de la
- * última corrida y se cierra con la X cuando terminó. Un mismo componente sirve
- * para cualquier trabajo (enriquecimiento, sincronización, ...): sólo cambia el
- * `kind` de la corrida a la que responde.
+ * Cinta global de procesos en segundo plano (SSOT, issue #16 Fase 2).
+ * Apila un chip por corrida: activos con barra de progreso, terminados
+ * con su `summary`/`error`. Un mismo componente sirve para cualquier
+ * trabajo; solo cambia el `kind`/`scope` de cada corrida.
  */
 export function BackgroundStatus({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [run, setRun] = useState<BackgroundRun | null>(null);
+  const [runs, setRuns] = useState<BackgroundRun[]>([]);
   const [starting, setStarting] = useState(false);
-  const [dismissedId, setDismissedId] = useState<string | null>(() =>
-    typeof window === "undefined" ? null : window.localStorage.getItem(DISMISS_KEY),
-  );
+  const [dismissed, setDismissed] = useState<Set<string>>(readDismissed);
   // Tick para medir antigüedad sin leer el reloj durante el render.
-  const [now, setNow] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
+  // Snapshot para no re-renderizar ni refrescar la página si el poll no
+  // trajo cambios (era: setRuns con array nuevo cada 2s + router.refresh()
+  // en cada transición → parpadeo de página completa en corridas largas).
+  const lastKeyRef = useRef<string | null>(null);
+  const pollGenRef = useRef(0);
+  const watchKeyRef = useRef<string | null>(null);
+  const lastAutoRefreshRef = useRef<number>(0);
+  const runsKey = (rs: BackgroundRun[]) =>
+    JSON.stringify(
+      rs.map((r) => [
+        r.id,
+        r.status,
+        r.processed ?? 0,
+        r.failed ?? 0,
+        r.total ?? 0,
+        r.summary ?? "",
+        r.error ?? "",
+        r.errorCode ?? "",
+      ]),
+    );
 
-  useEffect(() => {
-    getBackgroundStatusAction().then(setRun);
+  const refreshRuns = useCallback(async () => {
+    // Guardia de carrera: el intervalo dispara cada 2s sin esperar; si dos
+    // polls se solapan y el viejo resuelve último, su snapshot rancio haría
+    // flap (activo→quieto→activo) y cada flanco quieto refrescaba la página.
+    const gen = ++pollGenRef.current;
+    try {
+      const next = await getActiveRunsAction();
+      if (gen !== pollGenRef.current) return; // respuesta superada: descartar
+      const key = runsKey(next);
+      if (key !== lastKeyRef.current) {
+        lastKeyRef.current = key;
+        setRuns(next);
+      }
+    } catch {
+      // Sin cinta antes que sin página.
+    }
   }, []);
 
-  const running = run?.status === "running";
   useEffect(() => {
-    if (!running) return;
+    void refreshRuns();
+  }, [refreshRuns]);
+
+  const isStale = useCallback(
+    (run: BackgroundRun) =>
+      run.status === "running" && now - Date.parse(run.startedAt) > STALE_MS,
+    [now],
+  );
+  const activeRuns = useMemo(
+    () => runs.filter((r) => r.status === "running" && !isStale(r)),
+    [runs, isStale],
+  );
+
+  useEffect(() => {
+    if (!starting && activeRuns.length === 0) return;
     const t = setInterval(() => {
       setNow(Date.now());
-      getBackgroundStatusAction().then(setRun);
+      void refreshRuns();
     }, 2000);
     return () => clearInterval(t);
-  }, [running]);
+  }, [starting, activeRuns.length, refreshRuns]);
 
   const start = useCallback(
     async (action: () => Promise<BackgroundTaskResult>) => {
       setStarting(true);
       try {
         const r = await action();
-        if (r.run) setRun(r.run);
+        await refreshRuns();
         router.refresh();
         return r;
       } finally {
         setStarting(false);
       }
     },
-    [router],
+    [router, refreshRuns],
   );
 
-  const dismiss = useCallback(() => {
-    if (!run) return;
-    setDismissedId(run.id);
-    window.localStorage.setItem(DISMISS_KEY, run.id);
-  }, [run]);
+  const dismiss = useCallback((id: string) => {
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        window.localStorage.setItem(DISMISS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Sin persistencia: igual se oculta en esta vista.
+      }
+      return next;
+    });
+  }, []);
 
-  // Corrida "colgada" (p.ej. el server se reinició a mitad): se trata como terminada.
-  const stale = running && !!run && now !== null && now - Date.parse(run.startedAt) > STALE_MS;
-  const finished = !!run && (!running || stale);
-  const succeeded = !!run && !running && !stale && run.status === "done";
-
-  // Terminó (éxito o error): se oculta sola — el error aguanta más para
-  // alcanzar a leerse, pero también desaparece sin pedir la X.
+  // Terminados: se ocultan solos — el error y el veto aguantan más para
+  // alcanzar a leerse (el veto no es éxito: no se esconde a los 5s).
   useEffect(() => {
-    if (!finished) return;
-    const t = setTimeout(dismiss, succeeded ? AUTO_HIDE_MS : ERROR_HIDE_MS);
-    return () => clearTimeout(t);
-  }, [finished, succeeded, dismiss]);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const run of runs) {
+      if (run.status === "running" && !isStale(run)) continue;
+      if (dismissed.has(run.id)) continue;
+      const ok = run.status === "done" && !isStale(run) && !isVetoRun(run);
+      timers.push(setTimeout(() => dismiss(run.id), ok ? AUTO_HIDE_MS : ERROR_HIDE_MS));
+    }
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [runs, dismissed, dismiss, isStale]);
 
-  // El run terminó mientras lo vigilábamos (al menos un tick de polling):
-  // refresca el server render para que los skeletons se resuelvan en datos.
-  // `now === null` = la página cargó con el run ya terminado: no refrescar.
+  // Vimos actividad y se aquietó: refresca el server render UNA vez y solo
+  // si la actividad cambió algo visible (snapshot al empezar vs al aquietar)
+  // y con cooldown: sin esto, corridas largas/en flap disparan
+  // router.refresh() en loop y toda la página parpadea con skeletons.
   const watchedRun = useRef(false);
   useEffect(() => {
-    if (running) watchedRun.current = true;
-    if (watchedRun.current && finished && now !== null) {
-      watchedRun.current = false;
-      router.refresh();
+    const busy = starting || activeRuns.length > 0;
+    if (busy) {
+      watchedRun.current = true;
+      if (watchKeyRef.current === null) watchKeyRef.current = runsKey(runs);
+      return;
     }
-  }, [running, finished, now, router]);
+    if (watchedRun.current) {
+      watchedRun.current = false;
+      const changed = watchKeyRef.current !== runsKey(runs);
+      watchKeyRef.current = null;
+      if (changed && Date.now() - lastAutoRefreshRef.current > 15000) {
+        lastAutoRefreshRef.current = Date.now();
+        router.refresh();
+      }
+    }
+  }, [starting, activeRuns.length, router, runs]);
 
-  const total = run?.total ?? 0;
-  const processed = run?.processed ?? 0;
-  const failed = run?.failed ?? 0;
-  const done = processed + failed;
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const isBusy = useCallback(
+    (kind: string, scopeId?: string | null) =>
+      !isCompatible(
+        { kind, scopeId: scopeId ?? null },
+        activeRuns.map((r) => ({ kind: r.kind, scopeKind: r.scopeKind, scopeId: r.scopeId, label: r.label })),
+      ),
+    [activeRuns],
+  );
 
-  const visible = !!run && run.id !== dismissedId;
-  const Icon = (run && ICONS[run.kind]) || Wand2;
-  const label = run?.label ?? "";
+  const visible = useMemo(
+    () => runs.filter((r) => !dismissed.has(r.id)).slice(0, 5),
+    [runs, dismissed],
+  );
 
   return (
-    <BackgroundCtx.Provider value={{ run, starting, start }}>
+    <BackgroundCtx.Provider value={{ runs, activeRuns, starting, start, isBusy }}>
       {children}
-      {visible && (
-        <div className="fixed inset-x-0 top-0 z-50">
-          {!finished ? (
-            <div className="relative h-9 overflow-hidden border-b border-border bg-accent text-accent-foreground">
-              <div
-                className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-700"
-                style={{ width: `${pct}%` }}
-              />
-              <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
-              <div className="relative flex h-full items-center justify-center gap-2 text-xs font-medium tabular-nums">
-                <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
-                {label}… {done}/{total}
-                {failed > 0 && <span className="text-destructive">· {failed} fallidos</span>}
-              </div>
-            </div>
-          ) : (
-            <div
-              className={`relative flex h-9 items-center justify-center gap-2 border-b px-10 text-xs font-medium ${
-                run?.status === "done" && !stale
-                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : "border-destructive/30 bg-destructive/10 text-destructive"
-              }`}
-            >
-              {run?.status === "done" && !stale ? (
-                <>
-                  <Check className="size-3.5" aria-hidden />
-                  {label} listo{run?.summary ? ` · ${run.summary}` : ""}
-                </>
-              ) : (
-                <>
-                  <TriangleAlert className="size-3.5" aria-hidden />
-                  {label} {stale ? "interrumpido" : "con errores"}
-                  {run?.error ? ` · ${run.error}` : run?.summary ? ` · ${run.summary}` : ""}
-                </>
-              )}
-              <button
-                type="button"
-                onClick={dismiss}
-                aria-label="Cerrar"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 transition-colors hover:bg-foreground/10"
-              >
-                <X className="size-3.5" aria-hidden />
-              </button>
-            </div>
-          )}
+      {visible.length > 0 && (
+        <div className="fixed inset-x-0 top-0 z-50 flex flex-col">
+          {visible.map((run) => (
+            <RunChip key={run.id} run={run} stale={isStale(run)} onDismiss={() => dismiss(run.id)} />
+          ))}
         </div>
       )}
     </BackgroundCtx.Provider>
+  );
+}
+
+function RunChip({ run, stale, onDismiss }: { run: BackgroundRun; stale: boolean; onDismiss: () => void }) {
+  const running = run.status === "running" && !stale;
+  const Icon = ICONS[run.kind] || Wand2;
+  const total = run.total ?? 0;
+  const done = (run.processed ?? 0) + (run.failed ?? 0);
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+  if (running) {
+    return (
+      <div className="relative h-9 overflow-hidden border-b border-border bg-accent text-accent-foreground">
+        <div
+          className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-700"
+          style={{ width: `${pct}%` }}
+        />
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
+        <div className="relative flex h-full items-center justify-center gap-2 text-xs font-medium tabular-nums">
+          <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
+          {run.label}… {done}/{total}
+          {run.failed > 0 && <span className="text-destructive">· {run.failed} fallidos</span>}
+        </div>
+      </div>
+    );
+  }
+
+  const veto = isVetoRun(run);
+  const succeeded = run.status === "done" && !stale && !veto;
+  return (
+    <div
+      className={`relative flex h-9 items-center justify-center gap-2 border-b px-10 text-xs font-medium ${
+        succeeded
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+          : veto
+            ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+            : "border-destructive/30 bg-destructive/10 text-destructive"
+      }`}
+    >
+      {succeeded ? (
+        <>
+          <Check className="size-3.5" aria-hidden />
+          {run.label} listo{run.summary ? ` · ${run.summary}` : ""}
+        </>
+      ) : veto ? (
+        <>
+          <TriangleAlert className="size-3.5" aria-hidden />
+          {run.errorCode ? errorCodeMessage(run.errorCode) : "Omitido"}
+          {run.summary ? ` · ${run.summary}` : ""}
+        </>
+      ) : (
+        <>
+          <TriangleAlert className="size-3.5" aria-hidden />
+          {run.label} {stale ? "interrumpido" : "con errores"}
+          {run.error ? ` · ${run.error}` : run.summary ? ` · ${run.summary}` : ""}
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Cerrar"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 transition-colors hover:bg-foreground/10"
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
+    </div>
   );
 }

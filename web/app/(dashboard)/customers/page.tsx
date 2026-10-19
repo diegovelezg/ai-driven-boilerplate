@@ -26,7 +26,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; market?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; market?: string }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
@@ -39,6 +39,8 @@ export default async function CustomersPage({
     decision: sp.decision,
     vista: sp.vista,
     ritmo: sp.ritmo,
+    tipo: sp.tipo,
+    customer_type: sp.customer_type,
   });
 
   let rows: EditableCustomer[] = [];

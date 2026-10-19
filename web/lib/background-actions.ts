@@ -3,14 +3,15 @@
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
-import { getLatestRun, type BackgroundRun } from "@/lib/background";
+import { getActiveRuns, type BackgroundRun } from "@/lib/background";
 
-/** Estado de la última corrida en segundo plano (para el polling de la cinta global). */
-export async function getBackgroundStatusAction(): Promise<BackgroundRun | null> {
-  if (!isSupabaseConfigured()) return null;
+/** Fuente de la cinta multi-run (issue #16 Fase 2): corridas en curso +
+ *  últimas terminadas. El `dismiss` es cliente (localStorage por id). */
+export async function getActiveRunsAction(): Promise<BackgroundRun[]> {
+  if (!isSupabaseConfigured()) return [];
   const conn = await readConnections();
-  if (!conn.medusaUrl) return null;
+  if (!conn.medusaUrl) return [];
   const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return null;
-  return getLatestRun(storeId);
+  if (!storeId) return [];
+  return getActiveRuns(storeId);
 }

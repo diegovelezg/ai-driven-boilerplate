@@ -8,8 +8,10 @@ import { Button } from "@/components/ui/button";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
+import { useBackgroundOrNull } from "@/components/background-status";
 import {
   approveActionAction,
+  approveBatchAction,
   approveLeadAction,
   dismissSignalAction,
   regenerateStaleDraftsAction,
@@ -136,10 +138,18 @@ export function ReviewLists({
     params.set("tab", id);
     router.replace(`?${params.toString()}`, { scroll: false });
   };
-  // Aprobación en lote (solo no-B2B): reutiliza approveActionAction por id.
+  // Aprobación en lote (solo no-B2B) con corrida visible `approve_batch`
+  // (Fase 3): progreso real en la cinta en vez del loop ciego.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const bg = useBackgroundOrNull();
+  // SSR inicial + vivo del contexto: el snapshot solo ya no engaña cuando
+  // una corrida arranca después del primer render.
+  const liveKinds = new Set([
+    ...runningKinds,
+    ...(bg?.activeRuns.map((r) => r.kind) ?? []),
+  ]);
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -152,15 +162,20 @@ export function ReviewLists({
     if (batchBusy || selected.size === 0) return;
     setBatchBusy(true);
     setBatchMsg(null);
-    let ok = 0;
-    for (const id of selected) {
-      const r = await approveActionAction(id);
-      if (r.ok) ok += 1;
+    try {
+      const ids = [...selected];
+      const r = bg
+        ? await bg.start(async () => {
+            const x = await approveBatchAction(ids);
+            return { ok: x.ok, message: x.message, run: x.run ?? null };
+          })
+        : await approveBatchAction(ids);
+      setBatchMsg(r.message);
+      setSelected(new Set());
+    } finally {
+      setBatchBusy(false);
+      router.refresh();
     }
-    setBatchMsg(`${ok} de ${selected.size} aprobadas.`);
-    setSelected(new Set());
-    setBatchBusy(false);
-    router.refresh();
   };
   const emptyActions = filtered
     ? "Sin resultados para ese filtro."
@@ -216,7 +231,7 @@ export function ReviewLists({
           </div>
         )}
         {actions.length === 0 &&
-          (runningKinds.includes("copywriter") ? (
+          (liveKinds.has("copywriter") ? (
             <Card>
               <CardContent className="p-4">
                 <SectionLoading label="borradores" />
@@ -358,7 +373,7 @@ export function ReviewLists({
           )}
         </h2>
         {leads.length === 0 &&
-          (runningKinds.includes("prospect") ? (
+          (liveKinds.has("prospect") ? (
             <Card>
               <CardContent className="p-4">
                 <SectionLoading label="leads" rows={2} />
@@ -439,7 +454,7 @@ export function ReviewLists({
       <section className="flex flex-col gap-3" role="tabpanel">
         <h2 className="text-sm font-medium">Señales abiertas ({signals.length})</h2>
         {signals.length === 0 &&
-          (runningKinds.includes("scout") || runningKinds.includes("strategist")) && (
+          (liveKinds.has("scout") || liveKinds.has("strategist")) && (
             <Card>
               <CardContent className="p-4">
                 <SectionLoading label="señales" rows={2} />

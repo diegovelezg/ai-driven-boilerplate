@@ -10,9 +10,10 @@ import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
 import { recalibrateWithRun } from "@/lib/profile-recalibrate/service";
 import {
   advanceRun,
+  busyMessage,
   finishRun,
   getLatestRun,
-  hasRunningRun,
+  hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
@@ -42,8 +43,11 @@ export async function syncCustomersAction(): Promise<SyncState> {
     const storeId =
       (await resolveStoreId(medusaUrl)) ?? (await ensureStore(medusaUrl, token));
 
-    if (await hasRunningRun(storeId)) {
-      return { ok: true, message: "Ya hay un proceso en curso.", run: await getLatestRun(storeId) };
+    // `sync` bloquea todo (matriz issue #16): nombra el conflicto en vez
+    // del genérico "ya hay un proceso".
+    const conflict = await hasConflict(storeId, { kind: "sync" });
+    if (conflict) {
+      return { ok: false, message: busyMessage(conflict), run: conflict };
     }
     const runId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);
     log(`run ${runId} start`);

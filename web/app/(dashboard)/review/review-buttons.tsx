@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { useBackgroundOrNull } from "@/components/background-status";
+import type { ReviewOp } from "@/lib/review-actions";
 
 type Op = (id: string) => Promise<{ ok: boolean; message: string }>;
 
@@ -70,9 +72,10 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
   onRegenerate,
 }: {
   count: number;
-  onRegenerate: () => Promise<{ ok: boolean; message: string }>;
+  onRegenerate: () => Promise<ReviewOp>;
 }) {
   const router = useRouter();
+  const bg = useBackgroundOrNull();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   if (count <= 0) return null;
@@ -86,7 +89,9 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
         onClick={async () => {
           setBusy(true);
           try {
-            const r = await onRegenerate();
+            // Por la cinta cuando hay provider: el copywriter que arranca
+            // suma su chip sin esperar al refresh.
+            const r = bg ? await bg.start(() => onRegenerate().then((x) => ({ ...x, run: x.run ?? null }))) : await onRegenerate();
             setMsg(r.message);
             router.refresh();
           } finally {

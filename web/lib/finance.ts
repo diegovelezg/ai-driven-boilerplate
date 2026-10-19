@@ -39,6 +39,12 @@ function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Fin de mes (ms) para una key "YYYY-MM": cierre del punto de la serie. */
+export function monthEndMs(key: string): number {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m, 0, 23, 59, 59).getTime();
+}
+
 /** Últimos 12 meses calendario incluyendo el mes actual. */
 export function last12MonthKeys(now = Date.now()): Array<{ key: string; label: string }> {
   const base = new Date(now);
@@ -171,6 +177,9 @@ export interface RescateBucket {
    *  última compra más vieja que el ciclo). Oportunidad, no pérdida. */
   enJuegoMinor: number;
   enJuegoCount: number;
+  /** De dónde sale el punto: "motor" (foto de predicciones a fin de mes) o
+   *  "pre-motor" (reconstrucción desde órdenes). Nunca se mezclan sin etiqueta. */
+  origenEnJuego: "motor" | "pre-motor";
   /** Revenue atribuido a recuperación con fecha de acción en el mes. */
   rescatadoMinor: number;
 }
@@ -276,8 +285,10 @@ export function computeRetentionKpis(
 
 /**
  * Chart fusionado 1+2: en juego vs rescatado por mes.
- * En juego se reconstruye desde orders (últimos ~13m): aproximación honesta,
- * no el MIRA histórico (requeriría snapshots RFM que no existen).
+ * En juego sale del motor cuando hay foto de predicciones a fin de mes
+ * (predSnapshots: Σ valor esperado actuar+revisión+vigilar, intra-moneda);
+ * sin foto, reconstrucción pre-motor desde orders (honesta pero distinto
+ * denominador). Cada punto lleva su origen: no se mezclan sin etiqueta.
  * Sin ciclo del tenant no hay serie en juego → null (no se inventa número).
  */
 export function rescateMonthly(
@@ -288,13 +299,11 @@ export function rescateMonthly(
   cycleDays: number | null,
   viewCurrency: string | null,
   now = Date.now(),
+  predSnapshots?: Map<string, { minor: number; count: number }>,
 ): RescateBucket[] | null {
   if (cycleDays === null || cycleDays <= 0) return null;
   const keys = last12MonthKeys(now);
-  const monthEnds = keys.map((k) => {
-    const [y, m] = k.key.split("-").map(Number);
-    return new Date(y, m, 0, 23, 59, 59).getTime();
-  });
+  const monthEnds = keys.map((k) => monthEndMs(k.key));
   // Órdenes por cliente (moneda de la vista, fechas válidas), ascendentes.
   const perCustomer = groupCustomerHistories(orders, viewCurrency, now);
 
@@ -312,11 +321,22 @@ export function rescateMonthly(
   const cycleMs = cycleDays * DAY_MS;
   return keys.map((k, i) => {
     const end = monthEnds[i];
+    const snap = predSnapshots?.get(k.key);
+    if (snap) {
+      return {
+        ...k,
+        enJuegoMinor: Math.round(snap.minor),
+        enJuegoCount: snap.count,
+        origenEnJuego: "motor" as const,
+        rescatadoMinor: Math.round(rescuedByKey.get(k.key) ?? 0),
+      };
+    }
     const overdue = overdueAt(perCustomer, end, cycleMs);
     return {
       ...k,
       enJuegoMinor: overdue.valueMinor,
       enJuegoCount: overdue.count,
+      origenEnJuego: "pre-motor" as const,
       rescatadoMinor: Math.round(rescuedByKey.get(k.key) ?? 0),
     };
   });

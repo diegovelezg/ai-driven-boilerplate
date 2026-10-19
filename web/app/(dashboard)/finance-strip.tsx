@@ -68,7 +68,7 @@ function Trend({
           empty
             ? "Sin ventas en los últimos 12 meses"
             : fused
-              ? `Ventas, rescatado y fugado 12 meses: ${buckets.map((b, i) => `${b.label}: ${fused[i].enJuegoCount} vencidos`).join(", ")}`
+              ? `Ventas, rescatado y fugado 12 meses: ${buckets.map((b, i) => `${b.label}: ${fused[i].enJuegoCount} en juego`).join(", ")}`
               : `Ventas 12 meses: ${buckets.map((b) => `${b.label} ${b.orders}`).join(", ")}`
         }
       >
@@ -80,7 +80,7 @@ function Trend({
             <g key={b.key}>
               {fused && fv ? (
                 <>
-                  <title>{`${b.label}: en juego ${formatMoney(fv.enJuegoMinor, currency)} · rescatado ${formatMoney(fv.rescatadoMinor, currency)} · fugado ${formatMoney(fugadoOf(fv), currency)}`}</title>
+                  <title>{`${b.label}: en juego ${formatMoney(fv.enJuegoMinor, currency)} (${fv.origenEnJuego === "motor" ? "motor" : "histórico"}) · rescatado ${formatMoney(fv.rescatadoMinor, currency)} · fugado ${formatMoney(fugadoOf(fv), currency)}`}</title>
                   <rect
                     x={cx - barW / 2}
                     y={base - hOf(fv.rescatadoMinor)}
@@ -110,7 +110,7 @@ function Trend({
                 className="fill-muted-foreground opacity-60"
                 fontSize={8}
               >
-                {fused ? `${b.label} · ${b.orders}` : b.label}
+                {fused ? `${b.label} · ${b.orders} órd.` : b.label}
                 <title>{`${b.label}: ${b.orders} órdenes`}</title>
               </text>
             </g>
@@ -205,10 +205,6 @@ export function FinanceStrip({
   const total12 = buckets.reduce((a, b) => a + b.salesMinor, 0);
   if (total12 === 0 && kpis.orders30d === 0) return null;
   const fused = rescate && rescate.length === buckets.length ? rescate : null;
-  const recoveredPct =
-    recoveredMinor !== undefined && kpis.sales30dMinor > 0
-      ? Math.round((recoveredMinor / kpis.sales30dMinor) * 100)
-      : null;
   return (
     <section aria-label="Salud del negocio">
       <Card>
@@ -250,7 +246,9 @@ export function FinanceStrip({
                   <Delta pct={retention.rescatadoDeltaPct} />
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] text-muted-foreground">En juego hoy (esperado)</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {enJuegoProb ? "En juego hoy (esperado · actuar + vigilar)" : "En juego hoy (estimación histórica)"}
+                  </span>
                   {enJuegoProb ? (
                     <>
                       <span className="text-xl font-semibold tabular-nums tracking-tight">
@@ -268,8 +266,7 @@ export function FinanceStrip({
                         {formatMoney(retention.enJuegoNowMinor, currency)}
                       </span>
                       <span className="text-xs text-muted-foreground tabular-nums">
-                        {retention.enJuegoNowCount}{" "}
-                        {retention.enJuegoNowCount === 1 ? "vencido" : "vencidos"} × ticket
+                        {retention.enJuegoNowCount} por volver · ticket medio
                       </span>
                     </>
                   )}
@@ -279,11 +276,51 @@ export function FinanceStrip({
           </div>
           <Trend buckets={buckets} rescate={rescate} currency={currency} />
           <span className="text-xs text-muted-foreground tabular-nums">
-            {recoveredMinor !== undefined
-              ? recoveredMinor > 0 && recoveredPct !== null
-                ? `Recuperaste ${formatMoney(recoveredMinor, currency)} = ${recoveredPct}% de tus ventas 30d. `
-                : "Aún sin recupero medido — cuando un cliente vuelva, se refleja aquí. "
-              : ""}
+            {(() => {
+              // Issue #12: el % mezclaba atribuido histórico (all-time) contra
+              // ventas 30d. Con retention se usa rescatado30d (misma ventana);
+              // sin retention se muestra el atribuido total SIN % y etiquetado
+              // como atribuido (nunca incremental: sin holdout no hay causalidad).
+              const r30 = retention?.rescatado30dMinor ?? null;
+              if (r30 !== null && kpis.sales30dMinor > 0) {
+                const pct = Math.round((r30 / kpis.sales30dMinor) * 100);
+                return r30 > 0
+                  ? `Atribuido 30d ${formatMoney(r30, currency)} = ${pct}% de tus ventas 30d (atribuido, no incremental). `
+                  : "Aún sin recupero medido — cuando un cliente vuelva, se refleja aquí. ";
+              }
+              if (recoveredMinor !== undefined) {
+                return recoveredMinor > 0
+                  ? `Atribuido total ${formatMoney(recoveredMinor, currency)} (histórico; sin % hasta tener ventana 30d. Atribuido, no incremental). `
+                  : "Aún sin recupero medido — cuando un cliente vuelva, se refleja aquí. ";
+              }
+              return "";
+            })()}
+            {(() => {
+              // El ticket cuenta la historia que ventas y órdenes por separado
+              // esconden (p. ej. ventas −40% con órdenes +58% = ticket colapsado).
+              const closed = buckets.slice(0, -1).filter((b) => b.orders > 0);
+              if (closed.length >= 2) {
+                const a = closed[closed.length - 2];
+                const b = closed[closed.length - 1];
+                const ta = a.salesMinor / Math.max(1, a.orders);
+                const tb = b.salesMinor / Math.max(1, b.orders);
+                if (ta > 0 && (tb - ta) / ta <= -0.3) {
+                  return `El ticket cayó de ${formatMoney(Math.round(ta), currency)} a ${formatMoney(Math.round(tb), currency)} entre ${a.label} y ${b.label}: vendes más órdenes por menos plata. `;
+                }
+              }
+              return "";
+            })()}
+            {(() => {
+              // Origen de la serie en juego (issue #12): el motor solo existe
+              // desde que corre a diario; los meses anteriores son
+              // reconstrucción pre-motor desde órdenes. Se declara el corte.
+              const motorDesde = rescate?.find((r) => r.origenEnJuego === "motor");
+              const hayPre = (rescate ?? []).some((r) => r.origenEnJuego === "pre-motor");
+              if (motorDesde && hayPre) {
+                return `En juego con motor desde ${motorDesde.label}; meses anteriores reconstruidos desde órdenes (pre-motor). `;
+              }
+              return "";
+            })()}
             {fused && cycleDays !== null
               ? `Verde = rescatado; el gap con la línea punteada (en juego, ciclo ~${cycleDays}d) es tu fuga. `
               : ""}

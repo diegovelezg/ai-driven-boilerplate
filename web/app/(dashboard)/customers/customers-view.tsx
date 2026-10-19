@@ -187,6 +187,7 @@ export function CustomersView({
       decision?: string | null;
       vista?: string | null;
       ritmo?: string | null;
+      customerType?: string | null;
     }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
@@ -200,6 +201,8 @@ export function CustomersView({
       if (vis) params.set("vista", vis);
       const rit = overrides.ritmo !== undefined ? overrides.ritmo : filters.ritmo;
       if (rit) params.set("ritmo", rit);
+      const tip = overrides.customerType !== undefined ? overrides.customerType : filters.customerType;
+      if (tip) params.set("tipo", tip);
       if (marketId) params.set("market", marketId);
       return params.toString();
     },
@@ -215,13 +218,13 @@ export function CustomersView({
     });
   };
 
-  const setFilter = (patch: { decision?: string | null; vista?: string | null; ritmo?: string | null }) => {
+  const setFilter = (patch: { decision?: string | null; vista?: string | null; ritmo?: string | null; customerType?: string | null }) => {
     startTransition(() => {
       router.replace(`/customers?${buildParams({ page: 1, ...patch })}`);
     });
   };
 
-  const filtersActive = filters.decision !== null || filters.vista !== null || filters.ritmo !== null;
+  const filtersActive = filters.decision !== null || filters.vista !== null || filters.ritmo !== null || filters.customerType !== null;
 
   // Sincroniza el input cuando el `q` commiteado cambia por navegación externa
   // (botones paginación, atrás/adelante). setState en callback: sin cascading render.
@@ -346,12 +349,25 @@ export function CustomersView({
             <SelectItem value="sin-compras">Sin compras</SelectItem>
           </SelectContent>
         </Select>
+        <Select
+          value={filters.customerType ?? "all"}
+          onValueChange={(v) => setFilter({ customerType: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-36" aria-label="Filtrar por tipo de cliente">
+            <SelectValue placeholder="Tipo" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">B2B + B2C</SelectItem>
+            <SelectItem value="B2B">B2B · Empresas</SelectItem>
+            <SelectItem value="B2C">B2C · Consumidores</SelectItem>
+          </SelectContent>
+        </Select>
         {filtersActive && (
           <Button
             variant="ghost"
             size="sm"
             disabled={isPending}
-            onClick={() => setFilter({ decision: null, vista: null, ritmo: null })}
+            onClick={() => setFilter({ decision: null, vista: null, ritmo: null, customerType: null })}
           >
             Limpiar
           </Button>

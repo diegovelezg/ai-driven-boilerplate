@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { updateCustomerAction } from "@/lib/customer-actions";
 import { reenrichDomainAction } from "@/lib/enrich-actions";
+import { useBackground } from "@/components/background-status";
 import type { EditableCustomer, ManualField } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
 import type {
@@ -285,8 +286,9 @@ function EnrichedCompany({
   const [data, setData] = useState<CustomerFirmographics | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
-  const [reloading, startReenrich] = useTransition();
+  const [working, setWorking] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const { start, isBusy } = useBackground();
 
   useEffect(() => {
     let alive = true;
@@ -308,12 +310,19 @@ function EnrichedCompany({
 
   if (loading || !data || !data.enrichable) return null;
 
+  // Lock por dominio (Fase 3): frena el doble clic entre drawers con
+  // motivo, y el intento suma a la cinta.
+  const domainBusy = isBusy("enrich_single", data.domain);
+  const reloading = working || domainBusy;
   const runReenrich = () => {
-    startReenrich(async () => {
-      const r = await reenrichDomainAction(data.domain);
-      if (r.ok) setReloadKey((k) => k + 1);
-      else setMsg(r.message);
-    });
+    if (reloading) return;
+    setWorking(true);
+    void start(() => reenrichDomainAction(data.domain))
+      .then((r) => {
+        if (r.ok) setReloadKey((k) => k + 1);
+        else setMsg(r.message);
+      })
+      .finally(() => setWorking(false));
   };
 
   const meta = [data.industry, data.location, data.size && `tamaño ${data.size}`]

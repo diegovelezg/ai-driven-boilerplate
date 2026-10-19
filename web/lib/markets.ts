@@ -59,8 +59,9 @@ export async function listStoreMarkets(storeId: string, requestedId?: string | n
     .limit(50);
   if (error) throw new Error(`Markets read: ${error.message}`);
   if ((count ?? 0) > 50) {
-    const { createLogger } = await import("@/lib/log");
-    createLogger("tenant")(`markets truncados a 50/${count} (store ${storeId}): validar ?market= por ID directo`);
+    // Nota: console directo, no @/lib/log (server-only): este módulo también
+    // lo importan Client Components (market-selector) y el build lo prohíbe.
+    console.warn(`[tenant] markets truncados a 50/${count} (store ${storeId}): validar ?market= por ID directo`);
   }
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),

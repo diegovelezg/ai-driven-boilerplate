@@ -51,6 +51,9 @@ export interface TeamPulseProps {
   /** Última conclusión declarada por cada worker (SSOT histórica). La vista en
    *  vivo (conteos) manda; esto distingue "pausa intencional" de "nunca corrió". */
   pulseStates?: Record<string, "needs" | "active" | "paused" | null>;
+  /** Corridas en curso ahora (Fase 4): tira separada "En curso", sin tocar
+   *  el pulso (que es outcome, no actividad). */
+  runningLabels?: string[];
 }
 
 const dotCls: Record<Status, string> = {
@@ -119,7 +122,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
         icon: Radar,
         status: "paused",
         headline: `Vigiló ${p.totalVigilados}, nadie necesita mensaje`,
-        why: `En pausa: no quemas clientes ni descuentos${agoSuffix("scout")}`,
+        why: `En pausa: no quemas clientes${agoSuffix("scout")}`,
       });
     }
   } else if (p.atRisk > 0) {
@@ -316,9 +319,14 @@ export function TeamPulse(p: TeamPulseProps) {
       </span>
       <span className="text-xs text-muted-foreground">
         {needsCount > 0
-          ? `${needsCount} ${needsCount === 1 ? "necesita tu decisión" : "necesitan tu decisión"}, el resto trabaja solo.`
+          ? `${needsCount} ${needsCount === 1 ? "agente necesita tu decisión" : "agentes necesitan tu decisión"}, el resto trabaja solo.`
           : "Nadie te necesita ahora — todos vigilan solos."}
       </span>
+      {p.runningLabels && p.runningLabels.length > 0 && (
+        <p className="text-xs text-muted-foreground tabular-nums">
+          En curso ahora: {p.runningLabels.join(" · ")}
+        </p>
+      )}
       <ul className="mt-1 divide-y divide-border/60">
         {rows.map((r) => {
           const Icon = r.icon;
