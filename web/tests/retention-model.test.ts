@@ -240,7 +240,7 @@ describe("retention-model decisiones", () => {
     for (const p of preds) assert.equal(p.confidence, "baja");
   });
 
-  it("supresiones y B2B top decil → revision_humana", () => {
+  it("supresiones y B2B top decil dormido → dormido (sin excepción v4)", () => {
     const customers: CustomerSessions[] = [
       { customerId: "vip", sessions: sessionsFromGaps([30, 29, 31], 400, 90000) },
       { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
@@ -257,7 +257,9 @@ describe("retention-model decisiones", () => {
     const preds = predictStore(input);
     assert.equal(preds.find((x) => x.customerId === "b")!.decision, "sin_canal");
     assert.equal(preds.find((x) => x.customerId === "c")!.decision, "contactado_reciente");
-    assert.equal(preds.find((x) => x.customerId === "vip")!.decision, "revision_humana");
+    // v4: el vip B2B top pero dormido (t=400 ≫ ciclo) ya no abre revisión:
+    // ventana lejana se espera, no se contacta.
+    assert.equal(preds.find((x) => x.customerId === "vip")!.decision, "dormido");
   });
 
   it("rendimiento: 2000 clientes en <2s", () => {
@@ -384,7 +386,7 @@ describe("retention-model decisiones", () => {
       { customerId: "f", sessions: singleSession(10, 6000) },
     ];
     const preds = predictStore(baseInput(customers, 30, 30, 0.5));
-    assert.ok(DECISION_VERSION.startsWith("v3"));
+    assert.ok(DECISION_VERSION.startsWith("v4"));
     for (const p of preds) {
       assert.equal(p.decisionVersion, DECISION_VERSION);
       assert.ok(p.marketId === null || typeof p.marketId === "string");
@@ -506,18 +508,19 @@ describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
       ),
     );
     assert.deepEqual(typed.map(strip), legacy.map(strip));
-    assert.equal(typed.find((x) => x.customerId === "vip")!.decision, "revision_humana");
+    // v4: el vip dormido ya no califica a revisión aunque sea top B2B.
+    assert.equal(typed.find((x) => x.customerId === "vip")!.decision, "dormido");
   });
 
-  it("mix parte revision_humana por lado y deciles por lado", () => {
+  it("mix parte dormido por lado y deciles por lado (v4: sin revision por dormido)", () => {
     const customers: CustomerSessions[] = base().map((c) =>
       c.customerId === "vip" || c.customerId === "b"
         ? { ...c, customerType: "B2B" }
         : { ...c, customerType: "B2C" },
     );
     const preds = predictStore(baseInput(customers, 30, 30, 0.5, "PEN", false));
-    // Lado B2B: vip dormido + top de su lado ⇒ revision_humana.
-    assert.equal(preds.find((x) => x.customerId === "vip")!.decision, "revision_humana");
+    // Lado B2B: vip dormido + top de su lado ⇒ dormido igual (v4).
+    assert.equal(preds.find((x) => x.customerId === "vip")!.decision, "dormido");
     // Deciles por lado: "b" (6000) es top de un pool B2B de 2 (decil 10),
     // mientras que en global sería ~5/6. Se verifica rango válido + que el
     // pool chico no colapsa.

@@ -32,6 +32,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
   let created = 0;
   let updated = 0;
   let closed = 0;
+  let skippedOptOut = 0;
   const step = (current: string | null) =>
     advanceRun(runId, { processed: scanned, failed: 0, current });
 
@@ -149,10 +150,49 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     }
     log(`run ${runId} buyers=${customers.length}`);
     await setRunTotal(runId, customers.length).catch(() => {});
+    // Issue #13: bajas por canal. Sin por dónde escribir (opt-out en email
+    // Y whatsapp) no se crea señal: ningún envío sería posible y el gate
+    // pre-envío la frenaría igual. Con un solo canal dado de baja, la señal
+    // sigue (el otro canal sirve). Fallo de lectura = se supone contactable
+    // (fail-open auditado): el gate pre-envío vuelve a chequear por fila.
+    const optOutBoth = new Set<string>();
+    try {
+      const chansByCust = new Map<string, Set<string>>();
+      for (let from = 0; ; from += 1000) {
+        const { data, error: ooErr } = await db
+          .from("opt_outs")
+          .select("customer_id,channel")
+          .eq("store_id", storeId)
+          .range(from, from + 999);
+        if (ooErr) throw ooErr;
+        const rows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const r of rows) {
+          const cid = String(r.customer_id ?? "");
+          if (!cid) continue;
+          let s = chansByCust.get(cid);
+          if (!s) {
+            s = new Set();
+            chansByCust.set(cid, s);
+          }
+          s.add(String(r.channel ?? ""));
+        }
+        if (rows.length < 1000) break;
+      }
+      for (const [cid, chans] of chansByCust) {
+        if (chans.has("email") && chans.has("whatsapp")) optOutBoth.add(cid);
+      }
+      if (optOutBoth.size > 0) log(`run ${runId} opt_out_total=${optOutBoth.size} (sin señal)`);
+    } catch (e) {
+      log(`run ${runId} opt-out read ERROR ${e instanceof Error ? e.message : e} (se supone contactable)`);
+    }
 
     for (const c of customers) {
       scanned += 1;
       if (scanned % 25 === 0) await step(null);
+      if (optOutBoth.has(c.id)) {
+        skippedOptOut += 1;
+        continue;
+      }
       try {
         const pred = predByCust.get(c.id) ?? null;
         const { data: existing } = await db
@@ -362,7 +402,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     const status: RunStatus = "done";
     // Filosofía TeamPulse: outcome humano, no contadores de log. El detalle
     // (nuevas/actualizadas/cerradas) queda en el log, no en el summary.
-    log(`run ${runId} detalle nuevas=${created} actualizadas=${updated} cerradas=${closed}`);
+    log(`run ${runId} detalle nuevas=${created} actualizadas=${updated} cerradas=${closed} omitidas_opt_out=${skippedOptOut}`);
     const ready = created + updated;
     const summary: string =
       ready > 0

@@ -7,7 +7,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { UserMenu } from "@/components/user-menu";
 import { MarketSelector } from "@/components/market-selector";
 import { UsagePill } from "@/components/usage-pill";
-import type { TenantMarket } from "@/lib/markets";
+import type { TenantMarket } from "@/lib/market-utils";
 
 const titles = [
   { href: "/finanzas", label: "Finanzas" },

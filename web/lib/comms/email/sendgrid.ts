@@ -44,6 +44,10 @@ export async function sendViaSendGrid(opts: {
         { type: "text/plain", value: msg.text },
         { type: "text/html", value: msg.html ?? textToHtml(msg.text) },
       ],
+      // Issue #13 (salida del destinatario): el cliente de correo ofrece
+      // "darse de baja" escribiendo al remitente. La baja gestionada
+      // (tabla opt_outs) vive en la app; esto es la salida a nivel mensaje.
+      headers: { "List-Unsubscribe": `<mailto:${msg.from ?? from}>` },
     }),
   });
   if (!res.ok) {

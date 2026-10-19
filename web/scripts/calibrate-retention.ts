@@ -1,10 +1,11 @@
-// Backtest y calibración del motor retention:v1 (issue #5, Paso 5).
+// Backtest y calibración del motor retention:v2 (issue #5, Paso 5; paridad v2 market+b2b+bandas).
 // Rolling-origin con solo órdenes ≤ corte; excluye H no madurado.
 // Uso: npx tsx --env-file=.env.local scripts/calibrate-retention.ts
 // Salida: consola + JSON en .data/calibrate-retention.json (no UI).
 import { writeFileSync } from "node:fs";
 import { isRealOrder } from "@/lib/medusa";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
+import { BAND_CUTS_BY_ARCHETYPE } from "@/lib/store-profile-defs";
 import {
   HORIZON_BY_ARCHETYPE,
   SIGMA0_BY_ARCHETYPE,
@@ -25,15 +26,47 @@ async function main() {
   const isB2B = archetype === "b2b_proyecto" || archetype === "b2b_recurrente";
   const { data: shop } = await db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
   const shopCurrency = (shop?.shop_currency as string | null) ?? null;
-  console.log(`perfil: archetype=${archetype} cycle=${cycle} H=${H} sigma0=${sigma0} shop=${shopCurrency}`);
+  // Bandas por tenant (paridad v2 Paso 5): store_profiles.p_band_* o default arquetipo.
+  const { data: bandRow } = await db.from("store_profiles").select("p_band_high,p_band_low").eq("store_id", storeId).maybeSingle();
+  const dfltBands = BAND_CUTS_BY_ARCHETYPE[archetype] ?? { high: 0.6, low: 0.15 };
+  const bandRaw = (bandRow as Record<string, unknown> | null) ?? null;
+  const bhRaw = bandRaw?.p_band_high == null ? NaN : Number(bandRaw.p_band_high);
+  const blRaw = bandRaw?.p_band_low == null ? NaN : Number(bandRaw.p_band_low);
+  const bandHigh = Number.isFinite(bhRaw) && (bhRaw as number) > 0 && (bhRaw as number) < 1 ? (bhRaw as number) : dfltBands.high;
+  const bandLow = Number.isFinite(blRaw) && (blRaw as number) >= 0 && (blRaw as number) < 1 ? (blRaw as number) : dfltBands.low;
+  const [effHigh, effLow] = bandHigh > bandLow ? [bandHigh, bandLow] : [dfltBands.high, dfltBands.low];
+  // Markets (paridad v2 Paso 3): moneda por partición.
+  const { data: marketRows } = await db.from("market_regions").select("id,currency,countries,name").eq("store_id", storeId);
+  const markets = ((marketRows ?? []) as Array<Record<string, unknown>>).map((m) => ({
+    id: String(m.id),
+    currency: String(m.currency ?? ""),
+    countries: ((m.countries as string[] | null) ?? []).map(String),
+    name: String(m.name ?? ""),
+  }));
+  const marketCur = new Map(markets.map((m) => [m.id, m.currency]));
+  const marketCountries = new Map(markets.map((m) => [m.id, m.countries.map((c) => c.trim().toUpperCase())]));
+  console.log(`perfil: archetype=${archetype} cycle=${cycle} H=${H} sigma0=${sigma0} shop=${shopCurrency} bands=${effHigh}/${effLow} markets=${markets.length}`);
 
-  // Bulk: clientes + órdenes reales.
+  // Bulk: clientes (con tipo efectivo + país para partición v2) + órdenes reales.
   const { data: custRows } = await db
     .from("customers")
-    .select("id")
+    .select("id,customer_type,manual_edits,country")
     .eq("store_id", storeId)
     .limit(5000);
   const custIds = ((custRows ?? []) as Array<{ id: string }>).map((c) => c.id);
+  const custMeta = new Map(
+    ((custRows ?? []) as Array<Record<string, unknown>>).map((c) => {
+      const manual = (c.manual_edits as Record<string, unknown> | null)?.customer_type;
+      const eff =
+        typeof manual === "string" && manual.trim() !== ""
+          ? String(manual).trim().toUpperCase()
+          : String((c.customer_type as string | null) ?? "B2C").trim().toUpperCase();
+      return [
+        String(c.id),
+        { customerType: eff === "B2B" ? "B2B" : "B2C", country: ((c.country as string | null) ?? null) as string | null },
+      ];
+    }),
+  );
   const orders: Array<{ customer_id: string; at: number }> = [];
   for (let i = 0; i < custIds.length; i += 200) {
     const { data } = await db
@@ -56,17 +89,18 @@ async function main() {
       orders.push({ customer_id: o.customer_id as string, at: d.getTime() });
     }
   }
-  // Órdenes con ticket/moneda para el modelo (ticket no afecta calibración de p, pero se necesita).
+  // Órdenes con ticket/moneda/market para el modelo (ticket no afecta calibración de p, pero se necesita).
   const ordersFull: Array<{
     customer_id: string;
     at: number;
     ticketMinor: number;
     currency: string | null;
+    market_id: string | null;
   }> = [];
   for (let i = 0; i < custIds.length; i += 200) {
     const { data } = await db
       .from("orders")
-      .select("customer_id,placed_at,total_amount,currency,status,payment_status,is_test")
+      .select("customer_id,placed_at,total_amount,currency,market_id,status,payment_status,is_test")
       .in("customer_id", custIds.slice(i, i + 200))
       .order("placed_at", { ascending: true });
     for (const o of (data ?? []) as Array<Record<string, unknown>>) {
@@ -86,6 +120,7 @@ async function main() {
         at: d.getTime(),
         ticketMinor: Number(o.total_amount ?? 0),
         currency: (o.currency as string | null) ?? null,
+        market_id: (o.market_id as string | null) ?? null,
       });
     }
   }
@@ -110,22 +145,40 @@ async function main() {
   // cicloFuente en el JSON.
   const step = Math.max(15, H);
   const cutoffs = [0, 1, 2, 3, 4, 5].map((k) => now - H * DAY_MS - k * step * DAY_MS);
-  const pairs: Array<{ p: number; pLow: number; pHigh: number; y: number; model: string }> = [];
+  const pairs: Array<{ p: number; pLow: number; pHigh: number; y: number; model: string; decision: string; marketId: string | null }> = [];
+  // Asignación a market (paridad retention.ts): mayoría market_id ≤ corte ⇒ país ⇒ null.
+  const assignMarket = (mids: Array<string | null>, country: string | null): string | null => {
+    const counts = new Map<string, number>();
+    for (const m of mids) {
+      if (!m) continue;
+      counts.set(m, (counts.get(m) ?? 0) + 1);
+    }
+    if (counts.size > 0) {
+      let best: string | null = null;
+      let bestN = -1;
+      for (const [m, n] of counts) {
+        if (n > bestN || (n === bestN && (best === null || m < best))) {
+          best = m;
+          bestN = n;
+        }
+      }
+      if (best) return best;
+    }
+    const cc = (country ?? "").trim().toUpperCase();
+    if (cc && /^[A-Z]{2}$/.test(cc)) {
+      for (const [mid, clist] of marketCountries) {
+        if (clist.includes(cc)) return mid;
+      }
+    }
+    return null;
+  };
   let nPred = 0;
   for (const cutoff of cutoffs) {
-    const customers = [];
     // Sesiones completas (toda la historia) para la etiqueta y por SESIONES
     // (issue #10 P2: pago partido = 1 compra, no N órdenes).
     const sessionsByCust = new Map<string, Array<{ at: number }>>();
-    for (const cid of custIds) {
-      const ords = (byCustFull.get(cid) ?? []).filter((o) => o.at <= cutoff);
-      if (ords.length === 0) continue;
-      const sessions = sessionize(
-        ords.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency })),
-      );
-      if (sessions.length === 0) continue;
-      customers.push({ customerId: cid, sessions });
-    }
+    // Partición por market con sesiones filtradas (universos separados, nunca PEN+MXN).
+    const partCustomers = new Map<string | null, Array<{ customerId: string; sessions: Array<{ at: number; ticketMinor: number; currency: string | null }>; marketId: string | null; customerType: string }>>();
     for (const cid of custIds) {
       const allOrds = byCustFull.get(cid) ?? [];
       if (allOrds.length === 0) continue;
@@ -133,26 +186,47 @@ async function main() {
         cid,
         sessionize(allOrds.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency }))),
       );
+      const meta = custMeta.get(cid) ?? { customerType: "B2C", country: null };
+      const ordsCut = allOrds.filter((o) => o.at <= cutoff);
+      if (ordsCut.length === 0) continue;
+      const assigned = assignMarket(ordsCut.map((o) => o.market_id), meta.country);
+      const inPart = assigned === null ? ordsCut : ordsCut.filter((o) => o.market_id === null || o.market_id === assigned);
+      const sessions = sessionize(
+        inPart.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency })),
+      );
+      if (sessions.length === 0) continue;
+      const cs = { customerId: cid, sessions, marketId: assigned, customerType: meta.customerType };
+      const list = partCustomers.get(assigned) ?? [];
+      list.push(cs);
+      partCustomers.set(assigned, list);
     }
-    if (customers.length === 0) continue;
-    const preds = predictStore({
-      asOf: cutoff,
-      cycleDays: cycle,
-      horizonDays: H,
-      sigma0,
-      shopCurrency,
-      customers,
-      suppressed: new Map(),
-      isB2B,
-    });
-    nPred += preds.length;
-    for (const p of preds) {
-      const sessions = sessionsByCust.get(p.customerId) ?? [];
-      const y = sessions.some((s) => s.at > cutoff && s.at <= cutoff + H * DAY_MS) ? 1 : 0;
-      pairs.push({ p: p.pRecompraH, pLow: p.pLow, pHigh: p.pHigh, y, model: p.model });
+    if (partCustomers.size === 0) continue;
+    let nCut = 0;
+    for (const [partId, customers] of partCustomers) {
+      const partCurrency = (partId === null ? null : marketCur.get(partId)) ?? shopCurrency ?? null;
+      const preds = predictStore({
+        asOf: cutoff,
+        cycleDays: cycle,
+        horizonDays: H,
+        sigma0,
+        shopCurrency: partCurrency,
+        customers,
+        suppressed: new Map(),
+        isB2B,
+        marketId: partId,
+        bandHigh: effHigh,
+        bandLow: effLow,
+      });
+      nPred += preds.length;
+      nCut += preds.length;
+      for (const p of preds) {
+        const sessions = sessionsByCust.get(p.customerId) ?? [];
+        const y = sessions.some((s) => s.at > cutoff && s.at <= cutoff + H * DAY_MS) ? 1 : 0;
+        pairs.push({ p: p.pRecompraH, pLow: p.pLow, pHigh: p.pHigh, y, model: p.model, decision: p.decision, marketId: p.marketId });
+      }
     }
     console.log(
-      `corte ${new Date(cutoff).toISOString().slice(0, 10)}: clientes=${customers.length} preds=${preds.length}`,
+      `corte ${new Date(cutoff).toISOString().slice(0, 10)}: particiones=${partCustomers.size} preds=${nCut}`,
     );
   }
 
@@ -175,7 +249,7 @@ async function main() {
     return [Math.max(0, (c - m) / den), Math.min(1, (c + m) / den)];
   };
   const buildDecis = (rows: typeof pairs) => {
-    const decis: Array<{ decil: string; n: number; predicho: number; observado: number; cubierto: boolean; nEventos: number; ic95: [number, number] }> = [];
+    const decis: Array<{ decil: string; n: number; predicho: number; observado: number; lift: number | null; cubierto: boolean; nEventos: number; ic95: [number, number] }> = [];
     for (let d = 0; d < 10; d += 1) {
       const lo = d / 10;
       const hi = (d + 1) / 10;
@@ -185,13 +259,49 @@ async function main() {
       const observado = bin.length > 0 ? k / bin.length : 0;
       const lowMean = bin.length > 0 ? bin.reduce((a, x) => a + x.pLow, 0) / bin.length : 0;
       const highMean = bin.length > 0 ? bin.reduce((a, x) => a + x.pHigh, 0) / bin.length : 0;
-      decis.push({ decil: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: bin.length, predicho, observado, cubierto: observado >= lowMean - 0.05 && observado <= highMean + 0.05, nEventos: k, ic95: wilson(k, bin.length) });
+      decis.push({ decil: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: bin.length, predicho, observado, lift: obsRate && obsRate > 0 && bin.length > 0 ? observado / obsRate : null, cubierto: observado >= lowMean - 0.05 && observado <= highMean + 0.05, nEventos: k, ic95: wilson(k, bin.length) });
     }
     return decis;
   };
   const decis = buildDecis(pairs);
   const decisA = buildDecis(pairs.filter((x) => x.model === "renovacion"));
   const decisB = buildDecis(pairs.filter((x) => x.model === "segunda_compra"));
+  // Decisión del motor: ¿actuar/vigilar separan retorno? (curva decisión-realidad).
+  const decisionStats = (() => {
+    const keys = ["actuar", "vigilar", "organico", "dormido", "sin_canal", "contactado_reciente", "revision_humana"];
+    return keys.map((dec) => {
+      const rows = pairs.filter((x) => x.decision === dec);
+      const k = rows.filter((x) => x.y === 1).length;
+      return {
+        decision: dec,
+        n: rows.length,
+        eventos: k,
+        observado: rows.length > 0 ? k / rows.length : 0,
+        lift: obsRate && obsRate > 0 && rows.length > 0 ? (k / rows.length) / obsRate : null,
+        meanP: rows.length > 0 ? rows.reduce((a, x) => a + x.p, 0) / rows.length : 0,
+      };
+    }).filter((d) => d.n > 0);
+  })();
+  // Corte p óptimo (Youden J) como proxy de bandLow: el que mejor separa retornos.
+  const optimalCut = (() => {
+    const cands = [...new Set(pairs.map((x) => x.p))].sort((a, b) => a - b);
+    const pos = pairs.filter((x) => x.y === 1).length;
+    const neg = pairs.length - pos;
+    if (pos < 5 || neg < 5) return null;
+    let best: number | null = null;
+    let bestJ = 0;
+    for (const c of cands) {
+      const tp = pairs.filter((x) => x.y === 1 && x.p >= c).length;
+      const fp = pairs.filter((x) => x.y === 0 && x.p >= c).length;
+      const j = tp / pos + (neg - fp) / neg - 1;
+      if (j > bestJ + 1e-9) {
+        bestJ = j;
+        best = c;
+      }
+    }
+    return best === null ? null : { cut: Math.round(best * 100) / 100, youdenJ: Math.round(bestJ * 1000) / 1000 };
+  })();
+  const maxP = pairs.length > 0 ? Math.max(...pairs.map((x) => x.p)) : 0;
   // KM observada vs media predicha (único uso permitido de KM: diagnóstico).
   // KM(t) = fracción sin compra hasta t; predicha media = 1 - mean(p) en H.
   const kmObsH = n > 0 ? 1 - obsRate! : null;
@@ -206,6 +316,10 @@ async function main() {
     cycleDays: cycle,
     cicloFuente: "actual (sin snapshots históricos: los cortes viejos heredan el ciclo declarado hoy)",
     horizonDays: H,
+    sigma0,
+    bandHigh: effHigh,
+    bandLow: effLow,
+    engine: "retention:v2:lognormal-grid-market-b2b",
     pasoCortesDias: step,
     cutoffs: cutoffs.map((c) => new Date(c).toISOString()),
     nPredicciones: nPred,
@@ -216,16 +330,21 @@ async function main() {
     skillVsNaive: skill,
     meanPredicho: meanP,
     observadoGlobal: obsRate,
+    maxP,
     porDecil: decis,
     porDecilRenovacion: decisA,
     porDecilSegundaCompra: decisB,
+    porDecision: decisionStats,
+    corteOptimoYouden: optimalCut,
     coberturaDeciles: decis.filter((d) => d.n > 0 && d.cubierto).length,
     km: { observadaSinCompraH: kmObsH, predichaMediaSinCompraH: kmPredH },
-    nota: "Aceptación: en deciles centrales el observado cae dentro del predicho ±10pp en la cohorte agregada. Con pocos eventos el ±10pp es más estricto que el ruido (ver ic95 por decil): un fallo aislado NO autoriza tocar sigma0/k — se requieren 2 corridas consecutivas fuera de tolerancia o evidencia pooled. Si no, ajustar sigma0/k y repetir.",
+    nota: "Aceptación: en deciles centrales el observado cae dentro del predicho ±10pp en la cohorte agregada. Con pocos eventos el ±10pp es más estricto que el ruido (ver ic95 por decil): un fallo aislado NO autoriza tocar sigma0/k — se requieren 2 corridas consecutivas fuera de tolerancia o evidencia pooled. Si maxP<bandHigh, organico-probable nunca dispara: bajar bandHigh al entorno de maxP o del corte Youden.",
   };
-  console.log(`predicciones=${nPred} eventos=${events}/${n} brier=${brier?.toFixed(4)} naive=${brierNaive?.toFixed(4)} skill=${skill !== null ? (skill * 100).toFixed(1) + "%" : "n/a"}`);
+  console.log(`predicciones=${nPred} eventos=${events}/${n} brier=${brier?.toFixed(4)} naive=${brierNaive?.toFixed(4)} skill=${skill !== null ? (skill * 100).toFixed(1) + "%" : "n/a"} maxP=${maxP.toFixed(3)}`);
   console.table(decis);
-  console.log(`KM observada sin compra en H: ${kmObsH?.toFixed(3)} vs predicha media: ${kmPredH?.toFixed(3)}`);
+  console.table(decisionStats);
+  if (optimalCut) console.log(`corte Youden p>=${optimalCut.cut} J=${optimalCut.youdenJ} (bandLow actual ${effLow}, bandHigh actual ${effHigh})`);
+  else console.log(`sin corte Youden (poca historia). bandLow ${effLow}, bandHigh ${effHigh}.`);
   writeFileSync(".data/calibrate-retention.json", JSON.stringify(out, null, 2));
   console.log("JSON en .data/calibrate-retention.json");
 }

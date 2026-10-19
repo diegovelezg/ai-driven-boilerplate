@@ -243,6 +243,41 @@ async function runRecalibrationInner(
     return { status: "skipped", reason: cadence.reason, triggers: [] };
   }
 
+  // Autocalibración del corte de "seguimiento cercano" (display-only, sin
+  // HITL): aprende p vs retorno de la historia y escribe
+  // `store_profiles.close_watch_p`. Con poca historia conserva el default.
+  // Import dinámico: la cadena pesada (orders+predictions) no entra al path
+  // barato de cadencia.
+  const { createLogger } = await import("@/lib/log");
+  const calibLog = createLogger("recalibrate");
+  const { calibrateCloseWatchP } = await import("@/lib/close-watch-calibrate");
+  const calib = await calibrateCloseWatchP(storeId, { dryRun: opts.dryRun }).catch((e) => ({
+    fitted: null as number | null,
+    previous: 0.1,
+    samples: 0,
+    positives: 0,
+    wrote: false,
+    reason: `Calibración omitida: ${e instanceof Error ? e.message : "error"}.`,
+  }));
+  calibLog(`close_watch_p: ${calib.reason}`);
+
+  // Autocalibración de bandas (multitenant, 30d, con consecuencias en
+  // decisión): aprende high/low de p vs retorno y escribe
+  // `store_profiles.p_band_*` con trust region. Throttle propio de 30d por
+  // tenant (vive en Postgres, no en archivos). Con poca historia conserva.
+  const { calibrateBandCuts } = await import("@/lib/band-calibrate");
+  const bandCalib = await calibrateBandCuts(storeId, { dryRun: opts.dryRun }).catch((e) => ({
+    fittedHigh: null as number | null,
+    fittedLow: null as number | null,
+    previousHigh: 0.6,
+    previousLow: 0.15,
+    samples: 0,
+    positives: 0,
+    wrote: false,
+    reason: `Calibración omitida: ${e instanceof Error ? e.message : "error"}.`,
+  }));
+  calibLog(`band_cuts: ${bandCalib.reason}`);
+
   const ageDays = await getProfileAgeDays(storeId);
   const triggers = evaluateDrift(
     last?.stats ?? null,
@@ -257,8 +292,8 @@ async function runRecalibrationInner(
       status: "dry-run",
       reason:
         strong.length > 0
-          ? `Dry-run: ${formatNumber(strong.length)} trigger(s) llamarían al set perfilador.`
-          : "Dry-run: sin drift, no se llamaría al set perfilador.",
+          ? `Dry-run: ${formatNumber(strong.length)} trigger(s) llamarían al set perfilador. ${calib.reason}`
+          : `Dry-run: sin drift, no se llamaría al set perfilador. ${calib.reason}`,
       triggers,
     };
   }

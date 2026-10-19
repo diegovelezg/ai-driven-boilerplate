@@ -44,4 +44,21 @@ describe("inbox tags: color por criterio + tooltip humano", () => {
     assert.ok(!ui.includes("{a.kind ? <span>{a.kind}</span>"), "sigue el span crudo de kind");
     assert.ok(!ui.includes("{s.status} · {s.kind}"), "sigue el texto crudo status · kind");
   });
+
+  it("tag Hoy distingue lo generado hoy de la cola (isToday por día local)", async () => {
+    const mod = await import("../components/inbox-tag");
+    assert.equal(typeof mod.isToday, "function", "falta helper isToday");
+    assert.ok(mod.isToday(new Date().toISOString()), "el ahora mismo debe ser hoy");
+    assert.ok(!mod.isToday("2026-10-17T01:00:10.35881+00:00"), "un ISO de hace días no es hoy");
+    assert.ok(!mod.isToday(null) && !mod.isToday("") && !mod.isToday("no-fecha"), "nulos/inválidos no son hoy");
+    assert.ok(src.includes("TodayTag"), "falta componente TodayTag");
+    const ui = readFileSync(
+      join(__dirname, "..", "app", "(dashboard)", "review", "review-lists.tsx"),
+      "utf8",
+    );
+    // Hoy en las 3 colas: mensajes (pending+approved), empresas y riesgo.
+    const hoyUses = (ui.match(/<TodayTag value=\{/g) ?? []).length;
+    assert.ok(hoyUses >= 5, `TodayTag debe usarse en mensajes, aprobadas, leads, señales y descartadas (hay ${hoyUses})`);
+    assert.ok(ui.includes("<TodayTag value={l.created_at}"), "falta Hoy en empresas por contactar");
+  });
 });

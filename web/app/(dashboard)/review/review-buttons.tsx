@@ -91,6 +91,77 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
   );
 }
 
+/** Redacta un borrador para una señal sin mensaje (el inbox es el backlog:
+ *  todo se gestiona aquí, no en el home). */
+export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
+  const router = useRouter();
+  const bg = useBackgroundOrNull();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <span className="flex items-center gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setMsg(null);
+          try {
+            const r = bg
+              ? await bg.start(async () => {
+                  const x = await onRedact(id);
+                  return { ok: x.ok, message: x.message, run: null };
+                })
+              : await onRedact(id);
+            setMsg(r.message);
+            if (!bg) router.refresh();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Redactando…" : "Redactar"}
+      </Button>
+      {msg && <span className="max-w-56 text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
+/** Reabre una señal descartada ("contactar igual", issue #14 B3): el descarte
+ *  la escondía 30d sin remedio; reabrir la devuelve a la cola. */
+export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <span className="flex items-center gap-2">
+      <AppTooltip tip="Reabre la señal descartada: vuelve a la cola del motor para contactar igual.">
+        <span className="inline-flex items-center">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await onReopen(id);
+                setMsg(r.message);
+                router.refresh();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Reabriendo…" : "Contactar igual"}
+          </Button>
+        </span>
+      </AppTooltip>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
 /** Regenera borradores con criterios viejos (los borra y redacta de nuevo). */export function RegenerateButton({
   count,
   onRegenerate,

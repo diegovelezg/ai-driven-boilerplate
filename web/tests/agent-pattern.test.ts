@@ -212,7 +212,7 @@ describe("paginación estable (offset sin duplicados/ausentes)", () => {
 
 describe("scope fallback por IDs chunkeado (nunca URI too long)", () => {
   it("markets expone chunkIds + isLargeIdScope + fetchIdChunks", () => {
-    const m = src("lib/markets.ts");
+    const m = src("lib/market-utils.ts");
     assert.match(m, /SCOPE_ID_CHUNK_SIZE\s*=\s*200/);
     assert.match(m, /export function chunkIds/);
     assert.match(m, /export function isLargeIdScope/);

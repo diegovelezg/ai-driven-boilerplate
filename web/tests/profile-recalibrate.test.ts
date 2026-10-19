@@ -21,13 +21,13 @@ import {
   resolveProposalStatus,
   type ProfileDelta,
 } from "@/lib/profile-recalibrate/diff";
-import { profileSlotPatch, resolveManualSlots } from "@/lib/store-profiles";
+import { profileSlotPatch, resolveManualSlots } from "@/lib/store-profile-defs";
 import {
   appendRecalibrateLog,
   formatRecalibrateLine,
   parseRecalibrateLine,
 } from "@/lib/profile-recalibrate/log";
-import type { StoreProfile } from "@/lib/store-profiles";
+import type { StoreProfile } from "@/lib/store-profile-defs";
 import { dueStatusFor } from "@/lib/customer-data";
 
 const stats = (over: Partial<StatsLike> = {}): StatsLike => ({

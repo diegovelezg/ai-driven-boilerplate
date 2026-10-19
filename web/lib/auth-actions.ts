@@ -76,6 +76,16 @@ function scheduleSyncOnLogin(): void {
       });
       if (!decision.sync) {
         log(`login sync omitido (${decision.reason})`);
+        // La mañana no depende del sync fresco: corre igual con la BD
+        // cacheada; su propio guard (cadena de hoy ya done) evita duplicados.
+        if (probeStoreId && !running) {
+          try {
+            const { runMorningPipeline } = await import("@/lib/morning-run");
+            await runMorningPipeline(probeStoreId);
+          } catch (e) {
+            log(`morning omitido: ${e instanceof Error ? e.message : "error"}`);
+          }
+        }
         return;
       }
       const medusaUrl = conn.medusaUrl;

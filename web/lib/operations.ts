@@ -77,6 +77,16 @@ export function conflictMessage(conflict: ActiveOp): string {
   return `En curso: ${conflict.label}…`;
 }
 
+/** Alias de `conflictMessage`: una corrida en curso (BackgroundRun u otro
+ *  objeto con kind/scope/label) es un ActiveOp por estructura, así que se
+ *  puede pasar directo. Vive aquí (módulo puro) y no en `lib/background.ts`:
+ *  los archivos "use server" solo pueden exportar funciones async, y
+ *  `background.ts` debe exportar solo async + tipos para no romper el
+ *  server-actions loader ("found object" en dev). */
+export function busyMessage(conflict: ActiveOp): string {
+  return conflictMessage(conflict);
+}
+
 /** `error_code` → lenguaje humano (la cinta nunca muestra el código crudo). */
 export function errorCodeMessage(code: ErrorCode): string {
   switch (code) {

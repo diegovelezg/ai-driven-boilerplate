@@ -28,8 +28,7 @@ import {
   type TenantStore,
 } from "@/lib/tenant";
 import { TeamPulse } from "./team-pulse";
-import { AttentionTable, type AttentionItem } from "./attention-table";
-import { HoyHeroActions } from "./hoy-hero-actions";
+import { type AttentionItem } from "./attention-table";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { avgTicket, getRankedMira } from "@/lib/mira";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
@@ -863,22 +862,11 @@ export default async function DashboardPage({
             }
             footer={
               <span className="flex flex-wrap items-center gap-2">
-                {hoyActuar > 0 ? (
-                  <HoyHeroActions
-                    redactableCount={
-                      attention.filter(
-                        (r) => r.draftStatus === "none" && r.contactability?.eligible !== false,
-                      ).length
-                    }
-                    pendingCount={pending}
-                    isB2B={team.archetype === "b2b_proyecto" || team.archetype === "b2b_recurrente"}
-                    reviewHref={reviewHref}
-                  />
-                ) : pending > 0 ? (
+                {(hoyActuar > 0 || pending > 0) && (
                   <Button render={<Link href={reviewHref} />} nativeButton={false} size="sm">
-                    Revisar en Review
+                    Ir al inbox · {formatNumber(hoyActuar + pending)} por gestionar
                   </Button>
-                ) : null}
+                )}
               </span>
             }
           >
@@ -903,60 +891,6 @@ export default async function DashboardPage({
           </AppCard>
         </section>
       )}
-      {attention.length > 0 && (
-      <section id="hoy-tabla">
-        <SectionHeading
-          title={`Pendientes que no se pudieron redactar solos (${formatNumber(attention.length)})`}
-          hint="Si no los ves hoy, siguen mañana."
-          tone="amber"
-          right={
-            <span className="text-xs text-muted-foreground">
-              {pending > 0 ? (
-                <>
-                  Listos en Review ·{" "}
-                  <Link href={reviewHref} className="underline underline-offset-4">
-                    aprobar ahora
-                  </Link>
-                </>
-              ) : atRisk > 0 ? (
-                <>
-                  {formatNumber(atRisk)} pendientes · se redactan solos y pasan a{" "}
-                  <Link href={reviewHref} className="underline underline-offset-4">
-                    Review
-                  </Link>
-                </>
-              ) : (
-                "sin pendientes"
-              )}
-            </span>
-          }
-        />
-        <AppCard
-          variant="table"
-          footer={
-            masivos > 0 ? (
-              <span className="text-xs text-muted-foreground tabular-nums">
-                +{formatNumber(masivos)} inactivos antiguos van con reactivación masiva, no 1-a-1.
-              </span>
-            ) : undefined
-          }
-        >
-          <AttentionTable rows={attention} currency={viewCurrency} />
-        </AppCard>
-      </section>
-      )}
-
-      <section aria-label="No tocamos hoy">
-        <AppCard
-          title="No tocamos hoy"
-          description="Clientes que el motor decidió no contactar: están bien y escribirles quemaría el canal."
-          contentClassName="flex flex-wrap gap-x-6 gap-y-1 text-[13px] tabular-nums"
-        >
-          <span><strong>{formatNumber(hoyGroups.organico)}</strong> <span className="text-muted-foreground">al día (orgánico)</span></span>
-          <span><strong>{formatNumber(hoyGroups.dormido)}</strong> <span className="text-muted-foreground">dormidos</span></span>
-          <span><strong>{formatNumber(hoyGroups.contactado_reciente)}</strong> <span className="text-muted-foreground">contactados reciente</span></span>
-        </AppCard>
-      </section>
 
       <section aria-label="Embudo de recuperación">
         <SectionHeading

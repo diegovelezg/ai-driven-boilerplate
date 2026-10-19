@@ -45,6 +45,8 @@ export default async function ReviewPage({
   let approvedActions: ActionRow[] = [];
   let leads: LeadRow[] = [];
   let signals: SignalRow[] = [];
+  /** Descartadas recientes (contactar igual): reabrir las devuelve a la cola. */
+  let dismissedSignals: SignalRow[] = [];
   let runningKinds = new Set<string>();
   let error: string | null = null;
   /** Dominios que ya son customers (para el check “no es cliente actual”). */
@@ -269,12 +271,127 @@ export default async function ReviewPage({
         signals = [...mira.rows, ...mira.foreign].map((r) => ({
           id: r.signalId,
           kind: r.kind,
+          objective: r.objective ?? null,
           score: r.score,
           reason: r.reason,
           status: r.status,
           email: r.email,
           name: [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email,
+          createdAt: r.createdAt ?? null,
+          customerId: r.customerDbId,
+          daysSince: r.daysSince ?? null,
+          ordersCount: r.ordersCount,
+          totalSpent: r.totalSpent,
+          currency: r.currency,
         }));
+        // Descartadas recientes para "contactar igual" (issue #14 B3): la mira
+        // solo trae open/prioritized y el descarte no tenía remedio.
+        try {
+          const dq = applyScopeFilter(
+            db
+              .from("churn_signals")
+              .select("id,customer_id,kind,objective,score,reason,status,created_at,customers(email,first_name,last_name)")
+              .eq("store_id", storeId)
+              .eq("status", "dismissed"),
+            scope,
+          );
+          const { data: dd } = await dq.order("closed_at", { ascending: false }).limit(20);
+          dismissedSignals = ((dd ?? []) as Array<Record<string, unknown>>).map((r) => {
+            const c = (r.customers ?? {}) as Record<string, unknown>;
+            const email = String(c.email ?? "");
+            return {
+              id: String(r.id ?? ""),
+              kind: String(r.kind ?? ""),
+              objective: (r.objective as string | null) ?? null,
+              score: r.score == null ? null : Number(r.score),
+              reason: (r.reason as string | null) ?? null,
+              status: "dismissed",
+              email,
+              name: [c.first_name, c.last_name].filter(Boolean).join(" ") || email,
+              createdAt: (r.created_at as string | null) ?? null,
+              customerId: String(r.customer_id ?? ""),
+            };
+          });
+        } catch {
+          dismissedSignals = [];
+        }
+        // Sustento del motor para "Clientes en riesgo" (igual que en
+        // "Mensajes por aprobar"): última predicción + última orden real.
+        // Bulk en 2 queries (sin N+1), cubriendo abiertas y descartadas.
+        try {
+          const sigCustIds = [
+            ...new Set(
+              [...signals, ...dismissedSignals]
+                .map((x) => x.customerId)
+                .filter((v): v is string => !!v),
+            ),
+          ];
+          if (sigCustIds.length > 0) {
+            const [{ data: spr }, { data: sor }] = await Promise.all([
+              db
+                .from("customer_predictions")
+                .select("customer_id,decision,p_recompra_h,p_low,p_high,horizon_days,ticket_esperado_minor,valor_esperado_minor,confidence,evidence_json")
+                .eq("store_id", storeId)
+                .in("customer_id", sigCustIds)
+                .order("as_of", { ascending: false })
+                .order("model_version", { ascending: false })
+                .limit(500),
+              db
+                .from("orders")
+                .select("customer_id,placed_at,items_json")
+                .eq("store_id", storeId)
+                .in("customer_id", sigCustIds)
+                .order("placed_at", { ascending: false })
+                .limit(500),
+            ]);
+            const sPredById = new Map<string, Record<string, unknown>>();
+            for (const r of (spr ?? []) as Array<Record<string, unknown>>) {
+              const cid = String(r.customer_id ?? "");
+              if (cid && !sPredById.has(cid)) sPredById.set(cid, r);
+            }
+            const sLastById = new Map<string, { at: string; items: string[] }>();
+            for (const r of (sor ?? []) as Array<Record<string, unknown>>) {
+              const cid = String(r.customer_id ?? "");
+              if (!cid || sLastById.has(cid)) continue;
+              const items = Array.isArray(r.items_json)
+                ? (r.items_json as Array<Record<string, unknown>>)
+                    .map((i) => String(i.title ?? "").trim())
+                    .filter((t) => t && t !== "—")
+                    .slice(0, 3)
+                : [];
+              sLastById.set(cid, { at: String(r.placed_at ?? "").slice(0, 10), items });
+            }
+            const enrichSignal = (x: SignalRow): SignalRow => {
+              const p = sPredById.get(x.customerId ?? "");
+              const o = sLastById.get(x.customerId ?? "");
+              const next: SignalRow = {
+                ...x,
+                lastOrderAt: o?.at ?? x.lastOrderAt ?? null,
+                lastOrderItems: o?.items ?? x.lastOrderItems ?? null,
+              };
+              if (!p) return next;
+              const ev = (p.evidence_json as Record<string, unknown> | null) ?? {};
+              return {
+                ...next,
+                predCycleDays: ev.cycle_days == null ? null : Number(ev.cycle_days),
+                predTDays: ev.t_days == null ? null : Number(ev.t_days),
+                predHorizon: p.horizon_days == null ? null : Number(p.horizon_days),
+                predP: p.p_recompra_h == null ? null : Number(p.p_recompra_h),
+                predPLow: p.p_low == null ? null : Number(p.p_low),
+                predPHigh: p.p_high == null ? null : Number(p.p_high),
+                predTicketMinor:
+                  p.ticket_esperado_minor == null ? null : Number(p.ticket_esperado_minor),
+                predValorMinor:
+                  p.valor_esperado_minor == null ? null : Number(p.valor_esperado_minor),
+                predConfidence: (p.confidence as string | null) ?? null,
+              };
+            };
+            signals = signals.map(enrichSignal);
+            dismissedSignals = dismissedSignals.map(enrichSignal);
+          }
+        } catch {
+          // Sin predicciones: las tarjetas usan el texto de respaldo.
+        }
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
@@ -368,6 +485,7 @@ export default async function ReviewPage({
             approvedActions={approvedActions}
             leads={leads}
             signals={signals}
+            dismissedSignals={dismissedSignals}
             visible={{ actions: showActions, leads: showLeads, signals: showSignals }}
             runningKinds={[...runningKinds]}
             marketLabel={marketLabel}

@@ -41,6 +41,10 @@ export function AppCard({
   headerClassName,
   contentClassName,
   footerClassName,
+  /** Al proveerlo, TODO el header abre el drawer (inbox): cursor pointer
+   *  + teclado (Enter/Espacio). Los interactivos internos (checkbox)
+   *  hacen stopPropagation para no dispararlo. */
+  onHeaderClick,
   children,
   ...rest
 }: {
@@ -55,6 +59,7 @@ export function AppCard({
   headerClassName?: string;
   contentClassName?: string;
   footerClassName?: string;
+  onHeaderClick?: () => void;
   children: ReactNode;
 } & Omit<React.ComponentProps<"div">, "title" | "className">) {
   const hasHeader = title !== undefined || description !== undefined || action !== undefined;
@@ -70,7 +75,23 @@ export function AppCard({
       )}
     >
       {hasHeader && (
-        <CardHeader className={headerClassName}>
+        <CardHeader
+          className={cn(onHeaderClick && "cursor-pointer", headerClassName)}
+          onClick={onHeaderClick ? () => onHeaderClick() : undefined}
+          onKeyDown={
+            onHeaderClick
+              ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onHeaderClick();
+                  }
+                }
+              : undefined
+          }
+          role={onHeaderClick ? "button" : undefined}
+          tabIndex={onHeaderClick ? 0 : undefined}
+          title={onHeaderClick ? "Abrir ficha del cliente" : undefined}
+        >
           {title !== undefined && <CardTitle>{title}</CardTitle>}
           {description !== undefined && <CardDescription>{description}</CardDescription>}
           {action !== undefined && <CardAction>{action}</CardAction>}

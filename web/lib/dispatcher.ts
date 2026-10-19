@@ -28,7 +28,7 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
     for (let off = 0; ; off += 500) {
       const { data, error } = await db
         .from("proposed_actions")
-        .select("id,customer_id,channel,subject,body,evidence_json,customers(email)")
+        .select("id,customer_id,channel,subject,body,evidence_json,approved_at,created_at,signal_id,customers(email)")
         .eq("store_id", storeId)
         .eq("status", "approved")
         .order("created_at", { ascending: true })
@@ -43,15 +43,23 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
     if ((totalApproved ?? all.length) > all.length) {
       log(`run ${runId} cola truncada: ${all.length}/${totalApproved} aprobadas (CAP 5k)`);
     }
-    const rows = (all as Array<Record<string, unknown>>).map((r) => ({
-      id: String(r.id),
-      customer_id: String(r.customer_id ?? ""),
-      email: String((r.customers as Record<string, unknown> | null)?.email ?? ""),
-      channel: String(r.channel ?? "?"),
-      subject: (r.subject as string | null) ?? null,
-      body: String(r.body ?? ""),
-      generator: ((r.evidence_json as Record<string, unknown> | null)?.generator as string | null) ?? null,
-    }));
+    const rows = (all as Array<Record<string, unknown>>).map((r) => {
+      const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+      const contact = (ev.contactability as Record<string, unknown> | null) ?? {};
+      return {
+        id: String(r.id),
+        customer_id: String(r.customer_id ?? ""),
+        email: String((r.customers as Record<string, unknown> | null)?.email ?? ""),
+        channel: String(r.channel ?? "?"),
+        subject: (r.subject as string | null) ?? null,
+        body: String(r.body ?? ""),
+        generator: (ev.generator as string | null) ?? null,
+        approvedAt: (r.approved_at as string | null) ?? null,
+        createdAt: (r.created_at as string | null) ?? null,
+        signalId: (r.signal_id as string | null) ?? null,
+        failOpen: contact.fail_open === true,
+      };
+    });
     // Puerta de sello (issue #9): lo aprobado con criterios viejos no se
     // envía (revócalo en Review). Sin esto, un telegrama v5 aprobado antes
     // del juez saldría igual por esta cola.
@@ -73,16 +81,60 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
     if (dupHeld > 0) {
       log(`run ${runId} retenidas_dupe_customer=${dupHeld} (una por cliente por corrida)`);
     }
-    log(`run ${runId} start aprobadas=${sendable.length} (sello viejo omitidas=${stale}, dupes retenidas=${dupHeld}) stub=${stub ? "on" : "off"}`);
-    await setRunTotal(runId, sendable.length).catch(() => {});
+    // Puerta pre-envío (issue #13): revalidar antes de marcar `dispatched`.
+    // skip terminal → `skipped` con motivo; hold → queda `approved` sin envío.
+    const { checkPreSendGate } = await import("@/lib/pre-send");
+    const gated: typeof sendable = [];
+    let skipped = 0;
+    let held = 0;
+    for (const a of sendable) {
+      const g = await checkPreSendGate({
+        id: a.id,
+        storeId,
+        customerId: a.customer_id,
+        channel: a.channel,
+        approvedAt: a.approvedAt,
+        createdAt: a.createdAt,
+        signalId: a.signalId,
+        failOpen: a.failOpen,
+      });
+      if (g.send) {
+        gated.push(a);
+        continue;
+      }
+      if (g.terminal) {
+        const { data: prev } = await db
+          .from("proposed_actions")
+          .select("evidence_json")
+          .eq("id", a.id)
+          .maybeSingle();
+        const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+        await db
+          .from("proposed_actions")
+          .update({
+            status: "skipped",
+            evidence_json: { ...prevEv, skip: { code: g.code, reason: g.message, at: new Date().toISOString() } },
+          })
+          .eq("id", a.id)
+          .eq("status", "approved");
+        skipped += 1;
+        log(`run ${runId} ${a.email || a.id} SKIPPED ${g.code}: ${g.message}`);
+      } else {
+        held += 1;
+        log(`run ${runId} ${a.email || a.id} HELD ${g.code}: ${g.message} (queda approved)`);
+      }
+    }
+    const sendableGated = gated;
+    log(`run ${runId} start aprobadas=${sendableGated.length} (sello viejo omitidas=${stale}, dupes retenidas=${dupHeld}, skipped=${skipped}, held=${held}) stub=${stub ? "on" : "off"}`);
+    await setRunTotal(runId, sendableGated.length).catch(() => {});
     if (!stub) {
       // Ruta real: solo email/SendGrid. WhatsApp queda en cola (sin proveedor).
       const { readConnections } = await import("@/lib/store");
       const conn = await readConnections(storeId).catch(() => null);
       const emailReady =
         conn?.emailProvider === "sendgrid" && !!conn.emailApiKey && !!conn.emailFrom;
-      const emails = sendable.filter((r) => r.channel === "email");
-      const whats = sendable.filter((r) => r.channel !== "email");
+      const emails = sendableGated.filter((r) => r.channel === "email");
+      const whats = sendableGated.filter((r) => r.channel !== "email");
       if (whats.length > 0) {
         log(`run ${runId} retenidos_sin_proveedor=${whats.length} (WhatsApp sin conectar, siguen approved)`);
       }
@@ -163,7 +215,7 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
       log(`run ${runId} done ${summary}`);
       return;
     }
-    for (const a of sendable) {
+    for (const a of sendableGated) {
       await advanceRun(runId, { processed: dispatched, failed: 0, current: null });
       const { error: upErr } = await db
         .from("proposed_actions")

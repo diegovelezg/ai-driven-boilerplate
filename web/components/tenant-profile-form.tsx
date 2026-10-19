@@ -27,7 +27,7 @@ import {
   type CatalogType,
   type StoreProfile,
   type Suggestion,
-} from "@/lib/store-profiles";
+} from "@/lib/store-profile-defs";
 
 interface Props {
   storeId: string | null;

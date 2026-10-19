@@ -3,7 +3,7 @@
 // Aislado del loop de retención: solo lee customers/orders/domains.
 import { getSupabase } from "@/lib/supabase";
 import { isRealOrder } from "@/lib/medusa";
-import { classifyDomain, domainFromEmail } from "@/lib/domains";
+import { domainFromEmail, isCustomDomain } from "@/lib/domains";
 
 export interface TenantStats {
   customers: number;
@@ -23,11 +23,6 @@ export interface TenantStats {
   intervalMedian: number | null;
   intervalCoverage: number;
 }
-
-const FREE = new Set([
-  "gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com",
-  "icloud.com", "aol.com", "proton.me", "protonmail.com", "uol.com.br",
-]);
 
 function median(xs: number[]): number | null {
   if (xs.length === 0) return null;
@@ -67,7 +62,7 @@ export async function tenantStats(storeId: string): Promise<TenantStats & { samp
     if (Number(r.orders_count ?? 0) >= 2) repeat += 1;
     if (Number(r.orders_count ?? 0) > 0) buyers += 1;
     const d = domainFromEmail(String(r.email ?? ""));
-    if (d && classifyDomain(d).enrichable && !FREE.has(d)) {
+    if (isCustomDomain(d)) {
       customCust += 1;
       domCount.set(d, (domCount.get(d) ?? 0) + 1);
     }

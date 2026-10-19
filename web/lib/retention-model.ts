@@ -54,9 +54,11 @@ export interface Prediction {
 }
 
 /** Versión de la función de decisión (auditable, re-ejecutable).
- *  v3:market = partición por market + isB2B por lado + bandas por tenant
- *  (issue #21 Pasos 3-5). Con defaults reproduce v2 numéricamente. */
-export const DECISION_VERSION = "v3:market";
+ *  v4:nodormido-exception = v3:market sin la excepción dormido→
+ *  revision_humana para top B2B (el dormido con ventana lejana no abre
+ *  señal: se lo espera, no se lo contacta). Con defaults reproduce v3
+ *  salvo en ese caso. */
+export const DECISION_VERSION = "v4:nodormido-exception";
 
 /** Cortes default de banda_p (issue #21 Paso 5): reproducen v2.
  *  La forma es global; los valores son por tenant (store_profiles). */
@@ -75,9 +77,10 @@ export interface DecisionAxes {
 /** decision = función pura y versionada de los ejes (issue #14A).
  *  Reglas (mismas que el bloque inline anterior, ahora auditables):
  *  elegibilidad manda (sin-canal/contacto-reciente) → organico-probable
- *  en ventana temprana es organico → dormido (salvo top B2B) →
- *  recuperable en ventana con confianza e intervalo acotados es actuar →
- *  resto vigilar. */
+ *  en ventana temprana es organico → dormido siempre (sin excepción:
+ *  una cuenta dormida con ventana lejana no abre señal aunque sea top,
+ *  se la espera, no se la quema) → recuperable en ventana con
+ *  confianza e intervalo acotados es actuar → resto vigilar. */
 export function decideFromAxes(
   axes: DecisionAxes,
   opts: {
@@ -91,8 +94,15 @@ export function decideFromAxes(
   if (axes.elegibilidad === "sin-canal") return "sin_canal";
   if (axes.elegibilidad === "contacto-reciente") return "contactado_reciente";
   if (axes.bandaP === "organico-probable" && axes.ventana === "antes") return "organico";
+  // Dormido no abre señal para nadie: ni top ni B2B. La ventana lejana
+  // se espera (vigilar/dormido la cierra el scout); cuando t se acerque
+  // a p25 la ventana deja de ser dormido y el flujo normal decide.
+  // `isB2B`/`topDecil` quedan en la firma por compatibilidad (otros
+  // callers los pasan) pero ya no cambian la decisión aquí.
+  void opts.isB2B;
+  void opts.topDecil;
   if (axes.ventana === "dormido") {
-    return opts.topDecil && opts.isB2B ? "revision_humana" : "dormido";
+    return "dormido";
   }
   if (axes.bandaP !== "lejos" && axes.ventana !== "antes") {
     if (!opts.ventanaAcotada || opts.confidence === "baja" || opts.intervaloAncho) {
@@ -114,8 +124,8 @@ export interface StoreModelInput {
   suppressed: Map<string, "sin_canal" | "contactado_reciente">;
   /** Opcional: true si el tenant es B2B (b2b_proyecto/b2b_recurrente).
    *  Legacy (issue #21 Paso 4): solo fallback cuando el cliente no trae
-   *  `customerType`. Con tipos por cliente, la excepción dormido→
-   *  revision_humana se evalúa por lado. */
+   *  `customerType`. Desde v4 ya no hay excepción dormido→revision_humana:
+   *  el dormido no abre señal para ningún lado. */
   isB2B?: boolean;
   /** Etiqueta de la partición (issue #21 Paso 3). Se propaga a Prediction. */
   marketId?: string | null;

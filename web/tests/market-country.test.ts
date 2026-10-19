@@ -17,7 +17,7 @@ import {
   pickRequestedMarket,
   withMarketParam,
   type TenantMarket,
-} from "@/lib/markets";
+} from "@/lib/market-utils";
 
 const PE: TenantMarket = { id: "m-pe", name: "PE", currency: "pen", countries: [] };
 const MX: TenantMarket = { id: "m-mx", name: "MX", currency: "mxn", countries: [] };

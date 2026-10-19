@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { displayMarket, type TenantMarket } from "@/lib/markets";
+import { displayMarket, type TenantMarket } from "@/lib/market-utils";
 
 /**
  * Filtro global por país/mercado (?market= en URL, como ?store=).

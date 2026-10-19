@@ -34,6 +34,8 @@ export interface MiraRow {
   companyName: string | null;
   /** Último borrador de la señal (para el CTA correcto en Hoy). */
   draftStatus: "none" | "pending" | "approved" | "dispatched";
+  /** ISO de creación de la señal (para el tag "Hoy" del inbox). */
+  createdAt: string | null;
   /** Motor probabilístico (opcional para no romper consumidores). */
   pRecompraH?: number | null;
   decision?: string | null;
@@ -128,7 +130,7 @@ export async function getRankedMira(
     for (let off = 0; ; off += PAGE) {
       const { data: pageRows, error: pageErr } = await db
         .from("churn_signals")
-        .select("id,customer_id,kind,objective,score,reason,status,evidence_json")
+        .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
         .eq("store_id", storeId)
         .in("status", ["open", "prioritized"])
         .is("country", null)
@@ -150,7 +152,7 @@ export async function getRankedMira(
         for (let off = 0; !chunkDone; off += PAGE) {
           const { data: pageRows, error: pageErr } = await db
             .from("churn_signals")
-            .select("id,customer_id,kind,objective,score,reason,status,evidence_json")
+            .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
             .eq("store_id", storeId)
             .in("status", ["open", "prioritized"])
             .in("customer_id", c)
@@ -175,7 +177,7 @@ export async function getRankedMira(
     const pageQ = applyScopeFilter(
       db
         .from("churn_signals")
-        .select("id,customer_id,kind,objective,score,reason,status,evidence_json")
+        .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
         .eq("store_id", storeId)
         .in("status", ["open", "prioritized"]),
       scope,
@@ -318,6 +320,7 @@ export async function getRankedMira(
       currency: (c.currency as string | null) ?? null,
       country: (c.country as string | null) ?? null,
       draftStatus: draftBySignal.get(String(r.id)) ?? "none",
+      createdAt: (r.created_at as string | null) ?? null,
       pRecompraH: pred?.p ?? null,
       decision: pred?.decision ?? null,
       expectedDays: pred?.expectedDays ?? null,

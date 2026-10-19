@@ -78,3 +78,52 @@ export function isCloseWatch(
   const p = pred.pRecompraH;
   return p !== null && Number.isFinite(p) && (p as number) >= cutoff;
 }
+
+/** Muestra etiquetada para calibrar el corte: p del motor + si el cliente
+ *  volvió a comprar dentro de su ventana tras la predicción. */
+export interface CloseWatchSample {
+  p: number;
+  returned: boolean;
+}
+
+/** Mínimo de historia para fitear (menos = se conserva el default). */
+export const CLOSE_WATCH_FIT_MIN_SAMPLES = 30;
+/** Mínimo de casos por clase (sin positivos y negativos no hay corte). */
+export const CLOSE_WATCH_FIT_MIN_PER_CLASS = 5;
+/** Guardarraíles anti-degenerado del corte fiteado (no son negocio: evitan
+ *  "nadie es cercano" o "todos son cercanos" con historia rala). */
+export const CLOSE_WATCH_FIT_MIN_P = 0.02;
+export const CLOSE_WATCH_FIT_MAX_P = 0.5;
+
+/**
+ * Corte p aprendido del tenant para "seguimiento cercano" (autocalibración,
+ * sin hardcodear por tienda). Criterio: J de Youden (sensibilidad +
+ * especificidad − 1) sobre la historia etiquetada — el corte que mejor
+ * separa a los que volvieron de los que no. Empate → corte menor (favorece
+ * cobertura). Devuelve null si p no discrimina (J ≤ 0) o hay poca historia:
+ * el llamador conserva el default.
+ */
+export function fitCloseWatchP(samples: CloseWatchSample[]): number | null {
+  const rows = samples.filter(
+    (s) => Number.isFinite(s.p) && s.p >= 0 && s.p <= 1,
+  );
+  if (rows.length < CLOSE_WATCH_FIT_MIN_SAMPLES) return null;
+  const pos = rows.filter((s) => s.returned).length;
+  const neg = rows.length - pos;
+  if (pos < CLOSE_WATCH_FIT_MIN_PER_CLASS || neg < CLOSE_WATCH_FIT_MIN_PER_CLASS) return null;
+  const candidates = [...new Set(rows.map((s) => s.p))].sort((a, b) => a - b);
+  let best: number | null = null;
+  let bestJ = 0;
+  for (const c of candidates) {
+    const tp = rows.filter((s) => s.returned && s.p >= c).length;
+    const fp = rows.filter((s) => !s.returned && s.p >= c).length;
+    const j = tp / pos + (neg - fp) / neg - 1;
+    if (j > bestJ + 1e-9) {
+      bestJ = j;
+      best = c;
+    }
+  }
+  if (best === null) return null;
+  const clamped = Math.min(CLOSE_WATCH_FIT_MAX_P, Math.max(CLOSE_WATCH_FIT_MIN_P, best));
+  return Math.round(clamped * 100) / 100;
+}

@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, PenLine, Phone, Radar, Share2, UserPlus, type LucideIcon } from "lucide-react";
+import { ChevronDown, Mail, PenLine, Phone, Radar, Share2, UserPlus, type LucideIcon } from "lucide-react";
 import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { ChannelTag, KindTag, StatusTag } from "@/components/inbox-tag";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChannelTag, KindTag, StatusTag, TodayTag } from "@/components/inbox-tag";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber } from "@/lib/format";
@@ -20,6 +25,8 @@ import {
   approveLeadAction,
   dismissSignalAction,
   markDispatchedAction,
+  proposeSingleAction,
+  reopenSignalAction,
   regenerateStaleDraftsAction,
   rejectActionAction,
   rejectLeadAction,
@@ -28,10 +35,29 @@ import {
   switchChannelAction,
   updateDraftContentAction,
 } from "@/lib/review-actions";
-import { ApprovePair, DismissButton, DraftActions, EditableDraft, MarkSentButton, RegenerateButton, RevokeButton } from "./review-buttons";
+import { ApprovePair, DismissButton, DraftActions, EditableDraft, MarkSentButton, RedactButton, RegenerateButton, ReopenButton, RevokeButton } from "./review-buttons";
 import { CustomerDrawer } from "../customers/customer-drawer";
 import type { EditableCustomer } from "@/lib/customers-db";
 import { approverLabel } from "@/lib/action-trace";
+
+/** Sustento colapsado (shadcn Collapsible BASIC, cerrado por defecto):
+ *  el por-qué se propone no empuja el borrador hacia abajo. */
+function Sustento({ children }: { children: ReactNode }) {
+  return (
+    <Collapsible className="rounded-lg bg-muted/40 px-3.5 py-2.5">
+      <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-1.5 text-left text-xs font-medium hover:text-foreground">
+        Por qué se propone (sustento)
+        <ChevronDown
+          className="size-3.5 shrink-0 transition-transform group-data-[panel-open]:rotate-180"
+          aria-hidden
+        />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 export interface ActionRow {
   id: string;
@@ -98,15 +124,108 @@ export interface LeadRow {
 export interface SignalRow {
   id: string;
   kind: string;
+  /** Tratamiento decidido por strategist (winback|nurture|vip_care); null = sin tratar. */
+  objective?: string | null;
   score: number | null;
   reason: string | null;
   status: string;
   email: string;
   name: string;
+  /** ISO de creación de la señal (tag "Hoy"; null = sin fecha). */
+  createdAt?: string | null;
+  customerId?: string;
+  /** Días sin comprar (parseado del motivo; null = otros tipos). */
+  daysSince?: number | null;
+  ordersCount?: number | null;
+  totalSpent?: number | null;
+  currency?: string | null;
+  /** Evidencia del motor (mismo sustento que "Mensajes por aprobar"). */
+  predCycleDays?: number | null;
+  predTDays?: number | null;
+  predHorizon?: number | null;
+  predP?: number | null;
+  predPLow?: number | null;
+  predPHigh?: number | null;
+  predTicketMinor?: number | null;
+  predValorMinor?: number | null;
+  predConfidence?: string | null;
+  lastOrderAt?: string | null;
+  lastOrderItems?: string[] | null;
 }
 
 /** Tab del inbox: una cola por trabajo (retención vs adquisición vs contexto). */
 export type ReviewTab = "actions" | "leads" | "signals";
+
+/** Sustento de una señal (Clientes en riesgo): mismo Hecho/Evidencia/
+ *  Impacto que "Mensajes por aprobar", sin canal (aún no hay borrador). */
+function SignalSustento({
+  s,
+  shopCurrency,
+  ultimaCompraLabel,
+}: {
+  s: SignalRow;
+  shopCurrency?: string | null;
+  ultimaCompraLabel: string;
+}) {
+  const hasPred = s.predHorizon != null && s.predP != null;
+  const n10 = hasPred ? Math.round((s.predP ?? 0) * 10) : null;
+  const nLow = hasPred && s.predPLow != null ? Math.round(s.predPLow * 10) : null;
+  const nHigh = hasPred && s.predPHigh != null ? Math.round(s.predPHigh * 10) : null;
+  const hecho = hasPred
+    ? `ciclo ~${s.predCycleDays != null ? formatNumber(s.predCycleDays) : "?"}d · lleva ${s.predTDays != null ? formatNumber(s.predTDays) : "?"}d · ${ultimaCompraLabel} ${s.lastOrderAt ?? "—"}${s.lastOrderItems && s.lastOrderItems.length > 0 ? ` (${s.lastOrderItems.join(" · ")})` : ""}`
+    : null;
+  const historial =
+    s.ordersCount != null || s.totalSpent != null || s.daysSince != null ? (
+      <span>
+        <strong className="text-foreground">Historial:</strong>{" "}
+        {s.ordersCount != null ? `${formatNumber(s.ordersCount)} ${s.ordersCount === 1 ? "compra" : "compras"}` : "—"}
+        {s.totalSpent != null ? ` · acumulado ${formatMoney(s.totalSpent, (s.currency ?? shopCurrency) ?? null)}` : ""}
+        {s.daysSince != null ? ` · sin comprar hace ${formatNumber(s.daysSince)}d` : ""}.
+      </span>
+    ) : null;
+  const treatment = s.objective ?? s.kind;
+  return (
+    <Sustento>
+      {hasPred ? (
+        <>
+          <span>
+            <strong className="text-foreground">Hecho:</strong> {hecho}
+          </span>
+          {historial}
+          <span>
+            <strong className="text-foreground">Evidencia:</strong> sin escribirle,
+            de cada 10 similares vuelven ~{formatNumber(n10)} en {formatNumber(s.predHorizon)}d (rango {formatNumber(nLow)}–{formatNumber(nHigh)})
+            {s.predConfidence === "baja" ? " (estimación inicial: aún hay pocos datos de esta tienda)" : ""}.
+          </span>
+          <span>
+            <strong className="text-foreground">Impacto:</strong> ticket esperado{" "}
+            {s.predTicketMinor != null ? formatMoney(s.predTicketMinor, shopCurrency ?? null) : "—"}
+            {s.predValorMinor != null ? ` · valor esperado ${formatMoney(s.predValorMinor, shopCurrency ?? null)}` : ""} · sin
+            descuento.
+          </span>
+        </>
+      ) : (
+        <>
+          <span>
+            <strong className="text-foreground">Regla:</strong>{" "}
+            {treatment === "vip_care"
+              ? "3+ compras y gasto en el top 20% → cuidado VIP, vale 1-a-1"
+              : treatment === "winback"
+                ? "1 sola compra y vencido → winback, la 2ª compra define si se queda"
+                : treatment === "nurture"
+                  ? "2+ compras, gasto medio → nurture, reactivar hábito"
+                  : "señal de churn vencida → recupero"}{" "}
+            {s.score != null ? `· score ${formatNumber(s.score)}` : ""} {s.reason ? `· ${s.reason}` : ""}
+          </span>
+          {historial}
+          <span>
+            El texto del futuro borrador usará solo historial real, sin cifras inventadas.
+          </span>
+        </>
+      )}
+    </Sustento>
+  );
+}
 
 /** Listas del inbox: UN renderer para /review y para el canvas del chat.
  *  Recibe filas ya filtradas; `visible` decide qué secciones se muestran
@@ -117,6 +236,8 @@ export function ReviewLists({
   approvedActions = [],
   leads,
   signals,
+  /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
+  dismissedSignals = [],
   visible,
   runningKinds = [],
   marketLabel = null,
@@ -133,6 +254,8 @@ export function ReviewLists({
   approvedActions?: ActionRow[];
   leads: LeadRow[];
   signals: SignalRow[];
+  /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
+  dismissedSignals?: SignalRow[];
   visible: { actions: boolean; leads: boolean; signals: boolean };
   runningKinds?: string[];
   marketLabel?: string | null;
@@ -290,6 +413,7 @@ export function ReviewLists({
           <AppCard
             key={a.id}
             tone="primary"
+            onHeaderClick={() => void openDrawer(a.customerId)}
             title={
               <span className="flex min-w-0 items-center gap-2">
                 {!isB2B && (
@@ -302,22 +426,18 @@ export function ReviewLists({
                     className="size-4 shrink-0 accent-primary"
                   />
                 )}
-                <button
-                  type="button"
-                  onClick={() => void openDrawer(a.customerId)}
-                  title="Abrir ficha del cliente"
-                  className="flex min-w-0 items-center gap-2 rounded-md hover:underline"
-                >
+                <span className="flex min-w-0 items-center gap-2">
                   <span className="truncate">{a.name}</span>
                   <span className="truncate text-xs font-normal text-muted-foreground">
                     · {a.email}
                   </span>
-                </button>
+                </span>
               </span>
             }
             description={a.reason ? `Motivo: ${a.reason}` : undefined}
             action={
               <span className="flex items-center gap-1.5">
+                <TodayTag value={a.created_at} />
                 <ChannelTag value={a.channel} />
                 <KindTag value={a.kind} />
               </span>
@@ -344,11 +464,8 @@ export function ReviewLists({
                 body={a.body}
                 onSave={updateDraftContentAction}
               />
-              <details className="rounded-lg bg-muted/40 px-3.5 py-2.5">
-                <summary className="text-xs font-medium hover:text-foreground">
-                  Por qué se propone (sustento)
-                </summary>
-                <div className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
+              {/* Sustento colapsado: no empuja el borrador hacia abajo. */}
+              <Sustento>
                   {hasPred ? (
                     <>
                       <span>
@@ -389,8 +506,7 @@ export function ReviewLists({
                       ? "✓ criterios actuales"
                       : "⚠ criterios anteriores — usa “Regenerar” arriba para rehacerlo"}
                   </span>
-                </div>
-              </details>
+              </Sustento>
             </AppCard>
           );
         })}
@@ -405,18 +521,14 @@ export function ReviewLists({
               <AppCard
                 key={a.id}
                 tone="emerald"
+                onHeaderClick={() => void openDrawer(a.customerId)}
                 title={
-                  <button
-                    type="button"
-                    onClick={() => void openDrawer(a.customerId)}
-                    title="Abrir ficha del cliente"
-                    className="flex min-w-0 items-center gap-2 rounded-md hover:underline"
-                  >
+                  <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate">{a.name}</span>
                     <span className="truncate text-xs font-normal text-muted-foreground">
                       · {a.email}
                     </span>
-                  </button>
+                  </span>
                 }
                 description={
                   <span className="tabular-nums">
@@ -426,6 +538,7 @@ export function ReviewLists({
                 }
                 action={
                   <span className="flex flex-wrap items-center gap-1.5">
+                    <TodayTag value={a.created_at} />
                     <ChannelTag value={a.channel} />
                     <KindTag value={a.kind} />
                     {a.generator !== COPYWRITER_GEN ? (
@@ -500,8 +613,13 @@ export function ReviewLists({
             title={l.company ?? l.domain ?? l.url}
             description={l.reason ?? undefined}
             action={
-              l.icp_score != null ? (
-                <span className="tabular-nums">score {formatNumber(l.icp_score)}</span>
+              l.icp_score != null || l.created_at ? (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <TodayTag value={l.created_at} />
+                  {l.icp_score != null ? (
+                    <span className="tabular-nums">score {formatNumber(l.icp_score)}</span>
+                  ) : null}
+                </span>
               ) : undefined
             }
             footer={<ApprovePair id={l.id} onApprove={approveLeadAction} onReject={rejectLeadAction} />}
@@ -561,11 +679,7 @@ export function ReviewLists({
                   </div>
                 );
               })()}
-              <details className="rounded-lg bg-muted/40 px-3.5 py-2.5">
-                <summary className="text-xs font-medium hover:text-foreground">
-                  Por qué se propone (sustento del agente)
-                </summary>
-                <div className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
+              <Sustento>
                   {!l.evidence || (l.evidence.similar ?? []).length === 0 ? (
                     <span>
                       Sin referentes guardados (lead de corrida anterior al sustento). Juicio del modelo: {l.reason ?? "—"}
@@ -611,8 +725,7 @@ export function ReviewLists({
                     score {l.icp_score ?? "?"} · {l.source ?? "searxng"}
                     {l.created_at ? ` · hallado ${l.created_at.slice(0, 10)}` : ""}
                   </span>
-                </div>
-              </details>
+              </Sustento>
             </AppCard>
         ))}
       </section>
@@ -635,6 +748,7 @@ export function ReviewLists({
           <AppCard
             key={s.id}
             tone="amber"
+            onHeaderClick={() => void openDrawer(s.customerId)}
             title={
               <span>
                 {s.name} <span className="font-normal text-muted-foreground">· {s.email}</span>
@@ -642,6 +756,7 @@ export function ReviewLists({
             }
             description={
               <span className="flex flex-wrap items-center gap-1.5">
+                <TodayTag value={s.createdAt} />
                 <StatusTag value={s.status} />
                 <KindTag value={s.kind} />
                 {s.score != null ? (
@@ -650,11 +765,53 @@ export function ReviewLists({
                 {s.reason ? <span className="basis-full">{s.reason}</span> : null}
               </span>
             }
-            action={<DismissButton id={s.id} onDismiss={dismissSignalAction} />}
+            action={
+              <span className="flex flex-wrap items-center gap-1.5">
+                <RedactButton id={s.id} onRedact={proposeSingleAction} />
+                <DismissButton id={s.id} onDismiss={dismissSignalAction} />
+              </span>
+            }
+            contentClassName="flex flex-col gap-3"
           >
-            <></>
+            <SignalSustento s={s} shopCurrency={shopCurrency} ultimaCompraLabel={ultimaCompraLabel} />
           </AppCard>
         ))}
+        {(dismissedSignals ?? []).length > 0 && (
+          <div className="mt-2 flex flex-col gap-3">
+            <SectionHeading
+              title={`Descartadas — ¿contactar igual? (${formatNumber((dismissedSignals ?? []).length)})`}
+              hint="El descarte las escondía 30 días sin remedio. Reabrir las devuelve a la cola del motor."
+              tone="emerald"
+            />
+            {(dismissedSignals ?? []).map((s) => (
+              <AppCard
+                key={s.id}
+                tone="emerald"
+                onHeaderClick={() => void openDrawer(s.customerId)}
+                title={
+                  <span>
+                    {s.name} <span className="font-normal text-muted-foreground">· {s.email}</span>
+                  </span>
+                }
+                description={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <TodayTag value={s.createdAt} />
+                    <StatusTag value="dismissed" />
+                    <KindTag value={s.kind} />
+                    {s.score != null ? (
+                      <span className="tabular-nums">score {formatNumber(s.score)}</span>
+                    ) : null}
+                    {s.reason ? <span className="basis-full">{s.reason}</span> : null}
+                  </span>
+                }
+                action={<ReopenButton id={s.id} onReopen={reopenSignalAction} />}
+                contentClassName="flex flex-col gap-3"
+              >
+                <SignalSustento s={s} shopCurrency={shopCurrency} ultimaCompraLabel={ultimaCompraLabel} />
+              </AppCard>
+            ))}
+          </div>
+        )}
       </section>
       )}
       {drawerCustomer && (

@@ -10,16 +10,21 @@
 // ranking determinista manda. La puerta nunca vacía la cola por infra.
 import { createLogger } from "@/lib/log";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { parseJudgeResponse } from "@/lib/judge-brief";
+
+export { parseJudgeResponse };
 
 const log = createLogger("contactability");
 
 /** Sello del criterio juez. Sube cuando cambia el prompt/reglas. */
-export const JUDGE_GEN = "contactability:v2:llm-judge";
+export const JUDGE_GEN = "contactability:v4:reutilizable";
 
 const JUDGE_SYSTEM = `Eres el filtro de pertinencia de un motor de retención (español Perú).
 El dossier es HISTORIAL de compras pasadas, no la invitación futura. Una ventana pasada es lo normal y NUNCA es motivo de veto.
-Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reason": "una línea, máx 140 caracteres"}.
-Veta (false) SOLO si todas las piezas son saludo, homenaje o cumpleaños y hoy está lejos de esa fecha. Todo lo demás (feria, promo, campaña, temporada o lanzamiento pasados) es contactable=true. Ante cualquier duda, true.`;
+Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reusable": true|false, "reason": "una línea, máx 140 caracteres"}.
+contactable=false SOLO si ni reconociendo quién es hay algo útil que proponer hoy sin inventar datos, fechas, nombres, ofertas o ubicaciones. Inventar = proponer lo que no está en el dossier ni en la capacidad general.
+reusable=false si lo comprado solo tenía sentido en su ventana: sirve para reconocer quién es, no para repetirlo como propuesta.
+Por defecto {"contactable": true, "reusable": true}. Ante cualquier duda, true/true.`;
 
 export interface JudgeItem {
   title: string;
@@ -103,12 +108,18 @@ async function completeJudge(ref: ModelRef, system: string, user: string, meter?
     }
   }
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
+  if (typeof content !== "string" || !content.trim()) {
+    const fr = data?.choices?.[0]?.finish_reason ?? "?";
+    const u = data?.usage?.completion_tokens_details ?? data?.usage ?? null;
+    throw new Error(`${ref.provider}: respuesta vacía (finish=${fr} usage=${JSON.stringify(u)})`);
+  }
   return content;
 }
 
 export interface JudgeVerdict {
   contactable: boolean;
+  /** false = el historial solo sirve para reconocer quién es, no para repetirlo. */
+  reusable: boolean;
   reason: string;
   /** true cuando el veredicto es fail-open (el juez no pudo decidir). */
   failOpen: boolean;
@@ -127,17 +138,10 @@ export async function judgeContactability(dossier: JudgeDossier, opts: { storeId
       log(`primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
       raw = await completeJudge(cfg.fallback, JUDGE_SYSTEM, user, { storeId: opts.storeId, usedFallback: true });
     }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const contactable = parsed.contactable !== false;
-    const reason =
-      typeof parsed.reason === "string" && parsed.reason.trim()
-        ? parsed.reason.trim().slice(0, 140)
-        : contactable
-          ? "sin motivo de no-contacto en el dossier"
-          : "el juez no dio motivo";
-    return { contactable, reason, failOpen: false };
+    const parsed = parseJudgeResponse(raw);
+    return { ...parsed, failOpen: false };
   } catch (e) {
-    log(`juez no disponible (${e instanceof Error ? e.message : e}): fail-open`);
-    return { contactable: true, reason: "juez no disponible (fail-open)", failOpen: true };
+    log(`juez no disponible (${e instanceof Error ? e.message : e}): fail-open en modo identidad seguro`);
+    return { contactable: true, reusable: false, reason: "juez no disponible (fail-open)", failOpen: true };
   }
 }

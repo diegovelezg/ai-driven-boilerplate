@@ -68,7 +68,11 @@ export async function completeJson(
     }
   }
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
+  if (typeof content !== "string" || !content.trim()) {
+    const fr = data?.choices?.[0]?.finish_reason ?? "?";
+    const u = data?.usage?.completion_tokens_details ?? data?.usage ?? null;
+    throw new Error(`${ref.provider}: respuesta vacía (finish=${fr} usage=${JSON.stringify(u)})`);
+  }
   return content;
 }
 

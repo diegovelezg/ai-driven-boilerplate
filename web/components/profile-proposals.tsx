@@ -14,7 +14,7 @@ import {
 } from "@/lib/profile-recalibrate/actions";
 import type { ProfileProposal } from "@/lib/profile-recalibrate/service";
 import type { ProfileDelta, ProfileSlot } from "@/lib/profile-recalibrate/diff";
-import { ARCHETYPES, type ArchetypeId } from "@/lib/store-profiles";
+import { ARCHETYPES, type ArchetypeId } from "@/lib/store-profile-defs";
 import { formatNumber } from "@/lib/format";
 import { verticalName } from "@/lib/taxonomy";
 

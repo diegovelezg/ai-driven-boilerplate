@@ -10,12 +10,12 @@ import { runCopywriter } from "@/lib/copywriter";
 import { runDispatcher } from "@/lib/dispatcher";
 import { runAnalyst } from "@/lib/analyst";
 import {
-  busyMessage,
   getLatestRun,
   hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
+import { busyMessage } from "@/lib/operations";
 
 export interface StartRetentionState {
   ok: boolean;

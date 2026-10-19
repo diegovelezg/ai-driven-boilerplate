@@ -41,6 +41,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { updateCustomerAction } from "@/lib/customer-actions";
+import {
+  dismissSignalAction,
+  getCustomerSignalAction,
+  proposeSingleAction,
+  reopenCustomerSignalAction,
+} from "@/lib/review-actions";
 import { reenrichDomainAction } from "@/lib/enrich-actions";
 import { useBackground } from "@/components/background-status";
 import type { EditableCustomer, ManualField } from "@/lib/customers-db";
@@ -826,7 +832,7 @@ const DECISION_TONES: Record<string, { text: string; dot: string }> = {
 };
 
 /** Tarjeta titular: con predicción manda la decisión del motor (Decisión +
- *  Ventana + probabilidad con rango); sin predicción, respaldo clásico RFM. */
+ *  Ventana + probabilidad con rango); sin predicción, sin datos. */
 function DecisionCard({
   mpred,
 }: {
@@ -916,7 +922,7 @@ function ComprasTab({
   const [summary, setSummary] = useState<CustomerRfm | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Predicción del motor (la trae PredictionBlock): con predicción manda ella,
-  // sin predicción vale lo clásico por segmento RFM.
+  // sin predicción no hay decisión.
   const [mpred, setMpred] = useState<{
     decision: string;
     model: string;
@@ -970,22 +976,14 @@ function ComprasTab({
   const tMed = totals.length > 0 ? Math.round(medianNum(totals)) : 0;
   const trend = ticketTrendPct(chrono);
   const gapMed = medianGapDays(chrono);
-  const cycleSrc =
-    summary.cycleSource === "cliente"
-      ? "su ritmo"
-      : summary.cycleSource === "tienda"
-        ? "ritmo tienda"
-        : summary.cycleSource === "arquetipo"
-          ? "arquetipo"
-          : null;
   const trendLabel =
     trend === null
       ? null
       : `${trend >= 0 ? "↑" : "↓"} ${formatPercentPoints(Math.abs(trend))} vs primeras`;
   const firstDate = chrono[0]?.date?.slice(0, 10) ?? null;
   const lastDate = chrono[chrono.length - 1]?.date?.slice(0, 10) ?? null;
-  // Sugerencia del motor (o genérica sin predicción): el segmento RFM ya no
-  // recomienda. Sin predicción, el humano mira el historial.
+  // Sugerencia del motor (o genérica sin predicción): sin predicción,
+  // el humano mira el historial.
   const motorSuggestion =
     predDecision === "organico"
       ? "No escribir: suele volver solo"
@@ -1009,7 +1007,6 @@ function ComprasTab({
       ? "Sin compras registradas."
       : [
           `${formatNumber(summary.frequency)} compra${summary.frequency === 1 ? "" : "s"}`,
-          summary.expectedCycleDays !== null ? `cada ~${formatNumber(summary.expectedCycleDays)}d` : null,
           `ticket ${formatMoney(summary.avgTicket, summary.currency)}`,
           trendLabel ? `(${trendLabel})` : null,
           `última ${recencyLabel}`,
@@ -1017,8 +1014,7 @@ function ComprasTab({
           .filter(Boolean)
           .join(" · ");
   // Prompt con la recomendación + contexto para el agente (auto-envío al abrirlo).
-  // Con predicción la recomienda el motor (decisión + ventana); el RFM queda
-  // como contexto secundario, nunca como recomendador.
+  // Con predicción la recomienda el motor (decisión + ventana).
   const motorCtx =
     mpred !== null
       ? `Decisión del motor: ${mpred.decision}` +
@@ -1033,7 +1029,7 @@ function ComprasTab({
             ? `El motor recomienda para ${customerLabel}: ${suggestion}. ${motorCtx}`
             : `El historial sugiere para ${customerLabel}: ${suggestion}.`,
           `Contexto: ${resumen}.`,
-          `Detalle: ticket prom. ${formatMoney(summary.avgTicket, summary.currency)} (rango ${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}, mediana ${formatMoney(tMed, summary.currency)}${trendLabel ? `, ${trendLabel}` : ""}); ritmo esperado ~${summary.expectedCycleDays !== null ? formatNumber(summary.expectedCycleDays) : "–"}d${cycleSrc ? ` (${cycleSrc})` : ""}${gapMed !== null ? `, observado ~${formatNumber(gapMed)}d` : ""}; última compra ${recencyLabel}.`,
+          `Detalle: ticket prom. ${formatMoney(summary.avgTicket, summary.currency)} (rango ${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}, mediana ${formatMoney(tMed, summary.currency)}${trendLabel ? `, ${trendLabel}` : ""})${gapMed !== null ? `; ritmo observado ~${formatNumber(gapMed)}d` : ""}; última compra ${recencyLabel}.`,
           "¿Qué acción concreta propones para este cliente y por qué? Básate en su historial real.",
         ].join(" ")
       : null;
@@ -1067,6 +1063,7 @@ function ComprasTab({
             .filter((t) => !Number.isNaN(t))}
           onPrediction={setMpred}
         />
+        <FichaActions dbId={dbId} />
       </div>
 
       <SectionHeading
@@ -1079,9 +1076,9 @@ function ComprasTab({
         <DecisionCard mpred={mpred} />
         <AppTooltip
           tip={
-            summary.expectedCycleDays !== null
-              ? `Ciclo esperado cada ${formatNumber(summary.expectedCycleDays)}d (fuente: ${summary.cycleSource ?? "—"})`
-              : "Sin ciclo esperado"
+            gapMed !== null
+              ? `Ritmo observado entre compras: ~${formatNumber(gapMed)}d`
+              : "Sin ritmo observado aún"
           }
         >
           <AppCard
@@ -1094,7 +1091,7 @@ function ComprasTab({
             }
           >
             <p className="text-xl font-semibold tabular-nums">
-              {summary.expectedCycleDays !== null ? `~${formatNumber(summary.expectedCycleDays)}d` : "—"}
+              {gapMed !== null ? `~${formatNumber(gapMed)}d` : "—"}
             </p>
           </AppCard>
         </AppTooltip>
@@ -1120,7 +1117,6 @@ function ComprasTab({
             description={
               <>
                 {formatNumber(summary.frequency)} compra{summary.frequency === 1 ? "" : "s"}
-                {cycleSrc ? ` · ${cycleSrc}` : ""}
               </>
             }
           >
@@ -1160,9 +1156,6 @@ function ComprasTab({
             footer={
               <span className="text-xs text-muted-foreground tabular-nums">
                 {gapMed !== null ? `compra cada ~${formatNumber(gapMed)}d (observado)` : "1 sola compra"}
-                {summary.expectedCycleDays !== null && gapMed !== null
-                  ? ` · esperado ~${formatNumber(summary.expectedCycleDays)}d`
-                  : ""}
               </span>
             }
           >
@@ -1260,6 +1253,130 @@ const CONTACT_STATUS_CLASS: Record<string, string> = {
   rejected: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
+/** Issue #14 B3: "contactar igual" en la ficha. Reabre la última señal
+ *  descartada del cliente (el descarte la escondía 30d sin remedio). */
+function ContactarIgual({ dbId }: { dbId: string }) {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  return (
+    <span className="flex items-center gap-2">
+      <AppTooltip tip="Reabre la última señal descartada de este cliente: vuelve a la cola del motor.">
+        <span className="inline-flex items-center">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => start(async () => {
+              const r = await reopenCustomerSignalAction(dbId);
+              setMsg(r.message);
+            })}
+          >
+            {pending ? "Reabriendo…" : "Contactar igual"}
+          </Button>
+        </span>
+      </AppTooltip>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
+/** Motivos cerrados para [Descartar 30d] (issue #8 Paso 2). */
+const FICHA_DISMISS_REASONS = [
+  { value: "contactado_fuera", label: "ya lo contacté por fuera" },
+  { value: "no_cliente_real", label: "no es cliente real" },
+  { value: "dato_incorrecto", label: "dato incorrecto" },
+  { value: "otro", label: "otro" },
+] as const;
+
+/** Issue #8 Paso 2: acciones en la ficha. [Redactar mensaje] reutiliza el
+ *  flujo señal→borrador (`proposeSingleAction`, con cinta); [Descartar 30d]
+ *  usa `dismissSignalAction` con motivo cerrado (la esconde de Hoy 30d,
+ *  reversible en Review → Descartadas). Sin señal abierta, ambos
+ *  deshabilitados con tooltip honesto. */
+function FichaActions({ dbId }: { dbId: string }) {
+  const bg = useBackground();
+  const [signalId, setSignalId] = useState<string | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [reason, setReason] = useState<string>("contactado_fuera");
+  useEffect(() => {
+    let alive = true;
+    getCustomerSignalAction(dbId)
+      .then((r) => {
+        if (alive) setSignalId(r.signalId);
+      })
+      .catch(() => {
+        if (alive) setSignalId(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [dbId]);
+  const loading = signalId === undefined;
+  const redact = async () => {
+    if (!signalId || busy) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await bg.start(async () => {
+        const x = await proposeSingleAction(signalId);
+        return { ok: x.ok, message: x.message, run: x.run ?? null };
+      });
+      setMsg(r.message);
+      if (r.ok) setSignalId(null);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "No se pudo redactar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const dismiss = async () => {
+    if (!signalId || busy) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await dismissSignalAction(signalId, reason);
+      setMsg(r.message);
+      if (r.ok) setSignalId(null);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "No se pudo descartar.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <AppTooltip tip={signalId ? "Redacta un borrador para este cliente (va a Review)" : "Este cliente no está en Hoy: sin señal abierta no hay qué redactar"}>
+        <span className="inline-flex items-center">
+          <Button size="sm" disabled={loading || busy || !signalId} onClick={() => void redact()}>
+            {busy ? "Redactando…" : "Redactar mensaje"}
+          </Button>
+        </span>
+      </AppTooltip>
+      <Select value={reason} onValueChange={(v) => { if (v) setReason(v); }} disabled={loading || busy || !signalId}>
+        <SelectTrigger className="h-8 w-52 text-xs" aria-label="Motivo del descarte">
+          <SelectValue placeholder="Motivo" />
+        </SelectTrigger>
+        <SelectContent>
+          {FICHA_DISMISS_REASONS.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <AppTooltip tip={signalId ? "La esconde de Hoy 30 días (reversible en Review → Descartadas)" : "Sin señal abierta no hay qué descartar"}>
+        <span className="inline-flex items-center">
+          <Button size="sm" variant="outline" disabled={loading || busy || !signalId} onClick={() => void dismiss()}>
+            Descartar 30d
+          </Button>
+        </span>
+      </AppTooltip>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </div>
+  );
+}
+
 /** Issue #19 Paso 5: ¿ya le escribimos? Contactos separados de Compras. */
 function ContactosTab({ dbId }: { dbId: string }) {
   const [contacts, setContacts] = useState<CustomerContactDTO[] | null>(null);
@@ -1318,6 +1435,7 @@ function ContactosTab({ dbId }: { dbId: string }) {
         <p className="text-sm text-muted-foreground">
           Nunca se le envió un mensaje desde acá.
         </p>
+        <ContactarIgual dbId={dbId} />
       </div>
     );
   }
@@ -1329,6 +1447,7 @@ function ContactosTab({ dbId }: { dbId: string }) {
         tone="sky"
         className="mb-0"
       />
+      <ContactarIgual dbId={dbId} />
       <div className="grid gap-3">
         {contacts.map((c) => {
           const when = (c.dispatchedAt ?? c.createdAt).slice(0, 10);

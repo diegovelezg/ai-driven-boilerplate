@@ -11,13 +11,13 @@ import { formatNumber } from "@/lib/format";
 import { recalibrateWithRun } from "@/lib/profile-recalibrate/service";
 import {
   advanceRun,
-  busyMessage,
   finishRun,
   getLatestRun,
   hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
+import { busyMessage } from "@/lib/operations";
 
 const log = createLogger("sync");
 

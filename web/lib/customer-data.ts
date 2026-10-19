@@ -4,7 +4,6 @@ import { getSupabase } from "@/lib/supabase";
 import { isRealOrder } from "@/lib/medusa";
 import { enrichOrderItems } from "@/lib/media-context";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
-import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 
 export interface CustomerOrderItem {
   title: string;
@@ -33,18 +32,19 @@ export interface CustomerRfm {
   monetary: number;
   currency: string | null;
   avgTicket: number;
-  /** Ciclo esperado de recompra (días): mediana del cliente → ciclo de la tienda → default del arquetipo. */
+  /** @deprecated Ficha legacy: siempre null. El ritmo lo da el motor (p25/p75). */
   expectedCycleDays: number | null;
-  /** De dónde salió el ciclo: cliente|tienda|arquetipo. */
+  /** @deprecated Ficha legacy: siempre null. */
   cycleSource: "cliente" | "tienda" | "arquetipo" | null;
+  /** @deprecated Ficha legacy: siempre null. */
   churnMultiplier: number | null;
-  /** Estado vs el ciclo esperado: al_dia|por_vencer|vencido. */
+  /** @deprecated Ficha legacy: siempre null. Decisión real en `customer_predictions.decision`. */
   dueStatus: "al_dia" | "por_vencer" | "vencido" | null;
-  /** Días desde que venció (0 si aún no vence). */
+  /** @deprecated Ficha legacy: siempre null. */
   overdueDays: number | null;
 }
 
-/** Estado vs el ciclo esperado (puro: lo usa la ficha). */
+/** @deprecated Ficha legacy: se conserva por compatibilidad/tests. Siempre retorna null en UI nueva. */
 export function dueStatusFor(
   recencyDays: number | null,
   expectedCycleDays: number | null,
@@ -72,38 +72,14 @@ export interface CustomerFirmographics {
   enrichedAt: string | null;
 }
 
-/** Mediana de intervalos entre compras (días). null si F<2 o sin fechas.
- *  Un solo gap no es ritmo: se exigen ≥2 gaps (≥3 sesiones); si no, null y el
- *  ciclo cae a tienda/arquetipo. */
-function medianInterval(datesAsc: Date[]): number | null {
-  if (datesAsc.length < 2) return null;
-  // Sesiones: pedidos con <1d de separación son una sola compra en cuotas
-  // (mismo día / pagos partidos), no cadencia. Solo gaps entre sesiones cuentan.
-  const sessions: Date[] = [datesAsc[0]];
-  for (let i = 1; i < datesAsc.length; i += 1) {
-    const gap = (datesAsc[i].getTime() - sessions[sessions.length - 1].getTime()) / 86_400_000;
-    if (gap >= 1) sessions.push(datesAsc[i]);
-  }
-  if (sessions.length < 2) return null;
-  const gaps: number[] = [];
-  for (let i = 1; i < sessions.length; i += 1) {
-    gaps.push((sessions[i].getTime() - sessions[i - 1].getTime()) / 86_400_000);
-  }
-  if (gaps.length < 2) return null;
-  gaps.sort((a, b) => a - b);
-  const mid = Math.floor(gaps.length / 2);
-  const med = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
-  return Math.max(1, Math.round(med));
-}
-
 export interface CustomerOrdersAndRfm {
   orders: CustomerOrder[];
   summary: CustomerRfm;
 }
 
-/** Compras (más reciente primero) + hechos temporales del cliente.
- *  Display pagina N recientes; la mediana del ciclo se calcula sobre el
- *  historial completo (solo fechas, paginado) para no sesgar con la ventana. */
+/** Compras (más reciente primero) + hechos duros del cliente.
+ *  El ciclo esperado legacy ya no se calcula (ficha usa el motor p25/p75):
+ *  los campos deprecated van siempre null, sin queries extra. */
 export async function loadCustomerOrdersAndRfm(
   dbId: string,
   orderLimit = 20,
@@ -169,46 +145,6 @@ export async function loadCustomerOrdersAndRfm(
       ? Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86_400_000))
       : null;
 
-  // Ciclo esperado: mediana del cliente sobre HISTORIAL COMPLETO (solo fechas,
-  // paginado) → ciclo de tienda → arquetipo. No usar la ventana display.
-  const allDates: Date[] = [];
-  const DPAGE = 1000;
-  for (let off = 0; ; off += DPAGE) {
-    const { data: dpage, error: dErr } = await db
-      .from("orders")
-      .select("placed_at,status,payment_status,is_test")
-      .eq("customer_id", dbId)
-      .order("placed_at", { ascending: true })
-      .order("id", { ascending: true })
-      .range(off, off + DPAGE - 1);
-    if (dErr) throw new Error(dErr.message);
-    const rows = (dpage ?? []) as Array<Record<string, unknown>>;
-    for (const o of rows) {
-      if (!isRealOrder({ status: (o.status as string) ?? null, paymentStatus: (o.payment_status as string) ?? null, isTest: Boolean(o.is_test) })) continue;
-      if (!o.placed_at) continue;
-      const d = new Date(o.placed_at as string);
-      if (!Number.isNaN(d.getTime())) allDates.push(d);
-    }
-    if (rows.length < DPAGE) break;
-    if (allDates.length > 20000) break;
-  }
-  const customerMedian = medianInterval(allDates);
-  const storeId = customer.store_id as string;
-  const tenantProfile = await getStoreProfile(storeId).catch(() => null);
-  const tenantCycle = tenantProfile?.repurchaseCycleDays ?? null;
-  const archetypeCycle = tenantProfile
-    ? (ARCHETYPES[tenantProfile.archetype]?.defaultCycleDays ?? null)
-    : null;
-  const expectedCycleDays = customerMedian ?? tenantCycle ?? archetypeCycle;
-  const cycleSource =
-    customerMedian !== null ? "cliente" : tenantCycle !== null ? "tienda" : archetypeCycle !== null ? "arquetipo" : null;
-  const churnMultiplier = tenantProfile?.churnMultiplier ?? 1.25;
-  const dueStatus = dueStatusFor(recencyDays, expectedCycleDays, churnMultiplier);
-  const overdueDays =
-    recencyDays === null || expectedCycleDays === null
-      ? null
-      : Math.max(0, recencyDays - expectedCycleDays);
-
   return {
     orders: orderRows,
     totalOrders: frequency,
@@ -219,11 +155,11 @@ export async function loadCustomerOrdersAndRfm(
       monetary,
       currency,
       avgTicket: frequency > 0 ? Math.round(monetary / frequency) : 0,
-      expectedCycleDays,
-      cycleSource,
-      churnMultiplier,
-      dueStatus,
-      overdueDays,
+      expectedCycleDays: null,
+      cycleSource: null,
+      churnMultiplier: null,
+      dueStatus: null,
+      overdueDays: null,
     },
   };
 }

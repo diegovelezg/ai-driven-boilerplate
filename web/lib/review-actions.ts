@@ -6,12 +6,14 @@ import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { COPYWRITER_GEN, draftSingleSignal } from "@/lib/copywriter";
 import { isFreshGenerator, isV1SignalReason } from "@/lib/copywriter-gen";
-import { advanceRun, busyMessage, finishRun, getLatestRun, hasConflict, setRunTotal, startRun, type BackgroundRun } from "@/lib/background";
+import { advanceRun, finishRun, getLatestRun, hasConflict, setRunTotal, startRun, type BackgroundRun } from "@/lib/background";
+import { busyMessage } from "@/lib/operations";
 import { runSingleWithAudit, singleSignalScope, type SingleFinish } from "@/lib/single-audit";
 import { createLogger } from "@/lib/log";
 import { startCopywriterAction } from "@/lib/retention-actions";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { formatNumber } from "@/lib/format";
+import { DISMISS_REASON_LABEL, cleanDismissReason } from "@/lib/dismiss-reasons";
 
 export interface ReviewOp {
   ok: boolean;
@@ -67,35 +69,65 @@ async function setLeadStatus(id: string, status: "approved" | "rejected"): Promi
 
 /** Envía un aprobado-email en el acto (aprobar = enviar). Solo sello vigente
  *  y SendGrid configurado; si algo falta o falla, queda `approved` y lo
- *  reintenta el dispatcher. Guarda anti-carrera por status. */
+ *  reintenta el dispatcher. Guarda anti-carrera por status. La puerta
+ *  pre-envío (issue #13) frena antes de llamar al proveedor: skip terminal
+ *  archiva, hold deja en cola para ojo humano. */
 async function trySendApprovedEmail(
   id: string,
-): Promise<{ sent: boolean; message: string }> {
+): Promise<{ sent: boolean; message: string; disposition: "sent" | "skip" | "hold" | "retry" }> {
   const db = getSupabase();
   const { data: row } = await db
     .from("proposed_actions")
-    .select("id,channel,subject,body,evidence_json,customers(email)")
+    .select("id,store_id,customer_id,channel,subject,body,evidence_json,approved_at,created_at,signal_id,customers(email)")
     .eq("id", id)
     .eq("status", "approved")
     .maybeSingle();
   const r = (row ?? null) as Record<string, unknown> | null;
-  if (!r) return { sent: false, message: "Ya procesada por otro lado." };
-  if (String(r.channel ?? "") !== "email") return { sent: false, message: "No es email." };
+  if (!r) return { sent: false, message: "Ya procesada por otro lado.", disposition: "retry" };
+  if (String(r.channel ?? "") !== "email") return { sent: false, message: "No es email.", disposition: "retry" };
   const body = String(r.body ?? "");
   const subject = (r.subject as string | null) ?? null;
-  if (!subject || !body) return { sent: false, message: "Sin asunto o cuerpo." };
-  if (isStaleDraft((r.evidence_json as Record<string, unknown> | null) ?? null)) {
-    return { sent: false, message: "Criterios viejos: regenera en Review." };
+  if (!subject || !body) return { sent: false, message: "Sin asunto o cuerpo.", disposition: "retry" };
+  const ev0 = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  if (isStaleDraft(ev0)) {
+    return { sent: false, message: "Criterios viejos: regenera en Review.", disposition: "retry" };
   }
   const to = String(((r.customers as Record<string, unknown> | null)?.email) ?? "");
-  if (!to) return { sent: false, message: "Sin destinatario." };
+  if (!to) return { sent: false, message: "Sin destinatario.", disposition: "retry" };
+  // Puerta pre-envío ANTES del proveedor (nunca se envía sin revalidar).
+  const { checkPreSendGate } = await import("@/lib/pre-send");
+  const contact0 = (ev0.contactability as Record<string, unknown> | null) ?? {};
+  const gate = await checkPreSendGate({
+    id: String(r.id ?? id),
+    storeId: String(r.store_id ?? ""),
+    customerId: String(r.customer_id ?? ""),
+    channel: String(r.channel ?? ""),
+    approvedAt: (r.approved_at as string | null) ?? null,
+    createdAt: (r.created_at as string | null) ?? null,
+    signalId: (r.signal_id as string | null) ?? null,
+    failOpen: contact0.fail_open === true,
+  });
+  if (!gate.send) {
+    if (gate.terminal) {
+      await db
+        .from("proposed_actions")
+        .update({
+          status: "skipped",
+          evidence_json: { ...ev0, skip: { code: gate.code, reason: gate.message, at: new Date().toISOString() } },
+        })
+        .eq("id", id)
+        .eq("status", "approved");
+      return { sent: false, message: `Frenado y archivado (skip ${gate.code}): ${gate.message}`, disposition: "skip" };
+    }
+    return { sent: false, message: `Retenido (hold ${gate.code}): ${gate.message} Queda en cola para revisión.`, disposition: "hold" };
+  }
   const conn = await readConnections().catch(() => null);
   if (!conn || conn.emailProvider !== "sendgrid" || !conn.emailApiKey || !conn.emailFrom) {
-    return { sent: false, message: "SendGrid sin configurar en Settings." };
+    return { sent: false, message: "SendGrid sin configurar en Settings.", disposition: "retry" };
   }
   const { sendViaSendGrid } = await import("@/lib/comms/email/sendgrid");
   const res = await sendViaSendGrid({ apiKey: conn.emailApiKey, from: conn.emailFrom, msg: { to, subject, text: body } });
-  if (!res.ok) return { sent: false, message: res.error ?? "SendGrid falló." };
+  if (!res.ok) return { sent: false, message: res.error ?? "SendGrid falló.", disposition: "retry" };
   const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
   const { data: won } = await db
     .from("proposed_actions")
@@ -107,8 +139,8 @@ async function trySendApprovedEmail(
     .eq("id", id)
     .eq("status", "approved")
     .select("id");
-  if (!won || won.length === 0) return { sent: false, message: "Ya procesada por otro lado." };
-  return { sent: true, message: "Aprobada y enviada por email." };
+  if (!won || won.length === 0) return { sent: false, message: "Ya procesada por otro lado.", disposition: "retry" };
+  return { sent: true, message: "Aprobada y enviada por email.", disposition: "sent" };
 }
 
 export async function approveActionAction(id: string): Promise<ReviewOp> {
@@ -119,6 +151,7 @@ export async function approveActionAction(id: string): Promise<ReviewOp> {
   const send = await trySendApprovedEmail(id);
   if (send.sent) return { ok: true, message: send.message };
   if (send.message === "No es email." || send.message === "Ya procesada por otro lado.") return base;
+  if (send.disposition === "skip") return { ok: true, message: `Aprobada. ${send.message}` };
   return { ok: true, message: `Aprobada, pero no se pudo enviar: ${send.message} Queda en cola para el dispatcher.` };
 }
 
@@ -145,6 +178,54 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   }
   revalidatePath("/review");
   return { ok: true, message: "Envío cancelado: no saldrá." };
+}
+
+/** Da de baja a un cliente en un canal (issue #13): nunca más enviable por
+ *  ahí. Modelo mínimo sin UI en v1 (las actions existen para la futura UI y
+ *  para gestión manual). Se respeta en scout, copywriter y pre-envío. */
+export async function optOutCustomerAction(
+  customerDbId: string,
+  channel: string,
+  reason?: string | null,
+): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  if (channel !== "email" && channel !== "whatsapp") {
+    return { ok: false, message: "Canal inválido (email o whatsapp)." };
+  }
+  const db = getSupabase();
+  const { data: cust } = await db
+    .from("customers")
+    .select("id,store_id")
+    .eq("id", customerDbId)
+    .maybeSingle();
+  const storeId = ((cust ?? {}) as Record<string, unknown>).store_id as string | null ?? null;
+  if (!storeId) return { ok: false, message: "Cliente inexistente." };
+  const { error } = await db.from("opt_outs").upsert(
+    { store_id: storeId, customer_id: customerDbId, channel, reason: reason?.trim().slice(0, 200) ?? null },
+    { onConflict: "store_id,customer_id,channel" },
+  );
+  if (error) return { ok: false, message: error.message };
+  revalidatePath("/review");
+  return { ok: true, message: `Baja registrada en ${channel}: no se le volverá a escribir por ahí.` };
+}
+
+/** Revierte una baja (el destinatario volvió a aceptar). */
+export async function optInCustomerAction(
+  customerDbId: string,
+  channel: string,
+): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  if (channel !== "email" && channel !== "whatsapp") {
+    return { ok: false, message: "Canal inválido (email o whatsapp)." };
+  }
+  const { error } = await getSupabase()
+    .from("opt_outs")
+    .delete()
+    .eq("customer_id", customerDbId)
+    .eq("channel", channel);
+  if (error) return { ok: false, message: error.message };
+  revalidatePath("/review");
+  return { ok: true, message: `Baja revertida en ${channel}.` };
 }
 
 /** Edita asunto/cuerpo de un pendiente (solo pending_review). Valida los mismos
@@ -364,16 +445,104 @@ export async function rejectLeadAction(id: string): Promise<ReviewOp> {
 }
 
 /** Descarta una señal abierta/priorizada sin acción (el humano la juzga irrelevante). */
-export async function dismissSignalAction(id: string): Promise<ReviewOp> {
+export async function dismissSignalAction(id: string, reason?: string | null): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const { error } = await getSupabase()
+  const cleanReason = cleanDismissReason(reason);
+  const db = getSupabase();
+  const { data: prev } = await db
     .from("churn_signals")
-    .update({ status: "dismissed", closed_at: new Date().toISOString() })
+    .select("evidence_json")
+    .eq("id", id)
+    .maybeSingle();
+  const prevEv =
+    (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const { error } = await db
+    .from("churn_signals")
+    .update({
+      status: "dismissed",
+      closed_at: new Date().toISOString(),
+      evidence_json: cleanReason
+        ? {
+          ...prevEv,
+          dismiss: {
+            reason: cleanReason,
+            label: DISMISS_REASON_LABEL[cleanReason],
+            at: new Date().toISOString(),
+            by: await resolveApprover(),
+          },
+        }
+        : prevEv,
+    })
     .eq("id", id)
     .in("status", ["open", "prioritized"]);
   if (error) return { ok: false, message: error.message };
   revalidatePath("/review");
-  return { ok: true, message: "Señal descartada." };
+  return {
+    ok: true,
+    message: cleanReason
+      ? `Señal descartada (${DISMISS_REASON_LABEL[cleanReason]}).`
+      : "Señal descartada.",
+  };
+}
+
+/** Señal abierta/priorizada más reciente de un cliente (para la ficha:
+ *  Redactar/Descartar operan sobre ella; null = no está en Hoy). */
+export async function getCustomerSignalAction(
+  customerDbId: string,
+): Promise<{ signalId: string | null }> {
+  if (!isSupabaseConfigured()) return { signalId: null };
+  try {
+    const { data } = await getSupabase()
+      .from("churn_signals")
+      .select("id")
+      .eq("customer_id", customerDbId)
+      .in("status", ["open", "prioritized"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const id = ((data ?? {}) as Record<string, unknown>).id;
+    return { signalId: typeof id === "string" ? id : null };
+  } catch {
+    return { signalId: null };
+  }
+}
+
+/** Reabre una señal descartada (dismissed → open): "contactar igual" auditado
+ *  (issue #14 B3). El descarte escondía la señal de la mira 30d sin remedio;
+ *  reabrir la devuelve a la cola y el próximo scout la re-evalúa. Limpia
+ *  closed_at para no arrastrar el descarte viejo. */
+export async function reopenSignalAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const { data, error } = await getSupabase()
+    .from("churn_signals")
+    .update({ status: "open", closed_at: null })
+    .eq("id", id)
+    .eq("status", "dismissed")
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya reabierta o inexistente: nada que reabrir." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Reabierta: vuelve a la cola para contactar igual." };
+}
+
+/** Reabre la última señal descartada de un cliente (ficha/Hoy/Customers).
+ *  `customerDbId` = uuid de `customers`. Sin descartes → mensaje honesto. */
+export async function reopenCustomerSignalAction(customerDbId: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const db = getSupabase();
+  const { data: sig, error: sErr } = await db
+    .from("churn_signals")
+    .select("id")
+    .eq("customer_id", customerDbId)
+    .eq("status", "dismissed")
+    .order("closed_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  if (sErr) return { ok: false, message: sErr.message };
+  if (!sig) return { ok: false, message: "Sin descartes para reabrir en este cliente." };
+  return reopenSignalAction(String((sig as Record<string, unknown>).id ?? ""));
 }
 
 /** Redacta un borrador para UNA señal (CTA "Redactar" en "Tus 5 de hoy").
@@ -478,10 +647,11 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
       if (upErr) continue;
       ok += 1;
       // Aprobar = enviar (email): intento inmediato por fila; WhatsApp y
-      // fallos quedan approved para el dispatcher / flujo manual.
-      const send = await trySendApprovedEmail(t.id).catch(() => ({ sent: false as const, message: "error" }));
+      // fallos quedan approved para el dispatcher / flujo manual. Los skip
+      // de la puerta pre-envío ya están archivados: no cuentan como cola.
+      const send = await trySendApprovedEmail(t.id).catch(() => ({ sent: false as const, message: "error", disposition: "retry" as const }));
       if (send.sent) sent += 1;
-      else if (send.message !== "No es email." && send.message !== "Ya procesada por otro lado.") held += 1;
+      else if (send.disposition !== "skip" && send.message !== "No es email." && send.message !== "Ya procesada por otro lado.") held += 1;
       if (runId) {
         await advanceRun(runId, { processed: ok, failed: 0, current: null }).catch(() => {});
       }

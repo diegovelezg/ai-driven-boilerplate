@@ -12,13 +12,13 @@ import {
   runEnrichment,
 } from "@/lib/enrich";
 import {
-  busyMessage,
   finishRun,
   getLatestRun,
   hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
+import { busyMessage } from "@/lib/operations";
 import { formatNumber } from "@/lib/format";
 import { createLogger } from "@/lib/log";
 

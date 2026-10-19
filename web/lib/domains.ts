@@ -25,6 +25,21 @@ const WEBMAIL: ReadonlySet<string> = new Set([
 /** Familias de webmail con variantes regionales (yahoo.com.mx, hotmail.es, …). */
 const WEBMAIL_PREFIXES = ["yahoo.", "hotmail.", "outlook.", "live."];
 
+/** SSOT webmail: lista + prefijos regionales. Usar esto en vez de sets locales. */
+export function isWebmailDomain(domain: string): boolean {
+  const d = domain.trim().toLowerCase();
+  if (!d) return false;
+  return WEBMAIL.has(d) || WEBMAIL_PREFIXES.some((p) => d.startsWith(p));
+}
+
+/** Dominio propio: no vacío y no webmail (business + institucional).
+ *  Misma regla para `getProfileSignals`, `tenantStats` y `suggestArchetype`. */
+export function isCustomDomain(domain: string): boolean {
+  const d = domain.trim().toLowerCase();
+  if (!d) return false;
+  return !isWebmailDomain(d);
+}
+
 /** Sufijos institucionales/gubernamentales (LatAm + genéricos). */
 const INSTITUTIONAL_SUFFIXES = [
   ".edu", ".edu.pe", ".edu.co", ".edu.mx", ".edu.ar", ".edu.cl", ".edu.ec", ".edu.bo",
@@ -49,7 +64,7 @@ export function domainFromEmail(email: string): string {
 export function classifyDomain(domain: string): DomainClass {
   const d = domain.trim().toLowerCase();
   if (!d) return { domain: d, type: "none", enrichable: false };
-  if (WEBMAIL.has(d) || WEBMAIL_PREFIXES.some((p) => d.startsWith(p))) {
+  if (isWebmailDomain(d)) {
     return { domain: d, type: "webmail", enrichable: false };
   }
   if (INSTITUTIONAL_SUFFIXES.some((s) => d.endsWith(s))) {

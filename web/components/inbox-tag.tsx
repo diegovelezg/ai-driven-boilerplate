@@ -94,6 +94,26 @@ function fallbackMeta(raw: string): InboxTagMeta {
   };
 }
 
+/** Tag "Hoy": distingue lo generado hoy de la cola pendiente de días
+ *  anteriores. Comparación por día calendario local (navegador). */
+const TODAY_META: InboxTagMeta = {
+  label: "Hoy",
+  className: "bg-primary/10 text-primary",
+  tip: "Generado hoy: entró hoy a la cola. Sin tag = pendiente de días anteriores.",
+};
+
+export function isToday(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
 export function getKindMeta(kind: string | null | undefined): InboxTagMeta | null {
   if (!kind) return null;
   return KIND_META[kind] ?? fallbackMeta(kind);
@@ -137,4 +157,11 @@ export function StatusTag({ value, className }: { value: string | null | undefin
   const meta = getStatusMeta(value);
   if (!meta) return null;
   return <TagPill meta={meta} className={className} />;
+}
+
+/** Tag "Hoy": solo renderiza si el ISO es del día calendario actual.
+ *  El resto (cola de días anteriores) queda sin tag, a propósito. */
+export function TodayTag({ value, className }: { value: string | null | undefined; className?: string }) {
+  if (!isToday(value)) return null;
+  return <TagPill meta={TODAY_META} className={className} />;
 }

@@ -17,7 +17,6 @@
 // El `failed` va en su columna, no en el texto. `current` nunca lleva PII (emails).
 import { getSupabase } from "@/lib/supabase";
 import {
-  conflictMessage,
   findConflict,
   type ActiveOp,
   type ErrorCode,
@@ -181,11 +180,6 @@ export async function hasConflict(
   const hit = findConflict(op, running.map(toActiveOp));
   if (!hit) return null;
   return running.find((r) => r.kind === hit.kind && r.scopeId === hit.scopeId && r.label === hit.label) ?? null;
-}
-
-/** Mensaje de rechazo por lock (`En curso: Copywriter…`). */
-export function busyMessage(conflict: BackgroundRun): string {
-  return conflictMessage(toActiveOp(conflict));
 }
 
 /** Minutos sin heartbeat tras los cuales un `running` se da por muerto.

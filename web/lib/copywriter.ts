@@ -13,6 +13,7 @@ import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
 import { getLlmConfig } from "@/lib/ai/llm-config";
 import { completeJson } from "@/lib/retrieval";
 import { formatNumber } from "@/lib/format";
+import { briefMode, identityJugada, identityPatron } from "@/lib/judge-brief";
 
 const log = createLogger("copywriter");
 
@@ -67,6 +68,7 @@ Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradores: aperturas, orden y cierres distintos):
 - Usa los datos de respaldo solo si encajan natural en una frase sobre el negocio del cliente: PROHIBIDO recitar fecha+lugar como telegrama. Toda cifra o lugar debe aparecer dentro de una frase sobre su negocio (qué vende, a quién, en qué temporada). PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
 - El cuerpo lleva SUSTANCIA concreta (línea/marca/soporte del brief + ángulo útil: temporada de su rubro o continuidad de su línea). PROHIBIDO el comodín vago solo («una idea», «una propuesta», «algo», «opciones») sin decir para qué línea/soporte y para cuándo.
+- El historial dice quién es, no qué necesita hoy: úsalo solo para reconocer en una frase quién es. La propuesta nace de lo que el negocio sabe hacer por alguien como él, hoy. Si lo comprado solo tenía sentido en su ventana, esa ventana ya es recuerdo, no propuesta. Ve directo a lo nuevo; nunca hables del mensaje, de lo que no vas a proponer ni de tu razonamiento.
 - PROHIBIDAS las frases de plantilla y call center (hay control automático: si las usas el borrador se rechaza).
 - PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA invitación a accionar de máximo 15 palabras, siempre como pregunta reversible (¿te paso...? ¿te sirve...? ¿quieres que...?). PROHIBIDO declarar acciones cumplidas o comprometer inventario/disponibilidad como hecho: nunca bloqueo, reservo, aparto, separo, aseguro, avanzo o doy prioridad.
 - Nunca menciones score, media, ciclo, arquetipo ni cifras internas: solo lo que el cliente reconocería.
@@ -121,6 +123,13 @@ function hasAnchor(body: string, tokens: Array<string | null>): boolean {
 /** El juez dijo no-contactable: no es un fallo (no suma a failed), es una
  *  omisión auditada. Lleva el motivo para el log y el flag en evidence. */
 class ContactabilitySkip extends Error {}
+
+/** Re-export neutro para consumidores del modo brief (#23). */
+export { briefMode, identityJugada, identityPatron } from "@/lib/judge-brief";
+
+/** Baja del destinatario (issue #13): mismo trato que el veto del juez
+ *  (omisión auditada, no fallo), pero por opt-out en vez de pertinencia. */
+class OptOutSkip extends Error {}
 
 /** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes.
  *  Acepta también el formato retention:v1
@@ -210,7 +219,7 @@ async function composeDraftCopy(
   channel: string;
   body: string;
   subject: string | null;
-  verdict: { reason: string; failOpen: boolean };
+  verdict: { reason: string; failOpen: boolean; reusable: boolean };
 }> {
   const { data: orders } = await db
     .from("orders")
@@ -290,16 +299,6 @@ async function composeDraftCopy(
         : ratio < 10
           ? "hábito cortado: nombra el quiebre"
           : "dormido: OBLIGATORIO abrir reconociendo el tiempo (ej. «sé que ha pasado más de un año»). PROHIBIDO escribir como si la pausa fuera reciente";
-  const patron =
-    topCat && topCat[1] >= 2
-      ? `CONTENIDO: ${noun.repeat} "${topCat[0]}"${marcaByCat.get(topCat[0]) ? ` (ej. ${marcaByCat.get(topCat[0])})` : ""}. Tono: continuidad de su línea`
-      : top && top[1] >= 2
-        ? `REPITE: suele volver a "${top[0]}". Tono: volver a lo que le funciona`
-        : distinct >= 3
-          ? `EXPLORA: prueba opciones distintas. Tono: novedad`
-          : top
-            ? `última elección "${top[0]}"`
-            : "sin patrón legible";
   const firstName = (s.first_name ?? "").trim().split(/\s+/)[0] || s.email;
   const lastIso = real[0] ? String(real[0].placed_at ?? "").slice(0, 10) : null;
   const lastF = real[0] ? (fechaCorta(String(real[0].placed_at ?? "")) ?? lastIso) : null;
@@ -313,28 +312,10 @@ async function composeDraftCopy(
         ? "winback: 1-2 compras, simple y baja fricción"
         : "nurture: tenía hábito y se cortó, nombra el quiebre + 1 lectura útil";
 
-  // Menú de jugadas en lenguaje de invitación reversible (preguntar/ofrecer
-  // pasar disponibilidad o una idea, sin comprometer inventario). Coherencia
-  // jugada↔BANNED (issue #9): la jugada ya no ordena "reservar con prioridad",
-  // así el BANNED puede prohibir las muletillas sin fabricar descartes.
-  // Neutro por catálogo: solo servicio/digital hablan de espacios/zonas.
-  // El cierre SIEMPRE es pregunta reversible, nunca acción cumplida.
-  const jugada =
-    stamp.catalog === "servicio" || stamp.catalog === "digital"
-      ? patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
-        ? "pasarle 2-3 opciones concretas de disponibilidad o un ángulo para su línea habitual en esta temporada, y preguntarle si quiere que se las pase con fechas"
-        : patron.startsWith("EXPLORA")
-          ? "mostrarle una opción concreta que aún no prueba, o cotizarle su mejor ubicación para la temporada, y preguntarle si quiere que se la pase con fechas"
-          : "pasarle una propuesta concreta y simple para retomar (línea + ventana de fechas), y preguntarle si le sirve"
-      : patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
-        ? "pasarle su favorito habitual o una opción distinta y concreta de su línea para esta temporada, y preguntarle si quiere que se la pase"
-        : patron.startsWith("EXPLORA")
-          ? "mostrarle algo nuevo y concreto de su línea, o pasarle su favorito con ventana concreta para que lo mire sin compromiso"
-          : "pasarle una propuesta concreta y simple para retomar (producto + momento), y preguntarle si le sirve";
-
   // Dossier-first (issue #9): quién es + por-qué-ahora abren; fecha/lugares
   // van a datos de respaldo ("úsalos solo si encajan natural"). company_name
   // hoy ni se leía en el brief: se trae del Prioritized o de customers.
+  // Sube antes del juez (#23): el veredicto reusable lo necesita.
   let companyName = (s.companyName ?? "").trim() || null;
   if (!companyName) {
     const { data: cRow } = await db
@@ -353,40 +334,10 @@ async function composeDraftCopy(
     if (it.categoria && !categorias.includes(it.categoria)) categorias.push(it.categoria);
   }
   const quien = companyName ?? marcas[0] ?? categorias[0] ?? null;
-  const dossier = quien
-    ? `Cliente: ${firstName} — ${quien}${companyName && marcas[0] && marcas[0] !== companyName ? ` (en sus piezas: ${marcas[0]}${categorias[0] ? ` · ${categorias[0]}` : ""})` : categorias[0] && categorias[0] !== quien ? ` (${categorias[0]})` : ""} (objetivo ${objetivo})`
-    : `Cliente: ${firstName} (objetivo ${objetivo})`;
 
-  const user = [
-    dossier,
-    `Por-qué-ahora en una línea: ${estado}. ${patron}.`,
-    `Jugada (elige UNA, no las combines): ${jugada}.`,
-    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.`,
-    `Historial real (usa nombres tal cual, no inventes):`,
-    hist,
-    // Canal explícito del merchant (switch en Review) manda; si no, el
-    // indicio clásico: con teléfono → whatsapp, sin teléfono → email.
-    stamp.forceChannel === "whatsapp"
-      ? "Canal obligatorio: whatsapp. Responde con \"channel\": \"whatsapp\"."
-      : stamp.forceChannel === "email"
-        ? "Canal obligatorio: email. Responde con \"channel\": \"email\"."
-        : s.phone
-          ? "Canal: whatsapp (tiene teléfono)."
-          : "Canal: email (sin teléfono).",
-  ].join("\n");
-
-  const attempt = async (extraNudge: string | null): Promise<{ channel: string; body: string; subject: string | null }> => {
-    const raw = await draft(system, extraNudge ? `${user}\n\nREINTENTO: ${extraNudge}` : user, { storeId });
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const channel = parsed.channel === "email" ? "email" : "whatsapp";
-    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
-    const subject = typeof parsed.subject === "string" && parsed.subject.trim() ? parsed.subject.trim().slice(0, 200) : null;
-    return { channel, body, subject };
-  };
-
-  // Puerta de contactabilidad (issue #9): el juez LLM pone la sensatez con el
-  // mismo dossier enriquecido del brief, ANTES de gastar el draft. Sin listas
-  // en código: el modelo razona sobre contenido + ventanas + hoy.
+  // Puerta de contactabilidad (#9, #23): el juez razona una vez sobre
+  // contenido + ventanas + hoy y devuelve reusable. El brief bifurca abajo:
+  // una sola noción temporal, dos consumidores. Sin listas en código.
   const winOf = (md: unknown, key: "dateStart" | "dateEnd"): string | null => {
     const m = (md as Record<string, unknown> | null) ?? null;
     const v = m?.[key];
@@ -445,6 +396,63 @@ async function composeDraftCopy(
     throw new ContactabilitySkip(verdict.reason);
   }
 
+  // Brief condicional (#23): si reusable=false, el pasado solo reconoce.
+  // Nunca ordenar continuidad en modo identidad: esa era la raíz del caso
+  // Patricia (CONTENIDO + jugada habitual vs PROHIBIDO del SYSTEM).
+  const mode = briefMode(verdict.reusable);
+  const basePatron =
+    topCat && topCat[1] >= 2
+      ? `CONTENIDO: ${noun.repeat} "${topCat[0]}"${marcaByCat.get(topCat[0]) ? ` (ej. ${marcaByCat.get(topCat[0])})` : ""}. Tono: continuidad de su línea`
+      : top && top[1] >= 2
+        ? `REPITE: suele volver a "${top[0]}". Tono: volver a lo que le funciona`
+        : distinct >= 3
+          ? `EXPLORA: prueba opciones distintas. Tono: novedad`
+          : top
+            ? `última elección "${top[0]}"`
+            : "sin patrón legible";
+  const baseJugada =
+    stamp.catalog === "servicio" || stamp.catalog === "digital"
+      ? basePatron.startsWith("CONTENIDO") || basePatron.startsWith("REPITE")
+        ? "pasarle 2-3 opciones concretas de disponibilidad o un ángulo para su línea habitual en esta temporada, y preguntarle si quiere que se las pase con fechas"
+        : basePatron.startsWith("EXPLORA")
+          ? "mostrarle una opción concreta que aún no prueba, o cotizarle su mejor ubicación para la temporada, y preguntarle si quiere que se la pase con fechas"
+          : "pasarle una propuesta concreta y simple para retomar (línea + ventana de fechas), y preguntarle si le sirve"
+      : basePatron.startsWith("CONTENIDO") || basePatron.startsWith("REPITE")
+        ? "pasarle su favorito habitual o una opción distinta y concreta de su línea para esta temporada, y preguntarle si quiere que se la pase"
+        : basePatron.startsWith("EXPLORA")
+          ? "mostrarle algo nuevo y concreto de su línea, o pasarle su favorito con ventana concreta para que lo mire sin compromiso"
+          : "pasarle una propuesta concreta y simple para retomar (producto + momento), y preguntarle si le sirve";
+  const patron = mode === "identidad" ? identityPatron(quien) : basePatron;
+  const jugada = mode === "identidad" ? identityJugada() : baseJugada;
+  const dossier = quien
+    ? `Cliente: ${firstName} — ${quien}${companyName && marcas[0] && marcas[0] !== companyName ? ` (en sus piezas: ${marcas[0]}${categorias[0] ? ` · ${categorias[0]}` : ""})` : categorias[0] && categorias[0] !== quien ? ` (${categorias[0]})` : ""} (objetivo ${objetivo})`
+    : `Cliente: ${firstName} (objetivo ${objetivo})`;
+
+  const user = [
+    dossier,
+    `Por-qué-ahora en una línea: ${estado}. ${patron}.`,
+    `Jugada (elige UNA, no las combines): ${jugada}.`,
+    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.`,
+    `Historial real (usa nombres tal cual, no inventes):`,
+    hist,
+    stamp.forceChannel === "whatsapp"
+      ? "Canal obligatorio: whatsapp. Responde con \"channel\": \"whatsapp\"."
+      : stamp.forceChannel === "email"
+        ? "Canal obligatorio: email. Responde con \"channel\": \"email\"."
+        : s.phone
+          ? "Canal: whatsapp (tiene teléfono)."
+          : "Canal: email (sin teléfono).",
+  ].join("\n");
+
+  const attempt = async (extraNudge: string | null): Promise<{ channel: string; body: string; subject: string | null }> => {
+    const raw = await draft(system, extraNudge ? `${user}\n\nREINTENTO: ${extraNudge}` : user, { storeId });
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const channel = parsed.channel === "email" ? "email" : "whatsapp";
+    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+    const subject = typeof parsed.subject === "string" && parsed.subject.trim() ? parsed.subject.trim().slice(0, 200) : null;
+    return { channel, body, subject };
+  };
+
   let { channel, body, subject } = await attempt(null);
   // El canal explícito manda (email siempre seguro; whatsapp exige teléfono
   // y el control de ≤450 de abajo lo valida). Sin él, vale lo del LLM.
@@ -499,7 +507,16 @@ async function draftForSignal(
   s: Prioritized,
   stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
 ): Promise<{ channel: string; chars: number }> {
+  // Issue #13: baja total (ambos canales) → ni se redacta. La baja parcial
+  // se chequea tras conocer el canal (el otro canal sigue sirviendo).
+  const { isFullyOptedOut, isOptedOut } = await import("@/lib/pre-send");
+  if (await isFullyOptedOut(storeId, s.customer_id)) {
+    throw new OptOutSkip("baja total del destinatario (opt-out email + whatsapp)");
+  }
   const { channel, body, subject, verdict } = await composeDraftCopy(db, storeId, system, s, stamp);
+  if (await isOptedOut(storeId, s.customer_id, channel)) {
+    throw new OptOutSkip(`baja del destinatario en ${channel} (opt-out)`);
+  }
   const { error: insErr } = await db.from("proposed_actions").insert({
     store_id: storeId,
     customer_id: s.customer_id,
@@ -517,6 +534,7 @@ async function draftForSignal(
             // Puerta del juez (issue #9): veredicto auditado junto al borrador.
             contactability: {
               eligible: true,
+              reusable: verdict.reusable,
               reason: verdict.reason,
               fail_open: verdict.failOpen,
               generator: JUDGE_GEN,
@@ -577,6 +595,9 @@ export async function previewSignalCopy(
     }, { runId: null, catalog, forceChannel });
     return { ok: true, channel, body, subject };
   } catch (e) {
+    if (e instanceof OptOutSkip) {
+      return { ok: false, message: `Baja del destinatario: ${e.message}.` };
+    }
     if (e instanceof ContactabilitySkip) {
       return { ok: false, message: `${JUDGE_VETO_PREFIX}: ${e.message}` };
     }
@@ -639,6 +660,9 @@ export async function draftSingleSignal(
     }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null });
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
+    if (e instanceof OptOutSkip) {
+      return { ok: false, message: `Baja del destinatario: ${e.message}.` };
+    }
     if (e instanceof ContactabilitySkip) {
       return { ok: false, message: `${JUDGE_VETO_PREFIX}: ${e.message}` };
     }
@@ -729,7 +753,10 @@ export async function runCopywriter(
         draftedCustomer.add(s.customer_id);
         log(`run ${runId} ${s.email} → ${channel} (${chars} chars)`);
       } catch (e) {
-        if (e instanceof ContactabilitySkip) {
+        if (e instanceof OptOutSkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (opt-out): ${e.message}`);
+        } else if (e instanceof ContactabilitySkip) {
           skipped += 1;
           log(`run ${runId} ${s.email || s.customer_id} omitido (juez): ${e.message}`);
         } else {
