@@ -19,6 +19,7 @@ import { pendingDomains } from "@/lib/enrich";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber, formatPercentPoints } from "@/lib/format";
 import { getStoreProfile, resolveTenantCycleDays } from "@/lib/store-profiles";
+import { readConnections } from "@/lib/store";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { applyScopeFilter, displayMarket, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
 import {
@@ -252,6 +253,16 @@ export default async function DashboardPage({
   // Filtro global por país/mercado (?market= del header). Lo que se filtra es
   // el contenido operativo: conteos, mira, revenue y órdenes.
   let scope: MarketScope = { market: null, countries: null, customerIds: null };
+  // Aviso de configuración indispensable (tienda + negocio). Sin tienda no
+  // hay sync; sin perfil el motor usa genéricos. Se muestra arriba del todo.
+  let tiendaMissing = false;
+  let negocioMissing = false;
+  try {
+    const connections = await readConnections().catch(() => null);
+    tiendaMissing = !connections?.medusaUrl || !connections?.medusaToken;
+  } catch {
+    tiendaMissing = false;
+  }
 
   try {
     scope = await resolveMarketScope(active.id, sp.market).catch(() => scope);
@@ -623,6 +634,7 @@ export default async function DashboardPage({
         : null,
     }));
     const p = (profileRow.data ?? {}) as Record<string, unknown>;
+    negocioMissing = !profileRow.data;
     team = {
       vertical: (p.vertical_detected as string | null) ?? null,
       buyerType: (p.buyer_type as string | null) ?? null,
@@ -719,6 +731,59 @@ export default async function DashboardPage({
         }
       />
 
+      {(tiendaMissing || negocioMissing) && (
+        <section aria-label="Configuración pendiente">
+          <AppCard
+            tone="amber"
+            title={
+              <span className="inline-flex items-center gap-2">
+                <TriangleAlert className="size-4 text-amber-600 dark:text-amber-400" aria-hidden />
+                Falta configuración indispensable
+              </span>
+            }
+            description="Sin esto el motor no puede trabajar bien: conecta tu tienda y describe tu negocio."
+            footer={
+              <span className="flex flex-wrap items-center gap-2">
+                {tiendaMissing && (
+                  <Button render={<Link href="/settings?tab=tienda" />} nativeButton={false} size="sm">
+                    Conectar tienda
+                  </Button>
+                )}
+                {negocioMissing && (
+                  <Button
+                    render={<Link href="/settings?tab=negocio" />}
+                    nativeButton={false}
+                    size="sm"
+                    variant={tiendaMissing ? "outline" : "default"}
+                  >
+                    Describir negocio
+                  </Button>
+                )}
+              </span>
+            }
+          >
+            <ul className="flex flex-col gap-1.5 text-[13px]">
+              {tiendaMissing && (
+                <li>
+                  <strong>Tienda sin conectar:</strong> sin Medusa no hay clientes ni pedidos para recuperar.{" "}
+                  <Link href="/settings?tab=tienda" className="underline underline-offset-4">
+                    Ir a Tienda
+                  </Link>
+                </li>
+              )}
+              {negocioMissing && (
+                <li>
+                  <strong>Negocio sin describir:</strong> sin perfil el motor usa valores genéricos y acierta menos.{" "}
+                  <Link href="/settings?tab=negocio" className="underline underline-offset-4">
+                    Ir a Negocio
+                  </Link>
+                </li>
+              )}
+            </ul>
+          </AppCard>
+        </section>
+      )}
+
       {error && (
         <AppCardState>{error}</AppCardState>
       )}
@@ -779,14 +844,6 @@ export default async function DashboardPage({
                     Revisar en Review
                   </Button>
                 ) : null}
-                <Button
-                  render={<Link href={withMarketParam("/customers?decision=vigilar", scope.market?.id ?? null)} />}
-                  nativeButton={false}
-                  variant="outline"
-                  size="sm"
-                >
-                  Ver vigilando
-                </Button>
               </span>
             }
           >

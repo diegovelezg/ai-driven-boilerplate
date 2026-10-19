@@ -2,13 +2,14 @@ import type { ReactNode } from "react";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BackgroundStatus } from "@/components/background-status";
+import { Toaster } from "@/components/ui/toast";
 import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppTooltipProvider } from "@/components/ui/app-tooltip";
 import { displayStoreName, listStores, type TenantStore } from "@/lib/tenant";
 import { listStoreMarkets, pickPrimaryMarket, type TenantMarket } from "@/lib/markets";
 
-// Chrome del dashboard: sidebar + header + cinta de background.
+// Chrome del dashboard: sidebar + header + toasts de background.
 // Solo aplica a las rutas del grupo (dashboard); /login no lo hereda.
 // El layout carga tiendas + markets para el filtro global por país (?market=);
 // si falla, el header sigue funcionando sin selector.
@@ -42,6 +43,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
               <AppHeader stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} />
               <DashboardShell>{children}</DashboardShell>
             </SidebarInset>
+            <Toaster limit={3} />
           </AppTooltipProvider>
         </ChatDockProvider>
       </SidebarProvider>

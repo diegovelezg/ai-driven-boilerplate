@@ -11,21 +11,21 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ListChecks, PenLine, Radar, RefreshCw, Send, TrendingUp, TriangleAlert, Wand2, X, type LucideIcon } from "lucide-react";
 import { getActiveRunsAction } from "@/lib/background-actions";
 import type { BackgroundRun } from "@/lib/background";
 import { errorCodeMessage, isCompatible } from "@/lib/operations";
 import { isJudgeVetoMessage } from "@/lib/single-audit";
 import { formatNumber } from "@/lib/format";
+import { toast } from "@/components/ui/toast";
 
-export interface BackgroundTaskResult {
+interface BackgroundTaskResult {
   ok: boolean;
   message: string;
   run: BackgroundRun | null;
 }
 
 interface BackgroundCtxValue {
-  /** En curso + últimos terminados (la cinta los apila como chips). */
+  /** En curso + últimos terminados (los toasts los muestran abajo-derecha). */
   runs: BackgroundRun[];
   activeRuns: BackgroundRun[];
   starting: boolean;
@@ -43,32 +43,18 @@ export function useBackground(): BackgroundCtxValue {
   return ctx;
 }
 
-/** `null` fuera del provider (hosts sin cinta, p.ej. canvas del chat):
+/** `null` fuera del provider (hosts sin toasts, p.ej. canvas del chat):
  *  el llamador usa su vía local en vez de romper. */
 export function useBackgroundOrNull(): BackgroundCtxValue | null {
   return useContext(BackgroundCtx);
 }
-
-const ICONS: Record<string, LucideIcon> = {
-  enrichment: Wand2,
-  enrich_single: Wand2,
-  sync: RefreshCw,
-  scout: Radar,
-  strategist: ListChecks,
-  copywriter: PenLine,
-  copywriter_single: PenLine,
-  regenerate: RefreshCw,
-  approve_batch: Check,
-  dispatcher: Send,
-  analyst: TrendingUp,
-  prospect: Wand2,
-};
 
 const DISMISS_KEY = "background:dismissedRuns";
 const LEGACY_DISMISS_KEY = "background:dismissedRun";
 const STALE_MS = 20 * 60 * 1000;
 const AUTO_HIDE_MS = 5000;
 const ERROR_HIDE_MS = 15000;
+const SUMMARY_MAX = 120;
 
 function readDismissed(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -85,15 +71,21 @@ function readDismissed(): Set<string> {
 
 /** ¿La corrida es un veto del juez? (`error_code` nuevo, o el summary en
  *  DBs aún sin migrar.) El veto es omisión, no éxito ni fallo. */
-export function isVetoRun(run: BackgroundRun): boolean {
+function isVetoRun(run: BackgroundRun): boolean {
   return run.errorCode === "judge_veto" || (run.summary ? isJudgeVetoMessage(run.summary) : false);
 }
 
+function truncate(s: string, max: number): string {
+  const t = s.trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
 /**
- * Cinta global de procesos en segundo plano (SSOT, issue #16 Fase 2).
- * Apila un chip por corrida: activos con barra de progreso, terminados
- * con su `summary`/`error`. Un mismo componente sirve para cualquier
- * trabajo; solo cambia el `kind`/`scope` de cada corrida.
+ * Provider global de procesos en segundo plano (SSOT, issue #16 Fase 2).
+ * Mantiene polling, lock por compatibilidad y refresh; la presentación es
+ * el Toast base shadcn (abajo-derecha, auto-height, stacking nativo).
+ * Un mismo provider sirve para cualquier trabajo; solo cambia el
+ * `kind`/`scope` de cada corrida.
  */
 export function BackgroundStatus({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -109,6 +101,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   const pollGenRef = useRef(0);
   const watchKeyRef = useRef<string | null>(null);
   const lastAutoRefreshRef = useRef<number>(0);
+  const knownToastIdsRef = useRef<Set<string>>(new Set());
   const runsKey = (rs: BackgroundRun[]) =>
     JSON.stringify(
       rs.map((r) => [
@@ -137,7 +130,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
         setRuns(next);
       }
     } catch {
-      // Sin cinta antes que sin página.
+      // Sin toast antes que sin página.
     }
   }, []);
 
@@ -180,7 +173,10 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   );
 
   const dismiss = useCallback((id: string) => {
+    toast.close(id);
+    knownToastIdsRef.current.delete(id);
     setDismissed((prev) => {
+      if (prev.has(id)) return prev;
       const next = new Set(prev);
       next.add(id);
       try {
@@ -191,10 +187,6 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
-
-  // Terminados: los archiva la rotación secuencial de abajo (uno visible N
-  // segundos, luego el siguiente). Sin este relevo, los timers en masa los
-  // apilaban y desaparecían todos juntos.
 
   // Vimos actividad y se aquietó: refresca el server render UNA vez y solo
   // si la actividad cambió algo visible (snapshot al empezar vs al aquietar)
@@ -232,110 +224,112 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     () => runs.filter((r) => !dismissed.has(r.id)),
     [runs, dismissed],
   );
-  // Sin apilar: uno a la vez. Activo manda; si no hay activo, se rota por los
-  // terminados (uno visible N segundos, luego el siguiente).
-  const [queueIdx, setQueueIdx] = useState(0);
+
+  // Sincroniza corridas → toasts (id estable = run.id: add crea, update
+  // refresca progreso sin resetear timers de forma agresiva, close al
+  // descartar). Base UI apila solo (limit=3 en el Toaster); sin rotación
+  // manual uno-por-uno.
   useEffect(() => {
-    setQueueIdx(0);
-  }, [queue.map((r) => r.id).join(",")]);
-  useEffect(() => {
-    const finished = queue.filter((r) => r.status !== "running" || isStale(r));
-    if (activeRuns.length > 0 || finished.length === 0) return;
-    const cur = finished[queueIdx % finished.length];
-    const ok = cur.status === "done" && !isStale(cur) && !isVetoRun(cur);
-    const t = setTimeout(() => {
-      // Secuencia uno por uno: al vencer, se archiva el visible y aparece el
-      // siguiente en vez de apilarse todos a la vez.
-      dismiss(cur.id);
-      setQueueIdx((i) => i + 1);
-    }, ok ? AUTO_HIDE_MS : ERROR_HIDE_MS);
-    return () => clearTimeout(t);
-  }, [queue, queueIdx, activeRuns.length, isStale, dismiss]);
-  const visible = useMemo(() => {
-    if (queue.length === 0) return [];
-    const active = queue.find((r) => r.status === "running" && !isStale(r));
-    if (active) return [active];
-    const finished = queue.filter((r) => r.status !== "running" || isStale(r));
-    if (finished.length === 0) return [];
-    return [finished[queueIdx % finished.length]];
-  }, [queue, queueIdx, isStale]);
+    const known = knownToastIdsRef.current;
+    const desired = new Map<string, BackgroundRun>();
+    for (const r of queue) desired.set(r.id, r);
+
+    for (const id of [...known]) {
+      if (!desired.has(id)) {
+        toast.close(id);
+        known.delete(id);
+      }
+    }
+
+    for (const [id, run] of desired) {
+      const stale = isStale(run);
+      const running = run.status === "running" && !stale;
+      const veto = !running && isVetoRun(run);
+      const succeeded = !running && run.status === "done" && !stale && !veto;
+      const total = run.total ?? 0;
+      const done = (run.processed ?? 0) + (run.failed ?? 0);
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+      if (running) {
+        const options = {
+          title: run.label,
+          description: (
+            <span className="flex flex-col gap-1.5">
+              <span className="tabular-nums">
+                {formatNumber(done)}/{formatNumber(total)} · {pct}%
+                {run.failed > 0 ? ` · ${formatNumber(run.failed)} fallidos` : ""}
+              </span>
+              <span className="h-1 overflow-hidden rounded-full bg-muted">
+                <span
+                  className="block h-full rounded-full bg-primary transition-[width] duration-700"
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+            </span>
+          ),
+          type: "loading" as const,
+          timeout: 0,
+          onClose: () => dismiss(id),
+        };
+        if (known.has(id)) toast.update(id, options);
+        else {
+          toast.add({ id, ...options });
+          known.add(id);
+        }
+        continue;
+      }
+
+      const detail = succeeded
+        ? run.summary
+          ? truncate(run.summary, SUMMARY_MAX)
+          : null
+        : veto
+          ? truncate(
+              `${run.errorCode ? errorCodeMessage(run.errorCode) : "Omitido"}${run.summary ? ` · ${run.summary}` : ""}`,
+              SUMMARY_MAX,
+            )
+          : truncate(
+              run.error
+                ? run.error
+                : run.summary
+                  ? `${run.summary}`
+                  : "",
+              SUMMARY_MAX,
+            );
+      const options = {
+        title: succeeded
+          ? `${run.label} listo`
+          : veto
+            ? (run.errorCode ? errorCodeMessage(run.errorCode) : "Omitido")
+            : `${run.label} ${stale ? "interrumpido" : "con errores"}`,
+        description: detail || undefined,
+        type: succeeded ? ("success" as const) : veto ? ("warning" as const) : ("error" as const),
+        timeout: succeeded ? AUTO_HIDE_MS : ERROR_HIDE_MS,
+        priority: succeeded || veto ? ("low" as const) : ("high" as const),
+        ...(succeeded
+          ? {
+              actionProps: {
+                children: "Ver en Review",
+                onClick: () => {
+                  dismiss(id);
+                  router.push("/review");
+                },
+              },
+            }
+          : null),
+        onClose: () => dismiss(id),
+      };
+      if (known.has(id)) toast.update(id, options);
+      else {
+        toast.add({ id, ...options });
+        known.add(id);
+      }
+    }
+  }, [queue, isStale, dismiss, router]);
 
   return (
     <BackgroundCtx.Provider value={{ runs, activeRuns, starting, start, isBusy }}>
       {children}
-      {visible.length > 0 && (
-        <div className="fixed inset-x-0 top-0 z-50 flex flex-col">
-          {visible.map((run) => (
-            <RunChip key={run.id} run={run} stale={isStale(run)} onDismiss={() => dismiss(run.id)} />
-          ))}
-        </div>
-      )}
     </BackgroundCtx.Provider>
-  );
-}
-
-function RunChip({ run, stale, onDismiss }: { run: BackgroundRun; stale: boolean; onDismiss: () => void }) {
-  const running = run.status === "running" && !stale;
-  const Icon = ICONS[run.kind] || Wand2;
-  const total = run.total ?? 0;
-  const done = (run.processed ?? 0) + (run.failed ?? 0);
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-
-  if (running) {
-    return (
-      <div className="relative h-9 overflow-hidden border-b border-primary/30 bg-primary/10 text-foreground backdrop-blur">
-        <div
-          className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-700"
-          style={{ width: `${pct}%` }}
-        />
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
-        <div className="relative flex h-full items-center justify-center gap-2 px-10 text-xs font-medium tabular-nums">
-          <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
-          {run.label}… {formatNumber(done)}/{formatNumber(total)}
-          {run.failed > 0 && <span className="text-destructive">· {formatNumber(run.failed)} fallidos</span>}
-        </div>
-      </div>
-    );
-  }
-
-  const veto = isVetoRun(run);
-  const succeeded = run.status === "done" && !stale && !veto;
-  return (
-    <div
-      className={`relative flex h-9 items-center justify-center gap-2 border-b px-10 text-xs font-medium backdrop-blur ${
-        succeeded
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-          : veto
-            ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
-            : "border-destructive/30 bg-destructive/10 text-destructive"
-      }`}
-    >
-      {succeeded ? (
-        <>
-          <Check className="size-3.5" aria-hidden />
-          {run.label} listo{run.summary ? ` · ${run.summary}` : ""}
-        </>
-      ) : veto ? (
-        <>
-          <TriangleAlert className="size-3.5" aria-hidden />
-          {run.errorCode ? errorCodeMessage(run.errorCode) : "Omitido"}
-          {run.summary ? ` · ${run.summary}` : ""}
-        </>
-      ) : (
-        <>
-          <TriangleAlert className="size-3.5" aria-hidden />
-          {run.label} {stale ? "interrumpido" : "con errores"}
-          {run.error ? ` · ${run.error}` : run.summary ? ` · ${run.summary}` : ""}
-        </>
-      )}
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Cerrar"
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 transition-colors hover:bg-foreground/10"
-      >
-        <X className="size-3.5" aria-hidden />
-      </button>
-    </div>
   );
 }
