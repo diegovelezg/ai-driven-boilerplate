@@ -11,13 +11,13 @@ import { resolveStoreId } from "@/lib/customers-db";
 import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
 import {
   advanceRun,
-  busyMessage,
   finishRun,
   getLatestRun,
   hasConflict,
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
+import { busyMessage } from "@/lib/operations";
 import { formatNumber } from "@/lib/format";
 
 export interface SaveState {
@@ -27,10 +27,65 @@ export interface SaveState {
   run?: BackgroundRun | null;
 }
 
+/**
+ * Sesión exigida para mutar secretos (P1). Sin auth configurada (dev sin
+ * Supabase Auth), permite (legacy). Con auth, sin usuario → error.
+ */
+async function requireSettingsUser(): Promise<{ id: string; email: string | null } | { error: string } | null> {
+  let configured = false;
+  try {
+    const { isUserAuthConfigured } = await import("@/lib/supabase-server");
+    configured = isUserAuthConfigured();
+  } catch {
+    configured = false;
+  }
+  if (!configured) return null;
+  try {
+    const { createServerSupabase } = await import("@/lib/supabase-server");
+    const supabase = await createServerSupabase();
+    const { data } = await supabase.auth.getUser();
+    if (!data.user) return { error: "No autenticado. Inicia sesión." };
+    return { id: data.user.id, email: data.user.email ?? null };
+  } catch {
+    return { error: "No autenticado. Inicia sesión." };
+  }
+}
+
+/**
+ * Membresía por tenant, legacy-tolerante: si el usuario no tiene ninguna
+ * membresía (single-tenant pre-migración), permite. Si tiene y no incluye
+ * `storeId`, deniega. Sin `storeId` (tienda nueva) permite la creación.
+ */
+async function denyWithoutMembership(
+  storeId: string | null,
+  user: { id: string; email: string | null } | { error: string } | null,
+): Promise<string | null> {
+  if (!user || "error" in user) return null; // dev o ya denegado arriba
+  if (!storeId) return null; // creación de tienda nueva
+  try {
+    const { requireStoreMember } = await import("@/lib/api/guard");
+    const denied = await requireStoreMember(storeId, user);
+    return denied ? "Sin acceso a esta tienda." : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveConnStoreId(medusaUrl: string): Promise<string | null> {
+  if (!isSupabaseConfigured() || !medusaUrl) return null;
+  try {
+    return await resolveStoreId(medusaUrl).catch(() => null);
+  } catch {
+    return null;
+  }
+}
+
 export async function saveConnectionsAction(
   _prev: SaveState | null,
   formData: FormData,
 ): Promise<SaveState> {
+  const user = await requireSettingsUser();
+  if (user && "error" in user) return { ok: false, message: user.error };
   const platform = (String(formData.get("platform") ?? "medusa") || "medusa") as Platform;
   const prev = await readConnections();
 
@@ -44,13 +99,19 @@ export async function saveConnectionsAction(
   if (platform === "shopify") {
     const shopifyStore = String(formData.get("shopifyStore") ?? "").trim();
     const shopifyToken = String(formData.get("shopifyToken") ?? "").trim();
-    await writeConnections({
-      ...prev,
-      platform,
-      shopifyStore: shopifyStore || prev.shopifyStore,
-      // Vacío = conservar (los inputs deshabilitados no se envían).
-      shopifyToken: shopifyToken || prev.shopifyToken,
-    });
+    const denied = await denyWithoutMembership(await resolveConnStoreId(prev.medusaUrl), user);
+    if (denied) return { ok: false, message: denied };
+    try {
+      await writeConnections({
+        ...prev,
+        platform,
+        shopifyStore: shopifyStore || prev.shopifyStore,
+        // Vacío = conservar (los inputs deshabilitados no se envían).
+        shopifyToken: shopifyToken || prev.shopifyToken,
+      });
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };
+    }
     revalidatePath("/settings");
     return { ok: true, message: "Preset Shopify guardado (aún sin backend)." };
   }
@@ -70,14 +131,21 @@ export async function saveConnectionsAction(
 
   try {
     const token = await medusaLogin(medusaUrl, version, email, password);
-    await writeConnections({
-      ...prev,
-      platform,
-      medusaUrl,
-      medusaVersion: version,
-      medusaEmail: email,
-      medusaToken: token,
-    });
+    // Cross-tenant: si la tienda ya existe, exige membresía antes de rotar su token.
+    const denied = await denyWithoutMembership(await resolveConnStoreId(medusaUrl), user);
+    if (denied) return { ok: false, message: denied };
+    try {
+      await writeConnections({
+        ...prev,
+        platform,
+        medusaUrl,
+        medusaVersion: version,
+        medusaEmail: email,
+        medusaToken: token,
+      });
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : "Token obtenido pero no se pudo guardar." };
+    }
     const result = await testMedusa(medusaUrl, version, token);
     revalidatePath("/settings");
     revalidatePath("/customers");
@@ -150,6 +218,8 @@ export async function saveEmailAction(
   _prev: SaveState | null,
   formData: FormData,
 ): Promise<SaveState> {
+  const user = await requireSettingsUser();
+  if (user && "error" in user) return { ok: false, message: user.error };
   const provider = String(formData.get("emailProvider") ?? "sendgrid") as EmailProvider;
   const from = String(formData.get("emailFrom") ?? "").trim();
   const apiKey = String(formData.get("emailApiKey") ?? "");
@@ -168,14 +238,20 @@ export async function saveEmailAction(
   if (!apiKey && provider !== "none" && prev.emailApiKey && provider !== prev.emailProvider) {
     return { ok: false, message: "Indica la API key del nuevo proveedor (no se reutiliza la anterior)." };
   }
-  await writeConnections({
-    ...prev,
-    emailProvider: provider,
-    emailFrom: from,
-    // Vacío = conservar la guardada (el input viene con placeholder, no con valor).
-    emailApiKey: apiKey ? apiKey.trim() : prev.emailApiKey,
-    defaultChannel,
-  });
+  const denied = await denyWithoutMembership(await resolveConnStoreId(prev.medusaUrl), user);
+  if (denied) return { ok: false, message: denied };
+  try {
+    await writeConnections({
+      ...prev,
+      emailProvider: provider,
+      emailFrom: from,
+      // Vacío = conservar la guardada (el input viene con placeholder, no con valor).
+      emailApiKey: apiKey ? apiKey.trim() : prev.emailApiKey,
+      defaultChannel,
+    });
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };
+  }
   revalidatePath("/settings");
   return {
     ok: true,
@@ -192,9 +268,13 @@ export async function testEmailAction(
   _prev: SaveState | null,
   formData: FormData,
 ): Promise<SaveState> {
+  const user = await requireSettingsUser();
+  if (user && "error" in user) return { ok: false, message: user.error };
   const to = String(formData.get("emailTestTo") ?? "").trim();
   if (!to || !to.includes("@")) return { ok: false, message: "Indica un destino válido para la prueba" };
   const conn = await readConnections();
+  const denied = await denyWithoutMembership(await resolveConnStoreId(conn.medusaUrl), user);
+  if (denied) return { ok: false, message: denied };
   if (conn.emailProvider === "none" || !conn.emailApiKey || !conn.emailFrom) {
     return { ok: false, message: "Guarda primero proveedor, from y API key" };
   }
@@ -229,6 +309,8 @@ export type RevocableSecret = "medusa_token" | "shopify_token" | "email_api_key"
  * El password de Medusa nunca se guarda (solo token post-login).
  */
 export async function revokeSecretAction(secret: RevocableSecret): Promise<SaveState> {
+  const user = await requireSettingsUser();
+  if (user && "error" in user) return { ok: false, message: user.error };
   const conn = await readConnectionsJsonSafe();
   let storeId: string | null = null;
   if (isSupabaseConfigured() && conn.medusaUrl) {
@@ -239,6 +321,8 @@ export async function revokeSecretAction(secret: RevocableSecret): Promise<SaveS
       storeId = null;
     }
   }
+  const denied = await denyWithoutMembership(storeId, user);
+  if (denied) return { ok: false, message: denied };
   if (storeId) {
     try {
       const { isEncryptionConfigured } = await import("@/lib/secrets-crypto");

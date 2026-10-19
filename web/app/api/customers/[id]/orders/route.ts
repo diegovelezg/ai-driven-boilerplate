@@ -1,5 +1,5 @@
 import { loadCustomerOrdersAndRfm } from "@/lib/customer-data";
-import { resolveRouteCustomerId } from "@/lib/api/guard";
+import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
 
 export type {
   CustomerOrder,
@@ -13,6 +13,8 @@ export async function GET(
   const idOrErr = await resolveRouteCustomerId(params);
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
+  const access = await requireCustomerStoreAccess(id);
+  if (access instanceof Response) return access;
 
   const result = await loadCustomerOrdersAndRfm(id);
   if (!result) return Response.json({ error: "Customer no encontrado." }, { status: 404 });

@@ -27,17 +27,24 @@ async function updateAuthSession(request: NextRequest) {
   return response;
 }
 
-/** Refresca sesión; redirige a /login si no hay usuario (salvo login/API). */
+/** Refresca sesión; redirige a /login si no hay usuario (salvo login/API auth).
+ *  Las rutas /api/* (salvo /api/auth) exigen sesión: sin ella devuelven 401
+ *  JSON en vez de redirect (los fetch del dashboard esperan JSON). */
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const response = await updateAuthSession(request);
   if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return response;
   }
-  if (pathname.startsWith("/api/")) return response;
   const hasSession = Boolean(
     request.cookies.getAll().some((c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token")),
   );
+  if (pathname.startsWith("/api/")) {
+    if (!hasSession) {
+      return NextResponse.json({ error: "No autenticado." }, { status: 401 });
+    }
+    return response;
+  }
   if (!hasSession) {
     const login = request.nextUrl.clone();
     login.pathname = "/login";

@@ -31,6 +31,10 @@ export async function GET(req: Request) {
       { store_id: null, actions: 0, leads: 0, signals: 0, total: 0 },
     );
   }
+  // Auth + tenant: el conteo del inbox solo lo ven miembros de la tienda activa.
+  const { requireStoreAccess } = await import("@/lib/api/guard");
+  const access = await requireStoreAccess(active.id);
+  if (access instanceof Response) return access;
   const db = getSupabase();
   const scope = await resolveMarketScope(active.id, sp.get("market")).catch(() => null);
   const count = async (

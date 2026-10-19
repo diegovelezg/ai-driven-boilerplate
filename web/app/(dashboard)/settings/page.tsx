@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { resolveStoreId } from "@/lib/customers-db";
-import { readConnections } from "@/lib/store";
+import { readConnections, toSafeConnections } from "@/lib/store";
 import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from "@/lib/store-profiles";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { getPendingProposal } from "@/lib/profile-recalibrate/service";
@@ -43,6 +43,9 @@ export default async function SettingsPage({
   searchParams?: Promise<{ tab?: string }>;
 }) {
   const defaults = await readConnections();
+  // Seguridad: al cliente solo viajan booleanos has* (nunca los secretos en
+  // plaintext por el Flight payload). Los valores reales solo viven en server.
+  const safeDefaults = toSafeConnections(defaults);
   const storeId =
     isSupabaseConfigured() && defaults.medusaUrl
       ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
@@ -136,7 +139,7 @@ export default async function SettingsPage({
       />
       <SettingsTabs
         key={initialTab}
-        defaults={defaults}
+        defaults={safeDefaults}
         secretsInDb={secretsInDb}
         storeId={storeId}
         profile={profile}

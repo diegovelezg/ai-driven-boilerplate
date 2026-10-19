@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { revokeSecretAction, saveConnectionsAction, saveEmailAction, testEmailAction } from "@/lib/settings-actions";
 import type { RevocableSecret } from "@/lib/settings-actions";
-import type { DefaultChannel, EmailProvider, Platform, StoreConnections } from "@/lib/store";
+import type { DefaultChannel, EmailProvider, Platform, SafeStoreConnections } from "@/lib/store";
 
 /** Revocar es destructivo y solo existe cuando hay key: dos pasos
  *  (Revocar → confirmar) y refresh para reflejar el estado real. */
@@ -124,7 +124,7 @@ export function SettingsForm({
   defaults,
   secretsInDb,
 }: {
-  defaults: StoreConnections;
+  defaults: SafeStoreConnections;
   secretsInDb?: boolean;
 }) {
   // MO único: el connect (login + sync) va a la cinta global vía `bg.start`
@@ -137,12 +137,13 @@ export function SettingsForm({
   const bg = useBackgroundOrNull();
   // Medusa exige password en cada guardado (no hay "conservar token"):
   // con token, todo el bloque se bloquea hasta "Cambiar credenciales".
+  // `defaults` solo trae booleanos has* (los secretos nunca viajan al cliente).
   const hasToken =
-    platform === "medusa" ? Boolean(defaults.medusaToken) : Boolean(defaults.shopifyToken);
+    platform === "medusa" ? defaults.hasMedusaToken : defaults.hasShopifyToken;
   // La plataforma queda fijada mientras haya cualquier credencial guardada:
   // cambiarla con un token vivo deja secretos huérfanos y rompe el sync.
   // Solo se libera al revocar el token.
-  const hasAnyToken = Boolean(defaults.medusaToken || defaults.shopifyToken);
+  const hasAnyToken = defaults.hasMedusaToken || defaults.hasShopifyToken;
   const [editing, setEditing] = useState(false);
   const locked = hasToken && !editing;
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -181,8 +182,8 @@ export function SettingsForm({
         }
         action={
           platform === "medusa" ? (
-            <Badge variant={defaults.medusaToken ? "success" : "secondary"}>
-              {defaults.medusaToken
+            <Badge variant={defaults.hasMedusaToken ? "success" : "secondary"}>
+              {defaults.hasMedusaToken
                 ? `Medusa ${defaults.medusaVersion || ""} conectado`.trim()
                 : "Medusa sin conectar"}
             </Badge>
@@ -208,10 +209,10 @@ export function SettingsForm({
                 )}
               </>
             )}
-            {platform === "medusa" && defaults.medusaToken && (
+            {platform === "medusa" && defaults.hasMedusaToken && (
               <SecretRevokeButton secret="medusa_token" />
             )}
-            {platform === "shopify" && defaults.shopifyToken && (
+            {platform === "shopify" && defaults.hasShopifyToken && (
               <SecretRevokeButton secret="shopify_token" />
             )}
             {state && (
@@ -347,18 +348,25 @@ export function SettingsForm({
                   disabled
                 />
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="shopifyToken">Access token</Label>
-                <Input
-                  id="shopifyToken"
-                  name="shopifyToken"
-                  type="password"
-                  placeholder="••••••••"
-                  defaultValue={defaults.shopifyToken}
-                  autoComplete="off"
-                  disabled
+              {defaults.hasShopifyToken ? (
+                <LockedSecret
+                  label="Access token"
+                  storageHint={`Token guardado ${secretsInDb === true ? "en DB cifrada" : "local (solo dev)"} — nunca se muestra. Revoca para rotarlo.`}
+                  onReplace={() => setEditing(true)}
                 />
-              </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label htmlFor="shopifyToken">Access token</Label>
+                  <Input
+                    id="shopifyToken"
+                    name="shopifyToken"
+                    type="password"
+                    placeholder="••••••••"
+                    autoComplete="off"
+                    disabled
+                  />
+                </div>
+              )}
             </div>
             </>
           )}
@@ -372,7 +380,7 @@ export function EmailSettingsForm({
   defaults,
   secretsInDb,
 }: {
-  defaults: StoreConnections;
+  defaults: SafeStoreConnections;
   secretsInDb?: boolean;
 }) {
   const router = useRouter();
@@ -389,7 +397,8 @@ export function EmailSettingsForm({
   // Paridad con Tienda: con key guardada, todo el bloque se bloquea hasta
   // "Cambiar" (la key vacía conserva la actual, así que desbloquear para
   // tocar canal/proveedor/from no obliga a rotar).
-  const hasKey = Boolean(defaults.emailApiKey);
+  // `defaults` solo trae hasEmailApiKey (el valor nunca viaja al cliente).
+  const hasKey = defaults.hasEmailApiKey;
   const [editingKey, setEditingKey] = useState(false);
   const keyLocked = hasKey && !editingKey && provider !== "none";
   const onSave = (e: React.FormEvent<HTMLFormElement>) => {
@@ -435,8 +444,8 @@ export function EmailSettingsForm({
             </>
           }
           action={
-            <Badge variant={defaults.emailApiKey ? "success" : "secondary"}>
-              {defaults.emailApiKey
+            <Badge variant={defaults.hasEmailApiKey ? "success" : "secondary"}>
+              {defaults.hasEmailApiKey
                 ? `${defaults.emailProvider === "none" ? "Desactivado" : `${defaults.emailProvider} conectado`}`
                 : "Sin conectar"}
             </Badge>
@@ -467,7 +476,7 @@ export function EmailSettingsForm({
                   )}
                 </>
               )}
-              {defaults.emailApiKey && <SecretRevokeButton secret="email_api_key" />}
+              {defaults.hasEmailApiKey && <SecretRevokeButton secret="email_api_key" />}
               {saveState && (
                 <span className={saveState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
                   {saveState.message}
@@ -565,7 +574,7 @@ export function EmailSettingsForm({
         </AppCard>
       </form>
 
-      {defaults.emailProvider !== "none" && defaults.emailApiKey && (
+      {defaults.emailProvider !== "none" && defaults.hasEmailApiKey && (
         <AppCard
           tone="sky"
           title="Probar envío"

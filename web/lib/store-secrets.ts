@@ -1,11 +1,11 @@
 // Capa DB de secrets (issue #20). Solo server-side: usa service_role
 // (bypassa RLS). Nunca importar en client components.
 import "server-only";
-import { createHash } from "node:crypto";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   decryptSecret,
   encryptSecret,
+  fingerprintSecret,
   getEncryptionKey,
   isEncryptionConfigured,
 } from "@/lib/secrets-crypto";
@@ -13,11 +13,10 @@ import {
 const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
-type SecretAction = "upsert" | "revoke" | "migrate";
+type SecretAction = "upsert" | "revoke";
 
-function shaShort(s: string): string {
-  return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
-}
+// Huella para auditoría: reutiliza `fingerprintSecret` (única definición).
+const shaShort = fingerprintSecret;
 
 function isSecretsDbReady(): boolean {
   return isSupabaseConfigured() && isEncryptionConfigured();

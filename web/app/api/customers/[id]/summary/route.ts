@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { resolveRouteCustomerId } from "@/lib/api/guard";
+import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
 import { toEditableCustomer } from "@/lib/customers-db";
 import { domainFromEmail } from "@/lib/domains";
 
@@ -10,6 +10,8 @@ export async function GET(
   const idOrErr = await resolveRouteCustomerId(params);
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
+  const access = await requireCustomerStoreAccess(id);
+  if (access instanceof Response) return access;
 
   const db = getSupabase();
   const { data, error } = await db.from("customers").select("*").eq("id", id).maybeSingle();

@@ -10,8 +10,8 @@ import { EmailSettingsForm, SettingsForm } from "@/components/settings-form";
 import { TenantProfileForm } from "@/components/tenant-profile-form";
 import { ProfileProposalsPanel } from "@/components/profile-proposals";
 import { formatNumber } from "@/lib/format";
-import type { StoreConnections } from "@/lib/store";
-import type { StoreProfile, Suggestion } from "@/lib/store-profiles";
+import type { SafeStoreConnections } from "@/lib/store";
+import type { StoreProfile, Suggestion } from "@/lib/store-profile-defs";
 import type { ProfileProposal } from "@/lib/profile-recalibrate/service";
 
 /** Tab de settings: un grupo por trabajo (conectar vs calibrar vs motor). */
@@ -38,7 +38,7 @@ export function SettingsTabs({
   proposal,
   initialTab = "tienda",
 }: {
-  defaults: StoreConnections;
+  defaults: SafeStoreConnections;
   secretsInDb?: boolean;
   storeId: string | null;
   profile: StoreProfile | null;

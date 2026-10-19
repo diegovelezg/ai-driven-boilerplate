@@ -1,6 +1,6 @@
 import { InMemorySessionService } from "@google/adk";
 import { getSupabase } from "@/lib/supabase";
-import { resolveRouteCustomerId } from "@/lib/api/guard";
+import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
 import { loadHistory, saveTurn } from "@/lib/conversations";
@@ -30,6 +30,8 @@ export async function POST(
   const idOrErr = await resolveRouteCustomerId(params);
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
+  const access = await requireCustomerStoreAccess(id);
+  if (access instanceof Response) return access;
 
   let body: { messages?: IncomingMessage[] };
   try {

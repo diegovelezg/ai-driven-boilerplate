@@ -25,6 +25,10 @@ export async function GET(req: Request) {
     console.log(`[api/usage] store invalido param=${storeParam} stores=${stores.length}`);
     return Response.json({ error: "Falta store válido." }, { status: 400 });
   }
+  // Auth + tenant: el agregado de tokens solo lo ven miembros de la tienda.
+  const { requireStoreAccess } = await import("@/lib/api/guard");
+  const access = await requireStoreAccess(store.id);
+  if (access instanceof Response) return access;
 
   const db = getSupabase();
   let q = db

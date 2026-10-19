@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { resolveRouteCustomerId } from "@/lib/api/guard";
+import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
 
 interface CustomerPredictionDTO {
   model: string;
@@ -27,6 +27,8 @@ export async function GET(
   const idOrErr = await resolveRouteCustomerId(params);
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
+  const access = await requireCustomerStoreAccess(id);
+  if (access instanceof Response) return access;
   const db = getSupabase();
   const { data: cust } = await db
     .from("customers")

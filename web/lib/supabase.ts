@@ -1,4 +1,7 @@
 // Solo server-side: usa service_role (bypassa RLS). Nunca importar en client components.
+// (Sin `import "server-only"`: los tests `tsx --test` importan este módulo en
+// node y `server-only` lanza fuera de React Server Components. La protección
+// real contra fugas al browser es no serializar secretos: ver `toSafeConnections`.)
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let cached: SupabaseClient | null = null;

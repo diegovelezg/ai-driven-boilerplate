@@ -56,6 +56,11 @@ export async function POST(req: Request) {
   const storeId = typeof body.storeId === "string" ? body.storeId : "";
   if (!storeId) return Response.json({ error: "Falta storeId." }, { status: 400 });
 
+  // Auth + tenant: solo miembros de la tienda pueden chatear sobre ella.
+  const { requireStoreAccess } = await import("@/lib/api/guard");
+  const access = await requireStoreAccess(storeId);
+  if (access instanceof Response) return access;
+
   const history = (body.messages ?? []).filter(
     (m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
   );

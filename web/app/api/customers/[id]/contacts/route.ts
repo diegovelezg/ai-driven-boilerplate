@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { resolveRouteCustomerId } from "@/lib/api/guard";
+import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 
 // Issue #19 Paso 5: historial de contactos por cliente (¿ya le escribimos?).
@@ -25,6 +25,8 @@ export async function GET(
   const idOrErr = await resolveRouteCustomerId(params);
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
+  const access = await requireCustomerStoreAccess(id);
+  if (access instanceof Response) return access;
   const db = getSupabase();
   const { data: cust } = await db
     .from("customers")
