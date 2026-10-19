@@ -5,6 +5,8 @@ import { PageHeader } from "@/components/page-header";
 import type { CustomerFilters, CustomerPredictionLite, EditableCustomer } from "@/lib/customers-db";
 import {
   getPredictionsMap,
+  getSeguimientoSummary,
+  getValorByType,
   getVentana7Summary,
   parseCustomerFilters,
   parseCustomersSort,
@@ -28,7 +30,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; market?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; ventana?: string; banda?: string; elegibilidad?: string; decil?: string; market?: string }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
@@ -43,6 +45,10 @@ export default async function CustomersPage({
     ritmo: sp.ritmo,
     tipo: sp.tipo,
     customer_type: sp.customer_type,
+    ventana: sp.ventana,
+    banda: sp.banda,
+    elegibilidad: sp.elegibilidad,
+    decil: sp.decil,
   });
 
   let rows: EditableCustomer[] = [];
@@ -57,6 +63,8 @@ export default async function CustomersPage({
   let marketLabel: string | null = null;
   let preds: Record<string, CustomerPredictionLite> = {};
   let ventana7: { n: number; sumaMinor: number } | null = null;
+  let seguimiento: { n: number; sumaMinor: number } | null = null;
+  let valorByType: { b2b: { n: number; minor: number }; b2c: { n: number; minor: number }; otherCurrency: number; truncated: boolean } | null = null;
 
   if (connected && dbReady) {
     try {
@@ -72,8 +80,10 @@ export default async function CustomersPage({
         marketLabel = scope?.market ? displayMarket(scope.market) : null;
         pendingCount = (await pendingDomains(storeId, scope).catch(() => [])).length;
         duplicateCount = await countDuplicateEmails(storeId, scope).catch(() => 0);
+        const { resolveCloseWatchP } = await import("@/lib/store-profiles");
+        const closeWatchCutoff = await resolveCloseWatchP(storeId).catch(() => 0.1);
         const fetchPage = (p: number) =>
-          queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort, filters, scope);
+          queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort, filters, scope, closeWatchCutoff);
         let res = await fetchPage(page);
         totalCount = res.totalCount;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -99,6 +109,15 @@ export default async function CustomersPage({
         if (filters.vista === "ventana7") {
           ventana7 = await getVentana7Summary(storeId).catch(() => null);
         }
+        if (filters.vista === "seguimiento") {
+          seguimiento = await getSeguimientoSummary(storeId, closeWatchCutoff).catch(() => null);
+        }
+        // Agregado B2B/B2C por valor (issue #14A): facturación bruta por tipo.
+        valorByType = await getValorByType(
+          storeId,
+          scope?.market?.currency?.toUpperCase() ?? shopCurrency,
+          scope,
+        ).catch(() => null);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
@@ -184,6 +203,8 @@ export default async function CustomersPage({
           marketId={marketId}
           preds={preds}
           ventana7={ventana7}
+          seguimiento={seguimiento}
+          valorByType={valorByType}
         />
       )}
     </div>

@@ -178,6 +178,7 @@ export default async function ReviewPage({
                 .eq("store_id", storeId)
                 .in("customer_id", custIds)
                 .order("as_of", { ascending: false })
+                .order("model_version", { ascending: false })
                 .limit(500),
               db
                 .from("orders")

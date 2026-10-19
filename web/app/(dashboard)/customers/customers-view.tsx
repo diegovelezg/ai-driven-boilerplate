@@ -53,6 +53,15 @@ interface Props {
   preds: Record<string, CustomerPredictionLite>;
   /** Resumen "entran en ventana en 7 días" (solo con ?vista=ventana7). */
   ventana7: { n: number; sumaMinor: number } | null;
+  /** Resumen "seguimiento cercano" (solo con ?vista=seguimiento, issue #21). */
+  seguimiento: { n: number; sumaMinor: number } | null;
+  /** Facturación bruta por tipo efectivo (issue #14A). */
+  valorByType: {
+    b2b: { n: number; minor: number };
+    b2c: { n: number; minor: number };
+    otherCurrency: number;
+    truncated: boolean;
+  } | null;
 }
 
 /** Celda con edición inline: click -> input; Enter/blur guarda, Escape cancela. */
@@ -198,6 +207,8 @@ export function CustomersView({
   marketId,
   preds,
   ventana7,
+  seguimiento,
+  valorByType,
 }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -213,6 +224,10 @@ export function CustomersView({
       vista?: string | null;
       ritmo?: string | null;
       customerType?: string | null;
+      ventana?: string | null;
+      banda?: string | null;
+      elegibilidad?: string | null;
+      decil?: string | null;
     }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
@@ -228,6 +243,14 @@ export function CustomersView({
       if (rit) params.set("ritmo", rit);
       const tip = overrides.customerType !== undefined ? overrides.customerType : filters.customerType;
       if (tip) params.set("tipo", tip);
+      const ven = overrides.ventana !== undefined ? overrides.ventana : filters.ventana;
+      if (ven) params.set("ventana", ven);
+      const ban = overrides.banda !== undefined ? overrides.banda : filters.banda;
+      if (ban) params.set("banda", ban);
+      const ele = overrides.elegibilidad !== undefined ? overrides.elegibilidad : filters.elegibilidad;
+      if (ele) params.set("elegibilidad", ele);
+      const dcl = overrides.decil !== undefined ? overrides.decil : filters.decil;
+      if (dcl) params.set("decil", dcl);
       if (marketId) params.set("market", marketId);
       return params.toString();
     },
@@ -243,13 +266,13 @@ export function CustomersView({
     });
   };
 
-  const setFilter = (patch: { decision?: string | null; vista?: string | null; ritmo?: string | null; customerType?: string | null }) => {
+  const setFilter = (patch: { decision?: string | null; vista?: string | null; ritmo?: string | null; customerType?: string | null; ventana?: string | null; banda?: string | null; elegibilidad?: string | null; decil?: string | null }) => {
     startTransition(() => {
       router.replace(`/customers?${buildParams({ page: 1, ...patch })}`);
     });
   };
 
-  const filtersActive = filters.decision !== null || filters.vista !== null || filters.ritmo !== null || filters.customerType !== null;
+  const filtersActive = filters.decision !== null || filters.vista !== null || filters.ritmo !== null || filters.customerType !== null || filters.ventana !== null || filters.banda !== null || filters.elegibilidad !== null || filters.decil !== null;
 
   // Sincroniza el input cuando el `q` commiteado cambia por navegación externa
   // (botones paginación, atrás/adelante). setState en callback: sin cascading render.
@@ -383,6 +406,18 @@ export function CustomersView({
             </Button>
           </span>
         </AppTooltip>
+        <AppTooltip tip="Vigilar cercano: recuperables o p alta (mismo corte que el héroe)">
+          <span className="inline-flex">
+            <Button
+              variant={filters.vista === "seguimiento" ? "default" : "outline"}
+              size="sm"
+              disabled={isPending}
+              onClick={() => setFilter({ vista: filters.vista === "seguimiento" ? null : "seguimiento" })}
+            >
+              Seguimiento cercano
+            </Button>
+          </span>
+        </AppTooltip>
         <Select
           value={filters.ritmo ?? "all"}
           onValueChange={(v) => setFilter({ ritmo: v === "all" ? null : v })}
@@ -407,6 +442,113 @@ export function CustomersView({
             <SelectItem value="con-ritmo">Con ritmo</SelectItem>
             <SelectItem value="primera">Primera recompra</SelectItem>
             <SelectItem value="sin-compras">Sin compras</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.ventana ?? "all"}
+          onValueChange={(v) => setFilter({ ventana: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-36 bg-background" aria-label="Filtrar por ventana de recompra">
+            <SelectValue placeholder="Ventana">
+              {(value) =>
+                value === "all"
+                  ? "Toda ventana"
+                  : value === "antes"
+                    ? "Antes"
+                    : value === "en"
+                      ? "En ventana"
+                      : value === "pasada"
+                        ? "Pasada"
+                        : value === "dormido"
+                          ? "Dormido"
+                          : String(value)
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toda ventana</SelectItem>
+            <SelectItem value="antes">Antes</SelectItem>
+            <SelectItem value="en">En ventana</SelectItem>
+            <SelectItem value="pasada">Pasada</SelectItem>
+            <SelectItem value="dormido">Dormido</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.banda ?? "all"}
+          onValueChange={(v) => setFilter({ banda: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-44 bg-background" aria-label="Filtrar por banda de propensión">
+            <SelectValue placeholder="Banda">
+              {(value) =>
+                value === "all"
+                  ? "Toda banda"
+                  : value === "organico-probable"
+                    ? "Volverán solos"
+                    : value === "recuperable"
+                      ? "Recuperables"
+                      : value === "lejos"
+                        ? "Lejos"
+                        : String(value)
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toda banda</SelectItem>
+            <SelectItem value="organico-probable">Volverán solos</SelectItem>
+            <SelectItem value="recuperable">Recuperables</SelectItem>
+            <SelectItem value="lejos">Lejos</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.elegibilidad ?? "all"}
+          onValueChange={(v) => setFilter({ elegibilidad: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-40 bg-background" aria-label="Filtrar por elegibilidad de contacto">
+            <SelectValue placeholder="Elegibilidad">
+              {(value) =>
+                value === "all"
+                  ? "Toda elegibilidad"
+                  : value === "ok"
+                    ? "Contactables"
+                    : value === "sin-canal"
+                      ? "Sin canal"
+                      : value === "contacto-reciente"
+                        ? "Contacto reciente"
+                        : String(value)
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toda elegibilidad</SelectItem>
+            <SelectItem value="ok">Contactables</SelectItem>
+            <SelectItem value="sin-canal">Sin canal</SelectItem>
+            <SelectItem value="contacto-reciente">Contacto reciente</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filters.decil ?? "all"}
+          onValueChange={(v) => setFilter({ decil: v === "all" ? null : v })}
+        >
+          <SelectTrigger className="w-36 bg-background" aria-label="Filtrar por decil de valor">
+            <SelectValue placeholder="Valor">
+              {(value) =>
+                value === "all"
+                  ? "Todo valor"
+                  : value === "alto"
+                    ? "Valor alto (8-10)"
+                    : value === "medio"
+                      ? "Valor medio (4-7)"
+                      : value === "bajo"
+                        ? "Valor bajo (1-3)"
+                        : String(value)
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todo valor</SelectItem>
+            <SelectItem value="alto">Alto (8-10)</SelectItem>
+            <SelectItem value="medio">Medio (4-7)</SelectItem>
+            <SelectItem value="bajo">Bajo (1-3)</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -437,7 +579,7 @@ export function CustomersView({
             variant="ghost"
             size="sm"
             disabled={isPending}
-            onClick={() => setFilter({ decision: null, vista: null, ritmo: null, customerType: null })}
+            onClick={() => setFilter({ decision: null, vista: null, ritmo: null, customerType: null, ventana: null, banda: null, elegibilidad: null, decil: null })}
           >
             Limpiar
           </Button>
@@ -452,6 +594,18 @@ export function CustomersView({
       {filters.vista === "ventana7" && ventana7 && (
         <p className="text-[13px] text-muted-foreground tabular-nums">
           Próximos 7 días: ~{formatNumber(ventana7.n)} clientes · ~{formatMoney(ventana7.sumaMinor, shopCurrency)} en juego.
+        </p>
+      )}
+
+      {filters.vista === "seguimiento" && seguimiento && (
+        <p className="text-[13px] text-muted-foreground tabular-nums">
+          Seguimiento cercano: ~{formatNumber(seguimiento.n)} clientes · ~{formatMoney(seguimiento.sumaMinor, shopCurrency)} en juego.
+        </p>
+      )}
+
+      {valorByType && (
+        <p className="text-[13px] text-muted-foreground tabular-nums">
+          ¿Qué tipo vale más? B2B: {formatNumber(valorByType.b2b.n)} · {formatMoney(valorByType.b2b.minor, shopCurrency)} — B2C: {formatNumber(valorByType.b2c.n)} · {formatMoney(valorByType.b2c.minor, shopCurrency)} (facturación bruta acumulada{valorByType.truncated ? ", parcial: universo mayor al CAP" : ""}{valorByType.otherCurrency > 0 ? `; ${formatNumber(valorByType.otherCurrency)} en otra moneda fuera de la suma` : ""}).
         </p>
       )}
 

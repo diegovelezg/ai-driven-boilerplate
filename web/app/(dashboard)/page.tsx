@@ -212,6 +212,11 @@ export default async function DashboardPage({
   let hoyActuar = 0;
   let hoyVigilar = 0;
   let hoyAuto = 0;
+  // Issue #21 Paso 1 (solo display): vigilar partido en cercano vs residual.
+  // Cercano = decision==vigilar AND (recuperable OR p>=corte_tenant).
+  let hoyCercano = 0;
+  let hoyResidual = 0;
+  let closeWatchP = 0.1;
   // Issue #14 B2: el héroe sumaba plata sin descontar estimaciones débiles.
   // Se cuenta aparte y se declara en el subtítulo (no se descuenta en
   // silencio: el dueño decide si actuar igual).
@@ -225,6 +230,7 @@ export default async function DashboardPage({
       p25: number | null;
       p75: number | null;
       p: number | null;
+      bandaP: string | null;
       ticket: number | null;
       valor: number | null;
       currency: string | null;
@@ -452,15 +458,24 @@ export default async function DashboardPage({
       const dayStart = new Date(
         Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
       ).toISOString();
+      // Corte por tenant de "seguimiento cercano" (issue #21 Paso 1, display).
+      try {
+        const { resolveCloseWatchP } = await import("@/lib/store-profiles");
+        closeWatchP = await resolveCloseWatchP(active.id).catch(() => 0.1);
+      } catch {
+        closeWatchP = 0.1;
+      }
+      const { isCloseWatch: isCercano } = await import("@/lib/customer-predictions");
       let predRows: Array<Record<string, unknown>> = [];
       {
         const { data } = await db
           .from("customer_predictions")
           .select(
-            "customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,p_recompra_h,p25_days,p75_days,confidence,as_of,evidence_json",
+            "customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,p_recompra_h,banda_p,p25_days,p75_days,confidence,as_of,model_version,evidence_json",
           )
           .eq("store_id", active.id)
           .gte("as_of", dayStart)
+          .order("model_version", { ascending: false })
           .limit(5000);
         predRows = (data ?? []) as Array<Record<string, unknown>>;
       }
@@ -468,10 +483,11 @@ export default async function DashboardPage({
         const { data } = await db
           .from("customer_predictions")
           .select(
-            "customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,p_recompra_h,p25_days,p75_days,confidence,as_of,evidence_json",
+            "customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,p_recompra_h,banda_p,p25_days,p75_days,confidence,as_of,model_version,evidence_json",
           )
           .eq("store_id", active.id)
           .order("as_of", { ascending: false })
+          .order("model_version", { ascending: false })
           .limit(5000);
         // Solo la fecha más reciente (una foto, no historia).
         const rowsAll = (data ?? []) as Array<Record<string, unknown>>;
@@ -482,7 +498,12 @@ export default async function DashboardPage({
       const viewCur = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
       const foreign = new Map<string, { n: number; value: number }>();
       let nextIn: number | null = null;
+      // v1+v2 conviven el día del deploy: un cliente, un voto (prefiere v2).
+      const seenCust = new Set<string>();
       for (const r of predRows) {
+        const cid0 = String(r.customer_id ?? "");
+        if (!cid0 || seenCust.has(cid0)) continue;
+        seenCust.add(cid0);
         const d = String(r.decision ?? "");
         // Con filtro de mercado el market es el universo también en conteos:
         // sin esto el héroe cuenta MX bajo un header "viendo PE · PEN"
@@ -492,8 +513,13 @@ export default async function DashboardPage({
           viewCur === null || cur === null || cur.toUpperCase() === viewCur.toUpperCase();
         if (scope.market && !inView) continue;
         if (d === "actuar" || d === "revision_humana") hoyActuar += 1;
-        else if (d === "vigilar") hoyVigilar += 1;
-        else hoyAuto += 1;
+        else if (d === "vigilar") {
+          hoyVigilar += 1;
+          const banda = (r.banda_p as string | null) ?? null;
+          const p = r.p_recompra_h == null ? null : Number(r.p_recompra_h);
+          if (isCercano({ decision: d, bandaP: banda, pRecompraH: p }, closeWatchP)) hoyCercano += 1;
+          else hoyResidual += 1;
+        } else hoyAuto += 1;
         if ((r.confidence as string | null) === "baja" && (d === "actuar" || d === "revision_humana")) hoyDebiles += 1;
         if (d === "organico") hoyGroups.organico += 1;
         else if (d === "dormido") hoyGroups.dormido += 1;
@@ -508,6 +534,7 @@ export default async function DashboardPage({
           p25: r.p25_days == null ? null : Number(r.p25_days),
           p75: r.p75_days == null ? null : Number(r.p75_days),
           p: r.p_recompra_h == null ? null : Number(r.p_recompra_h),
+          bandaP: (r.banda_p as string | null) ?? null,
           ticket: r.ticket_esperado_minor == null ? null : Number(r.ticket_esperado_minor),
           valor: r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
           currency: (r.currency as string | null) ?? null,
@@ -703,7 +730,7 @@ export default async function DashboardPage({
         description={
           (hasMotor
             ? hoyActuar > 0
-              ? `${formatNumber(hoyVigilar)} en seguimiento · ${formatNumber(hoyAuto)} al día`
+              ? `${formatNumber(hoyCercano)} en seguimiento cercano · ${formatNumber(hoyResidual)} residuales en automático · ${formatNumber(hoyAuto)} al día`
               : pending > 0
                 ? `Nada nuevo hoy; ${formatNumber(pending)} por aprobar en Review.`
                 : "Ningún mensaje necesario hoy; la vigilancia sigue."
@@ -809,7 +836,7 @@ export default async function DashboardPage({
                 <span className="block tabular-nums">
                   {hoyActuar > 0 ? (
                     <>
-                      {formatNumber(hoyVigilar)} en seguimiento · {formatNumber(hoyAuto)} al día · entre {money(hoyLow)} y {money(hoyHigh)}
+                      {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático · {formatNumber(hoyAuto)} al día · entre {money(hoyLow)} y {money(hoyHigh)}
                       {hoyDebiles > 0 ? ` · ${formatNumber(hoyDebiles)} con pocos datos` : ""}
                       {hoyForeign.map((fl) => (
                         <span key={fl.code}>
@@ -819,7 +846,7 @@ export default async function DashboardPage({
                     </>
                   ) : (
                     <>
-                      {formatNumber(hoyVigilar)} en seguimiento
+                      {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático
                       {nextWindowDate ? ` · el próximo puede necesitar mensaje el ${nextWindowDate}` : ""}
                     </>
                   )}

@@ -186,17 +186,19 @@ export default async function FinanzasPage({
       ).toISOString();
       const { data: predDay } = await db
         .from("customer_predictions")
-        .select("decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency")
+        .select("customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency")
         .eq("store_id", active.id)
         .gte("as_of", dayStart)
+        .order("model_version", { ascending: false })
         .limit(5000);
       let rows = (predDay ?? []) as Array<Record<string, unknown>>;
       if (rows.length === 0) {
         const { data: last } = await db
           .from("customer_predictions")
-          .select("decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,as_of")
+          .select("customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,as_of")
           .eq("store_id", active.id)
           .order("as_of", { ascending: false })
+          .order("model_version", { ascending: false })
           .limit(5000);
         const all = (last ?? []) as Array<Record<string, unknown>>;
         const maxAsOf = all.length > 0 ? String(all[0].as_of ?? "") : null;
@@ -207,7 +209,12 @@ export default async function FinanzasPage({
       let high = 0;
       let count = 0;
       let organicos = 0;
+      // v1+v2 conviven el día del deploy: un cliente, un voto (prefiere v2).
+      const seenFin = new Set<string>();
       for (const r of rows) {
+        const cid = String(r.customer_id ?? "");
+        if (!cid || seenFin.has(cid)) continue;
+        seenFin.add(cid);
         const d = String(r.decision ?? "");
         if (d === "organico") organicos += 1;
         if (d !== "actuar" && d !== "revision_humana" && d !== "vigilar") continue;

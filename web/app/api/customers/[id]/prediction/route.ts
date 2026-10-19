@@ -41,6 +41,7 @@ export async function GET(
     )
     .eq("customer_id", id)
     .order("as_of", { ascending: false })
+    .order("model_version", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (!pred) return Response.json({ prediction: null });

@@ -13,6 +13,11 @@ export interface SessionInput {
 export interface CustomerSessions {
   customerId: string;
   sessions: SessionInput[];
+  /** Market asignado por el caller (partición, issue #21 Paso 3). Null = legacy. */
+  marketId?: string | null;
+  /** Tipo efectivo por cliente (manual_edits.customer_type ?? customer_type,
+   *  issue #21 Paso 4). Null = fallback a `isB2B` global del input. */
+  customerType?: string | null;
 }
 
 export type Decision =
@@ -44,10 +49,19 @@ export interface Prediction {
   valorDecil: number | null;
   elegibilidad: "ok" | "sin-canal" | "contacto-reciente";
   decisionVersion: string;
+  /** Partición que produjo la predicción (issue #21 Paso 3). Null = legacy. */
+  marketId: string | null;
 }
 
-/** Versión de la función de decisión (auditable, re-ejecutable). */
-export const DECISION_VERSION = "v2:axes";
+/** Versión de la función de decisión (auditable, re-ejecutable).
+ *  v3:market = partición por market + isB2B por lado + bandas por tenant
+ *  (issue #21 Pasos 3-5). Con defaults reproduce v2 numéricamente. */
+export const DECISION_VERSION = "v3:market";
+
+/** Cortes default de banda_p (issue #21 Paso 5): reproducen v2.
+ *  La forma es global; los valores son por tenant (store_profiles). */
+export const BAND_HIGH_DEFAULT = 0.6;
+export const BAND_LOW_DEFAULT = 0.15;
 
 /** Ejes de entrada de la decisión (testeable sin modelo). */
 export interface DecisionAxes {
@@ -99,8 +113,16 @@ export interface StoreModelInput {
   // supresiones ya resueltas por el caller, para mantener esto puro:
   suppressed: Map<string, "sin_canal" | "contactado_reciente">;
   /** Opcional: true si el tenant es B2B (b2b_proyecto/b2b_recurrente).
-   *  Activa la excepción dormido→revision_humana para top decil. */
+   *  Legacy (issue #21 Paso 4): solo fallback cuando el cliente no trae
+   *  `customerType`. Con tipos por cliente, la excepción dormido→
+   *  revision_humana se evalúa por lado. */
   isB2B?: boolean;
+  /** Etiqueta de la partición (issue #21 Paso 3). Se propaga a Prediction. */
+  marketId?: string | null;
+  /** Cortes de banda_p por tenant (issue #21 Paso 5). Null/inválido ⇒
+   *  defaults 0.6/0.15 (reproducen v2). Calibración intacta. */
+  bandHigh?: number | null;
+  bandLow?: number | null;
 }
 
 export const HORIZON_BY_ARCHETYPE: Record<string, number> = {
@@ -599,7 +621,56 @@ export function predictStore(input: StoreModelInput): Prediction[] {
 
   const nStoreWithGaps = per.filter((p) => p.gaps.length >= 1).length;
   const cohortCases = cohortGaps.length + cohortCens.length;
-  const isB2B = input.isB2B === true;
+
+  // Tipo efectivo por cliente (issue #21 Paso 4): customerType del input
+  // (ya resuelto por el caller como manual_edits ?? customer_type) manda;
+  // sin tipo ⇒ fallback al global legacy (puro-B2C/B2B idénticos a v2).
+  const legacyB2B = input.isB2B === true;
+  const isB2BClient = (c: CustomerSessions): boolean => {
+    const t = (c.customerType ?? "").trim().toUpperCase();
+    if (t === "B2B") return true;
+    if (t === "B2C") return false;
+    return legacyB2B;
+  };
+
+  // Lado por cliente + deciles por lado (issue #21 Paso 4). Sin tipos
+  // explícitos todos caen al legacy ⇒ pools idénticos a v2.
+  const sideById = new Map<string, boolean>();
+  const marketById = new Map<string, string | null>();
+  for (const c of input.customers) {
+    sideById.set(c.customerId, isB2BClient(c));
+    const m = (c.marketId ?? null) as string | null;
+    marketById.set(c.customerId, m);
+  }
+  const b2bVals = [...ticketById.entries()]
+    .filter(([id, v]) => v !== null && sideById.get(id) === true)
+    .map(([, v]) => v as number)
+    .sort((a, b) => a - b);
+  const b2cVals = [...ticketById.entries()]
+    .filter(([id, v]) => v !== null && sideById.get(id) !== true)
+    .map(([, v]) => v as number)
+    .sort((a, b) => a - b);
+  const sideThreshold = (vals: number[]): number | null => {
+    if (vals.length >= 10) return vals[Math.min(vals.length - 1, Math.ceil(0.9 * vals.length) - 1)];
+    if (vals.length > 0) return vals[vals.length - 1];
+    return null;
+  };
+  const topB2B = sideThreshold(b2bVals);
+  const topB2C = sideThreshold(b2cVals);
+
+  // Cortes de banda por tenant (issue #21 Paso 5): con defaults reproducen
+  // v2 (0.6/0.15). Validación estricta: fuera de rango o high<=low ⇒ defaults.
+  const bandHighRaw = input.bandHigh;
+  const bandLowRaw = input.bandLow;
+  const bandHigh =
+    typeof bandHighRaw === "number" && Number.isFinite(bandHighRaw) && bandHighRaw > 0 && bandHighRaw < 1
+      ? bandHighRaw
+      : BAND_HIGH_DEFAULT;
+  const bandLow =
+    typeof bandLowRaw === "number" && Number.isFinite(bandLowRaw) && bandLowRaw >= 0 && bandLowRaw < 1
+      ? bandLowRaw
+      : BAND_LOW_DEFAULT;
+  const [effHigh, effLow] = bandHigh > bandLow ? [bandHigh, bandLow] : [BAND_HIGH_DEFAULT, BAND_LOW_DEFAULT];
 
   const out: Prediction[] = [];
   for (const p of per) {
@@ -636,7 +707,7 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       sup === "sin_canal" ? "sin-canal" : sup === "contactado_reciente" ? "contacto-reciente" : "ok";
     const ritmo: Prediction["ritmo"] = isRenewal ? "con-ritmo" : "primera";
     const bandaP: Prediction["bandaP"] =
-      pr.pMean > 0.6 ? "organico-probable" : pr.pMean >= 0.15 ? "recuperable" : "lejos";
+      pr.pMean > effHigh ? "organico-probable" : pr.pMean >= effLow ? "recuperable" : "lejos";
     let ventana: Prediction["ventana"];
     if (p.t > 3 * cycle) {
       const sLn = Math.max(0, Math.min(1, 1 - predictiveCdf(p.t, grid)));
@@ -651,20 +722,25 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       ventana = "en";
     }
     let valorDecil: number | null = null;
-    if (ticket !== null && ticketVals.length > 0) {
-      const rank = ticketVals.filter((v) => v <= ticket).length;
-      valorDecil = Math.min(10, Math.max(1, Math.ceil((rank / ticketVals.length) * 10)));
+    const sideB2B = sideById.get(p.id) ?? legacyB2B;
+    const sidePool = sideB2B ? b2bVals : b2cVals;
+    const pool = sidePool.length > 0 ? sidePool : ticketVals;
+    if (ticket !== null && pool.length > 0) {
+      const rank = pool.filter((v) => v <= ticket).length;
+      valorDecil = Math.min(10, Math.max(1, Math.ceil((rank / pool.length) * 10)));
     }
     const ventanaAcotada = pr.p75 !== null && pr.p75 <= 4 * cycle;
     const intervaloAncho = pr.pHigh - pr.pLow > 0.6;
-    const topDecil = ticket !== null && topDecilThreshold !== null && ticket >= topDecilThreshold;
+    const sideTop = sideB2B ? (topB2B ?? topDecilThreshold) : (topB2C ?? topDecilThreshold);
+    const topDecil = ticket !== null && sideTop !== null && ticket >= sideTop;
     const decision = decideFromAxes(
       { ritmo, ventana, bandaP, valorDecil, elegibilidad },
-      { isB2B, confidence, ventanaAcotada, intervaloAncho, topDecil },
+      { isB2B: sideB2B, confidence, ventanaAcotada, intervaloAncho, topDecil },
     );
 
     out.push({
       customerId: p.id,
+      marketId: input.marketId ?? marketById.get(p.id) ?? null,
       model: isRenewal ? "renovacion" : "segunda_compra",
       pRecompraH: round3(pr.pMean),
       pLow: round3(pr.pLow),

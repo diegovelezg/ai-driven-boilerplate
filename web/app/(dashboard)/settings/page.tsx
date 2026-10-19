@@ -82,9 +82,10 @@ export default async function SettingsPage({
       const [{ data: pr }, { data: or }] = await Promise.all([
         db
           .from("customer_predictions")
-          .select("model,confidence,as_of")
+          .select("customer_id,model,confidence,as_of")
           .eq("store_id", storeId)
           .order("as_of", { ascending: false })
+          .order("model_version", { ascending: false })
           .limit(5000),
         db
           .from("orders")
@@ -95,7 +96,14 @@ export default async function SettingsPage({
       ]);
       const rowsAll = (pr ?? []) as Array<Record<string, unknown>>;
       const maxAsOf = rowsAll.length > 0 ? String(rowsAll[0].as_of ?? "") : null;
-      const photo = maxAsOf ? rowsAll.filter((r) => String(r.as_of ?? "") === maxAsOf) : [];
+      // v1+v2 conviven el día del deploy: un cliente, un voto (prefiere v2).
+      const seenPhoto = new Set<string>();
+      const photo = (maxAsOf ? rowsAll.filter((r) => String(r.as_of ?? "") === maxAsOf) : []).filter((r) => {
+        const cid = String(r.customer_id ?? "");
+        if (!cid || seenPhoto.has(cid)) return false;
+        seenPhoto.add(cid);
+        return true;
+      });
       const firmes = photo.filter((r) => String(r.confidence ?? "") !== "baja").length;
       const times = ((or ?? []) as Array<Record<string, unknown>>)
         .map((r) => ({

@@ -1,5 +1,6 @@
 // Perfil del tenant + arquetipos de churn. Solo server-side (service_role).
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { CLOSE_WATCH_DEFAULT_P } from "@/lib/customer-predictions";
 
 export type BusinessModel = "b2c" | "b2b" | "hybrid";
 export type CatalogType =
@@ -107,7 +108,24 @@ export interface StoreProfile {
   description: string | null;
   interpretationConfidence: "alta" | "media" | "baja" | null;
   notes: string | null;
+  /** Corte p para "seguimiento cercano" (issue #21 Paso 1). Null = default. */
+  closeWatchP?: number | null;
+  /** Cortes de banda_p por tenant (issue #21 Paso 5). Null = default arquetipo. */
+  bandHigh?: number | null;
+  bandLow?: number | null;
 }
+
+/** Defaults de banda por arquetipo (issue #21 Paso 5): hoy todos reproducen
+ *  v2 (0.6/0.15). La forma es global y versionada; los valores son por tenant
+ *  con fallback al default del arquetipo (shrinkage, no fitted global). */
+export const BAND_CUTS_BY_ARCHETYPE: Record<ArchetypeId, { high: number; low: number }> = {
+  b2c_consumible: { high: 0.6, low: 0.15 },
+  b2c_moda: { high: 0.6, low: 0.15 },
+  b2c_durable: { high: 0.6, low: 0.15 },
+  b2b_recurrente: { high: 0.6, low: 0.15 },
+  b2b_proyecto: { high: 0.6, low: 0.15 },
+  hibrido: { high: 0.6, low: 0.15 },
+};
 
 export const INDUSTRIES = [
   "alimentos",
@@ -237,6 +255,18 @@ function toProfile(storeId: string, r: Record<string, unknown>): StoreProfile {
     interpretationConfidence:
       (r.interpretation_confidence as StoreProfile["interpretationConfidence"]) ?? null,
     notes: (r.notes as string) ?? null,
+    closeWatchP:
+      r.close_watch_p == null || !Number.isFinite(Number(r.close_watch_p))
+        ? null
+        : Number(r.close_watch_p),
+    bandHigh:
+      r.p_band_high == null || !Number.isFinite(Number(r.p_band_high))
+        ? null
+        : Number(r.p_band_high),
+    bandLow:
+      r.p_band_low == null || !Number.isFinite(Number(r.p_band_low))
+        ? null
+        : Number(r.p_band_low),
   };
 }
 
@@ -379,4 +409,58 @@ export async function resolveShopCurrency(storeId: string): Promise<string | nul
     .maybeSingle();
   if (error) return null;
   return (data?.shop_currency as string | null) ?? null;
+}
+
+/** Corte p de "seguimiento cercano" por tenant (issue #21 Paso 1).
+ *  `store_profiles.close_watch_p` nullable; NULL/inválido ⇒ 0.10.
+ *  Solo display: no toca decisión ni calibración. */
+export async function resolveCloseWatchP(storeId: string): Promise<number> {
+  try {
+    if (!isSupabaseConfigured()) return CLOSE_WATCH_DEFAULT_P;
+    const { data, error } = await getSupabase()
+      .from("store_profiles")
+      .select("close_watch_p")
+      .eq("store_id", storeId)
+      .maybeSingle();
+    if (error) return CLOSE_WATCH_DEFAULT_P;
+    const v = (data as Record<string, unknown> | null)?.close_watch_p;
+    const n = v == null ? NaN : Number(v);
+    if (!Number.isFinite(n) || n < 0 || n > 1) return CLOSE_WATCH_DEFAULT_P;
+    return n;
+  } catch {
+    return CLOSE_WATCH_DEFAULT_P;
+  }
+}
+
+/** Cortes de banda_p por tenant (issue #21 Paso 5).
+ *  `store_profiles.p_band_high/low` nullables; NULL/inválido ⇒ default del
+ *  arquetipo (hoy 0.6/0.15 en todos ⇒ reproduce v2). high<=low ⇒ defaults. */
+export async function resolveBandCuts(
+  storeId: string,
+): Promise<{ high: number; low: number }> {
+  const fallback = async (): Promise<{ high: number; low: number }> => {
+    const profile = await getStoreProfile(storeId).catch(() => null);
+    const arch = profile?.archetype ?? "b2c_consumible";
+    return BAND_CUTS_BY_ARCHETYPE[arch] ?? { high: 0.6, low: 0.15 };
+  };
+  try {
+    if (!isSupabaseConfigured()) return fallback();
+    const { data, error } = await getSupabase()
+      .from("store_profiles")
+      .select("p_band_high,p_band_low,archetype")
+      .eq("store_id", storeId)
+      .maybeSingle();
+    if (error || !data) return fallback();
+    const r = data as Record<string, unknown>;
+    const arch = (r.archetype as ArchetypeId) ?? "b2c_consumible";
+    const dflt = BAND_CUTS_BY_ARCHETYPE[arch] ?? { high: 0.6, low: 0.15 };
+    const h = r.p_band_high == null ? NaN : Number(r.p_band_high);
+    const l = r.p_band_low == null ? NaN : Number(r.p_band_low);
+    const high = Number.isFinite(h) && h > 0 && h < 1 ? h : dflt.high;
+    const low = Number.isFinite(l) && l >= 0 && l < 1 ? l : dflt.low;
+    if (!(high > low)) return dflt;
+    return { high, low };
+  } catch {
+    return fallback();
+  }
 }

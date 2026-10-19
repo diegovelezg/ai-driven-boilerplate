@@ -8,6 +8,7 @@ import {
   predictStore,
   sessionize,
   type CustomerSessions,
+  type Prediction,
   type StoreModelInput,
 } from "@/lib/retention-model";
 
@@ -383,9 +384,10 @@ describe("retention-model decisiones", () => {
       { customerId: "f", sessions: singleSession(10, 6000) },
     ];
     const preds = predictStore(baseInput(customers, 30, 30, 0.5));
-    assert.ok(DECISION_VERSION.startsWith("v2"));
+    assert.ok(DECISION_VERSION.startsWith("v3"));
     for (const p of preds) {
       assert.equal(p.decisionVersion, DECISION_VERSION);
+      assert.ok(p.marketId === null || typeof p.marketId === "string");
       // Re-segmentar el pasado: mismos ejes ⇒ misma decisión.
       const redo = decideFromAxes(
         { ritmo: p.ritmo, ventana: p.ventana, bandaP: p.bandaP, valorDecil: p.valorDecil, elegibilidad: p.elegibilidad },
@@ -410,6 +412,174 @@ describe("retention-model decisiones", () => {
         { isB2B: false, confidence: "alta", ventanaAcotada: true, intervaloAncho: false, topDecil: false },
       ),
       "sin_canal",
+    );
+  });
+});
+
+describe("issue #21 Paso 3: motor por market (versionado)", () => {
+  const strip = (p: Prediction) => {
+    const { decisionVersion: _v, marketId: _m, ...rest } = p;
+    return rest;
+  };
+
+  it("mono-market idéntico a v2 (misma partición ⇒ mismos números)", () => {
+    const customers: CustomerSessions[] = [
+      { customerId: "a", sessions: sessionsFromGaps([28, 30, 27], 38, 6500) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const legacy = predictStore(baseInput(customers, 30, 30, 0.5, "PEN"));
+    const tagged: CustomerSessions[] = customers.map((c) => ({ ...c, marketId: "m-pe" }));
+    const parted = predictStore({
+      ...baseInput(tagged, 30, 30, 0.5, "PEN"),
+      marketId: "m-pe",
+    });
+    assert.equal(parted.length, legacy.length);
+    for (const p of parted) {
+      assert.equal(p.marketId, "m-pe");
+      const q = legacy.find((x) => x.customerId === p.customerId)!;
+      assert.deepEqual(strip(p), strip(q));
+    }
+  });
+
+  it("multi-market: p distintas por lado (moneda/ciclo propios, sin mezcla)", () => {
+    const pe: CustomerSessions[] = [
+      { customerId: "pe1", sessions: sessionsFromGaps([28, 30, 29], 35, 6500, "PEN"), marketId: "m-pe" },
+      { customerId: "pe2", sessions: sessionsFromGaps([30, 28, 31], 22, 6000, "PEN"), marketId: "m-pe" },
+      { customerId: "pe3", sessions: sessionsFromGaps([29, 30, 28], 25, 6200, "PEN"), marketId: "m-pe" },
+    ];
+    const mx: CustomerSessions[] = [
+      { customerId: "mx1", sessions: sessionsFromGaps([28, 30, 29], 35, 65000, "MXN"), marketId: "m-mx" },
+      { customerId: "mx2", sessions: sessionsFromGaps([30, 28, 31], 22, 60000, "MXN"), marketId: "m-mx" },
+      { customerId: "mx3", sessions: sessionsFromGaps([29, 30, 28], 25, 62000, "MXN"), marketId: "m-mx" },
+    ];
+    const ppe = predictStore({ ...baseInput(pe, 30, 30, 0.5, "PEN"), marketId: "m-pe" });
+    const pmx = predictStore({ ...baseInput(mx, 60, 60, 0.5, "MXN"), marketId: "m-mx" });
+    assert.equal(ppe[0].marketId, "m-pe");
+    assert.equal(pmx[0].marketId, "m-mx");
+    // Mismo ritmo relativo, distinto ciclo/moneda ⇒ p distintas (no mezcladas).
+    assert.notEqual(ppe[0].pRecompraH, pmx[0].pRecompraH);
+    // Tickets en su propia moneda (nunca PEN+MXN en el mismo Σ).
+    assert.ok((ppe[0].ticketEsperadoMinor ?? 0) < 20000);
+    assert.ok((pmx[0].ticketEsperadoMinor ?? 0) > 20000);
+  });
+});
+
+describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
+  const strip = (p: Prediction) => {
+    const { decisionVersion: _v, marketId: _m, ...rest } = p;
+    return rest;
+  };
+  const mkDormido = (id: string, ticket: number): CustomerSessions => ({
+    customerId: id,
+    sessions: sessionsFromGaps([30, 29, 31], 400, ticket),
+  });
+  const base = (): CustomerSessions[] => [
+    mkDormido("vip", 90000),
+    { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+    { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+    { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+    { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+    { customerId: "f", sessions: singleSession(10, 6000) },
+  ];
+
+  it("puro-B2C idéntico a v2 (sin tipos ⇒ fallback global false)", () => {
+    const legacy = predictStore(baseInput(base(), 30, 30, 0.5, "PEN", false));
+    const typed = predictStore(
+      baseInput(
+        base().map((c) => ({ ...c, customerType: "B2C" })),
+        30, 30, 0.5, "PEN", false,
+      ),
+    );
+    assert.deepEqual(typed.map(strip), legacy.map(strip));
+  });
+
+  it("puro-B2B idéntico a v2 (todos B2B ⇒ mismo top/deciles que global true)", () => {
+    const legacy = predictStore(baseInput(base(), 30, 30, 0.5, "PEN", true));
+    const typed = predictStore(
+      baseInput(
+        base().map((c) => ({ ...c, customerType: "B2B" })),
+        30, 30, 0.5, "PEN", false,
+      ),
+    );
+    assert.deepEqual(typed.map(strip), legacy.map(strip));
+    assert.equal(typed.find((x) => x.customerId === "vip")!.decision, "revision_humana");
+  });
+
+  it("mix parte revision_humana por lado y deciles por lado", () => {
+    const customers: CustomerSessions[] = base().map((c) =>
+      c.customerId === "vip" || c.customerId === "b"
+        ? { ...c, customerType: "B2B" }
+        : { ...c, customerType: "B2C" },
+    );
+    const preds = predictStore(baseInput(customers, 30, 30, 0.5, "PEN", false));
+    // Lado B2B: vip dormido + top de su lado ⇒ revision_humana.
+    assert.equal(preds.find((x) => x.customerId === "vip")!.decision, "revision_humana");
+    // Deciles por lado: "b" (6000) es top de un pool B2B de 2 (decil 10),
+    // mientras que en global sería ~5/6. Se verifica rango válido + que el
+    // pool chico no colapsa.
+    const b = preds.find((x) => x.customerId === "b")!;
+    assert.ok(b.valorDecil !== null && b.valorDecil >= 1 && b.valorDecil <= 10);
+    // Un B2C dormido equivalente no califica a revisión (por datos, no veto):
+    const c = preds.find((x) => x.customerId === "c")!;
+    assert.ok(c.decision === "dormido" || c.decision === "vigilar" || c.decision === "actuar");
+  });
+});
+
+describe("issue #21 Paso 5: cortes de banda por tenant", () => {
+  it("defaults reproducen v2 (sin cortes ⇒ 0.6/0.15)", () => {
+    const mk = (): CustomerSessions[] => [
+      { customerId: "a", sessions: sessionsFromGaps([28, 30, 27], 38, 6500) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const omitted = predictStore(baseInput(mk(), 30, 30, 0.5));
+    const explicit = predictStore({ ...baseInput(mk(), 30, 30, 0.5), bandHigh: 0.6, bandLow: 0.15 });
+    assert.deepEqual(explicit, omitted);
+  });
+
+  it("cortes custom mueven banda sin tocar p (forma global, valores tenant)", () => {
+    const mk = (): CustomerSessions[] => [
+      { customerId: "a", sessions: sessionsFromGaps([28, 30, 27], 38, 6500) },
+      { customerId: "b", sessions: sessionsFromGaps([30, 28, 32], 20, 6000) },
+      { customerId: "c", sessions: sessionsFromGaps([29, 31, 28], 25, 6200) },
+      { customerId: "d", sessions: sessionsFromGaps([27, 30, 29], 15, 5800) },
+      { customerId: "e", sessions: sessionsFromGaps([31, 28, 30], 40, 6100) },
+      { customerId: "f", sessions: singleSession(10, 6000) },
+    ];
+    const dflt = predictStore(baseInput(mk(), 30, 30, 0.5));
+    const custom = predictStore({ ...baseInput(mk(), 30, 30, 0.5), bandHigh: 0.95, bandLow: 0.9 });
+    assert.equal(custom.length, dflt.length);
+    for (const p of custom) {
+      const q = dflt.find((x) => x.customerId === p.customerId)!;
+      assert.equal(p.pRecompraH, q.pRecompraH);
+    }
+    // Con high=0.95/low=0.9 los organico default (p~0.84) caen a lejos.
+    const moved = custom.filter((p) => {
+      const q = dflt.find((x) => x.customerId === p.customerId)!;
+      return p.bandaP !== q.bandaP;
+    }).length;
+    const nowLejos = custom.filter((p) => p.bandaP === "lejos").length;
+    const wasLejos = dflt.filter((p) => p.bandaP === "lejos").length;
+    assert.ok(moved > 0 && nowLejos > wasLejos, "cortes más duros ⇒ banda cambia a lejos");
+  });
+
+  it("cortes inválidos caen a defaults (fail-safe)", () => {
+    const mk = (): CustomerSessions[] => [
+      { customerId: "a", sessions: sessionsFromGaps([28, 30, 27], 38, 6500) },
+      { customerId: "b", sessions: singleSession(5, 5000) },
+    ];
+    const dflt = predictStore(baseInput(mk(), 30, 30, 0.5));
+    const bad = predictStore({ ...baseInput(mk(), 30, 30, 0.5), bandHigh: 0.1, bandLow: 0.9 });
+    assert.deepEqual(
+      bad.map((p) => p.bandaP),
+      dflt.map((p) => p.bandaP),
     );
   });
 });

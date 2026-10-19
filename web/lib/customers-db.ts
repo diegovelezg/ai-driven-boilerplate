@@ -7,7 +7,14 @@ import { smartTitleCase } from "@/lib/text";
 import type { CanonicalCustomer } from "@/lib/medusa";
 import {
   matchesDecisionFilter,
+  BANDA_VALUES,
+  CLOSE_WATCH_DEFAULT_P,
+  DECIL_VALUES,
+  ELEGIBILIDAD_VALUES,
   RITMO_VALUES,
+  VENTANA_VALUES,
+  isCloseWatch,
+  matchesDecilFilter,
   type CustomerPredictionLite,
 } from "@/lib/customer-predictions";
 import {
@@ -230,12 +237,17 @@ function matchesEnrichedFirm(needle: string, firm: EnrichedFirm | undefined): bo
 export interface CustomerFilters {
   /** Decisión del motor (foto del día): actuar|vigilar|no-tocar|organico|dormido|sin_canal|contactado_reciente|revision_humana. */
   decision: string | null;
-  /** Vista prearmada "ventana7": vigilar que entra en ventana en 7 días. */
+  /** Vista prearmada: "ventana7" (entra en ventana en 7d) o "seguimiento" (vigilar cercano, issue #21). */
   vista: string | null;
   /** Ritmo estructural: con-ritmo|primera|sin-compras. */
   ritmo: string | null;
   /** Tipo efectivo (manual_edits.customer_type ?? customer_type): B2B|B2C. */
   customerType: string | null;
+  /** Ejes de segmentación (issue #14A): ventana|banda|elegibilidad|decil. */
+  ventana: string | null;
+  banda: string | null;
+  elegibilidad: string | null;
+  decil: string | null;
 }
 
 const NO_CUSTOMER_FILTERS: CustomerFilters = {
@@ -243,6 +255,10 @@ const NO_CUSTOMER_FILTERS: CustomerFilters = {
   vista: null,
   ritmo: null,
   customerType: null,
+  ventana: null,
+  banda: null,
+  elegibilidad: null,
+  decil: null,
 };
 
 const DECISION_VALUES = new Set([
@@ -256,21 +272,30 @@ const DECISION_VALUES = new Set([
   "revision_humana",
 ]);
 
-/** Valida decision/vista/ritmo/tipo de searchParams; lo inválido se ignora. */
+/** Valida decision/vista/ritmo/tipo/ejes de searchParams; lo inválido se ignora. */
 export function parseCustomerFilters(sp: {
   decision?: string;
   vista?: string;
   ritmo?: string;
   tipo?: string;
   customer_type?: string;
+  ventana?: string;
+  banda?: string;
+  elegibilidad?: string;
+  decil?: string;
 }): CustomerFilters {
   const decision =
     sp.decision && DECISION_VALUES.has(sp.decision) ? sp.decision : null;
-  const vista = sp.vista === "ventana7" ? "ventana7" : null;
+  const vista = sp.vista === "ventana7" || sp.vista === "seguimiento" ? sp.vista : null;
   const ritmo = sp.ritmo && RITMO_VALUES.has(sp.ritmo) ? sp.ritmo : null;
   const rawTipo = (sp.tipo ?? sp.customer_type ?? "").trim().toUpperCase();
   const customerType = rawTipo === "B2B" || rawTipo === "B2C" ? rawTipo : null;
-  return { decision, vista, ritmo, customerType };
+  const ventana = sp.ventana && VENTANA_VALUES.has(sp.ventana) ? sp.ventana : null;
+  const banda = sp.banda && BANDA_VALUES.has(sp.banda) ? sp.banda : null;
+  const elegibilidad =
+    sp.elegibilidad && ELEGIBILIDAD_VALUES.has(sp.elegibilidad) ? sp.elegibilidad : null;
+  const decil = sp.decil && DECIL_VALUES.has(sp.decil) ? sp.decil : null;
+  return { decision, vista, ritmo, customerType, ventana, banda, elegibilidad, decil };
 }
 
 function hasCustomerFilters(f: CustomerFilters): boolean {
@@ -278,7 +303,11 @@ function hasCustomerFilters(f: CustomerFilters): boolean {
     f.decision !== null ||
     f.vista !== null ||
     f.ritmo !== null ||
-    f.customerType !== null
+    f.customerType !== null ||
+    f.ventana !== null ||
+    f.banda !== null ||
+    f.elegibilidad !== null ||
+    f.decil !== null
   );
 }
 
@@ -309,9 +338,13 @@ export async function getPredictionsMap(
   for (let off = 0; ; off += 1000) {
     const { data, error } = await db
       .from("customer_predictions")
-      .select("customer_id,decision,model,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
+      .select("customer_id,decision,model,valor_esperado_minor,p_recompra_h,p25_days,p75_days,evidence_json,as_of,model_version,ritmo,ventana,banda_p,valor_decil,elegibilidad")
       .eq("store_id", storeId)
       .order("as_of", { ascending: false })
+      // v2 convive con v1 el día del deploy: prefiere v2 (misma foto).
+      // Orden lexicográfico ("retention:v2" > "retention:v1"): si llega v10,
+      // revisar (v10 > v2 pero v9 < v2 en texto).
+      .order("model_version", { ascending: false })
       .order("id", { ascending: true })
       .range(off, off + 999);
     if (error) return map;
@@ -320,14 +353,25 @@ export async function getPredictionsMap(
       const cid = String(r.customer_id ?? "");
       if (!cid || map.has(cid)) continue;
       const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+      const model = (r.model as string | null) ?? null;
+      // Ritmo: columna de ejes, fallback al modelo (fotos pre-migración).
+      const ritmo =
+        (r.ritmo as string | null) ??
+        (model === "renovacion" ? "con-ritmo" : model === "segunda_compra" ? "primera" : null);
       map.set(cid, {
         decision: String(r.decision ?? ""),
-        model: (r.model as string | null) ?? null,
+        model,
         tDays: ev.t_days == null ? null : Number(ev.t_days),
         p25Days: r.p25_days == null ? null : Number(r.p25_days),
         p75Days: r.p75_days == null ? null : Number(r.p75_days),
+        pRecompraH: r.p_recompra_h == null ? null : Number(r.p_recompra_h),
         valorEsperadoMinor:
           r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
+        ritmo,
+        ventana: (r.ventana as string | null) ?? null,
+        bandaP: (r.banda_p as string | null) ?? null,
+        valorDecil: r.valor_decil == null ? null : Number(r.valor_decil),
+        elegibilidad: (r.elegibilidad as string | null) ?? null,
       });
     }
     if (rows.length < 1000) break;
@@ -360,6 +404,25 @@ export async function getVentana7Summary(
   return { n, sumaMinor };
 }
 
+/** Resumen "seguimiento cercano" (issue #21 Paso 2): misma definición que
+ *  el héroe (vigilar AND (recuperable OR p>=corte)). Solo display. */
+export async function getSeguimientoSummary(
+  storeId: string,
+  cutoff: number = CLOSE_WATCH_DEFAULT_P,
+): Promise<{ n: number; sumaMinor: number }> {
+  const map = await getPredictionsMap(storeId).catch(
+    () => new Map<string, CustomerPredictionLite>(),
+  );
+  let n = 0;
+  let sumaMinor = 0;
+  for (const p of map.values()) {
+    if (!isCloseWatch(p, cutoff)) continue;
+    n += 1;
+    sumaMinor += p.valorEsperadoMinor ?? 0;
+  }
+  return { n, sumaMinor };
+}
+
 /** Ritmo de un cliente para filtro: del modelo, o sin-compras si no hay
  *  predicción y nunca compró. Clientes con compras pero sin predicción
  *  (alta posterior a la corrida) no calzan en ningún ritmo. */
@@ -368,6 +431,8 @@ function matchesRitmoFilter(
   ordersCount: number,
   filter: string,
 ): boolean {
+  // Columna de ejes primero (fotos nuevas); fallback al modelo (pre-migración).
+  if (pred?.ritmo) return pred.ritmo === filter;
   if (filter === "con-ritmo") return pred?.model === "renovacion";
   if (filter === "primera") return pred?.model === "segunda_compra";
   if (filter === "sin-compras") return !pred && ordersCount === 0;
@@ -392,10 +457,11 @@ export async function getPredEnJuegoByMonth(
   for (let from = 0; ; from += 5000) {
     const { data, error } = await db
       .from("customer_predictions")
-      .select("as_of,decision,valor_esperado_minor,currency")
+      .select("as_of,customer_id,decision,valor_esperado_minor,currency,model_version")
       .eq("store_id", storeId)
       .lte("as_of", new Date(maxEnd).toISOString())
       .order("as_of", { ascending: false })
+      .order("model_version", { ascending: false })
       .order("id", { ascending: true })
       .range(from, from + 4999);
     if (error) return out;
@@ -419,9 +485,14 @@ export async function getPredEnJuegoByMonth(
     while (pi < photoDates.length && Date.parse(photoDates[pi]) > m.endMs) pi += 1;
     if (pi >= photoDates.length) continue;
     const photo = byPhoto.get(photoDates[pi]) ?? [];
+    // v1+v2 conviven el día del deploy: un cliente, un voto (prefiere v2).
+    const seen = new Set<string>();
     let minor = 0;
     let count = 0;
     for (const r of photo) {
+      const cid = String(r.customer_id ?? "");
+      if (!cid || seen.has(cid)) continue;
+      seen.add(cid);
       const d = String(r.decision ?? "");
       if (d !== "actuar" && d !== "revision_humana" && d !== "vigilar") continue;
       const cur = (r.currency as string | null) ?? null;
@@ -432,6 +503,70 @@ export async function getPredEnJuegoByMonth(
       count += 1;
     }
     if (count > 0) out.set(m.key, { minor, count });
+  }
+  return out;
+}
+
+/** Facturación bruta acumulada por tipo efectivo (issue #14A: "¿qué tipo de
+ *  cliente vale más?"). Escaneo con CAP (mismo patrón que las fotos del
+ *  motor): si se capa, `truncated=true` y las cifras son parciales. Solo
+ *  suma filas en `currency` (moneda de la vista); el resto se ignora y se
+ *  cuenta en `otherCurrency` para rotularlo. */
+export async function getValorByType(
+  storeId: string,
+  currency: string | null,
+  market: MarketScope | null = null,
+): Promise<{
+  b2b: { n: number; minor: number };
+  b2c: { n: number; minor: number };
+  otherCurrency: number;
+  truncated: boolean;
+}> {
+  const out = {
+    b2b: { n: 0, minor: 0 },
+    b2c: { n: 0, minor: 0 },
+    otherCurrency: 0,
+    truncated: false,
+  };
+  const db = getSupabase();
+  const inMarket = (r: Record<string, unknown>): boolean => {
+    if (!market || (!market.countries && !market.customerIds)) return true;
+    if (isEmptyScope(market)) return r.country == null;
+    const { countries, ids } = effectiveScopeFilter(market);
+    if (countries) return r.country == null || countries.includes(String(r.country));
+    if (ids) return r.country == null || ids.includes(String(r.id));
+    return true;
+  };
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await db
+      .from("customers")
+      .select("id,country,orders_count,total_spent,currency,customer_type,manual_edits")
+      .eq("store_id", storeId)
+      .order("id", { ascending: true })
+      .range(off, off + 999);
+    if (error) return out;
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      if (!inMarket(r)) continue;
+      const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
+      const manual =
+        typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
+          ? String(overrides["customer_type"]).toUpperCase()
+          : null;
+      const tipo = (manual ?? String(r.customer_type ?? "B2C")).toUpperCase() === "B2B" ? "b2b" : "b2c";
+      const cur = (r.currency as string | null) ?? null;
+      if (currency !== null && cur !== null && cur.toUpperCase() !== currency.toUpperCase()) {
+        out.otherCurrency += 1;
+        continue;
+      }
+      out[tipo].n += 1;
+      out[tipo].minor += Number(r.total_spent ?? 0);
+    }
+    if (rows.length < 1000) break;
+    if (off >= 29000) {
+      out.truncated = true;
+      break;
+    }
   }
   return out;
 }
@@ -447,6 +582,10 @@ export async function queryStoreCustomers(
   // el fallback sin países (ver resolveMarketScope en lib/markets).
   // NULL-comodín: los sin país (r.country null) pasan cualquier filtro.
   market: MarketScope | null = null,
+  // Corte p de "seguimiento cercano" por tenant (issue #21). Null = default
+  // 0.10; los callers pasan el valor resuelto vía resolveCloseWatchP.
+  // Solo display.
+  closeWatchCutoff: number | null = null,
 ): Promise<DbCustomersPage> {
   // Predicado JS (misma semántica que applyScopeFilter) para los caminos
   // que resuelven en memoria. NULL-comodín: sin país pasa todo filtro.
@@ -500,6 +639,10 @@ export async function queryStoreCustomers(
       filters.decision !== null ||
       filters.vista !== null ||
       filters.ritmo !== null ||
+      filters.ventana !== null ||
+      filters.banda !== null ||
+      filters.elegibilidad !== null ||
+      filters.decil !== null ||
       sort.key === "valor";
     const predMap = needPred ? await getPredictionsMap(storeId).catch(() => new Map()) : new Map<string, CustomerPredictionLite>();
     for (const [domain, firm] of firms) {
@@ -511,6 +654,10 @@ export async function queryStoreCustomers(
       const pred = predMap.get(String(r.id ?? ""));
       if (filters.customerType !== null && effectiveCustomerType(r) !== filters.customerType) return;
       if (filters.decision !== null && !matchesDecisionFilter(pred, filters.decision)) return;
+      if (filters.ventana !== null && (pred?.ventana ?? null) !== filters.ventana) return;
+      if (filters.banda !== null && (pred?.bandaP ?? null) !== filters.banda) return;
+      if (filters.elegibilidad !== null && (pred?.elegibilidad ?? null) !== filters.elegibilidad) return;
+      if (filters.decil !== null && !matchesDecilFilter(pred?.valorDecil ?? null, filters.decil)) return;
       if (filters.ritmo !== null) {
         const oc = Number(r.orders_count ?? 0);
         if (!matchesRitmoFilter(pred, oc, filters.ritmo)) return;
@@ -519,6 +666,11 @@ export async function queryStoreCustomers(
         if (!pred || pred.decision !== "vigilar" || pred.tDays === null || pred.p25Days === null) return;
         const diff = pred.p25Days - pred.tDays;
         if (diff < 0 || diff > 7) return;
+      }
+      if (filters.vista === "seguimiento") {
+        let cutoff = closeWatchCutoff;
+        if (cutoff === null || cutoff === undefined) cutoff = CLOSE_WATCH_DEFAULT_P;
+        if (!isCloseWatch(pred, cutoff)) return;
       }
       if (needle) {
         const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};

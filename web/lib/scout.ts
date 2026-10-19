@@ -71,6 +71,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         .select("customer_id,model,p_recompra_h,p25_days,p75_days,decision,evidence_json,as_of")
         .eq("store_id", storeId)
         .order("as_of", { ascending: false })
+        .order("model_version", { ascending: false })
         .order("id", { ascending: true })
         .range(from, from + 999);
       if (error) throw new Error(`Predictions read: ${error.message}`);

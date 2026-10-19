@@ -253,6 +253,7 @@ export async function getRankedMira(
           .eq("store_id", storeId)
           .in("customer_id", c)
           .order("as_of", { ascending: false })
+          .order("model_version", { ascending: false })
           .order("id", { ascending: true })
           .range(off, off + 499)
           .then(

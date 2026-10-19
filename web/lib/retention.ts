@@ -5,6 +5,7 @@ import { isRealOrder } from "@/lib/medusa";
 import {
   ARCHETYPES,
   getStoreProfile,
+  resolveBandCuts,
   resolveShopCurrency,
   resolveTenantCycleDays,
 } from "@/lib/store-profiles";
@@ -14,12 +15,14 @@ import {
   predictStore,
   sessionize,
   type CustomerSessions,
+  type Prediction,
 } from "@/lib/retention-model";
+import { listStoreMarkets, marketCountry, type TenantMarket } from "@/lib/markets";
 
 /** Versión del criterio: se guarda en evidence_json.generator. */
-const RETENTION_GEN = "retention:v1:lognormal-grid";
+const RETENTION_GEN = "retention:v2:lognormal-grid-market-b2b";
 /** model_version para la clave única (store, customer, as_of). */
-const RETENTION_VERSION = "retention:v1";
+const RETENTION_VERSION = "retention:v2";
 
 const DAY_MS = 86_400_000;
 
@@ -34,10 +37,66 @@ interface OrderRow {
   customer_id: string;
   total_amount: number;
   currency: string | null;
+  market_id: string | null;
+  country: string | null;
   placed_at: string | null;
   status: string | null;
   payment_status: string | null;
   is_test: boolean;
+}
+
+/** Tipo efectivo por cliente (misma regla que la GUI): override manual ??
+ *  base. Usado para isB2B por lado (issue #21 Paso 4). */
+function effectiveType(
+  customerType: string | null,
+  manualEdits: Record<string, unknown> | null,
+): "B2B" | "B2C" {
+  const manual =
+    manualEdits != null &&
+    typeof manualEdits["customer_type"] === "string" &&
+    (manualEdits["customer_type"] as string).trim() !== ""
+      ? String(manualEdits["customer_type"]).trim().toUpperCase()
+      : null;
+  const base = (customerType ?? "B2C").trim().toUpperCase();
+  return (manual ?? base) === "B2B" ? "B2B" : "B2C";
+}
+
+/** Asigna cada cliente a un market (issue #21 Paso 3): mayoría de market_id
+ *  en sus órdenes reales ≤ corte; fallback país→market; else null (legacy).
+ *  Asignación única: una fila por cliente (market_id = etiqueta). */
+function assignMarket(
+  orderMarketIds: Array<string | null>,
+  customerCountry: string | null,
+  markets: TenantMarket[],
+): string | null {
+  const counts = new Map<string, number>();
+  for (const m of orderMarketIds) {
+    if (!m) continue;
+    counts.set(m, (counts.get(m) ?? 0) + 1);
+  }
+  if (counts.size > 0) {
+    let best: string | null = null;
+    let bestN = -1;
+    for (const [m, n] of counts) {
+      if (n > bestN || (n === bestN && (best === null || m < best))) {
+        best = m;
+        bestN = n;
+      }
+    }
+    if (best && markets.some((mk) => mk.id === best)) return best;
+    if (best) return best;
+  }
+  const cc = (customerCountry ?? "").trim().toUpperCase();
+  if (cc && /^[A-Z]{2}$/.test(cc)) {
+    for (const mk of markets) {
+      const countries = (mk.countries ?? []).map((c) => c.trim().toUpperCase());
+      if (countries.includes(cc)) return mk.id;
+    }
+    for (const mk of markets) {
+      if (marketCountry(mk) === cc) return mk.id;
+    }
+  }
+  return null;
 }
 
 /**
@@ -57,10 +116,12 @@ export async function runRetentionModel(
   ).toISOString();
   const asOfIso = dayIso;
 
-  const [profile, cycleDays, shopCurrency] = await Promise.all([
+  const [profile, cycleDays, shopCurrency, bandCuts, markets] = await Promise.all([
     getStoreProfile(storeId).catch(() => null),
     resolveTenantCycleDays(storeId).catch(() => null),
     resolveShopCurrency(storeId).catch(() => null),
+    resolveBandCuts(storeId).catch(() => ({ high: 0.6, low: 0.15 })),
+    listStoreMarkets(storeId).catch(() => [] as TenantMarket[]),
   ]);
   const archetype = profile?.archetype ?? "b2c_consumible";
   const cycle = cycleDays ?? ARCHETYPES[archetype]?.defaultCycleDays ?? 30;
@@ -69,17 +130,23 @@ export async function runRetentionModel(
   const isB2B = archetype === "b2b_proyecto" || archetype === "b2b_recurrente";
   const cycleSource: string =
     profile?.repurchaseCycleDays != null ? "tienda" : "arquetipo";
+  // Ciclo por market (Paso 3): sin columna por market, el ciclo es el del
+  // tenant (tienda → arquetipo) para todas las particiones; la moneda sí es
+  // por market (market.currency ⇒ tienda). Documentado, no fitted.
 
   // --- Clientes en bulk (1.000 por página) ---
   const custRows: Array<{
     id: string;
     email: string | null;
     phone: string | null;
+    customerType: string | null;
+    manualEdits: Record<string, unknown> | null;
+    country: string | null;
   }> = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await db
       .from("customers")
-      .select("id,email,phone")
+      .select("id,email,phone,customer_type,manual_edits,country")
       .eq("store_id", storeId)
       .order("id", { ascending: true })
       .range(from, from + 999);
@@ -89,6 +156,9 @@ export async function runRetentionModel(
         id: String(r.id),
         email: (r.email as string | null) ?? null,
         phone: (r.phone as string | null) ?? null,
+        customerType: (r.customer_type as string | null) ?? null,
+        manualEdits: (r.manual_edits as Record<string, unknown> | null) ?? null,
+        country: (r.country as string | null) ?? null,
       });
     }
     if (!data || data.length < 1000) break;
@@ -102,7 +172,7 @@ export async function runRetentionModel(
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db
         .from("orders")
-        .select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test")
+        .select("customer_id,total_amount,currency,market_id,country,placed_at,status,payment_status,is_test")
         .eq("store_id", storeId)
         .order("placed_at", { ascending: true })
         .order("id", { ascending: true })
@@ -114,6 +184,8 @@ export async function runRetentionModel(
           customer_id: String(r.customer_id),
           total_amount: Number(r.total_amount ?? 0),
           currency: (r.currency as string | null) ?? null,
+          market_id: (r.market_id as string | null) ?? null,
+          country: (r.country as string | null) ?? null,
           placed_at: (r.placed_at as string | null) ?? null,
           status: (r.status as string | null) ?? null,
           payment_status: (r.payment_status as string | null) ?? null,
@@ -195,13 +267,36 @@ export async function runRetentionModel(
     if (!rows || rows.length < 1000) break;
   }
 
-  // --- Sesiones por cliente (fechas sí cuentan siempre; moneda se filtra dentro) ---
-  const customers: CustomerSessions[] = [];
+  // --- Partición por market (issue #21 Paso 3): asignación única por cliente
+  // (mayoría de market_id ⇒ país ⇒ null). Sesiones filtradas a la partición:
+  // órdenes de otros markets no informan ritmo/ticket de este (universos
+  // separados, nunca PEN+MXN en ningún Σ). Sin órdenes se salta (sin-compras
+  // fuera del motor, como en v1).
+  const marketById = new Map<string, string | null>();
+  const typeById = new Map<string, "B2B" | "B2C">();
+  for (const c of custRows) {
+    const ords = ordersByCust.get(c.id) ?? [];
+    // Solo órdenes ≤ corte para la etiqueta (sin leak de futuro en backtests).
+    const mids = ords
+      .filter((o) => {
+        if (!o.placed_at) return true;
+        const t = new Date(o.placed_at).getTime();
+        return !Number.isFinite(t) || t <= asOfMs;
+      })
+      .map((o) => o.market_id);
+    marketById.set(c.id, assignMarket(mids, c.country, markets));
+    typeById.set(c.id, effectiveType(c.customerType, c.manualEdits));
+  }
+  const partCustomers = new Map<string | null, CustomerSessions[]>();
   const gapsById = new Map<string, number>();
   const tById = new Map<string, number>();
   for (const c of custRows) {
+    const assigned = marketById.get(c.id) ?? null;
     const ords = ordersByCust.get(c.id) ?? [];
-    const parsed = ords
+    const inPart = assigned === null
+      ? ords
+      : ords.filter((o) => o.market_id === null || o.market_id === assigned);
+    const parsed = inPart
       .map((o) => {
         const d = o.placed_at ? new Date(o.placed_at) : null;
         return d && !Number.isNaN(d.getTime())
@@ -213,7 +308,15 @@ export async function runRetentionModel(
       .filter((x) => x.placedAt <= asOfMs);
     const sessions = sessionize(parsed);
     if (sessions.length === 0) continue;
-    customers.push({ customerId: c.id, sessions });
+    const cs: CustomerSessions = {
+      customerId: c.id,
+      sessions,
+      marketId: assigned,
+      customerType: typeById.get(c.id) ?? "B2C",
+    };
+    const list = partCustomers.get(assigned) ?? [];
+    list.push(cs);
+    partCustomers.set(assigned, list);
     // Evidencia para el upsert.
     let gaps = 0;
     for (let i = 1; i < sessions.length; i += 1) {
@@ -224,21 +327,42 @@ export async function runRetentionModel(
     tById.set(c.id, Math.max(0, (asOfMs - last) / DAY_MS));
   }
 
-  const preds = predictStore({
-    asOf: asOfMs,
-    cycleDays: cycle,
-    horizonDays: horizon,
-    sigma0,
-    shopCurrency,
-    customers,
-    suppressed,
-    isB2B,
-  });
+  // --- Una corrida por partición: moneda/grillas/cura/deciles propios por
+  // market; ciclo del tenant en todas (sin columna por market: fallback
+  // tienda → arquetipo documentado). Bandas por tenant (Paso 5).
+  const marketByMarketId = new Map(markets.map((m) => [m.id, m]));
+  const preds: Prediction[] = [];
+  const currencyById = new Map<string, string | null>();
+  for (const [partId, customers] of partCustomers) {
+    const market = partId === null ? null : (marketByMarketId.get(partId) ?? null);
+    const partCurrency = (market?.currency ?? shopCurrency ?? null) as string | null;
+    for (const cs of customers) currencyById.set(cs.customerId, partCurrency);
+    const part = predictStore({
+      asOf: asOfMs,
+      cycleDays: cycle,
+      horizonDays: horizon,
+      sigma0,
+      shopCurrency: partCurrency,
+      customers,
+      suppressed,
+      isB2B,
+      marketId: partId,
+      bandHigh: bandCuts.high,
+      bandLow: bandCuts.low,
+    });
+    preds.push(...part);
+  }
 
   // --- Upsert en lotes de 500 ---
+  // DEPLOY (issue #21, bloqueante): aplicar antes del primer run v2, en orden:
+  //   20261025000000_close_watch_p, 20261026000000_customer_predictions_market,
+  //   20261026000001_store_band_cuts.
+  // El upsert incluye `market_id` sin guarda (fail-closed como ejes #14A):
+  // sin la migración la corrida falla entera. Los resolvers sí son fail-open.
   const rows = preds.map((p) => ({
     store_id: storeId,
     customer_id: p.customerId,
+    market_id: p.marketId,
     as_of: asOfIso,
     model_version: RETENTION_VERSION,
     model: p.model,
@@ -251,7 +375,7 @@ export async function runRetentionModel(
     p75_days: p.p75Days,
     ticket_esperado_minor: p.ticketEsperadoMinor,
     valor_esperado_minor: p.valorEsperadoMinor,
-    currency: shopCurrency,
+    currency: currencyById.get(p.customerId) ?? shopCurrency,
     decision: p.decision,
     confidence: p.confidence,
     ritmo: p.ritmo,
@@ -266,6 +390,10 @@ export async function runRetentionModel(
       cycle_days: cycle,
       cycle_source: cycleSource,
       generator: RETENTION_GEN,
+      market_id: p.marketId,
+      customer_type: typeById.get(p.customerId) ?? null,
+      band_high: bandCuts.high,
+      band_low: bandCuts.low,
     },
   }));
   for (let i = 0; i < rows.length; i += 500) {

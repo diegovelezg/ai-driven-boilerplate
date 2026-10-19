@@ -77,7 +77,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const summary = new FunctionTool({
     name: "get_store_summary",
     description:
-      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos y compradores por tipo efectivo), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency), señales abiertas y acciones pendientes. NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats.",
+      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos, compradores y FACTURACIÓN BRUTA por tipo y moneda: revenue_by_type), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency), señales abiertas y acciones pendientes. Para 'qué tipo de cliente vale más' usa revenue_by_type (B2B vs B2C por moneda). NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats.",
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -104,6 +104,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let offset = 0;
       let truncated = false;
       const revenue: Record<string, number> = {};
+      /** Facturación bruta por tipo efectivo y moneda (issue #14A). */
+      const revenueByType: Record<string, Record<string, number>> = { B2B: {}, B2C: {} };
       let b2b = 0;
       let b2c = 0;
       let b2bBuyers = 0;
@@ -125,6 +127,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
               ? String(overrides["customer_type"]).toUpperCase()
               : null;
           const tipo = (manual ?? String(r.customer_type ?? "B2C")).toUpperCase() === "B2B" ? "B2B" : "B2C";
+          const rev = revenueByType[tipo] ?? (revenueByType[tipo] = {});
+          rev[cur] = (rev[cur] ?? 0) + Number(r.total_spent ?? 0);
           const isBuyer = Number(r.orders_count ?? 0) > 0;
           if (tipo === "B2B") {
             b2b += 1;
@@ -154,6 +158,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         b2b_buyers: b2bBuyers,
         b2c_buyers: b2cBuyers,
         revenue_by_currency: revenue,
+        revenue_by_type: revenueByType,
         open_signals: openSignals ?? 0,
         pending_actions: pendingActions ?? 0,
         truncated,
@@ -580,18 +585,23 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   ] as const;
 
   /** Filtra la tabla de Customers: la vista muestra, aquí solo se cuenta.
-   *  Los filtros son los mismos de la tabla (?decision=&vista=&q=&tipo=B2B|B2C):
-   *  el chat los escribe, no los duplica. Lo omitido no filtra. */
+   *  Los filtros son los mismos de la tabla (?decision=&vista=&q=&tipo=B2B|B2C
+   *  + ejes ventana/banda/elegibilidad/decil): el chat los escribe, no los
+   *  duplica. Lo omitido no filtra. */
   const filterCustomers = new FunctionTool({
     name: "filter_customers",
     description:
-      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días. ritmo: con-ritmo, primera o sin-compras (segmentación estructural). customer_type: B2B o B2C (tipo efectivo: override manual ?? clasificación por dominio). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
+      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días; vista=seguimiento: vigilar cercano (recuperable o p alta, mismo corte que el héroe). ritmo: con-ritmo, primera o sin-compras (segmentación estructural). customer_type: B2B o B2C (tipo efectivo: override manual ?? clasificación por dominio). Ejes del motor: ventana (antes/en/pasada/dormido), banda (organico-probable/recuperable/lejos), elegibilidad (ok/sin-canal/contacto-reciente), decil de valor (alto 8-10/medio 4-7/bajo 1-3). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
     parameters: z.object({
       q: z.string().min(2).max(100).optional(),
       decision: z.enum(DECISIONS).optional(),
-      vista: z.enum(["ventana7"]).optional(),
+      vista: z.enum(["ventana7", "seguimiento"]).optional(),
       ritmo: z.enum(["con-ritmo", "primera", "sin-compras"] as const).optional(),
       customer_type: z.enum(["B2B", "B2C"]).optional(),
+      ventana: z.enum(["antes", "en", "pasada", "dormido"] as const).optional(),
+      banda: z.enum(["organico-probable", "recuperable", "lejos"] as const).optional(),
+      elegibilidad: z.enum(["ok", "sin-canal", "contacto-reciente"] as const).optional(),
+      decil: z.enum(["alto", "medio", "bajo"] as const).optional(),
     }),
     execute: async ({
       q,
@@ -599,12 +609,20 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       vista,
       ritmo,
       customer_type,
+      ventana,
+      banda,
+      elegibilidad,
+      decil,
     }: {
       q?: string;
       decision?: string;
       vista?: string;
       ritmo?: string;
       customer_type?: string;
+      ventana?: string;
+      banda?: string;
+      elegibilidad?: string;
+      decil?: string;
     }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const scope: MarketScope = {
@@ -612,6 +630,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         countries: marketScope.countries,
         customerIds: marketScope.customerIds,
       };
+      const { resolveCloseWatchP } = await import("@/lib/store-profiles");
+      const closeWatchCutoff = await resolveCloseWatchP(storeId).catch(() => 0.1);
       const res = await queryStoreCustomers(
         storeId,
         q?.trim() ?? "",
@@ -620,11 +640,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         undefined,
         {
           decision: (decision as (typeof DECISIONS)[number] | undefined) ?? null,
-          vista: vista === "ventana7" ? "ventana7" : null,
+          vista: vista === "ventana7" || vista === "seguimiento" ? vista : null,
           ritmo: ritmo ?? null,
           customerType: customer_type ?? null,
+          ventana: ventana ?? null,
+          banda: banda ?? null,
+          elegibilidad: elegibilidad ?? null,
+          decil: decil ?? null,
         },
         scope,
+        closeWatchCutoff,
       );
       return {
         filter: {
@@ -633,6 +658,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           vista: vista ?? null,
           ritmo: ritmo ?? null,
           customer_type: customer_type ?? null,
+          ventana: ventana ?? null,
+          banda: banda ?? null,
+          elegibilidad: elegibilidad ?? null,
+          decil: decil ?? null,
         },
         count: res.totalCount,
       };
@@ -715,6 +744,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         .select("model,p_recompra_h,p_low,p_high,horizon_days,expected_days,p25_days,p75_days,ticket_esperado_minor,valor_esperado_minor,decision,confidence,as_of")
         .eq("customer_id", customerId)
         .order("as_of", { ascending: false })
+        .order("model_version", { ascending: false })
         .limit(1)
         .maybeSingle();
       return { ...result, prediction: pred ?? null };
