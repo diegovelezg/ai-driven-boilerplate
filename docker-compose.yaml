@@ -120,7 +120,7 @@ services:
       SUPABASE_URL: http://gateway:8000
       SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:?SUPABASE_PUBLIC_URL requerido (= API_EXTERNAL_URL)}
       SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido (ver infra/supabase/gen-keys.py)}
-      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY requerido}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY requerido (o SUPABASE_SERVICE_ROLE_KEY)}}
       AUTH_JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requerido}
 
   gateway:
@@ -190,7 +190,7 @@ services:
       # Server-side (internas, red compose): más rápido y sin salir a internet.
       SUPABASE_URL: http://gateway:8000
       SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
-      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY requerido}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY requerido (o SUPABASE_SERVICE_ROLE_KEY)}}
       # Browser (inlined en build + fallback runtime): URL pública del gateway.
       NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?SUPABASE_PUBLIC_URL requerido}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
