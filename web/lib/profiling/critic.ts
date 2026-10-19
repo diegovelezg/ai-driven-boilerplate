@@ -33,9 +33,9 @@ const SLOTS = new Set([
 ]);
 
 /** Revisa la síntesis contra la evidencia cruda. Lanza si el LLM falla. */
-export async function critique(synthesis: Synthesis, evidence: string): Promise<Critique> {
+export async function critique(synthesis: Synthesis, evidence: string, opts: { storeId?: string | null } = {}): Promise<Critique> {
   const user = `SÍNTESIS:\n${JSON.stringify(synthesis).slice(0, 3000)}\n\nEVIDENCIA CRUDA:\n${evidence.slice(0, 4000)}`;
-  const raw = await completeProcessJson("profiler_critic", SYSTEM, user);
+  const raw = await completeProcessJson("profiler_critic", SYSTEM, user, opts.storeId ? { storeId: opts.storeId } : {});
   const p = JSON.parse(raw) as Record<string, unknown>;
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
   const slots = (p.slots ?? {}) as Record<string, Record<string, unknown>>;

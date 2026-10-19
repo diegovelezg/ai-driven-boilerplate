@@ -62,7 +62,7 @@ function buildJudgeDossier(d: JudgeDossier): string {
   return lines.join("\n");
 }
 
-async function completeJudge(ref: ModelRef, system: string, user: string): Promise<string> {
+async function completeJudge(ref: ModelRef, system: string, user: string, meter?: { storeId?: string | null; usedFallback?: boolean }): Promise<string> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
   const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -76,6 +76,7 @@ async function completeJudge(ref: ModelRef, system: string, user: string): Promi
     response_format: { type: "json_object" },
     ...reasoningBody(ref.provider, ref.model, "low"),
   };
+  const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -83,6 +84,24 @@ async function completeJudge(ref: ModelRef, system: string, user: string): Promi
   });
   if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
+  if (meter?.storeId) {
+    const { parseChatUsage, logLlmUsage } = await import("@/lib/ai/usage");
+    const usage = parseChatUsage(data);
+    if (usage) {
+      void logLlmUsage({
+        storeId: meter.storeId,
+        process: "contactability_judge",
+        provider: ref.provider,
+        model: ref.model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        reasoningTokens: usage.reasoningTokens,
+        latencyMs: Date.now() - t0,
+        usedFallback: meter.usedFallback ?? false,
+      });
+    }
+  }
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
   return content;
@@ -96,17 +115,17 @@ export interface JudgeVerdict {
 }
 
 /** Pasa el dossier por el juez. Nunca lanza: ante cualquier fallo, fail-open. */
-export async function judgeContactability(dossier: JudgeDossier): Promise<JudgeVerdict> {
+export async function judgeContactability(dossier: JudgeDossier, opts: { storeId?: string | null } = {}): Promise<JudgeVerdict> {
   const user = buildJudgeDossier(dossier);
   try {
     const cfg = getLlmConfig("contactability_judge");
     let raw: string;
     try {
-      raw = await completeJudge(cfg.primary, JUDGE_SYSTEM, user);
+      raw = await completeJudge(cfg.primary, JUDGE_SYSTEM, user, { storeId: opts.storeId });
     } catch (e) {
       if (!cfg.fallback) throw e;
       log(`primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
-      raw = await completeJudge(cfg.fallback, JUDGE_SYSTEM, user);
+      raw = await completeJudge(cfg.fallback, JUDGE_SYSTEM, user, { storeId: opts.storeId, usedFallback: true });
     }
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const contactable = parsed.contactable !== false;

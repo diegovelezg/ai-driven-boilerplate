@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { GraphStar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
@@ -14,8 +15,8 @@ export function LoginForm({ next }: { next: string }) {
       <AppCard
         title={
           <span className="flex flex-col gap-2">
-            <span className="mb-1 flex size-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-              AI
+            <span className="mb-1 flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <GraphStar className="size-5" strokeWidth={2} />
             </span>
             Entra a tu motor de retención
           </span>

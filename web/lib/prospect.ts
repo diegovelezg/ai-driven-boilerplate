@@ -102,7 +102,7 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>):
   return lines.join("\n");
 }
 
-async function prospectComplete(system: string, user: string): Promise<string> {
+async function prospectComplete(system: string, user: string, meter?: { storeId: string }): Promise<string> {
   const cfg = getLlmConfig("prospect_scan");
   // 3 intentos [primario, fallback, fallback]: el vaciado intermitente
   // (choices con content vacío) suele resolverse reintentando. Se loguea
@@ -111,7 +111,7 @@ async function prospectComplete(system: string, user: string): Promise<string> {
   let lastErr: unknown = null;
   for (let i = 0; i < order.length; i++) {
     try {
-      return await completeJson(order[i], cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user);
+      return await completeJson(order[i], cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user, meter ? { storeId: meter.storeId, process: "prospect_scan", usedFallback: i > 0 } : undefined);
     } catch (e) {
       lastErr = e;
       log(`complete intento ${i + 1}/${order.length} ${order[i].provider}/${order[i].model} falló (${e instanceof Error ? e.message : e})`);
@@ -283,6 +283,7 @@ async function scoreLeads(
   /** Retrieval previo por candidato: solo estas referencias ve el modelo.
    *  null = sin retrieval (pool completo, conducta anterior). */
   topByIndex: Map<number, SimilarPoolEntry[]> | null = null,
+  meter?: { storeId: string },
 ): Promise<Scored[]> {
   if (cands.length === 0) return [];
   // Lotes de 4: acota el prompt (los vaciados crecen con payloads grandes)
@@ -291,7 +292,7 @@ async function scoreLeads(
   for (let off = 0; off < cands.length; off += 4) {
     const chunk = cands.slice(off, off + 4);
     const subTop = topByIndex !== null ? new Map(chunk.map((_, k) => [k, topByIndex.get(off + k) ?? pool])) : null;
-    const scored = await scoreChunk(icp, chunk, focus, pool, subTop);
+    const scored = await scoreChunk(icp, chunk, focus, pool, subTop, meter);
     for (const s of scored) {
       const globalIdx = off + s.index;
       const valid = new Set(((subTop?.get(s.index) ?? pool).map((p) => p.domain.toLowerCase())));
@@ -332,6 +333,7 @@ async function scoreChunk(
   focus: string | null | undefined,
   pool: SimilarPoolEntry[],
   topByIndex: Map<number, SimilarPoolEntry[]> | null,
+  meter?: { storeId: string },
 ): Promise<Scored[]> {
   const usePerCand = topByIndex !== null;
   const refBlock = (i: number): string => {
@@ -347,6 +349,7 @@ async function scoreChunk(
   const raw = await prospectComplete(
     "Puntúas candidatos vs un ICP. Responde SOLO JSON: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. Descarta (icp_score 0) lo que no encaje. contact: SOLO email o teléfono del CONTACTO_DETECTADO (el mejor: email > teléfono); si no hay bloque, null salvo email/tel literal en el texto. PROHIBIDO nombres de personas, cargos, URLs o direcciones en contact (p.ej. nunca \"Luis Cueva\"). reason: 1 frase corta (máx 25 palabras). similar: hasta 2 clientes de REFERENCIA que más se parezcan al candidato, con why en español y corto anclado en sustantivo de industria (p.ej. \"ambos en bienestar animal\"). PROHIBIDO usar verbos genéricos en why (importación, distribución, fabricación, comercialización, ventas). Si ninguno se parece de verdad, similar=[].",
     `ICP:\n${icp.slice(0, 1500)}\n${focus ? `\nEnfoque de ESTA corrida (excluye con 0 lo que lo contradiga): ${focus}\n` : ""}${poolBlock}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 1500)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
+    meter,
   );
   // El truncado (max_tokens) da JSON cortado: un reintento con muestra fresca
   // suele bastar; si repite, que falle el lote con error legible.
@@ -358,6 +361,7 @@ async function scoreChunk(
     const retry = await prospectComplete(
       "Puntúas candidatos vs un ICP. Responde SOLO JSON compacto: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. contact: SOLO email o teléfono del CONTACTO_DETECTADO, si no hay, null. PROHIBIDO nombres de personas. reason: máx 15 palabras. similar: máx 1.",
       `ICP:\n${icp.slice(0, 800)}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 800)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
+      meter,
     );
     parsed = JSON.parse(retry) as { leads?: Scored[] };
   }
@@ -422,7 +426,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
   try {
     const icp = await getIcp(storeId);
     await step(null);
-    const queries = await buildQueries(icp.text, nQ, focus);
+    const queries = await buildQueries(icp.text, nQ, focus, { storeId });
 
     const hits: SearchHit[] = [];
     for (const q of queries) {
@@ -465,7 +469,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
         topByIndex = null;
       }
     }
-    const scored = await scoreLeads(icpText, scraped, focus, pool, topByIndex);
+    const scored = await scoreLeads(icpText, scraped, focus, pool, topByIndex, { storeId });
     const fresh = await dedupe(storeId, scraped, scored);
     const poolByDomain = new Map(pool.map((p) => [p.domain.toLowerCase(), p]));
 

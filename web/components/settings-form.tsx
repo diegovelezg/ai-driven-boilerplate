@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { KeyRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useBackgroundOrNull } from "@/components/background-status";
+import { toast } from "@/components/ui/toast";
 import {
   Select,
   SelectContent,
@@ -58,8 +60,11 @@ function SecretRevokeButton({
             const r = await revokeSecretAction(secret);
             setMsg(r.message);
             if (r.ok) {
+              toast.add({ title: "Secreto revocado", description: r.message, type: "success" });
               setConfirming(false);
               router.refresh();
+            } else {
+              toast.add({ title: "No se pudo revocar", description: r.message, type: "error" });
             }
           })
         }
@@ -99,7 +104,7 @@ function LockedSecret({
         <span className="text-sm tracking-widest tabular-nums" aria-label="Key guardada (oculta)">
           ••••••••
         </span>
-        <Badge variant="default">Guardada</Badge>
+        <Badge variant="success">Guardada</Badge>
         <Button
           type="button"
           variant="outline"
@@ -122,25 +127,48 @@ export function SettingsForm({
   defaults: StoreConnections;
   secretsInDb?: boolean;
 }) {
-  const [state, action, pending] = useActionState(saveConnectionsAction, null);
+  // MO único: el connect (login + sync) va a la cinta global vía `bg.start`
+  // (el server devuelve el run `sync` y el toast muestra el progreso); el
+  // resultado también deja toast de éxito/error en el mismo canal.
+  const [state, setState] = useState<{ ok: boolean; message: string } | null>(null);
+  const [pending, startSave] = useTransition();
   const [platform, setPlatform] = useState<Platform>(defaults.platform);
   const router = useRouter();
+  const bg = useBackgroundOrNull();
   // Medusa exige password en cada guardado (no hay "conservar token"):
   // con token, todo el bloque se bloquea hasta "Cambiar credenciales".
   const hasToken =
     platform === "medusa" ? Boolean(defaults.medusaToken) : Boolean(defaults.shopifyToken);
+  // La plataforma queda fijada mientras haya cualquier credencial guardada:
+  // cambiarla con un token vivo deja secretos huérfanos y rompe el sync.
+  // Solo se libera al revocar el token.
+  const hasAnyToken = Boolean(defaults.medusaToken || defaults.shopifyToken);
   const [editing, setEditing] = useState(false);
   const locked = hasToken && !editing;
-  useEffect(() => {
-    if (state?.ok) {
-      // Diferido: evita setState sincrónico en el efecto (cascada de renders).
-      queueMicrotask(() => setEditing(false));
-      router.refresh();
-    }
-  }, [state, router]);
+  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startSave(async () => {
+      const r = bg
+        ? await bg.start(async () => {
+            const x = await saveConnectionsAction(null, fd);
+            return { ok: x.ok, message: x.message, run: x.run ?? null };
+          })
+        : await saveConnectionsAction(null, fd);
+      setState({ ok: r.ok, message: r.message });
+      if (r.ok) {
+        toast.add({ title: "Tienda conectada", description: r.message, type: "success" });
+        queueMicrotask(() => setEditing(false));
+        // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
+        if (!bg) router.refresh();
+      } else {
+        toast.add({ title: "No se pudo conectar", description: r.message, type: "error" });
+      }
+    });
+  };
 
   return (
-    <form action={action} className="flex w-full flex-col gap-4">
+    <form onSubmit={onSubmit} className="flex w-full flex-col gap-4">
       <AppCard
         tone="primary"
         title="Ecommerce"
@@ -153,7 +181,7 @@ export function SettingsForm({
         }
         action={
           platform === "medusa" ? (
-            <Badge variant={defaults.medusaToken ? "default" : "secondary"}>
+            <Badge variant={defaults.medusaToken ? "success" : "secondary"}>
               {defaults.medusaToken
                 ? `Medusa ${defaults.medusaVersion || ""} conectado`.trim()
                 : "Medusa sin conectar"}
@@ -206,6 +234,7 @@ export function SettingsForm({
                 name="platform"
                 value={platform}
                 onValueChange={(v) => setPlatform(v as Platform)}
+                disabled={hasAnyToken}
               >
                 <SelectTrigger id="platform">
                   <SelectValue />
@@ -215,6 +244,14 @@ export function SettingsForm({
                   <SelectItem value="shopify">Shopify</SelectItem>
                 </SelectContent>
               </Select>
+              {hasAnyToken && (
+                <>
+                  <input type="hidden" name="platform" value={platform} />
+                  <p className="text-xs text-muted-foreground">
+                    Plataforma fijada mientras haya credenciales guardadas. Revoca el token para cambiarla.
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
@@ -338,29 +375,55 @@ export function EmailSettingsForm({
   defaults: StoreConnections;
   secretsInDb?: boolean;
 }) {
-  const [saveState, saveAction, savePending] = useActionState(saveEmailAction, null);
-  const [testState, testAction, testPending] = useActionState(testEmailAction, null);
+  const router = useRouter();
+  // Guardado y prueba son instantáneos (sin corrida): el MO único pide el
+  // mismo canal de toasts para el resultado, no solo el texto inline.
+  const [saveState, setSaveState] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testState, setTestState] = useState<{ ok: boolean; message: string } | null>(null);
+  const [savePending, startSave] = useTransition();
+  const [testPending, startTest] = useTransition();
   const [provider, setProvider] = useState<EmailProvider>(defaults.emailProvider || "sendgrid");
   const [defaultChannel, setDefaultChannel] = useState<DefaultChannel>(
     defaults.defaultChannel || "email",
   );
-  const router = useRouter();
-  // El backend conserva la key con vacío: los campos no-secretos siempre
-  // editables; solo la key se bloquea hasta "Reemplazar".
+  // Paridad con Tienda: con key guardada, todo el bloque se bloquea hasta
+  // "Cambiar" (la key vacía conserva la actual, así que desbloquear para
+  // tocar canal/proveedor/from no obliga a rotar).
   const hasKey = Boolean(defaults.emailApiKey);
   const [editingKey, setEditingKey] = useState(false);
   const keyLocked = hasKey && !editingKey && provider !== "none";
-  useEffect(() => {
-    if (saveState?.ok) {
-      // Diferido: evita setState sincrónico en el efecto (cascada de renders).
-      queueMicrotask(() => setEditingKey(false));
-      router.refresh();
-    }
-  }, [saveState, router]);
+  const onSave = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startSave(async () => {
+      const r = await saveEmailAction(null, fd);
+      setSaveState(r);
+      if (r.ok) {
+        toast.add({ title: "Email guardado", description: r.message, type: "success" });
+        queueMicrotask(() => setEditingKey(false));
+        router.refresh();
+      } else {
+        toast.add({ title: "No se pudo guardar", description: r.message, type: "error" });
+      }
+    });
+  };
+  const onTest = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startTest(async () => {
+      const r = await testEmailAction(null, fd);
+      setTestState(r);
+      toast.add({
+        title: r.ok ? "Prueba enviada" : "La prueba falló",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
+    });
+  };
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <form action={saveAction} className="flex flex-col gap-4">
+      <form onSubmit={onSave} className="flex flex-col gap-4">
         <AppCard
           tone="sky"
           title="Email transaccional"
@@ -372,17 +435,38 @@ export function EmailSettingsForm({
             </>
           }
           action={
-            <Badge variant={defaults.emailApiKey ? "default" : "secondary"}>
+            <Badge variant={defaults.emailApiKey ? "success" : "secondary"}>
               {defaults.emailApiKey
-                ? `${provider === "none" ? "Desactivado" : `${provider} conectado`}`
+                ? `${defaults.emailProvider === "none" ? "Desactivado" : `${defaults.emailProvider} conectado`}`
                 : "Sin conectar"}
             </Badge>
           }
           footer={
             <span className="flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={savePending}>
-                {savePending ? "Guardando…" : "Guardar email"}
-              </Button>
+              {keyLocked ? (
+                <Button type="button" variant="outline" onClick={() => setEditingKey(true)}>
+                  Cambiar credenciales
+                </Button>
+              ) : (
+                <>
+                  <Button type="submit" disabled={savePending}>
+                    {savePending ? "Guardando…" : "Guardar email"}
+                  </Button>
+                  {hasKey && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setProvider(defaults.emailProvider || "sendgrid");
+                        setDefaultChannel(defaults.defaultChannel || "email");
+                        setEditingKey(false);
+                      }}
+                    >
+                      Cancelar
+                    </Button>
+                  )}
+                </>
+              )}
               {defaults.emailApiKey && <SecretRevokeButton secret="email_api_key" />}
               {saveState && (
                 <span className={saveState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
@@ -404,6 +488,7 @@ export function EmailSettingsForm({
                   name="defaultChannel"
                   value={defaultChannel}
                   onValueChange={(v) => setDefaultChannel(v as DefaultChannel)}
+                  disabled={keyLocked}
                 >
                   <SelectTrigger id="defaultChannel">
                     <SelectValue />
@@ -429,6 +514,7 @@ export function EmailSettingsForm({
                   name="emailProvider"
                   value={provider}
                   onValueChange={(v) => setProvider(v as EmailProvider)}
+                  disabled={keyLocked}
                 >
                   <SelectTrigger id="emailProvider">
                     <SelectValue />
@@ -451,6 +537,7 @@ export function EmailSettingsForm({
                       placeholder="notificaciones@tutienda.com"
                       defaultValue={defaults.emailFrom}
                       autoComplete="off"
+                      disabled={keyLocked}
                     />
                   </div>
                   {keyLocked ? (
@@ -462,26 +549,13 @@ export function EmailSettingsForm({
                   ) : (
                     <div className="grid gap-2">
                       <Label htmlFor="emailApiKey">API key</Label>
-                      <div className="flex flex-col gap-2">
-                        <Input
-                          id="emailApiKey"
-                          name="emailApiKey"
-                          type="password"
-                          placeholder={hasKey ? "Nueva key (vacío = conservar la actual)" : "SG.…"}
-                          autoComplete="off"
-                        />
-                        {hasKey && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="w-fit"
-                            onClick={() => setEditingKey(false)}
-                          >
-                            Cancelar reemplazo
-                          </Button>
-                        )}
-                      </div>
+                      <Input
+                        id="emailApiKey"
+                        name="emailApiKey"
+                        type="password"
+                        placeholder={hasKey ? "Nueva key (vacío = conservar la actual)" : "SG.…"}
+                        autoComplete="off"
+                      />
                     </div>
                   )}
                 </>
@@ -491,13 +565,13 @@ export function EmailSettingsForm({
         </AppCard>
       </form>
 
-      {provider !== "none" && defaults.emailApiKey && (
+      {defaults.emailProvider !== "none" && defaults.emailApiKey && (
         <AppCard
           tone="sky"
           title="Probar envío"
           description="Verifica que la key y el remitente funcionan antes de aprobar mensajes."
         >
-          <form action={testAction} className="flex flex-col gap-3">
+          <form onSubmit={onTest} className="flex flex-col gap-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Input
                 name="emailTestTo"

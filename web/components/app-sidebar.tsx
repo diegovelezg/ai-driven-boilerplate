@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import {
   CircleHelp,
+  GraphStar,
   Inbox,
   LayoutDashboard,
   MessagesSquare,
@@ -87,8 +88,8 @@ function AppSidebarNav() {
               render={<Link href={`/${suffix}`} />}
               tooltip="AI Retention Engine"
             >
-              <span className="flex size-6 items-center justify-center rounded bg-primary text-[11px] font-bold text-primary-foreground">
-                AI
+              <span className="flex size-6 items-center justify-center rounded bg-primary text-primary-foreground">
+                <GraphStar className="size-4" strokeWidth={2} />
               </span>
               <span className="text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
                 AI Retention Engine
@@ -113,7 +114,7 @@ function AppSidebarNav() {
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
-                      render={<Link href={item.href} />}
+                      render={<Link href={`${item.href}${suffix}`} />}
                       isActive={active}
                       tooltip={
                         badge ? `${item.label} (${badge})` : item.label

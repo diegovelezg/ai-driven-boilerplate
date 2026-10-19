@@ -359,7 +359,10 @@ export default async function ReviewPage({
       {connected && dbReady && !error && (
         <>
           <ReviewLists
-            key={initialTab}
+            // Remount solo cuando cambia LO PEDIDO (filtro del chat o market):
+            // con `key={initialTab}` cada click en un tab desmontaba todo
+            // (se perdía edición/selección y la página parpadeaba).
+            key={`${sp.market ?? ""}|${sp.actionIds ?? ""}|${sp.leadIds ?? ""}|${sp.signalIds ?? ""}`}
             actions={actions}
             approvedActions={approvedActions}
             leads={leads}

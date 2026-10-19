@@ -18,6 +18,7 @@ import { getProfileSignals } from "@/lib/store-profiles";
 import { runProfiler } from "@/lib/profiling/pipeline";
 import type { Synthesis } from "@/lib/profiling/synthesizer";
 import { createLogger } from "@/lib/log";
+import { advanceRun, finishRun, getLatestRun, startRun, type BackgroundRun } from "@/lib/background";
 import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 
 const chatLog = createLogger("profiler");
@@ -34,22 +35,57 @@ export interface DeepProfileState {
   synthesis?: Synthesis;
   criticVerdict?: "accept" | "reject";
   criticReasons?: string[];
+  /** Corrida visible en la cinta (progreso por etapa vía advanceRun). */
+  run?: BackgroundRun | null;
 }
+
+/** Etapas del set para la cinta (total 4: la 4ª la cierra finishRun). */
+const PROFILER_TOTAL = 4;
 
 export async function runProfilerAction(
   storeId: string,
   description: string,
 ): Promise<DeepProfileState> {
+  // Con cinta (DB): corrida `profile` con progreso por etapa; el cliente la
+  // envuelve en `bg.start` y sigue necesitando la síntesis síncrona para
+  // avanzar al paso 2. Sin DB: camino legacy sin progreso.
+  let runId: string | null = null;
   try {
-    const { synthesis, critic } = await runProfiler(storeId, description);
+    runId = await startRun(storeId, "profile", "Perfil profundo", PROFILER_TOTAL);
+  } catch {
+    runId = null;
+  }
+  const stage = (step: { done: number; label: string }) => {
+    if (!runId) return;
+    advanceRun(runId, { processed: step.done, failed: 0, current: step.label }).catch(() => {});
+  };
+  try {
+    const { synthesis, critic } = await runProfiler(storeId, description, stage);
+    if (runId) {
+      await finishRun(runId, {
+        status: "done",
+        processed: PROFILER_TOTAL,
+        failed: 0,
+        summary: `Perfil ${synthesis.archetype} (critic: ${critic.verdict}).`,
+      }).catch(() => undefined);
+    }
     return {
       ok: true,
       message: `Perfil profundo listo (critic: ${critic.verdict}).`,
       synthesis,
       criticVerdict: critic.verdict,
       criticReasons: critic.reasons,
+      run: runId ? await getLatestRun(storeId).catch(() => null) : null,
     };
   } catch (e) {
+    if (runId) {
+      await finishRun(runId, {
+        status: "error",
+        processed: 0,
+        failed: 0,
+        error: e instanceof Error ? e.message : "No pude generar el perfil profundo",
+      }).catch(() => undefined);
+    }
     return { ok: false, message: e instanceof Error ? e.message : "No pude generar el perfil profundo" };
   }
 }
@@ -213,7 +249,12 @@ export async function saveTenantProfileAction(
   if (!conn.medusaUrl) {
     return { ok: false, message: "Conecta Medusa primero: aún no hay store." };
   }
-  const storeId = await resolveStoreId(conn.medusaUrl);
+  let storeId: string | null;
+  try {
+    storeId = await resolveStoreId(conn.medusaUrl);
+  } catch (e) {
+    return { ok: false, message: `No pude resolver el store: ${e instanceof Error ? e.message : "error"}` };
+  }
   if (!storeId) {
     return { ok: false, message: "Haz un sync primero (Guardar y conectar) para crear el store." };
   }

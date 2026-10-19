@@ -49,14 +49,16 @@ Reglas:
 const VALID_SIZES = new Set(["micro", "pequeña", "mediana", "grande", "agencia"]);
 const VALID_CONF = new Set(["alta", "media", "baja"]);
 
-async function briefOnce(ref: ModelRef, text: string): Promise<string> {
+async function briefOnce(ref: ModelRef, text: string, meter?: { storeId?: string | null; usedFallback?: boolean }): Promise<string> {
   const cfg = getLlmConfig("prospect_scan");
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
   const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+  const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
       model: ref.model,
       messages: [
@@ -70,6 +72,24 @@ async function briefOnce(ref: ModelRef, text: string): Promise<string> {
   });
   if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
+  if (meter?.storeId) {
+    const { parseChatUsage, logLlmUsage } = await import("@/lib/ai/usage");
+    const usage = parseChatUsage(data);
+    if (usage) {
+      void logLlmUsage({
+        storeId: meter.storeId,
+        process: "prospect_scan",
+        provider: ref.provider,
+        model: ref.model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        reasoningTokens: usage.reasoningTokens,
+        latencyMs: Date.now() - t0,
+        usedFallback: meter.usedFallback ?? false,
+      });
+    }
+  }
   const c = data?.choices?.[0]?.message?.content;
   if (typeof c !== "string" || !c.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
   return c;
@@ -133,6 +153,7 @@ function parseBrief(raw: string): VerticalBrief {
 export async function researchVertical(
   vertical: string,
   taxonomyId: string | null = null,
+  opts: { storeId?: string | null } = {},
 ): Promise<VerticalResearch> {
   const v = (vertical ?? "").trim().slice(0, 120);
   if (v.length < 4) throw new Error("Vertical demasiado corto para investigar.");
@@ -145,7 +166,7 @@ export async function researchVertical(
   ];
   for (const [ri, round] of rounds.entries()) {
     if (ri > 0 && selectRich(scraped).length >= 3) break;
-    const queries = await buildQueries(`Negocio de ${v} en Perú: quién contrata, precios, frecuencia`, round.n, round.focus);
+    const queries = await buildQueries(`Negocio de ${v} en Perú: quién contrata, precios, frecuencia`, round.n, round.focus, opts.storeId ? { storeId: opts.storeId } : undefined);
     const hits = (await Promise.all(queries.map((q) => searchSearxng(q, 5).catch(() => [])))).flat();
     const fresh = peFirst(hits.map((h) => h.url)).filter((u) => !seen.has(u)).slice(0, 10);
     fresh.forEach((u) => seen.add(u));
@@ -159,10 +180,10 @@ export async function researchVertical(
   const text = `Vertical: ${v}\n\n${corpus.map((s, i) => `[${i}] ${s.url}\n${s.title}\n${s.text.slice(0, 1500)}`).join("\n\n")}`;
   let raw: string;
   try {
-    raw = await briefOnce(cfg.primary, text);
+    raw = await briefOnce(cfg.primary, text, opts.storeId ? { storeId: opts.storeId } : undefined);
   } catch (e) {
     if (!cfg.fallback) throw e;
-    raw = await briefOnce(cfg.fallback, text);
+    raw = await briefOnce(cfg.fallback, text, opts.storeId ? { storeId: opts.storeId, usedFallback: true } : { usedFallback: true });
   }
   return {
     brief: parseBrief(raw),

@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { proposeSingleAction } from "@/lib/review-actions";
 import { useBackground } from "@/components/background-status";
-import { isJudgeVetoMessage } from "@/lib/single-audit";
 import {
   Table,
   TableBody,
@@ -66,7 +64,6 @@ export function AttentionTable({
   // servidor frena lo incompatible (misma señal, bulk, regenerate, sync).
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const [draftError, setDraftError] = useState<{ id: string; message: string } | null>(null);
-  const router = useRouter();
   const { start } = useBackground();
 
   // La fila habla tratamiento (qué hago), no identidad. Sin predicción del
@@ -100,16 +97,14 @@ export function AttentionTable({
         return { ok: x.ok, message: x.message, run: x.run ?? null };
       });
       if (r.ok) {
-        router.refresh();
         return;
       }
       // Issue #16 Fase 1: no descartar `r.message` (trae "Ya tiene
       // borrador…" / veto del juez). Se muestra tal cual.
       setDraftError({ id: row.signalId, message: r.message });
-      // El veto escribe `evidence_json.contactability` en DB: refrescar para
-      // que la próxima renderice el estado estable `Omitido por juez` en vez
-      // de re-ofrecer `Redactar` hasta la próxima navegación.
-      if (isJudgeVetoMessage(r.message)) router.refresh();
+      // El veto escribe `evidence_json.contactability` en DB: el refresh ya
+      // lo hizo `start()`; sin doble refresh no se aborta el RSC en vuelo
+      // (ECONNRESET + parpadeo).
     } finally {
       setBusyIds((prev) => prev.filter((id) => id !== row.signalId));
     }

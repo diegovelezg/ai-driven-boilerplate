@@ -57,11 +57,17 @@ function applyCorrections(base: Synthesis, corrections: Critique["corrections"])
 /**
  * Corre el set completo. Lanza si investigator/synthesizer/critic fallan
  * (error honesto); el sector sin web útil degrada a brief null, no a error.
+ * `onStage` avisa cada etapa para progreso en vivo (cinta vía advanceRun).
  */
-export async function runProfiler(storeId: string, description: string): Promise<ProfilerResult> {
+export async function runProfiler(
+  storeId: string,
+  description: string,
+  onStage?: (step: { done: number; label: string }) => void,
+): Promise<ProfilerResult> {
   const t0 = Date.now();
-  const investigator = await investigateBusiness(description);
+  const investigator = await investigateBusiness(description, undefined, { storeId });
   log(`pipeline investigator vertical=${investigator.vertical} model=${investigator.businessModel} conf=${investigator.confidence}`);
+  onStage?.({ done: 1, label: "Negocio investigado" });
 
   const [sectorCached, stats, icpRes] = await Promise.all([
     getVerticalProfile(investigator.taxonomyId, investigator.vertical ?? description.slice(0, 80)),
@@ -78,7 +84,7 @@ export async function runProfiler(storeId: string, description: string): Promise
   log(`pipeline sector ${sectorCached ? `CACHE conf=${sectorCached.confidence}` : "MISS"}`);
   if (!sectorBrief && investigator.vertical) {
     try {
-      const research = await researchVertical(investigator.vertical, investigator.taxonomyId);
+      const research = await researchVertical(investigator.vertical, investigator.taxonomyId, { storeId });
       await saveVerticalProfile(investigator.taxonomyId, investigator.vertical, research).catch((e) => {
         log(`pipeline sector save fallo (${e instanceof Error ? e.message : e})`);
       });
@@ -94,6 +100,7 @@ export async function runProfiler(storeId: string, description: string): Promise
       ? String((icpRes.data as { icp_description?: unknown }).icp_description)
       : null;
   log(`pipeline stats buyers=${stats.buyers}/${stats.customers} ticket=${stats.ticketMedian} gaps->synthesize`);
+  onStage?.({ done: 2, label: "Datos y sector cruzados" });
 
   const synthesis = await synthesize({
     description,
@@ -102,8 +109,10 @@ export async function runProfiler(storeId: string, description: string): Promise
     sectorSources,
     stats,
     icp,
+    storeId,
   });
   log(`pipeline synthesis model=${synthesis.businessModel} arch=${synthesis.archetype} conf=${synthesis.confidence}`);
+  onStage?.({ done: 3, label: "Perfil sintetizado" });
 
   const evidence = [
     `Web: ${(investigator.webText ?? "(sin texto)").slice(0, 1200)}`,
@@ -111,7 +120,7 @@ export async function runProfiler(storeId: string, description: string): Promise
     `Datos: buyers=${stats.buyers}/${stats.customers} repeat=${Math.round(stats.repeatRate * 100)}% ticket=${stats.ticketMedian} intervalo_mediano=${stats.intervalMedian ?? "?"}d cobertura=${Math.round(stats.intervalCoverage * 100)}% top=${stats.topDomains.map((t) => t.domain).join(",")}`,
     icp ? `ICP: ${icp.slice(0, 200)}` : "ICP: no.",
   ].join("\n");
-  const criticResult = await critique(synthesis, evidence);
+  const criticResult = await critique(synthesis, evidence, { storeId });
   const emptyReject = criticResult.verdict === "reject" && criticResult.corrections.length === 0;
   log(`pipeline critic verdict=${criticResult.verdict} corrections=${criticResult.corrections.length}${emptyReject ? " (reject sin correcciones: se mantiene síntesis)" : ""} (${Date.now() - t0}ms)`);
 

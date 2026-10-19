@@ -1,16 +1,30 @@
 "use server";
 
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { medusaLogin, testMedusa } from "@/lib/medusa";
 import type { MedusaVersion } from "@/lib/medusa";
 import { readConnections, writeConnections } from "@/lib/store";
 import type { DefaultChannel, EmailProvider, Platform } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { syncStoreFromMedusa } from "@/lib/sync";
+import { resolveStoreId } from "@/lib/customers-db";
+import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
+import {
+  advanceRun,
+  busyMessage,
+  finishRun,
+  getLatestRun,
+  hasConflict,
+  startRun,
+  type BackgroundRun,
+} from "@/lib/background";
+import { formatNumber } from "@/lib/format";
 
 export interface SaveState {
   ok: boolean;
   message: string;
+  /** Corrida visible en la cinta (solo el connect con sync la devuelve). */
+  run?: BackgroundRun | null;
 }
 
 export async function saveConnectionsAction(
@@ -19,6 +33,13 @@ export async function saveConnectionsAction(
 ): Promise<SaveState> {
   const platform = (String(formData.get("platform") ?? "medusa") || "medusa") as Platform;
   const prev = await readConnections();
+
+  // La plataforma está fijada mientras haya credenciales guardadas (el
+  // selector viaja deshabilitado + hidden input). Rechazo de defensa ante
+  // un POST manipulado: cambiarla con token vivo deja secretos huérfanos.
+  if ((prev.medusaToken || prev.shopifyToken) && platform !== prev.platform) {
+    return { ok: false, message: "Revoca el token guardado antes de cambiar de plataforma." };
+  }
 
   if (platform === "shopify") {
     const shopifyStore = String(formData.get("shopifyStore") ?? "").trim();
@@ -61,17 +82,65 @@ export async function saveConnectionsAction(
     revalidatePath("/settings");
     revalidatePath("/customers");
     if (!result.ok) return { ok: false, message: `Login ok, pero falla lectura: ${result.error}` };
-    // Cada auth dispara sync ecommerce → BD (no bloquea el login si falla).
-    let syncMsg = "sync omitido (sin Supabase en .env.local)";
-    if (isSupabaseConfigured()) {
-      try {
-        const s = await syncStoreFromMedusa(medusaUrl, version, token);
-        syncMsg = `sync: ${s.customers} customers, ${s.orders} orders`;
-      } catch (e) {
-        syncMsg = `sync falló: ${e instanceof Error ? e.message : "error"}`;
-      }
+    // Sync en background con corrida visible (MO único: toda mutación larga
+    // va a la cinta de toasts). Antes bloqueaba el submit segundos sin
+    // progreso; el cliente envuelve en `bg.start` y el toast lo sigue.
+    if (!isSupabaseConfigured()) {
+      return { ok: true, message: `Medusa ${version} conectado: ${result.store} · sync omitido (sin Supabase en .env.local)` };
     }
-    return { ok: true, message: `Medusa ${version} conectado: ${result.store} · ${syncMsg}` };
+    let storeId: string;
+    try {
+      storeId = (await resolveStoreId(medusaUrl)) ?? (await ensureStore(medusaUrl, token));
+    } catch (e) {
+      return { ok: true, message: `Medusa ${version} conectado: ${result.store} · sync no iniciado: ${e instanceof Error ? e.message : "error"}` };
+    }
+    const syncConflict = await hasConflict(storeId, { kind: "sync" }).catch(() => null);
+    if (syncConflict) {
+      return {
+        ok: true,
+        message: `Medusa ${version} conectado: ${result.store} · ${busyMessage(syncConflict)}`,
+        run: syncConflict,
+      };
+    }
+    let syncRunId: string | null = null;
+    try {
+      syncRunId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);
+    } catch (e) {
+      return { ok: true, message: `Medusa ${version} conectado: ${result.store} · sync no registrado: ${e instanceof Error ? e.message : "error"}` };
+    }
+    const runId = syncRunId;
+    const syncUrl = medusaUrl;
+    const syncToken = token;
+    const syncVersion = version;
+    after(async () => {
+      try {
+        const s = await syncStoreFromMedusa(syncUrl, syncVersion, syncToken, {
+          onProgress: (p) => {
+            advanceRun(runId, { processed: p.processed, failed: 0, current: p.current }).catch(() => {});
+          },
+        });
+        await finishRun(runId, {
+          status: "done",
+          processed: SYNC_TOTAL,
+          failed: 0,
+          summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders`,
+        });
+      } catch (e) {
+        await finishRun(runId, {
+          status: "error",
+          processed: 0,
+          failed: 0,
+          error: e instanceof Error ? e.message : "error",
+        }).catch(() => undefined);
+      }
+      revalidatePath("/settings");
+      revalidatePath("/customers");
+    });
+    return {
+      ok: true,
+      message: `Medusa ${version} conectado: ${result.store} · sync en curso (progreso abajo a la derecha).`,
+      run: await getLatestRun(storeId).catch(() => null),
+    };
   } catch (e) {
     return { ok: false, message: `Medusa falla: ${e instanceof Error ? e.message : "error"}` };
   }
@@ -93,6 +162,12 @@ export async function saveEmailAction(
     return { ok: false, message: "Falta remitente (from)" };
   }
   const prev = await readConnections();
+  // Sin key nueva no se reutiliza la de otro proveedor: cambiar de
+  // proveedor exige su propia key (el selector viaja bloqueado con key
+  // guardada; esto cubre el POST manipulado).
+  if (!apiKey && provider !== "none" && prev.emailApiKey && provider !== prev.emailProvider) {
+    return { ok: false, message: "Indica la API key del nuevo proveedor (no se reutiliza la anterior)." };
+  }
   await writeConnections({
     ...prev,
     emailProvider: provider,

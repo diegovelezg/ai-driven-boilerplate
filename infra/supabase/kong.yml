@@ -1,0 +1,59 @@
+# Gateway mínimo Kong (declarativo, sin DB) para el deploy único en Coolify.
+# Mapea lo que supabase-js espera desde una sola SUPABASE_URL:
+#   <gateway>/auth/v1/* -> gotrue (auth:9999)
+#   <gateway>/rest/v1/* -> postgrest (rest:3000)
+_format_version: "1.1"
+
+services:
+  - name: auth
+    url: http://auth:9999
+    routes:
+      - name: auth
+        paths:
+          - /auth/v1
+        strip_path: true
+    plugins:
+      - name: cors
+
+  - name: rest
+    url: http://rest:3000
+    routes:
+      - name: rest
+        paths:
+          - /rest/v1
+        strip_path: true
+    plugins:
+      - name: cors
+
+plugins:
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+        - HEAD
+      headers:
+        - Accept
+        - Accept-Version
+        - Content-Length
+        - Content-MD5
+        - Content-Type
+        - Date
+        - X-Auth-Token
+        - apikey
+        - Authorization
+        - Prefer
+        - Range
+        - suffix
+        - ms
+      exposed_headers:
+        - Content-Range
+        - Range
+      credentials: true
+      max_age: 3600

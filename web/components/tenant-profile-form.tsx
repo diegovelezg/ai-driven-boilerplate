@@ -1,11 +1,13 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toast } from "@/components/ui/toast";
 import {
   Select,
   SelectContent,
@@ -47,10 +49,16 @@ const MODEL_DEFAULT_ARCHETYPE: Record<BusinessModel, ArchetypeId> = {
 };
 
 export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
-  const [state, action, pending] = useActionState(saveTenantProfileAction, null);
+  // Guardado instantáneo (sin corrida): el MO único pide el mismo canal de
+  // toasts para el resultado, no solo el texto inline.
+  const [state, setState] = useState<{ ok: boolean; message: string } | null>(null);
+  const [pending, startSave] = useTransition();
+  const router = useRouter();
   const [step, setStep] = useState<1 | 2>(profile ? 2 : 1);
+  // Paridad con Tienda/Email: con perfil guardado, el paso 2 viaja bloqueado
+  // hasta "Cambiar". Sin perfil (primera vez) se edita directo.
 
-  // Descripción acumulada del chat (se guarda con el perfil).
+  // Descripción del chat + elaboración de la IA (se guarda con el perfil).
   const [description, setDescription] = useState(profile?.description ?? "");
   const [reading, setReading] = useState<DescriptionInterpretation | null>(null);
 
@@ -84,6 +92,33 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     verdict: "accept" | "reject";
     reasons: string[];
   } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const locked = profile != null && !editing;
+  // El generador (investigación del chat / perfil profundo) bloquea la
+  // salida a edición de valores hasta terminar.
+  const [chatBusy, setChatBusy] = useState(false);
+
+  /** Cancelar edición: revierte todo al perfil guardado (los campos son
+   *  estado controlado, no basta con re-bloquear). */
+  const resetFromSaved = () => {
+    if (!profile) return;
+    setModel(profile.businessModel);
+    setIndustry(profile.industry ?? null);
+    setVerticalDetected(profile.verticalDetected ?? null);
+    setTaxonomyId(profile.taxonomyId ?? null);
+    setBuyerType(profile.buyerType ?? null);
+    setArchetype(profile.archetype);
+    setCatalog(profile.catalogType ?? null);
+    setCycle(profile.repurchaseCycleDays?.toString() ?? "");
+    setMult(String(profile.churnMultiplier));
+    setCompanyRequired(profile.companyRequired);
+    setSource(profile.archetypeSource === "sugerido" ? "sugerido" : "manual");
+    setConfidence(profile.interpretationConfidence ?? null);
+    setDescription(profile.description ?? "");
+    setReading(null);
+    setCriticInfo(null);
+    setEditing(false);
+  };
 
   if (!storeId) {
     return (
@@ -130,15 +165,33 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   ) => {
     applyInterpretation(proposal, fullDescription);
     setCriticInfo(info ? { verdict: info.criticVerdict, reasons: info.criticReasons } : null);
+    // Lo recién generado llega en edición: con perfil existente, sin esto
+    // el paso 2 aterriza bloqueado y el Guardar queda escondido tras Cambiar.
+    setEditing(true);
     setStep(2);
   };
 
   const useDataSignal = () => {
+    // La señal de datos solo aporta modelo+arquetipo: se limpian los slots
+    // que pudo haber interpretado el agente para no mezclar evidencias.
     setModel(suggestion.businessModel);
     setArchetype(suggestion.archetype);
     setCompanyRequired(ARCHETYPES[suggestion.archetype].companyRequired);
     setMult(String(ARCHETYPES[suggestion.archetype].defaultMultiplier));
+    setIndustry(null);
+    setVerticalDetected(null);
+    setTaxonomyId(null);
+    setBuyerType(null);
+    setCatalog(null);
+    setCycle("");
+    setConfidence(null);
+    setReading(null);
+    setCriticInfo(null);
+    // La descripción es evidencia del chat: en la vía de datos no hay chat,
+    // así que se limpia para no guardarla como "sugerida por datos".
+    setDescription("");
     setSource("sugerido");
+    setEditing(true);
     setStep(2);
   };
 
@@ -164,14 +217,51 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     }
   };
 
+  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    startSave(async () => {
+      try {
+        const r = await saveTenantProfileAction(null, fd);
+        setState(r);
+        if (r.ok) {
+          toast.add({ title: "Perfil guardado", description: r.message, type: "success" });
+          queueMicrotask(() => setEditing(false));
+          router.refresh();
+        } else {
+          toast.add({ title: "No se pudo guardar", description: r.message, type: "error" });
+        }
+      } catch (err) {
+        // El action no debería lanzar (devuelve estado), pero si lo hace
+        // no queda en silencio: mensaje inline + toast.
+        const message = err instanceof Error ? err.message : "Error al guardar";
+        setState({ ok: false, message });
+        toast.add({ title: "No se pudo guardar", description: message, type: "error" });
+      }
+    });
+  };
+
   const profileFooter = (
     <span className="flex flex-wrap items-center gap-3">
       <Button type="button" variant="outline" onClick={() => setStep(1)}>
         Atrás
       </Button>
-      <Button type="submit" disabled={pending}>
-        {pending ? "Guardando…" : "Guardar perfil"}
-      </Button>
+      {locked ? (
+        <Button type="button" variant="outline" onClick={() => setEditing(true)}>
+          Cambiar
+        </Button>
+      ) : (
+        <>
+          <Button type="submit" disabled={pending}>
+            {pending ? "Guardando…" : "Guardar perfil"}
+          </Button>
+          {profile && (
+            <Button type="button" variant="ghost" onClick={resetFromSaved}>
+              Cancelar
+            </Button>
+          )}
+        </>
+      )}
       {state && (
         <span className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
           {state.message}
@@ -188,25 +278,96 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
           title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
           description="Cuéntanos qué vendes y a quién, con tus palabras."
           action={
-            <Badge variant={profile ? "default" : "secondary"}>
+            <Badge variant={profile ? "success" : "secondary"}>
               {profile ? "Perfil configurado" : "Sin perfil"}
             </Badge>
           }
+          footer={
+            profile ? (
+              <span className="flex flex-wrap items-center gap-3">
+                <Button
+                  type="button"
+                  disabled={chatBusy}
+                  onClick={() => {
+                    setEditing(true);
+                    setStep(2);
+                  }}
+                >
+                  Editar valores
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  O descríbeme el cambio abajo y lo aplicamos.
+                </span>
+              </span>
+            ) : undefined
+          }
         >
+          {profile && (
+            <div className="mb-4 rounded-lg border border-input p-3">
+              <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                Tu perfil actual
+              </p>
+              <dl className="mt-2 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">Modelo:</dt>
+                  <dd className="font-medium">
+                    {MODELS.find((m) => m.value === profile.businessModel)?.label ??
+                      profile.businessModel}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">Rubro:</dt>
+                  <dd className="font-medium">
+                    {verticalName(profile.taxonomyId) ??
+                      profile.industry ??
+                      profile.verticalDetected ??
+                      "—"}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">Compra:</dt>
+                  <dd className="font-medium">
+                    {[
+                      profile.buyerType,
+                      profile.companyRequired ? "empresas" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "—"}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">Patrón:</dt>
+                  <dd className="font-medium">
+                    {ARCHETYPES[profile.archetype]?.label ?? profile.archetype}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-muted-foreground">Recompra:</dt>
+                  <dd className="font-medium">
+                    {profile.repurchaseCycleDays != null
+                      ? `cada ~${formatNumber(profile.repurchaseCycleDays)}d`
+                      : `auto (~${formatNumber(ARCHETYPES[profile.archetype]?.defaultCycleDays ?? 0)}d)`}{" "}
+                    · churn ×{profile.churnMultiplier}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
           <ProfileChat
             storeId={storeId}
             onConfirm={handleChatConfirm}
             onUseDataSignal={useDataSignal}
+            onBusyChange={setChatBusy}
           />
         </AppCard>
       ) : (
-        <form action={action} className="flex flex-col">
+        <form onSubmit={onSubmit} className="flex flex-col">
           <AppCard
             tone="violet"
             title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
             description="Confirma lo que generó el set — ajusta lo que sea antes de guardar."
             action={
-              <Badge variant={profile ? "default" : "secondary"}>
+              <Badge variant={profile ? "success" : "secondary"}>
                 {profile ? "Perfil configurado" : "Sin perfil"}
               </Badge>
             }
@@ -247,7 +408,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </p>
                 <div className="grid gap-2">
                   <Label htmlFor="businessModel">¿A quién le vendes?</Label>
-                  <Select value={model} onValueChange={(v) => onModelChange(v as BusinessModel)}>
+                  <Select value={model} onValueChange={(v) => onModelChange(v as BusinessModel)} disabled={locked}>
                     <SelectTrigger id="businessModel">
                       <SelectValue />
                     </SelectTrigger>
@@ -267,6 +428,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                     id="buyerType"
                     value={buyerType ?? ""}
                     maxLength={60}
+                    disabled={locked}
                     onChange={(e) => {
                       setBuyerType(e.target.value || null);
                       setSource("manual");
@@ -283,6 +445,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                     id="companyRequired"
                     type="checkbox"
                     checked={companyRequired}
+                    disabled={locked}
                     onChange={(e) => {
                       setCompanyRequired(e.target.checked);
                       setSource("manual");
@@ -305,7 +468,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                       El agente detectó: {verticalDetected}.
                     </p>
                   )}
-                  <Select value={taxonomyId ?? ""} onValueChange={onTaxonomyChange}>
+                  <Select value={taxonomyId ?? ""} onValueChange={onTaxonomyChange} disabled={locked}>
                     <SelectTrigger id="taxonomy">
                       <SelectValue placeholder="Elegir…" />
                     </SelectTrigger>
@@ -335,6 +498,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                       id="cycle"
                       inputMode="numeric"
                       value={cycle}
+                      disabled={locked}
                       onChange={(e) => {
                         setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4));
                         setSource("manual");
@@ -351,7 +515,11 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                       id="mult"
                       inputMode="decimal"
                       value={mult}
-                      onChange={(e) => setMult(e.target.value.replace(/[^0-9.]/g, "").slice(0, 4))}
+                      disabled={locked}
+                      onChange={(e) => {
+                        setMult(e.target.value.replace(/[^0-9.]/g, "").slice(0, 4));
+                        setSource("manual");
+                      }}
                       placeholder="1.25"
                     />
                     <p className="text-xs text-muted-foreground">

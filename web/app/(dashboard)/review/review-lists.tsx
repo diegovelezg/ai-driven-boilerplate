@@ -210,7 +210,10 @@ export function ReviewLists({
       setSelected(new Set());
     } finally {
       setBatchBusy(false);
-      router.refresh();
+      // Sin doble refresh: `bg.start()` ya refrescó al resolver; un segundo
+      // refresh aborta el RSC en vuelo (ECONNRESET + parpadeo). Solo el host
+      // sin provider (canvas) necesita refrescar aquí.
+      if (!bg) router.refresh();
     }
   };
   const emptyActions = filtered

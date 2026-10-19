@@ -151,14 +151,14 @@ function fechaCorta(iso: string | null): string | null {
   return `${d.getDate()} de ${meses[d.getMonth()]}`;
 }
 
-async function draft(system: string, user: string): Promise<string> {
+async function draft(system: string, user: string, meter?: { storeId: string }): Promise<string> {
   const cfg = getLlmConfig("proposer_draft");
   try {
-    return await completeJson(cfg.primary, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user);
+    return await completeJson(cfg.primary, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user, meter ? { storeId: meter.storeId, process: "proposer_draft" } : undefined);
   } catch (e) {
     if (!cfg.fallback) throw e;
     log(`primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
-    return await completeJson(cfg.fallback, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user);
+    return await completeJson(cfg.fallback, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, system, user, meter ? { storeId: meter.storeId, process: "proposer_draft", usedFallback: true } : { usedFallback: true });
   }
 }
 
@@ -376,7 +376,7 @@ async function composeDraftCopy(
   ].join("\n");
 
   const attempt = async (extraNudge: string | null): Promise<{ channel: string; body: string; subject: string | null }> => {
-    const raw = await draft(system, extraNudge ? `${user}\n\nREINTENTO: ${extraNudge}` : user);
+    const raw = await draft(system, extraNudge ? `${user}\n\nREINTENTO: ${extraNudge}` : user, { storeId });
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const channel = parsed.channel === "email" ? "email" : "whatsapp";
     const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
@@ -413,7 +413,7 @@ async function composeDraftCopy(
     daysSince: days,
     todayIso: new Date().toISOString().slice(0, 10),
     items: judgeItems,
-  });
+  }, { storeId });
   if (!verdict.contactable) {
     // Flag auditado en la señal (sin estados ni columnas nuevas): por qué no
     // se redactó. La señal sigue prioritized; el próximo run rejuzga (el

@@ -6,6 +6,11 @@ import { createProfilerLogger } from "./log";
 
 const log = createProfilerLogger();
 
+// Sin timeout, un provider colgado deja el pipeline esperando para siempre:
+// el fallback solo salta ante error, nunca ante un fetch que no responde.
+// El log muestra etapas normales de 10-30s; 120s es techo generoso.
+const LLM_TIMEOUT_MS = 120_000;
+
 export interface ProcessJsonOpts {
   storeId?: string | null;
   usedFallback?: boolean;
@@ -29,6 +34,7 @@ async function once(
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     body: JSON.stringify({
       model: ref.model,
       messages: [

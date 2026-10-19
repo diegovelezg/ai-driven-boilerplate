@@ -375,3 +375,11 @@ npm install -D @google/adk-devtools
 - **Agent tools (read-only by default):** `listChurnRisk`, `rfmBreakdown`, `getCustomer`, `listActions`, `draftCampaign`. `approveAction`/`dispatch` require explicit merchant confirmation.
 - **Canvas:** renders agent artifacts next to the chat — `chart` (RFM/churn), `table` (customer segments), `actionDraft` (editable campaign copy before approval). One editable draft at a time (artifact pattern).
 - **Persistence:** Supabase tables `conversations` + `messages`; generated drafts stay as `ProposedAction` rows with `PENDING_REVIEW`.
+
+## 8. Metering LLM por tenant (issue #15)
+
+- **Tabla:** `llm_usage` (`supabase/migrations/20261020000003_llm_usage.sql`), una fila por llamada con `store_id` obligatorio + `process/provider/model/prompt/completion/total/reasoning/latency/used_fallback/success`. RLS: lectura por `is_store_member(store_id)`; escritura solo `service_role` desde server. Vista `llm_usage_daily` para agregados por día/proceso/modelo.
+- **Wrapper:** `web/lib/ai/usage.ts` — `parseChatUsage` tolera OpenAI/DeepSeek (`usage.prompt_tokens/...`), Anthropic (`input_tokens/output_tokens`) y Gemini (`usageMetadata`); devuelve `null` sin conteo. `logLlmUsage` nunca lanza (warn si falta `store_id` o Supabase) y se llama fire-and-forget.
+- **Dónde se loguea:** no-streaming JSON (`profiling/llm.ts`, `ai/investigate.ts`, `ai/enrich.ts`, `retrieval.ts` via `meter`, `contactability.ts`, `verticals.ts`, `copywriter.ts` proceso `proposer_draft`, `prospect.ts` proceso `prospect_scan`, `profiling/pipeline.ts` + `synthesizer/critic`) y adaptadores ADK (`adk/models/openai-compatible.ts`, `anthropic.ts` via `config.storeId/process` desde `customer-agent.ts`). Fallback loguea solo la fila del modelo que respondió con `used_fallback=true` (sin doble conteo). Sin `usage` real no se inventa: no hay fila (el `success=false` con 0 queda para fase 2).
+- **Lectura:** `GET /api/usage?store=<uuid>&from=&to=&process=` agrega `llm_usage` (RLS aplica); pill informativo en el header (`usage-pill.tsx`, total hoy + histórico, sin link).
+- **Fuera de alcance:** `ai/decisions.ts` (Decisions API: devuelve `answers` con probabilidades, sin `usage`/tokens — no hay qué medir) y backfill histórico (solo forward). `llm_usage_daily` existe para futuros agregados; la ruta agrega en código.

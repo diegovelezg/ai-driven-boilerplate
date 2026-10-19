@@ -3,9 +3,11 @@
 // Vigilante de perfil (#6): propuesta de corrección con decisión por delta.
 // Nada se aplica solo: cada fila se acepta o se rechaza por separado.
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
+import { useBackgroundOrNull } from "@/components/background-status";
 import {
   decideProfileDeltaAction,
   runRecalibrationAction,
@@ -54,7 +56,7 @@ function DeltaRow({
         <span className="font-medium">{SLOT_LABEL[delta.slot]}</span>
         <Badge variant="secondary">confianza {delta.confianza}</Badge>
         {delta.decision !== "pending" && (
-          <Badge variant={delta.decision === "accepted" ? "default" : "outline"}>
+          <Badge variant={delta.decision === "accepted" ? "success" : "outline"}>
             {delta.decision === "accepted" ? "Aplicado" : "Descartado"}
           </Badge>
         )}
@@ -93,17 +95,27 @@ export function ProfileProposalsPanel({
 }) {
   const [message, setMessage] = useState<string | null>(null);
   const [reviewing, startReview] = useTransition();
+  const bg = useBackgroundOrNull();
+  const router = useRouter();
   const runReview = () =>
     startReview(async () => {
-      const r = await runRecalibrationAction();
+      // MO único: la revisión va a la cinta global (toast de progreso).
+      const r = bg
+        ? await bg.start(async () => {
+            const x = await runRecalibrationAction();
+            return { ok: x.ok, message: x.message, run: x.run ?? null };
+          })
+        : await runRecalibrationAction();
       setMessage(r.message);
+      // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
+      if (!bg) router.refresh();
     });
 
   return (
     <AppCard
       tone="emerald"
       title="Vigilante de perfil"
-      description="Cada semana comparo tu perfil con tus datos reales. Si algo cambió, te propongo corregirlo aquí: nada se aplica sin tu decisión. La revisión tarda ~1 min en segundo plano: recarga la página para verla."
+      description="Cada semana comparo tu perfil con tus datos reales. Si algo cambió, te propongo corregirlo aquí: nada se aplica sin tu decisión. La revisión tarda ~1 min en segundo plano: sigue el progreso abajo a la derecha."
       action={proposal?.provisional ? <Badge variant="secondary">Provisional</Badge> : undefined}
       footer={
         <span className="flex flex-wrap items-center gap-3">
@@ -128,7 +140,10 @@ export function ProfileProposalsPanel({
                 key={d.slot}
                 proposalId={proposal.id}
                 delta={d}
-                onDecided={setMessage}
+                onDecided={(msg) => {
+                  setMessage(msg);
+                  router.refresh();
+                }}
               />
             ))}
           </>

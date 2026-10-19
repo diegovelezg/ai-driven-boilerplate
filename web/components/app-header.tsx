@@ -23,10 +23,12 @@ export function AppHeader({
   stores = [],
   marketsByStore = {},
   primaryByStore = {},
+  userEmail = null,
 }: {
   stores?: Array<{ id: string }>;
   marketsByStore?: Record<string, TenantMarket[]>;
   primaryByStore?: Record<string, string>;
+  userEmail?: string | null;
 }) {
   const pathname = usePathname();
   const title =
@@ -44,7 +46,7 @@ export function AppHeader({
           <UsagePill stores={stores} />
           <MarketSelector stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} />
         </Suspense>
-        <UserMenu />
+        <UserMenu initialEmail={userEmail} />
       </span>
     </header>
   );

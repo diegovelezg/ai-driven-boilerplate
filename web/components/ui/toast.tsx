@@ -22,7 +22,9 @@ function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
     <ToastPrimitive.Viewport
       data-slot="toast-viewport"
       className={cn(
-        "pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto w-auto max-w-sm outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
+        // Desviación intencional vs el registry oficial (max-w-sm): más ancho
+        // para que el texto ocupe menos líneas y el stack estorbe menos.
+        "pointer-events-none fixed inset-x-4 bottom-4 z-50 mx-auto w-auto max-w-md outline-none sm:right-4 sm:left-auto sm:mx-0 sm:w-full",
         className
       )}
       {...props}
@@ -74,7 +76,8 @@ function ToastTitle({ className, ...props }: ToastPrimitive.Title.Props) {
   return (
     <ToastPrimitive.Title
       data-slot="toast-title"
-      className={cn("text-sm font-medium", className)}
+      // Desviación vs oficial (text-sm): más compacto para que estorbe menos.
+      className={cn("text-[13px] font-medium", className)}
       {...props}
     />
   )
@@ -87,7 +90,8 @@ function ToastDescription({
   return (
     <ToastPrimitive.Description
       data-slot="toast-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      // Desviación vs oficial (text-sm): más compacto para que estorbe menos.
+      className={cn("text-xs text-muted-foreground", className)}
       {...props}
     />
   )

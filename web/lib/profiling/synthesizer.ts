@@ -59,6 +59,7 @@ export interface SynthesisInput {
   sectorSources: Array<{ url: string; title: string }>;
   stats: TenantStats;
   icp: string | null;
+  storeId?: string | null;
 }
 
 /** Sintetiza el perfil desde las 4 evidencias. Lanza si el LLM falla. */
@@ -77,7 +78,7 @@ export async function synthesize(input: SynthesisInput): Promise<Synthesis> {
     `Datos de la tienda (${s.customers} customers, ${s.buyers} compradores): empresa=${Math.round(s.companyRate * 100)}%, dominio_propio=${Math.round(s.customDomainRate * 100)}%, repeat_2+compras=${Math.round(s.repeatRate * 100)}%, ticket_mediano=${s.ticketMedian ?? "?"} ${s.ticketCurrency ?? ""}, intervalo_mediano=${s.intervalMedian ?? "?"}d (informa el ${Math.round(s.intervalCoverage * 100)}% de compradores), top_dominios=${s.topDomains.map((t) => `${t.domain}(${t.customers})`).join(", ") || "—"}, enriquecidos=${s.enrichedSample.map((e) => `${e.domain}:${e.company ?? "?"}:${e.industry ?? "?"}`).join("; ") || "—"}.${sampleFlag}`,
     input.icp ? `ICP declarado (fragmento 500): ${input.icp.slice(0, 500)}` : "ICP: no declarado.",
   ].join("\n\n");
-  const raw = await completeProcessJson("profiler_synthesize", SYSTEM, user);
+  const raw = await completeProcessJson("profiler_synthesize", SYSTEM, user, input.storeId ? { storeId: input.storeId } : {});
   const p = JSON.parse(raw) as Record<string, unknown>;
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
   /** Corte en borde de palabra (nada de "ocasio" a medias). */

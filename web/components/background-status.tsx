@@ -102,6 +102,11 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   const watchKeyRef = useRef<string | null>(null);
   const lastAutoRefreshRef = useRef<number>(0);
   const knownToastIdsRef = useRef<Set<string>>(new Set());
+  const lastToastKeyRef = useRef<Map<string, string>>(new Map());
+  // Último payload emitido por toast: NUNCA re-emitir el mismo. Cada
+  // `toast.update()` con `timeout` reinicia el auto-hide (Base UI hace
+  // reschedule), así que re-emitir el "listo" en cada poll (2s) lo dejaba
+  // clavado visible mientras hubiera cualquier corrida activa.
   const runsKey = (rs: BackgroundRun[]) =>
     JSON.stringify(
       rs.map((r) => [
@@ -178,6 +183,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   const dismiss = useCallback((id: string) => {
     toast.close(id);
     knownToastIdsRef.current.delete(id);
+    lastToastKeyRef.current.delete(id);
     setDismissed((prev) => {
       if (prev.has(id)) return prev;
       const next = new Set(prev);
@@ -234,6 +240,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   // manual uno-por-uno.
   useEffect(() => {
     const known = knownToastIdsRef.current;
+    const sent = lastToastKeyRef.current;
     const desired = new Map<string, BackgroundRun>();
     for (const r of queue) desired.set(r.id, r);
 
@@ -241,6 +248,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
       if (!desired.has(id)) {
         toast.close(id);
         known.delete(id);
+        sent.delete(id);
       }
     }
 
@@ -254,10 +262,15 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
       const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
       if (running) {
+        // Huella del progreso: solo re-emitir si avanzó. Sin esto, cada poll
+        // (2s) re-dispara `update` y resetea timers/animaciones sin necesidad.
+        const key = `run|${done}|${total}|${run.failed ?? 0}|${stale}|${run.current ?? ""}`;
+        if (known.has(id) && sent.get(id) === key) continue;
         const options = {
           title: run.label,
           description: (
             <span className="flex flex-col gap-1.5">
+              {run.current && <span>{run.current}</span>}
               <span className="tabular-nums">
                 {formatNumber(done)}/{formatNumber(total)} · {pct}%
                 {run.failed > 0 ? ` · ${formatNumber(run.failed)} fallidos` : ""}
@@ -279,6 +292,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
           toast.add({ id, ...options });
           known.add(id);
         }
+        sent.set(id, key);
         continue;
       }
 
@@ -311,22 +325,37 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
         priority: succeeded || veto ? ("low" as const) : ("high" as const),
         ...(succeeded
           ? {
-              actionProps: {
-                children: "Ver en Review",
-                onClick: () => {
-                  dismiss(id);
-                  router.push("/review");
-                },
-              },
+              actionProps:
+                run.kind === "profile"
+                  ? {
+                      children: "Ver mi perfil",
+                      onClick: () => {
+                        dismiss(id);
+                        router.push("/settings?tab=negocio");
+                      },
+                    }
+                  : {
+                      children: "Ver en Review",
+                      onClick: () => {
+                        dismiss(id);
+                        router.push("/review");
+                      },
+                    },
             }
           : null),
         onClose: () => dismiss(id),
       };
+      // Huella del cierre: el "listo" es dato congelado; re-emitirlo en cada
+      // poll reiniciaría su auto-hide (5s) y quedaría clavado visible mientras
+      // cualquier otra corrida mantenga el polling vivo.
+      const key = `end|${run.status}|${run.errorCode ?? ""}|${stale}|${detail ?? ""}`;
+      if (known.has(id) && sent.get(id) === key) continue;
       if (known.has(id)) toast.update(id, options);
       else {
         toast.add({ id, ...options });
         known.add(id);
       }
+      sent.set(id, key);
     }
   }, [queue, isStale, dismiss, router]);
 

@@ -16,7 +16,9 @@ process.env.CRAWLEE_STORAGE_DIR ??= join(process.cwd(), ".data", "crawlee");
 
 const SEARXNG_URL = (process.env.SEARXNG_URL ?? "http://localhost:8888").replace(/\/+$/, "");
 
-/** Chat completion que devuelve JSON (lanza si la respuesta no es texto útil). */
+/** Chat completion que devuelve JSON (lanza si la respuesta no es texto útil).
+ *  Metering issue #15: con `meter.storeId` loguea usage en `llm_usage`
+ *  (fire-and-forget, nunca bloquea). Sin storeId solo advierte en el insert. */
 export async function completeJson(
   ref: ModelRef,
   temp: number,
@@ -24,6 +26,7 @@ export async function completeJson(
   effort: string | null,
   system: string,
   user: string,
+  meter?: { storeId?: string | null; process?: string; usedFallback?: boolean },
 ): Promise<string> {
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
@@ -38,6 +41,7 @@ export async function completeJson(
     response_format: { type: "json_object" },
     ...reasoningBody(ref.provider, ref.model, effort),
   };
+  const t0 = Date.now();
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -45,6 +49,24 @@ export async function completeJson(
   });
   if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
+  if (meter?.storeId) {
+    const { parseChatUsage, logLlmUsage } = await import("@/lib/ai/usage");
+    const usage = parseChatUsage(data);
+    if (usage) {
+      void logLlmUsage({
+        storeId: meter.storeId,
+        process: meter.process ?? "prospect_scan",
+        provider: ref.provider,
+        model: ref.model,
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        reasoningTokens: usage.reasoningTokens,
+        latencyMs: Date.now() - t0,
+        usedFallback: meter.usedFallback ?? false,
+      });
+    }
+  }
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
   return content;
@@ -54,7 +76,7 @@ const QUERIES_SYSTEM =
   "Generas queries de búsqueda web para encontrar negocios parecidos al ICP. Responde SOLO JSON: {\"queries\": [string]}. Queries en español, variadas. Prefiere queries que devuelvan webs de empresas y directorios indexables; evita site:linkedin.com y redes sociales (muro de login, no scrapeables).";
 
 /** Queries de búsqueda desde un ICP (3 intentos primario→fallback, como el prospector). */
-export async function buildQueries(icp: string, n = 3, focus?: string | null): Promise<string[]> {
+export async function buildQueries(icp: string, n = 3, focus?: string | null, meter?: { storeId?: string | null }): Promise<string[]> {
   const cfg = getLlmConfig("prospect_scan");
   const order = [cfg.primary, cfg.fallback, cfg.fallback].filter(
     (r): r is ModelRef => Boolean(r),
@@ -71,6 +93,7 @@ export async function buildQueries(icp: string, n = 3, focus?: string | null): P
         cfg.reasoningEffort,
         QUERIES_SYSTEM,
         user,
+        meter?.storeId ? { storeId: meter.storeId, process: "prospect_scan", usedFallback: i > 0 } : undefined,
       );
       break;
     } catch (e) {

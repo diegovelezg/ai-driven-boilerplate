@@ -850,9 +850,9 @@ export default async function DashboardPage({
             {hoyActuar > 0 ? (
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(hoyActuar)}</span>
-                <span className="text-base">para hoy</span>
+                <span className="text-base">para actuar</span>
                 <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary tabular-nums">
-                  {money(hoyValor)} en juego
+                  {money(hoyValor)} valor de actuar hoy
                 </span>
               </div>
             ) : pending > 0 ? (
@@ -911,6 +911,18 @@ export default async function DashboardPage({
       </section>
       )}
 
+      <section aria-label="No tocamos hoy">
+        <AppCard
+          title="No tocamos hoy"
+          description="Clientes que el motor decidió no contactar: están bien y escribirles quemaría el canal."
+          contentClassName="flex flex-wrap gap-x-6 gap-y-1 text-[13px] tabular-nums"
+        >
+          <span><strong>{formatNumber(hoyGroups.organico)}</strong> <span className="text-muted-foreground">al día (orgánico)</span></span>
+          <span><strong>{formatNumber(hoyGroups.dormido)}</strong> <span className="text-muted-foreground">dormidos</span></span>
+          <span><strong>{formatNumber(hoyGroups.contactado_reciente)}</strong> <span className="text-muted-foreground">contactados reciente</span></span>
+        </AppCard>
+      </section>
+
       <section aria-label="Embudo de recuperación">
         <SectionHeading
           title="Embudo de recuperación"
@@ -942,7 +954,7 @@ export default async function DashboardPage({
                 },
                 {
                   key: "actuar",
-                  label: "Actuar hoy",
+                  label: "Decisión actuar (modelo de hoy)",
                   n: hoyActuar,
                   minor: hoyActuar > 0 ? hoyValor : null,
                   bar: "bg-primary",
@@ -950,7 +962,7 @@ export default async function DashboardPage({
                 },
                 {
                   key: "mira",
-                  label: "En la mira",
+                  label: "Casos abiertos por gestionar",
                   n: atRisk,
                   minor: atRisk > 0 ? miraValue : null,
                   bar: "bg-violet-500",
@@ -1199,7 +1211,7 @@ export default async function DashboardPage({
                       )}
                     >
                       {out?.kind === "volvio"
-                        ? `volvió · ${money(out.revenue)}`
+                        ? `volvió · ${money(out.revenue)}${scope.market ? ` ${viewCurrency}` : ""}`
                         : out?.kind === "en_ventana"
                           ? `en ventana (quedan ${formatNumber(out.daysLeft)}d)`
                           : "no volvió"}
