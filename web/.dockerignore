@@ -1,0 +1,11 @@
+# El contexto de build de web/ NO debe incluir esto: node_modules (~1GB)
+# re-leído en cada build revienta RAM/disco del VPS.
+node_modules
+.next
+out
+.data
+storage
+*.log
+.env*
+coverage
+.git
