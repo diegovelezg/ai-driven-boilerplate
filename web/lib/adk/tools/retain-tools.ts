@@ -603,7 +603,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const leads = new FunctionTool({
     name: "list_leads",
     description:
-      "Leads propuestos por el prospector (negocios parecidos al ICP, con score y motivo). Por defecto los pendientes de revisión del humano. País por sus customers de referencia; sin evidencia se ven en todo filtro. Si el merchant pide una cantidad, pásala en 'limit' (1-20, default 10).",
+      "Leads propuestos por el prospector (negocios parecidos al ICP, con score, motivo, contacto público y RRSS en evidence_json.contacts). Por defecto los pendientes de revisión del humano. País por sus customers de referencia; sin evidencia se ven en todo filtro. Si el merchant pide una cantidad, pásala en 'limit' (1-20, default 10).",
     parameters: z.object({
       status: z.enum(["pending_review", "approved", "rejected", "contacted", "discarded"]).optional(),
       limit: z.number().int().min(1).max(20).optional(),

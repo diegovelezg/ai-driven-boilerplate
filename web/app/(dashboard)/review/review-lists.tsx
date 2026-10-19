@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Mail, PenLine, Phone, Radar, Share2, UserPlus, type LucideIcon } from "lucide-react";
 import { cn } from "cn";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
   revokeApprovalAction,
 } from "@/lib/review-actions";
 import { ApprovePair, DismissButton, RegenerateButton, RevokeButton } from "./review-buttons";
+import { approverLabel } from "@/lib/action-trace";
 
 export interface ActionRow {
   id: string;
@@ -35,6 +37,9 @@ export interface ActionRow {
   score: number | null;
   kind: string | null;
   generator: string | null;
+  /** Issue #19: auditoría de aprobación (null = sin registro, pre-migración). */
+  approvedBy?: string | null;
+  approvedAt?: string | null;
   /** Evidencia del motor (opcionales: borradores viejos usan el respaldo). */
   predCycleDays?: number | null;
   predTDays?: number | null;
@@ -60,6 +65,11 @@ export interface LeadRow {
   reason: string | null;
   evidence: {
     queries?: string[];
+    contacts?: {
+      emails?: string[];
+      phones?: string[];
+      socials?: Array<{ network: string; url: string }>;
+    };
     similar?: Array<{
       domain: string;
       label?: string;
@@ -122,10 +132,10 @@ export function ReviewLists({
   isB2B?: boolean;
 }) {
   const router = useRouter();
-  const tabs: Array<{ id: ReviewTab; label: string; show: boolean }> = [
-    { id: "actions", label: `Acciones (${actions.length})`, show: visible.actions },
-    { id: "leads", label: `Leads (${leads.length})`, show: visible.leads },
-    { id: "signals", label: `Señales (${signals.length})`, show: visible.signals },
+  const tabs: Array<{ id: ReviewTab; label: string; show: boolean; icon: LucideIcon }> = [
+    { id: "actions", label: `Mensajes por aprobar (${actions.length})`, show: visible.actions, icon: PenLine },
+    { id: "leads", label: `Empresas por contactar (${leads.length})`, show: visible.leads, icon: UserPlus },
+    { id: "signals", label: `Clientes en riesgo (${signals.length})`, show: visible.signals, icon: Radar },
   ];
   const shown = tabs.filter((t) => t.show);
   const fallback = shown[0]?.id ?? "actions";
@@ -179,8 +189,8 @@ export function ReviewLists({
   };
   const emptyActions = filtered
     ? "Sin resultados para ese filtro."
-    : "Sin borradores pendientes. Pídelos en el chat o desde Overview.";
-  const emptyLeads = filtered ? "Sin resultados para ese filtro." : "Sin leads pendientes.";
+    : "Sin mensajes por aprobar. Pídelos en el chat o desde Overview.";
+  const emptyLeads = filtered ? "Sin resultados para ese filtro." : "Sin empresas por contactar.";
 
   return (
     <>
@@ -193,12 +203,13 @@ export function ReviewLists({
               aria-selected={active === t.id}
               onClick={() => selectTab(t.id)}
               className={cn(
-                "rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
                 active === t.id
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
+              <t.icon className="size-4 shrink-0" aria-hidden />
               {t.label}
             </button>
           ))}
@@ -208,7 +219,7 @@ export function ReviewLists({
       <section className="flex flex-col gap-3" role="tabpanel">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">
-            Acciones propuestas ({actions.length})
+            Mensajes por aprobar ({actions.length})
             <span className="ml-2 text-xs font-normal text-muted-foreground">
               el copywriter propone, el humano aprueba; dispatcher solo envía aprobadas
             </span>
@@ -353,6 +364,10 @@ export function ReviewLists({
                   </div>
                   {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
                   <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    Aprobado por {approverLabel(a.approvedBy)}
+                    {a.approvedAt ? ` · ${a.approvedAt.slice(0, 10)}` : ""}
+                  </p>
                   <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
                 </CardContent>
               </Card>
@@ -365,7 +380,7 @@ export function ReviewLists({
       {visible.leads && active === "leads" && (
       <section className="flex flex-col gap-3" role="tabpanel">
         <h2 className="text-sm font-medium">
-          Leads propuestos ({leads.length})
+          Empresas por contactar ({leads.length})
           {marketLabel && (
             <span className="ml-2 text-xs font-normal text-muted-foreground">
               sin país atribuido: van todos
@@ -403,6 +418,57 @@ export function ReviewLists({
               <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
                 {l.url}
               </a>
+              {(() => {
+                const emails = l.evidence?.contacts?.emails ?? [];
+                const phones = l.evidence?.contacts?.phones ?? [];
+                const socials = l.evidence?.contacts?.socials ?? [];
+                if (emails.length === 0 && phones.length === 0 && socials.length === 0) return null;
+                return (
+                  <div className="flex flex-col gap-1 text-xs">
+                    {emails.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <Mail className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                        <span>
+                          {emails.map((e, i) => (
+                            <span key={e}>
+                              {i > 0 && ", "}
+                              <a href={`mailto:${e}`} className="text-primary underline">{e}</a>
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    )}
+                    {phones.length > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <Phone className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                        <span>
+                          {phones.map((p, i) => (
+                            <span key={p}>
+                              {i > 0 && ", "}
+                              <a href={`tel:${p.replace(/[^+\d]/g, "")}`} className="text-primary underline">{p}</a>
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    )}
+                    {socials.length > 0 && (
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <Share2 className="size-3.5 shrink-0" aria-hidden />
+                        <span>
+                          {socials.map((s, i) => (
+                            <span key={`${s.network}-${s.url}`}>
+                              {i > 0 && " · "}
+                              <a href={s.url} target="_blank" rel="noreferrer" className="text-primary underline">
+                                {s.network}
+                              </a>
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               <details className="rounded-md bg-muted/50 px-3 py-2">
                 <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
                   Por qué se propone (sustento del agente)
@@ -437,7 +503,19 @@ export function ReviewLists({
                         ·{" "}
                       </>
                     )}
-                    {l.contact ? `✓ contacto público: ${l.contact}` : "✗ sin contacto público (solo formulario)"} ·{" "}
+                    {(() => {
+                      const nEmails = l.evidence?.contacts?.emails?.length ?? 0;
+                      const nPhones = l.evidence?.contacts?.phones?.length ?? 0;
+                      const nSocials = l.evidence?.contacts?.socials?.length ?? 0;
+                      const hasAny = l.contact || nEmails > 0 || nPhones > 0 || nSocials > 0;
+                      if (!hasAny) return "✗ sin contacto público (solo formulario)";
+                      const bits: string[] = [];
+                      if (l.contact) bits.push(`✓ contacto público: ${l.contact}`);
+                      else bits.push("✓ contacto público detectado");
+                      if (nEmails + nPhones + nSocials > 0)
+                        bits.push(`${nEmails} email${nEmails === 1 ? "" : "s"} · ${nPhones} tel${nPhones === 1 ? "" : "s"} · ${nSocials} rrss`);
+                      return bits.join(" · ");
+                    })()} ·{" "}
                     score {l.icp_score ?? "?"} · {l.source ?? "searxng"}
                     {l.created_at ? ` · hallado ${l.created_at.slice(0, 10)}` : ""}
                   </span>
@@ -452,7 +530,7 @@ export function ReviewLists({
 
       {visible.signals && active === "signals" && (
       <section className="flex flex-col gap-3" role="tabpanel">
-        <h2 className="text-sm font-medium">Señales abiertas ({signals.length})</h2>
+        <h2 className="text-sm font-medium">Clientes en riesgo ({signals.length})</h2>
         {signals.length === 0 &&
           (liveKinds.has("scout") || liveKinds.has("strategist")) && (
             <Card>

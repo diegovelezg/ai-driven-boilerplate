@@ -9,6 +9,8 @@ import {
   buildQueries,
   completeJson,
   hostOf,
+  pickLeadContact,
+  sanitizeLeadContact,
   scrapeCandidates,
   scrapable,
   searchSearxng,
@@ -21,7 +23,7 @@ import { createLogger } from "@/lib/log";
 const log = createLogger("prospect");
 
 /** Versión del criterio prospector. Sube cuando cambia scoring/retrieval. */
-export const PROSPECT_GEN = "prospect:v3:hybrid";
+export const PROSPECT_GEN = "prospect:v4:contacts";
 
 export interface Icp {
   text: string;
@@ -292,8 +294,12 @@ export async function scoreLeads(
       const globalIdx = off + s.index;
       const valid = new Set(((subTop?.get(s.index) ?? pool).map((p) => p.domain.toLowerCase())));
       if (!cands[globalIdx]) continue;
+      // Fallback determinista: si el LLM no devolvió email/tel válido (o
+      // alucinó un nombre como "Luis Cueva"), se usa el primero del scrape.
+      const llmContact = sanitizeLeadContact(s.contact) ?? pickLeadContact(cands[globalIdx]?.contacts);
       out.push({
         ...s,
+        contact: llmContact ?? pickLeadContact(cands[globalIdx]?.contacts),
         index: globalIdx,
         similar: s.similar.filter((x) => valid.has(x.domain.toLowerCase())).slice(0, 2),
       });
@@ -302,9 +308,22 @@ export async function scoreLeads(
   return out.filter((l) => l && l.icp_score > 0.3);
 }
 
+/** Contacto válido = SOLO email o teléfono (implementación pura en retrieval;
+ *  el LLM a veces devuelve nombres como "Luis Cueva": se descarta a null;
+ *  scoreLeads lo importa arriba y aplica el fallback determinista). */
+
 /** Un lote (≤4 candidatos) en una sola llamada LLM. Índices locales al lote.
  *  `topByIndex` restringe las referencias visibles por candidato (retrieval);
  *  null = bloque único de pool (conducta anterior). */
+function contactBlock(c: Scraped): string {
+  const parts: string[] = [];
+  if (c.contacts?.emails?.length) parts.push(`emails: ${c.contacts.emails.join(", ")}`);
+  if (c.contacts?.phones?.length) parts.push(`tels: ${c.contacts.phones.join(", ")}`);
+  if (c.contacts?.socials?.length)
+    parts.push(`rrss: ${c.contacts.socials.map((s) => `${s.network}:${s.url}`).join(" | ").slice(0, 400)}`);
+  return parts.length > 0 ? `CONTACTO_DETECTADO (público, úsalo en contact si encaja): ${parts.join(" · ")}\n` : "";
+}
+
 async function scoreChunk(
   icp: string,
   cands: Scraped[],
@@ -324,8 +343,8 @@ async function scoreChunk(
       ? `\nCLIENTES DE REFERENCIA (verificados, ya te compran):\n${pool.map((p) => `- ${p.domain} | ${p.label} | ${p.industry}`).join("\n")}\n`
       : "";
   const raw = await prospectComplete(
-    "Puntúas candidatos vs un ICP. Responde SOLO JSON: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. Descarta (icp_score 0) lo que no encaje. contact solo si aparece público en el texto. reason: 1 frase corta (máx 25 palabras). similar: hasta 2 clientes de REFERENCIA que más se parezcan al candidato, con why en español y corto anclado en sustantivo de industria (p.ej. \"ambos en bienestar animal\"). PROHIBIDO usar verbos genéricos en why (importación, distribución, fabricación, comercialización, ventas). Si ninguno se parece de verdad, similar=[].",
-    `ICP:\n${icp.slice(0, 1500)}\n${focus ? `\nEnfoque de ESTA corrida (excluye con 0 lo que lo contradiga): ${focus}\n` : ""}${poolBlock}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${c.text.slice(0, 1500)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
+    "Puntúas candidatos vs un ICP. Responde SOLO JSON: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. Descarta (icp_score 0) lo que no encaje. contact: SOLO email o teléfono del CONTACTO_DETECTADO (el mejor: email > teléfono); si no hay bloque, null salvo email/tel literal en el texto. PROHIBIDO nombres de personas, cargos, URLs o direcciones en contact (p.ej. nunca \"Luis Cueva\"). reason: 1 frase corta (máx 25 palabras). similar: hasta 2 clientes de REFERENCIA que más se parezcan al candidato, con why en español y corto anclado en sustantivo de industria (p.ej. \"ambos en bienestar animal\"). PROHIBIDO usar verbos genéricos en why (importación, distribución, fabricación, comercialización, ventas). Si ninguno se parece de verdad, similar=[].",
+    `ICP:\n${icp.slice(0, 1500)}\n${focus ? `\nEnfoque de ESTA corrida (excluye con 0 lo que lo contradiga): ${focus}\n` : ""}${poolBlock}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 1500)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
   );
   // El truncado (max_tokens) da JSON cortado: un reintento con muestra fresca
   // suele bastar; si repite, que falle el lote con error legible.
@@ -335,8 +354,8 @@ async function scoreChunk(
   } catch {
     log(`scoreChunk JSON cortado (lote ${cands.length}), reintento con muestra fresca`);
     const retry = await prospectComplete(
-      "Puntúas candidatos vs un ICP. Responde SOLO JSON compacto: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. reason: máx 15 palabras. similar: máx 1.",
-      `ICP:\n${icp.slice(0, 800)}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${c.text.slice(0, 800)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
+      "Puntúas candidatos vs un ICP. Responde SOLO JSON compacto: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. contact: SOLO email o teléfono del CONTACTO_DETECTADO, si no hay, null. PROHIBIDO nombres de personas. reason: máx 15 palabras. similar: máx 1.",
+      `ICP:\n${icp.slice(0, 800)}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 800)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
     );
     parsed = JSON.parse(retry) as { leads?: Scored[] };
   }
@@ -466,6 +485,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
             generator: PROSPECT_GEN,
             icp_manual: icp.manual,
             queries,
+            contacts: scraped[s.index]?.contacts ?? { emails: [], phones: [], socials: [] },
             similar: s.similar.map((ref) => {
               const p = poolByDomain.get(ref.domain.toLowerCase());
               return p ? { ...p, why: ref.why } : { domain: ref.domain, why: ref.why };
