@@ -74,12 +74,13 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     log("morning omitido (cadena de hoy ya done)");
     return;
   }
-  // 1. Enriquecimiento acotado: mejora el brief del copywriter (empresa/
-  // industria). Cap 20 para no alargar el login; el resto va bajo demanda.
+  // 1. Enriquecimiento completo: mejora el brief del copywriter (empresa/
+  // industria). Sin tope: corre en `after()` en fondo (no alarga el login)
+  // y la cadena es 1 vez/día; los fallidos reintentan hasta su tope y luego
+  // quedan terminales (no se repiten eternamente).
   try {
     const { pendingDomains, runEnrichment, invalidatePendingCache } = await import("@/lib/enrich");
-    const pending = await pendingDomains(storeId).catch(() => [] as string[]);
-    const batch = pending.slice(0, 20);
+    const batch = await pendingDomains(storeId).catch(() => [] as string[]);
     if (batch.length > 0) {
       await step(storeId, "enrichment", "Enriquecimiento", batch.length, (runId) =>
         runEnrichment(runId, batch, { storeId }).finally(() => invalidatePendingCache(storeId)),
