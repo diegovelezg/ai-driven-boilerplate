@@ -151,27 +151,14 @@ services:
         condition: service_healthy
     volumes:
       - ./supabase/migrations:/migrations:ro
+      - ./infra/supabase/migrate.sh:/scripts/migrate.sh:ro
     environment:
       PGHOST: db
       PGPORT: 5432
       PGUSER: postgres
       PGDATABASE: ${POSTGRES_DB:-postgres}
       PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requerido}
-    command:
-      - sh
-      - -c
-      - |
-        until pg_isready -h db -U postgres; do sleep 2; done
-        psql -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS public.schema_migrations (filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());"
-        for f in $$(ls /migrations/*.sql | sort); do
-          name=$$(basename "$$f")
-          done=$$(psql -tAc "SELECT 1 FROM public.schema_migrations WHERE filename='$$name'")
-          if [ "$$done" = "1" ]; then echo "skip $$name"; continue; fi
-          echo "== $$name"
-          psql -v ON_ERROR_STOP=1 -f "$$f" || exit 1
-          psql -v ON_ERROR_STOP=1 -c "INSERT INTO public.schema_migrations (filename) VALUES ('$$name')"
-        done
-        echo MIGRATIONS_OK
+    command: ["sh", "/scripts/migrate.sh"]
 
   web:
     build:
