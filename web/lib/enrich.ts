@@ -188,8 +188,9 @@ function isFreshTerminal(enrichedAt: unknown): boolean {
 export async function pendingDomains(
   storeId: string,
   scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
+  opts: { fresh?: boolean } = {},
 ): Promise<string[]> {
-  const useCache = scope === null;
+  const useCache = scope === null && opts.fresh !== true;
   const cacheKey = useCache ? `pending:${storeId}` : null;
   if (cacheKey) {
     const hit = pendingCache.get(cacheKey);

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import {
-  CheckCircle2,
   ChevronDown,
   Mail,
   MessageCircle,
@@ -14,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { SectionHeading } from "@/components/section-heading";
+import { HealthSection } from "@/components/health-section";
 import { countDuplicateEmails } from "@/lib/duplicates";
 import { pendingDomains } from "@/lib/enrich";
 import { formatMoney } from "@/lib/medusa";
@@ -685,18 +685,6 @@ export default async function DashboardPage({
   const hasMotor = hoyActuar + hoyVigilar + hoyAuto > 0;
   const riskPct = buyers > 0 ? Math.round((atRisk / buyers) * 100) : 0;
   const hasRecovered = revenue > 0;
-  const healthPct =
-    buyers > 0
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            Math.round(
-              ((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100,
-            ),
-          ),
-        )
-      : 0;
   // Minor units → moneda real (formatMoney divide ÷100; no formatear a mano).
   // Con filtro de mercado los montos van en la moneda del market (MX→MXN).
   const viewCurrency = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
@@ -1192,88 +1180,16 @@ export default async function DashboardPage({
           </AppCard>
         </section>
 
-      <section aria-label="Salud de tu cartera">
-        <SectionHeading
-          title="Salud de tu cartera"
-          hint="Para que el equipo IA trabaje con datos limpios."
-          tone="emerald"
-        />
-        <AppCard contentClassName="flex flex-col gap-3">
-            {duplicateCount === 0 && enrichPending === 0 && hoyGroups.sin_canal === 0 ? (
-              <p className="inline-flex items-center gap-2 text-[13px] text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="size-4 shrink-0" aria-hidden />
-                Cartera limpia — sin duplicados, sin dominios pendientes y con canal utilizable.
-              </p>
-            ) : (
-              <>
-                {duplicateCount > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-amber-500/50 pl-3">
-                    <p className="text-[13px]">
-                      <strong>{formatNumber(duplicateCount)}</strong>{" "}
-                      {duplicateCount === 1 ? "email duplicado" : "emails duplicados"}: el mismo
-                      contacto en más de una ficha parte el historial y el RFM.
-                    </p>
-                    <Button render={<Link href="/customers/duplicates" />} nativeButton={false} size="sm">
-                      Revisar duplicados
-                    </Button>
-                  </div>
-                )}
-                {enrichPending > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-sky-500/50 pl-3">
-                    <p className="text-[13px]">
-                      <strong>{formatNumber(enrichPending)}</strong>{" "}
-                      {enrichPending === 1 ? "dominio sin enriquecer" : "dominios sin enriquecer"}: sin
-                      empresa e industria el Estratega y el Redactor trabajan a ciegas.
-                    </p>
-                    <Button render={<Link href="/customers" />} nativeButton={false} size="sm">
-                      Enriquecer en Customers
-                    </Button>
-                  </div>
-                )}
-                {hoyGroups.sin_canal > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-rose-500/50 pl-3">
-                    <p className="text-[13px]">
-                      <strong>{formatNumber(hoyGroups.sin_canal)}</strong>{" "}
-                      {hoyGroups.sin_canal === 1 ? "cliente" : "clientes"} sin canal utilizable: el motor no puede escribirles.
-                    </p>
-                    <Button render={<Link href={withMarketParam("/customers?decision=sin_canal", scope.market?.id ?? null)} />} nativeButton={false} size="sm">
-                      Ver sin canal
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-            {buyers > 0 && (
-              <div className="mt-1 flex flex-col gap-1.5">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="h-2 flex-1 overflow-hidden rounded-full bg-muted"
-                    role="img"
-                    aria-label={`Cartera lista: ${formatPercentPoints(healthPct)}`}
-                  >
-                    <div
-                      className="h-full rounded-full bg-emerald-500/80"
-                      style={{ width: `${healthPct}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-medium text-emerald-600 tabular-nums dark:text-emerald-400">
-                    {formatPercentPoints(healthPct)}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {formatPercentPoints(healthPct)} de cartera lista ({formatNumber(buyers)} con compras)
-                </p>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground">
-              La base por ritmo de recompra vive en{" "}
-              <Link href={withMarketParam("/customers?ritmo=con-ritmo", scope.market?.id ?? null)} className="underline">
-                Customers (filtro por ritmo)
-              </Link>
-              .
-            </p>
-          </AppCard>
-        </section>
+      <HealthSection
+        storeId={active.id}
+        marketId={scope.market?.id ?? null}
+        initial={{
+          duplicateCount,
+          enrichPending,
+          sinCanal: hoyGroups.sin_canal,
+          buyers,
+        }}
+      />
 
       <section aria-label="Tu equipo IA">
         <TeamPulse
