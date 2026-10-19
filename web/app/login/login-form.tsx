@@ -13,7 +13,7 @@ export function LoginForm({ next }: { next: string }) {
     <form action={action} className="w-full max-w-sm">
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Retain Engine</CardTitle>
+          <CardTitle className="text-sm font-medium">AI Retention Engine</CardTitle>
           <CardDescription>Ingresa con tu cuenta de merchant.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

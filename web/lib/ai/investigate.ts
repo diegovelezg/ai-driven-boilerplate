@@ -7,7 +7,7 @@ import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 
 const log = createProfilerLogger();
 
-const UA = "Mozilla/5.0 (compatible; RetainEngineBot/0.1)";
+const UA = "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)";
 const FETCH_TIMEOUT_MS = 12_000;
 
 export interface InvestigateSources {

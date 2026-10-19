@@ -27,7 +27,7 @@ const SECTIONS: Section[] = [
     articles: [
       {
         id: "que-es",
-        title: "Qué es Retain Engine",
+        title: "Qué es AI Retention Engine",
         text: "No es un CRM. Es un motor de decisión y acción sobre tus datos: detecta quién debería haber vuelto, propone la siguiente mejor acción y mide si volvió.",
       },
       {

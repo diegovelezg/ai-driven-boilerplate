@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Retain Engine",
-  description: "Customer retention AI for e-commerce",
+  title: "AI Retention Engine",
+  description: "AI Retention Engine for e-commerce",
 };
 
 // Sin script de bloqueo inline: React/Next 16 avisa en consola ante CUALQUIER

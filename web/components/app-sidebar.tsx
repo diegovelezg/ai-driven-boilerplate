@@ -69,13 +69,13 @@ function AppSidebarNav() {
             <SidebarMenuButton
               size="lg"
               render={<Link href={`/${suffix}`} />}
-              tooltip="Retain Engine"
+              tooltip="AI Retention Engine"
             >
               <span className="flex size-6 items-center justify-center rounded bg-primary text-[11px] font-bold text-primary-foreground">
-                R
+                AI
               </span>
               <span className="text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-                Retain Engine
+                AI Retention Engine
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>

@@ -93,7 +93,7 @@ async function main() {
     try {
       const r = await fetch(url, {
         redirect: "follow",
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; RetainEngineBot/0.1)" },
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)" },
       });
       const html = await r.text();
       const text = htmlToText(html);

@@ -1,4 +1,4 @@
-# Retain Engine — web
+# AI Retention Engine — web
 
 Dashboard merchant + sync multi-tenant de ecommerce (Medusa hoy, Shopify/Woo después) a Supabase. La vista de customers lee desde BD, no del ecommerce en vivo.
 

@@ -11,7 +11,7 @@ import { searchSearxng, scrapable } from "@/lib/retrieval";
 import { mapPool } from "@/lib/parallel";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 
-const UA = "Mozilla/5.0 (compatible; RetainEngineBot/0.1)";
+const UA = "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)";
 // Sitios legítimos responden en <3s (medido); colgados = muertos. 8s acota el
 // peor caso a 16s/dominio (era 24s) sin recortar éxitos reales.
 const FETCH_TIMEOUT_MS = 8_000;
