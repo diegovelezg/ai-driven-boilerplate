@@ -4,14 +4,10 @@
 set -eu
 
 until pg_isready -h db -U postgres >/dev/null 2>&1; do sleep 2; done
-# Roles internos de supabase/postgres nacen SIN password si el volumen se
-# inicializó sin roles.sql (deploys anteriores al fix). Sin esto, postgrest y
-# gotrue mueren con "password authentication failed". Idempotente: en cada
-# deploy asegura los passwords con el POSTGRES_PASSWORD vigente.
-ESCAPED_PW=$(printf '%s' "$PGPASSWORD" | sed "s/'/''/g")
-psql -v ON_ERROR_STOP=1 -tAc "SELECT rolname FROM pg_roles WHERE rolname IN ('authenticator','supabase_auth_admin','supabase_functions_admin','pgbouncer')" | while read -r r; do
-  [ -n "$r" ] && psql -v ON_ERROR_STOP=1 -c "ALTER ROLE \"$r\" WITH PASSWORD '$ESCAPED_PW'"
-done
+# La imagen supabase/postgres DEMOTEa a postgres (ya no es superuser): NO se
+# pueden tocar passwords de roles reservados desde aquí. Eso solo ocurre en
+# el init (infra/supabase/db/roles.sql). Este bloque solo arregla ownership
+# de funciones (permitido al owner sin ser superuser).
 # La imagen supabase/postgres pre-crea auth.uid()/role()/email() como
 # superuser postgres en el init; GoTrue (supabase_auth_admin) muere con
 # "must be owner of function" al intentar reemplazarlas. Se transfiere el

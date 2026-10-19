@@ -18,7 +18,12 @@ services:
       # TEMPORAL para la migración inicial de datos (luego se quita).
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # pgdata2: el volumen pgdata original nació sin passwords de roles y no
+      # tiene arreglo in-place (la imagen le quita superuser a postgres).
+      # Al cambiar el nombre, el próximo deploy inicializa fresco (con
+      # roles.sql) y el migrator aplica las 40 migraciones. Nada que perder:
+      # los datos aún no se migraron. El viejo pgdata queda huérfano.
+      - pgdata2:/var/lib/postgresql/data
       # Init oficial Supabase (solo primera vez del volumen): passwords de roles
       # internos (authenticator, supabase_auth_admin...) + jwt_exp. Sin esto,
       # postgrest/gotrue mueren con "password authentication failed".
@@ -219,4 +224,4 @@ services:
       BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080/}
 
 volumes:
-  pgdata:
+  pgdata2:
