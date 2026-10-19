@@ -5,6 +5,9 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { COPYWRITER_GEN, draftSingleSignal } from "@/lib/copywriter";
+import { advanceRun, finishRun, startRun } from "@/lib/background";
+import { runSingleWithAudit, type SingleFinish } from "@/lib/single-audit";
+import { createLogger } from "@/lib/log";
 import { startCopywriterAction } from "@/lib/retention-actions";
 
 export interface ReviewOp {
@@ -85,7 +88,13 @@ export async function dismissSignalAction(id: string): Promise<ReviewOp> {
   return { ok: true, message: "Señal descartada." };
 }
 
-/** Redacta un borrador para UNA señal (CTA "Redactar" en "Tus 5 de hoy"). */
+/** Redacta un borrador para UNA señal (CTA "Redactar" en "Tus 5 de hoy").
+ *  Issue #16 Fase 1: aunque sea síncrono, deja corrida de auditoría
+ *  `copywriter_single` (start → draft → finish) para que el veto del juez
+ *  quede como estado consultable y no solo en `console.log` /
+ *  `evidence_json`. Sin `scope_id` aún (Fase 0 lo agrega); el `current`
+ *  lleva el `signalId` como trazabilidad mínima. El cierre garantizado
+ *  vive en `runSingleWithAudit` (P0: ni un throw deja `running` eterno). */
 export async function proposeSingleAction(signalId: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
   const db = getSupabase();
@@ -96,11 +105,36 @@ export async function proposeSingleAction(signalId: string): Promise<ReviewOp> {
     .maybeSingle();
   const storeId = (sig?.store_id as string | null) ?? null;
   if (!storeId) return { ok: false, message: "Señal inexistente." };
-  const r = await draftSingleSignal(storeId, signalId);
-  if (r.ok) {
-    revalidatePath("/");
-    revalidatePath("/review");
-  }
+  const log = createLogger("review-actions");
+  const r = await runSingleWithAudit({
+    start: async () => {
+      try {
+        return await startRun(storeId, "copywriter_single", "Redacción individual", 1);
+      } catch (e) {
+        log(`single ${signalId} startRun falló: ${e instanceof Error ? e.message : e}`);
+        return null;
+      }
+    },
+    advance: async (runId) => {
+      try {
+        await advanceRun(runId, { processed: 0, failed: 0, current: signalId });
+      } catch (e) {
+        log(`single ${signalId} advanceRun falló: ${e instanceof Error ? e.message : e}`);
+      }
+    },
+    finish: async (runId, f: SingleFinish) => {
+      try {
+        await finishRun(runId, f);
+      } catch (e) {
+        log(`single ${signalId} finishRun falló: ${e instanceof Error ? e.message : e}`);
+      }
+    },
+    draft: () => draftSingleSignal(storeId, signalId),
+  });
+  // El fallo también pudo mutar DB (veto escribe `contactability`): la UI
+  // debe releer en vez de quedarse con la foto vieja.
+  revalidatePath("/");
+  revalidatePath("/review");
   return r;
 }
 
@@ -120,17 +154,33 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   const db = getSupabase();
   const storeId = await resolveStoreId(conn.medusaUrl);
   if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
-  const { data, error } = await db
-    .from("proposed_actions")
-    .select("id,signal_id,evidence_json")
-    .eq("store_id", storeId)
-    .eq("status", "pending_review")
-    .limit(500);
-  if (error) return { ok: false, message: error.message };
-  const stale = ((data ?? []) as Array<Record<string, unknown>>).filter((r) =>
+  const all: Array<Record<string, unknown>> = [];
+  let scanTruncated = false;
+  for (let off = 0; ; off += 500) {
+    const { data, error } = await db
+      .from("proposed_actions")
+      .select("id,signal_id,evidence_json")
+      .eq("store_id", storeId)
+      .eq("status", "pending_review")
+      .range(off, off + 499);
+    if (error) return { ok: false, message: error.message };
+    const page = (data ?? []) as Array<Record<string, unknown>>;
+    all.push(...page);
+    if (page.length < 500) break;
+    if (all.length >= 5000) {
+      scanTruncated = true;
+      break;
+    }
+  }
+  const data = all;
+  const stale = (data ?? []).filter((r) =>
     isStaleDraft((r.evidence_json as Record<string, unknown> | null) ?? null),
   );
-  if (stale.length === 0) return { ok: true, message: "Nada que regenerar: todo con criterios actuales." };
+  if (stale.length === 0) {
+    return scanTruncated
+      ? { ok: true, message: "Revisados 5000 pendientes sin stale en la ventana; puede haber más fuera del CAP." }
+      : { ok: true, message: "Nada que regenerar: todo con criterios actuales." };
+  }
   // Antirreinyección legacy (issue #9): solo se regenera lo atado a señales
   // retention:v1 (reason "ciclo ~Nd"). Los pendientes de señales del motor
   // viejo o sin señal se dejan intactos: los cubre refresh-retention-v1.ts,
@@ -142,10 +192,14 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   const legacyIds: string[] = [];
   if (withSignal.length > 0) {
     const sids = [...new Set(withSignal.map((r) => String(r.signal_id)))];
-    const { data: sigRows } = await db
-      .from("churn_signals")
-      .select("id,reason")
-      .in("id", sids);
+    const sigRows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < sids.length; i += 200) {
+      const { data: spage } = await db
+        .from("churn_signals")
+        .select("id,reason")
+        .in("id", sids.slice(i, i + 200));
+      sigRows.push(...((spage ?? []) as Array<Record<string, unknown>>));
+    }
     const reasonById = new Map(
       ((sigRows ?? []) as Array<Record<string, unknown>>).map((s) => [String(s.id), String(s.reason ?? "")]),
     );
@@ -164,9 +218,13 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
       message: `Nada que regenerar por aquí: ${legacyIds.length} legacy + ${noSignal} sin señal intactos (cúbrelos con scripts/refresh-retention-v1.ts).`,
     };
   }
-  const { error: delErr } = await db.from("proposed_actions").delete().in("id", ids);
-  if (delErr) return { ok: false, message: delErr.message };
-  await db.from("churn_signals").update({ status: "prioritized" }).in("id", v1Ids).eq("status", "actioned");
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error: delErr } = await db.from("proposed_actions").delete().in("id", ids.slice(i, i + 200));
+    if (delErr) return { ok: false, message: delErr.message };
+  }
+  for (let i = 0; i < v1Ids.length; i += 200) {
+    await db.from("churn_signals").update({ status: "prioritized" }).in("id", v1Ids.slice(i, i + 200)).eq("status", "actioned");
+  }
   revalidatePath("/review");
   const started = await startCopywriterAction();
   const extra = skipped > 0 ? ` ${skipped} intacto(s) legacy/sin señal (van por refresh).` : "";

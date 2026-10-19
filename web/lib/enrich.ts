@@ -243,22 +243,24 @@ interface DomainUsers {
 
 async function domainUsers(domain: string): Promise<DomainUsers> {
   const esc = domain.replace(/[%_\\]/g, "\\$&");
-  const { data, error } = await getSupabase()
+  const { data, error, count } = await getSupabase()
     .from("customers")
-    .select("email,company_name,orders_count")
+    .select("email,company_name,orders_count", { count: "exact" })
     .like("email", `%@${esc}`)
     .limit(20);
   if (error || !data || data.length === 0) return { context: "", company: null, buyers: 0 };
   const rows = data as Array<Record<string, unknown>>;
+  const total = count ?? rows.length;
   const lines = rows.slice(0, 5).map((r) => {
     const co = String(r.company_name ?? "").trim();
     return `- ${String(r.email ?? "")}${co ? ` (empresa: ${co})` : ""}`;
   });
   const companies = [...new Set(rows.map((r) => String(r.company_name ?? "").trim()).filter(Boolean))];
+  const buyersWindow = rows.filter((r) => Number(r.orders_count ?? 0) > 0).length;
   return {
-    context: `${rows.length} customer(s) con este dominio:\n${lines.join("\n")}`,
+    context: `Top-20 de ${total} customer(s) con este dominio (${buyersWindow} compradores en la muestra):\n${lines.join("\n")}`,
     company: companies[0] ?? null,
-    buyers: rows.filter((r) => Number(r.orders_count ?? 0) > 0).length,
+    buyers: buyersWindow,
   };
 }
 

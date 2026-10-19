@@ -37,15 +37,27 @@ function median(xs: number[]): number | null {
 }
 
 /** Stats del tenant para confrontar sector vs realidad. Lanza si falla (sin ceros falsos). */
-export async function tenantStats(storeId: string): Promise<TenantStats> {
+export async function tenantStats(storeId: string): Promise<TenantStats & { sampleN: number; truncated: boolean }> {
   const db = getSupabase();
-  const { data: customers, error } = await db
-    .from("customers")
-    .select("email,company_name,orders_count")
-    .eq("store_id", storeId)
-    .limit(5000);
-  if (error) throw new Error(`tenantStats customers: ${error.message}`);
-  const rows = (customers ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;
+  const PAGE = 1000;
+  const CAP = 20000;
+  const rows: Array<{ email: string; company_name: string | null; orders_count: number }> = [];
+  let truncated = false;
+  for (let off = 0; ; off += PAGE) {
+    const { data: page, error } = await db
+      .from("customers")
+      .select("email,company_name,orders_count")
+      .eq("store_id", storeId)
+      .range(off, off + PAGE - 1);
+    if (error) throw new Error(`tenantStats customers: ${error.message}`);
+    const prows = (page ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;
+    rows.push(...prows);
+    if (prows.length < PAGE) break;
+    if (rows.length >= CAP) {
+      truncated = true;
+      break;
+    }
+  }
   const n = rows.length;
   let company = 0, repeat = 0, buyers = 0, customCust = 0;
   const domCount = new Map<string, number>();
@@ -64,20 +76,30 @@ export async function tenantStats(storeId: string): Promise<TenantStats> {
     .slice(0, 8)
     .map(([domain, c]) => ({ domain, customers: c }));
 
-  const [{ data: orders }, { data: domains }] = await Promise.all([
-    db.from("orders").select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test").eq("store_id", storeId).limit(5000),
-    topDomains.length > 0
-      ? db.from("domains").select("domain,company_name,industry").in("domain", topDomains.map((t) => t.domain)).limit(8)
-      : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
-  ]);
-  const orows = (orders ?? []) as Array<{ customer_id: string; total_amount: number; currency: string; placed_at: string | null; status: string | null; payment_status: string | null; is_test: boolean }>;
+  const orows: Array<{ customer_id: string; total_amount: number; currency: string; placed_at: string | null; status: string | null; payment_status: string | null; is_test: boolean }> = [];
+  let ordersTruncated = false;
+  for (let off = 0; ; off += PAGE) {
+    const { data: opage, error: oErr } = await db.from("orders").select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test").eq("store_id", storeId).range(off, off + PAGE - 1);
+    if (oErr) throw new Error(`tenantStats orders: ${oErr.message}`);
+    const prows = (opage ?? []) as Array<{ customer_id: string; total_amount: number; currency: string; placed_at: string | null; status: string | null; payment_status: string | null; is_test: boolean }>;
+    orows.push(...prows);
+    if (prows.length < PAGE) break;
+    if (orows.length >= CAP) {
+      ordersTruncated = true;
+      break;
+    }
+  }
+  const { data: domains } = topDomains.length > 0
+    ? await db.from("domains").select("domain,company_name,industry").in("domain", topDomains.map((t) => t.domain)).limit(8)
+    : { data: [] as Array<Record<string, unknown>> };
   const byCur = new Map<string, number[]>();
   const byCust = new Map<string, Date[]>();
   for (const o of orows) {
+    // Ticket solo sobre órdenes reales: test/canceladas contaminaban la mediana.
+    if (!isRealOrder({ status: o.status ?? null, paymentStatus: o.payment_status ?? null, isTest: Boolean(o.is_test) })) continue;
     const cur = String(o.currency ?? "?");
     if (!byCur.has(cur)) byCur.set(cur, []);
     byCur.get(cur)!.push(Number(o.total_amount ?? 0));
-    if (!isRealOrder({ status: o.status ?? null, paymentStatus: o.payment_status ?? null, isTest: Boolean(o.is_test) })) continue;
     if (!o.placed_at) continue;
     const d = new Date(o.placed_at);
     if (Number.isNaN(d.getTime())) continue;
@@ -134,5 +156,7 @@ export async function tenantStats(storeId: string): Promise<TenantStats> {
     })),
     intervalMedian,
     intervalCoverage: buyers > 0 ? medians.length / buyers : 0,
+    sampleN: n,
+    truncated: truncated || ordersTruncated,
   };
 }

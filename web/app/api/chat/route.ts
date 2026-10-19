@@ -154,8 +154,13 @@ export async function POST(req: Request) {
             // artefacto para el canvas. Arrays llegan como {results: [...]}.
             const fr = p.functionResponse;
             if (fr && ARTIFACT_TOOLS.includes(fr.name ?? "")) {
-              const r = fr.response as { results?: unknown; result?: unknown } | unknown[];
-              const data = Array.isArray(r) ? r : (r as { results?: unknown; result?: unknown })?.results ?? (r as { result?: unknown })?.result ?? r;
+              const r = fr.response as { results?: unknown; result?: unknown; items?: unknown } | unknown[];
+              const data = Array.isArray(r)
+                ? r
+                : (r as { results?: unknown; result?: unknown; items?: unknown })?.results
+                  ?? (r as { result?: unknown })?.result
+                  ?? (r as { items?: unknown })?.items
+                  ?? r;
               const query = callArgs[fr.name as string] ?? null;
               const n = Array.isArray(data) ? data.length : 1;
               log(`artifact ${fr.name} filas=${n} query=${JSON.stringify(query)}`);

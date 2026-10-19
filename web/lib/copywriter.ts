@@ -6,6 +6,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
 import { JUDGE_GEN, judgeContactability, type JudgeItem } from "@/lib/contactability";
+import { JUDGE_VETO_PREFIX } from "@/lib/single-audit";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
@@ -189,6 +190,8 @@ export interface CopywriterOpts {
 interface Prioritized {
   id: string;
   kind: string;
+  /** Tratamiento (issue #11): strategist escribe objective; kind se conserva como origen. */
+  objective?: string | null;
   score: number | null;
   reason: string | null;
   customer_id: string;
@@ -228,11 +231,14 @@ async function draftForSignal(
     .eq("customer_id", s.customer_id)
     .order("placed_at", { ascending: false })
     .limit(10);
-  const real = (((orders ?? []) as Array<Record<string, unknown>>).filter((o) => {
-    if (o.is_test === true) return false;
-    const st = typeof o.status === "string" ? o.status.toLowerCase() : "";
-    return !["cancelled", "canceled", "archived", "refunded"].includes(st);
-  })).slice(0, 5);
+  const { isRealDbOrder } = await import("@/lib/medusa");
+  const real = (((orders ?? []) as Array<Record<string, unknown>>).filter((o) =>
+    isRealDbOrder({
+      status: typeof o.status === "string" ? o.status : null,
+      payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
+      is_test: o.is_test === true,
+    }),
+  )).slice(0, 5);
   // Historial legible: fecha corta + ubicaciones reales (sin "x0", sin moneda).
   // Enriquecido con media-context (misma forma para cualquier tenant):
   // contiene/categoría/pauta/clienteDijo/detalles solo si existen (sin nulls ruidosos).
@@ -310,10 +316,13 @@ async function draftForSignal(
   const firstName = (s.first_name ?? "").trim().split(/\s+/)[0] || s.email;
   const lastIso = real[0] ? String(real[0].placed_at ?? "").slice(0, 10) : null;
   const lastF = real[0] ? (fechaCorta(String(real[0].placed_at ?? "")) ?? lastIso) : null;
+  // Issue #11: el copywriter lee objective (tratamiento), no kind (origen).
+  // Fallback a kind para señales pre-migración sin objective.
+  const treatment = s.objective ?? s.kind;
   const objetivo =
-    s.kind === "vip_care"
+    treatment === "vip_care"
       ? "vip_care: cliente leal, reconoce historial + oferta 1-a-1 concreta"
-      : s.kind === "winback"
+      : treatment === "winback"
         ? "winback: 1-2 compras, simple y baja fricción"
         : "nurture: tenía hábito y se cortó, nombra el quiebre + 1 lectura útil";
 
@@ -547,6 +556,7 @@ export async function draftSingleSignal(
     const { channel } = await draftForSignal(db, storeId, system, {
       id: found.signalId,
       kind: found.kind,
+      objective: found.objective ?? null,
       score: found.score,
       reason: found.reason,
       customer_id: found.customerDbId,
@@ -562,7 +572,7 @@ export async function draftSingleSignal(
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
     if (e instanceof ContactabilitySkip) {
-      return { ok: false, message: `Omitido por el juez: ${e.message}` };
+      return { ok: false, message: `${JUDGE_VETO_PREFIX}: ${e.message}` };
     }
     return { ok: false, message: e instanceof Error ? e.message : "No se pudo redactar." };
   }
@@ -589,6 +599,7 @@ export async function runCopywriter(
       .map((r) => ({
         id: r.signalId,
         kind: r.kind,
+        objective: r.objective ?? null,
         score: r.score,
         reason: r.reason,
         customer_id: r.customerDbId,
@@ -606,26 +617,27 @@ export async function runCopywriter(
     log(`run ${runId} top10=${rows.slice(0, 10).map((r) => r.email || r.customer_id).join(",")}`);
 
     // Sin borrador pendiente/aprobado para el mismo cliente (no duplicar).
-    // La clave es customer, no signal: dos señales del mismo cliente con dos
-    // signal_id distintos pasaban el filtro viejo y generaban dos borradores
-    // al mismo WhatsApp (caso Plaza Hogar: "media 15d, 21 compras" + "media
-    // 22d, 20 compras"). Además, uno por cliente por corrida.
-    const { data: existing } = await db
-      .from("proposed_actions")
-      .select("signal_id,customer_id")
-      .eq("store_id", storeId)
-      .in("status", ["pending_review", "approved"])
-      .limit(500);
-    const busySignal = new Set(
-      ((existing ?? []) as Array<Record<string, unknown>>)
-        .map((a) => String(a.signal_id ?? ""))
-        .filter(Boolean),
-    );
-    const busyCustomer = new Set(
-      ((existing ?? []) as Array<Record<string, unknown>>)
-        .map((a) => String(a.customer_id ?? ""))
-        .filter(Boolean),
-    );
+    // Paginado completo: .limit(500) truncado generaba doble borrador.
+    const busySignal = new Set<string>();
+    const busyCustomer = new Set<string>();
+    for (let off = 0; ; off += 1000) {
+      const { data: epage, error: eErr } = await db
+        .from("proposed_actions")
+        .select("signal_id,customer_id")
+        .eq("store_id", storeId)
+        .in("status", ["pending_review", "approved"])
+        .range(off, off + 999);
+      if (eErr) throw new Error(`Existing read: ${eErr.message}`);
+      const erows = (epage ?? []) as Array<Record<string, unknown>>;
+      for (const a of erows) {
+        const sid = String(a.signal_id ?? "");
+        const cid = String(a.customer_id ?? "");
+        if (sid) busySignal.add(sid);
+        if (cid) busyCustomer.add(cid);
+      }
+      if (erows.length < 1000) break;
+      if (busySignal.size + busyCustomer.size >= 20000) break;
+    }
     const fresh = rows.filter((r) => !busySignal.has(r.id) && !busyCustomer.has(r.customer_id));
     log(`run ${runId} candidatas=${fresh.length} (con borrador: ${rows.length - fresh.length})`);
 

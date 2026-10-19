@@ -140,17 +140,28 @@ export interface ProfileSignals {
   repeatRate: number;
 }
 
-export async function getProfileSignals(storeId: string): Promise<ProfileSignals | null> {
+export async function getProfileSignals(storeId: string): Promise<(ProfileSignals & { truncated: boolean }) | null> {
   if (!isSupabaseConfigured()) return null;
   const db = getSupabase();
-  const { data, error } = await db
-    .from("customers")
-    .select("email,company_name,orders_count")
-    .eq("store_id", storeId)
-    .limit(2000);
-  if (error) throw new Error(`DB read: ${error.message}`);
-  const rows = (data ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;
-  if (rows.length === 0) return { customers: 0, companyRate: 0, customDomainRate: 0, repeatRate: 0 };
+  const { count } = await db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId);
+  const rows: Array<{ email: string; company_name: string | null; orders_count: number }> = [];
+  let truncated = false;
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await db
+      .from("customers")
+      .select("email,company_name,orders_count")
+      .eq("store_id", storeId)
+      .range(off, off + 999);
+    if (error) throw new Error(`DB read: ${error.message}`);
+    const page = (data ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;
+    rows.push(...page);
+    if (page.length < 1000) break;
+    if (rows.length >= 20000) {
+      truncated = true;
+      break;
+    }
+  }
+  if (rows.length === 0) return { customers: count ?? 0, companyRate: 0, customDomainRate: 0, repeatRate: 0, truncated };
   let company = 0;
   let custom = 0;
   let repeat = 0;
@@ -161,10 +172,11 @@ export async function getProfileSignals(storeId: string): Promise<ProfileSignals
     if (Number(r.orders_count ?? 0) >= 2) repeat += 1;
   }
   return {
-    customers: rows.length,
+    customers: count ?? rows.length,
     companyRate: company / rows.length,
     customDomainRate: custom / rows.length,
     repeatRate: repeat / rows.length,
+    truncated,
   };
 }
 

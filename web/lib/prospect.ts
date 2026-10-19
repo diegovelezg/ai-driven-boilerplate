@@ -132,7 +132,24 @@ export interface SimilarPoolEntry {
  *  El MODELO elige los parecidos dentro de este pool al puntuar. */
 export async function buildSimilarPool(storeId: string, limit = 15): Promise<SimilarPoolEntry[]> {
   const db = getSupabase();
-  const [{ data: ce }, { data: dr }] = await Promise.all([
+  // Dominios de ESTA tienda (no tabla global cortada a 2000): paginado + .in chunkeado.
+  const storeDomains = new Set<string>();
+  for (let off = 0; ; off += 1000) {
+    const { data: cpage, error: cErr } = await db
+      .from("customers")
+      .select("email")
+      .eq("store_id", storeId)
+      .range(off, off + 999);
+    if (cErr) break;
+    const rows = (cpage ?? []) as Array<Record<string, unknown>>;
+    for (const c of rows) {
+      const d = domainFromEmail(String(c.email ?? ""));
+      if (d && classifyDomain(d).enrichable) storeDomains.add(d.toLowerCase());
+    }
+    if (rows.length < 1000) break;
+    if (storeDomains.size >= 10000) break;
+  }
+  const [{ data: ce }, dr] = await Promise.all([
     db
       .from("customers")
       .select("email,company_name,orders_count,total_spent,country")
@@ -140,7 +157,15 @@ export async function buildSimilarPool(storeId: string, limit = 15): Promise<Sim
       .gt("orders_count", 0)
       .order("total_spent", { ascending: false })
       .limit(60),
-    db.from("domains").select("domain,industry,company_name").limit(2000),
+    (async () => {
+      const doms = [...storeDomains].slice(0, 2000);
+      const out: Array<Record<string, unknown>> = [];
+      for (let i = 0; i < doms.length; i += 200) {
+        const { data } = await db.from("domains").select("domain,industry,company_name").in("domain", doms.slice(i, i + 200));
+        out.push(...((data ?? []) as Array<Record<string, unknown>>));
+      }
+      return out;
+    })(),
   ]);
   const indByDomain = new Map<string, { industry: string; company: string | null }>();
   for (const d of ((dr ?? []) as Array<Record<string, unknown>>)) {
@@ -327,19 +352,28 @@ async function scoreChunk(
     }));
 }
 
-/** Dedupe: ni URLs ya propuestas ni dominios que ya son customers. Devuelve índices a guardar. */
+/** Dedupe: ni URLs ya propuestas ni dominios que ya son customers. Paginado completo. */
 export async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]): Promise<Scored[]> {
   const db = getSupabase();
-  const [{ data: leads }, { data: customers }] = await Promise.all([
-    db.from("proposed_leads").select("url").eq("store_id", storeId).limit(2000),
-    db.from("customers").select("email").eq("store_id", storeId).limit(5000),
-  ]);
-  const seenUrls = new Set(((leads ?? []) as Array<Record<string, unknown>>).map((l) => String(l.url)));
-  const customerDomains = new Set(
-    ((customers ?? []) as Array<Record<string, unknown>>)
-      .map((c) => domainFromEmail(String(c.email ?? "")))
-      .filter((d) => d && classifyDomain(d).enrichable),
-  );
+  const seenUrls = new Set<string>();
+  for (let off = 0; ; off += 1000) {
+    const { data: lpage } = await db.from("proposed_leads").select("url").eq("store_id", storeId).range(off, off + 999);
+    const rows = (lpage ?? []) as Array<Record<string, unknown>>;
+    for (const l of rows) seenUrls.add(String(l.url));
+    if (rows.length < 1000) break;
+    if (seenUrls.size >= 20000) break;
+  }
+  const customerDomains = new Set<string>();
+  for (let off = 0; ; off += 1000) {
+    const { data: cpage } = await db.from("customers").select("email").eq("store_id", storeId).range(off, off + 999);
+    const rows = (cpage ?? []) as Array<Record<string, unknown>>;
+    for (const c of rows) {
+      const d = domainFromEmail(String(c.email ?? ""));
+      if (d && classifyDomain(d).enrichable) customerDomains.add(d);
+    }
+    if (rows.length < 1000) break;
+    if (customerDomains.size >= 20000) break;
+  }
   return scored.filter((s) => {
     const url = cands[s.index]?.url ?? "";
     if (!url || seenUrls.has(url)) return false;

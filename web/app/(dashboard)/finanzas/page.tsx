@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
-import { bucketMonthly, computeFinanceKpis, rankCustomers, rankItems, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
+import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
+import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
 import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
 import { formatMoney } from "@/lib/medusa";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
@@ -75,7 +75,7 @@ export default async function FinanzasPage({
     customerIds: null,
   }));
   const viewCurrency = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
-  // eslint-disable-next-line react-hooks/purity -- timestamp fijo por request (igual que el Overview)
+  // Timestamp fijo por request (igual que el Overview).
   const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
 
   let buckets: ReturnType<typeof bucketMonthly> = [];
@@ -84,25 +84,62 @@ export default async function FinanzasPage({
   let topCustomers: Array<{ customer: EditableCustomer; revenueMinor: number; orders: number }> = [];
   let recoveredMinor = 0;
   let error: string | null = null;
+  // Bloque probabilístico (issue #14 B4): /finanzas mostraba el strip
+  // clásico porque no le pasaba props. Se replica la foto del día.
+  let rescate: ReturnType<typeof rescateMonthly> | undefined;
+  let retention: ReturnType<typeof computeRetentionKpis> | null = null;
+  let cycleDays: number | null = null;
+  let enJuegoProb: { minor: number; low: number; high: number; count: number } | null = null;
+  let organicosEnAuto: number | null = null;
+  let dataPartial = false;
   try {
-    let fq = db
-      .from("orders")
-      .select("total_amount,currency,placed_at,items_json,customer_id")
-      .eq("store_id", active.id)
-      .gte("placed_at", yearAgoIso)
-      .order("placed_at", { ascending: false });
-    if (scope.market) fq = fq.or(`market_id.eq.${scope.market.id},country.is.null`);
-    const revQ = applyScopeFilter(
-      db
-        .from("proposed_actions")
-        .select("revenue_attributed,dispatched_at,created_at")
+    let ordersTruncated = false;
+    let revTruncated = false;
+    const revRows: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 1000) {
+      const { data: rpage, error: rErr } = await applyScopeFilter(
+        db
+          .from("proposed_actions")
+          .select("revenue_attributed,dispatched_at,created_at")
+          .eq("store_id", active.id)
+          .not("revenue_attributed", "is", null),
+        scope,
+      ).range(off, off + 999);
+      if (rErr) throw new Error(`revenue: ${rErr.message}`);
+      const rows = (rpage ?? []) as Array<Record<string, unknown>>;
+      revRows.push(...rows);
+      if (rows.length < 1000) break;
+      if (revRows.length >= 20000) {
+        revTruncated = true;
+        break;
+      }
+    }
+    const orows: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 1000) {
+      let oq = db
+        .from("orders")
+        .select("total_amount,currency,placed_at,items_json,customer_id")
         .eq("store_id", active.id)
-        .not("revenue_attributed", "is", null),
-      scope,
-    ).limit(500);
-    const [{ data, error: qErr }, revRows] = await Promise.all([fq.limit(5000), revQ]);
-    if (qErr) throw new Error(`orders: ${qErr.message}`);
-    if (revRows.error) throw new Error(`revenue: ${revRows.error.message}`);
+        .gte("placed_at", yearAgoIso)
+        .order("placed_at", { ascending: false });
+      if (scope.market) oq = oq.or(`market_id.eq.${scope.market.id},country.is.null`);
+      const { data: opage, error: qErr } = await oq.range(off, off + 999);
+      if (qErr) throw new Error(`orders: ${qErr.message}`);
+      const rows = (opage ?? []) as Array<Record<string, unknown>>;
+      orows.push(...rows);
+      if (rows.length < 1000) break;
+      if (orows.length >= 20000) {
+        ordersTruncated = true;
+        break;
+      }
+    }
+    if (ordersTruncated || revTruncated) {
+      const { createLogger } = await import("@/lib/log");
+      createLogger("finanzas")(`store ${active.id} CAP 20k (orders_trunc=${ordersTruncated} rev_trunc=${revTruncated}): KPIs parciales`);
+      dataPartial = true;
+    }
+    const data = orows;
+    const revQ = { data: revRows, error: null };
     const finOrders = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
       total_amount: Number(r.total_amount ?? 0),
       currency: (r.currency as string | null) ?? null,
@@ -114,12 +151,72 @@ export default async function FinanzasPage({
     kpis = computeFinanceKpis(finOrders, viewCurrency);
     items = rankItems(finOrders, viewCurrency, 10);
     const attributed: AttributedRevenue[] = (
-      (revRows.data ?? []) as Array<Record<string, unknown>>
+      (revRows ?? []) as Array<Record<string, unknown>>
     ).map((r) => ({
       amount: Number(r.revenue_attributed ?? 0),
       at: ((r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null),
     }));
     recoveredMinor = attributed.reduce((a, r) => a + r.amount, 0);
+    const { resolveTenantCycleDays } = await import("@/lib/store-profiles");
+    cycleDays = await resolveTenantCycleDays(active.id).catch(() => null);
+    if (cycleDays !== null) {
+      const predSnap = await getPredEnJuegoByMonth(
+        active.id,
+        last12MonthKeys(Date.now()).map((k) => ({ key: k.key, endMs: monthEndMs(k.key) })),
+        viewCurrency,
+      ).catch(() => new Map<string, { minor: number; count: number }>());
+      rescate = rescateMonthly(finOrders, attributed, cycleDays, viewCurrency, Date.now(), predSnap);
+      retention = computeRetentionKpis(finOrders, attributed, cycleDays, viewCurrency);
+    }
+    // Foto del día para En juego (esperado): actuar+vigilar intra-moneda.
+    try {
+      const dayStart = new Date(
+        Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
+      ).toISOString();
+      const { data: predDay } = await db
+        .from("customer_predictions")
+        .select("decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency")
+        .eq("store_id", active.id)
+        .gte("as_of", dayStart)
+        .limit(5000);
+      let rows = (predDay ?? []) as Array<Record<string, unknown>>;
+      if (rows.length === 0) {
+        const { data: last } = await db
+          .from("customer_predictions")
+          .select("decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,as_of")
+          .eq("store_id", active.id)
+          .order("as_of", { ascending: false })
+          .limit(5000);
+        const all = (last ?? []) as Array<Record<string, unknown>>;
+        const maxAsOf = all.length > 0 ? String(all[0].as_of ?? "") : null;
+        rows = maxAsOf ? all.filter((r) => String(r.as_of ?? "") === maxAsOf) : [];
+      }
+      let minor = 0;
+      let low = 0;
+      let high = 0;
+      let count = 0;
+      let organicos = 0;
+      for (const r of rows) {
+        const d = String(r.decision ?? "");
+        if (d === "organico") organicos += 1;
+        if (d !== "actuar" && d !== "revision_humana" && d !== "vigilar") continue;
+        const cur = (r.currency as string | null) ?? null;
+        if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency.toUpperCase()) continue;
+        const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
+        if (v === null) continue;
+        minor += v;
+        count += 1;
+        const tk = r.ticket_esperado_minor == null ? null : Number(r.ticket_esperado_minor);
+        if (tk !== null) {
+          low += Number(r.p_low ?? 0) * tk;
+          high += Number(r.p_high ?? 0) * tk;
+        }
+      }
+      if (count > 0) enJuegoProb = { minor: Math.round(minor), low: Math.round(low), high: Math.round(high), count };
+      organicosEnAuto = organicos;
+    } catch {
+      // Sin predicciones: el strip cae al clásico, no se rompe.
+    }
     // Fichas del top: una sola query por ~10 ids (nunca miles).
     // toEditableCustomer ya aplica propercase (misma regla que Customers).
     const ranked = rankCustomers(finOrders, viewCurrency, 10);
@@ -164,6 +261,7 @@ export default async function FinanzasPage({
         <span className="text-xs text-muted-foreground">
           Ventas, órdenes y ticket por mes, en {(viewCurrency ?? "PEN").toUpperCase()}
           {marketLabel ? ` · viendo ${marketLabel}` : ""}. Otras monedas van aparte.
+          {dataPartial && " · muestra parcial (CAP 20k)"}
         </span>
       </header>
 
@@ -180,6 +278,11 @@ export default async function FinanzasPage({
           currency={viewCurrency}
           recoveredMinor={recoveredMinor}
           marketLabel={marketLabel}
+          rescate={rescate}
+          cycleDays={cycleDays}
+          retention={retention ?? undefined}
+          enJuegoProb={enJuegoProb}
+          organicosEnAuto={organicosEnAuto}
         />
       )}
 

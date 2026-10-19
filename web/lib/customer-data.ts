@@ -101,11 +101,14 @@ export interface CustomerOrdersAndRfm {
   summary: CustomerRfm;
 }
 
-/** Compras (más reciente primero) + hechos temporales del cliente. */
+/** Compras (más reciente primero) + hechos temporales del cliente.
+ *  Display pagina N recientes; la mediana del ciclo se calcula sobre el
+ *  historial completo (solo fechas, paginado) para no sesgar con la ventana. */
 export async function loadCustomerOrdersAndRfm(
   dbId: string,
   orderLimit = 20,
-): Promise<CustomerOrdersAndRfm | null> {
+  offset = 0,
+): Promise<(CustomerOrdersAndRfm & { totalOrders: number; truncated: boolean }) | null> {
   const db = getSupabase();
   const { data: customer, error: custErr } = await db
     .from("customers")
@@ -114,13 +117,13 @@ export async function loadCustomerOrdersAndRfm(
     .maybeSingle();
   if (custErr || !customer) return null;
 
+  // Ventana display: trae de más por test/canceladas, pagina por offset real.
   const { data: orders, error } = await db
     .from("orders")
     .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
     .eq("customer_id", dbId)
     .order("placed_at", { ascending: false })
-    // Traer de más: las test/canceladas se filtran abajo (misma regla que el sync).
-    .limit(Math.max(orderLimit * 3, 60));
+    .range(offset, offset + Math.max(orderLimit * 3, 60) - 1);
   if (error) throw new Error(error.message);
 
   // Solo compras reales: misma regla que los agregados del sync
@@ -164,13 +167,29 @@ export async function loadCustomerOrdersAndRfm(
       ? Math.max(0, Math.floor((Date.now() - lastDate.getTime()) / 86_400_000))
       : null;
 
-  // Ciclo esperado: mediana del cliente → ciclo declarado de la tienda →
-  // default del arquetipo. El perfil del tenant por fin alimenta el motor.
-  const orderDatesAsc = realRows
-    .map((o) => (o.placed_at ? new Date(o.placed_at as string) : null))
-    .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
-    .sort((a, b) => a.getTime() - b.getTime());
-  const customerMedian = medianInterval(orderDatesAsc);
+  // Ciclo esperado: mediana del cliente sobre HISTORIAL COMPLETO (solo fechas,
+  // paginado) → ciclo de tienda → arquetipo. No usar la ventana display.
+  const allDates: Date[] = [];
+  const DPAGE = 1000;
+  for (let off = 0; ; off += DPAGE) {
+    const { data: dpage, error: dErr } = await db
+      .from("orders")
+      .select("placed_at,status,payment_status,is_test")
+      .eq("customer_id", dbId)
+      .order("placed_at", { ascending: true })
+      .range(off, off + DPAGE - 1);
+    if (dErr) throw new Error(dErr.message);
+    const rows = (dpage ?? []) as Array<Record<string, unknown>>;
+    for (const o of rows) {
+      if (!isRealOrder({ status: (o.status as string) ?? null, paymentStatus: (o.payment_status as string) ?? null, isTest: Boolean(o.is_test) })) continue;
+      if (!o.placed_at) continue;
+      const d = new Date(o.placed_at as string);
+      if (!Number.isNaN(d.getTime())) allDates.push(d);
+    }
+    if (rows.length < DPAGE) break;
+    if (allDates.length > 20000) break;
+  }
+  const customerMedian = medianInterval(allDates);
   const storeId = customer.store_id as string;
   const tenantProfile = await getStoreProfile(storeId).catch(() => null);
   const tenantCycle = tenantProfile?.repurchaseCycleDays ?? null;
@@ -189,6 +208,8 @@ export async function loadCustomerOrdersAndRfm(
 
   return {
     orders: orderRows,
+    totalOrders: frequency,
+    truncated: frequency > orderRows.length + offset,
     summary: {
       recencyDays,
       frequency,

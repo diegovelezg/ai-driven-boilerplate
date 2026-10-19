@@ -54,41 +54,87 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const summary = new FunctionTool({
     name: "get_store_summary",
     description:
-      "Resumen de la tienda: nº de customers, compradores, FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency), señales abiertas y acciones pendientes. NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats.",
+      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos y compradores por tipo efectivo), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency), señales abiertas y acciones pendientes. NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats.",
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const db = getSupabase();
-      const custQuery = withMarket(
-        db.from("customers").select("orders_count,total_spent,currency").eq("store_id", storeId),
+      // Conteos exactos (no .length de una ventana): única fuente de totales.
+      const baseCust = withMarket(
+        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId),
         "id",
       );
-      const sigQuery = withMarket(
-        db.from("churn_signals").select("id", { count: "exact" }).eq("store_id", storeId).in("status", ["open", "prioritized"]),
+      const baseBuyers = withMarket(
+        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).gt("orders_count", 0),
+        "id",
       );
-      const actQuery = withMarket(
-        db.from("proposed_actions").select("id", { count: "exact" }).eq("store_id", storeId).eq("status", "pending_review"),
+      const sigCountQ = withMarket(
+        db.from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", ["open", "prioritized"]),
       );
-      const [{ data: customers, error }, { data: signals }, { data: actions }, { data: profile }] = await Promise.all([
-        custQuery.limit(5000),
-        sigQuery,
-        actQuery,
-        db.from("store_profiles").select("business_model,industry,icp_description").eq("store_id", storeId).maybeSingle(),
-      ]);
-      if (error) return { error: error.message };
-      const rows = (customers ?? []) as Array<Record<string, unknown>>;
+      const actCountQ = withMarket(
+        db.from("proposed_actions").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review"),
+      );
+      // Agregados (revenue + B2B/B2C): paginado completo en lotes, con flag si se capa.
+      // PostgREST no suma por moneda: se pagina y se suma en JS sobre el universo.
+      const PAGE = 1000;
+      const CAP = 50000;
+      let offset = 0;
+      let truncated = false;
       const revenue: Record<string, number> = {};
-      for (const r of rows) {
-        const cur = String(r.currency ?? "?");
-        revenue[cur] = (revenue[cur] ?? 0) + Number(r.total_spent ?? 0);
+      let b2b = 0;
+      let b2c = 0;
+      let b2bBuyers = 0;
+      let b2cBuyers = 0;
+      for (;;) {
+        const pageQ = withMarket(
+          db.from("customers").select("orders_count,total_spent,currency,customer_type,manual_edits").eq("store_id", storeId),
+          "id",
+        );
+        const { data, error: pageErr } = await pageQ.range(offset, offset + PAGE - 1);
+        if (pageErr) return { error: pageErr.message };
+        const rows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const r of rows) {
+          const cur = String(r.currency ?? "?");
+          revenue[cur] = (revenue[cur] ?? 0) + Number(r.total_spent ?? 0);
+          const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
+          const manual =
+            typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
+              ? String(overrides["customer_type"]).toUpperCase()
+              : null;
+          const tipo = (manual ?? String(r.customer_type ?? "B2C")).toUpperCase() === "B2B" ? "B2B" : "B2C";
+          const isBuyer = Number(r.orders_count ?? 0) > 0;
+          if (tipo === "B2B") {
+            b2b += 1;
+            if (isBuyer) b2bBuyers += 1;
+          } else {
+            b2c += 1;
+            if (isBuyer) b2cBuyers += 1;
+          }
+        }
+        offset += rows.length;
+        if (rows.length < PAGE) break;
+        if (offset >= CAP) {
+          truncated = true;
+          break;
+        }
       }
+      const [{ count: totalCustomers }, { count: totalBuyers }, { count: openSignals }, { count: pendingActions }, { data: profile }] =
+        await Promise.all([baseCust, baseBuyers, sigCountQ, actCountQ,
+          db.from("store_profiles").select("business_model,industry,icp_description").eq("store_id", storeId).maybeSingle(),
+        ]);
       const prof = (profile ?? {}) as Record<string, unknown>;
       return {
-        customers: rows.length,
-        buyers: rows.filter((r) => Number(r.orders_count ?? 0) > 0).length,
+        customers: totalCustomers ?? offset,
+        buyers: totalBuyers ?? 0,
+        b2b_count: b2b,
+        b2c_count: b2c,
+        b2b_buyers: b2bBuyers,
+        b2c_buyers: b2cBuyers,
         revenue_by_currency: revenue,
-        open_signals: (signals as Array<unknown> | null)?.length ?? 0,
-        pending_actions: (actions as Array<unknown> | null)?.length ?? 0,
+        open_signals: openSignals ?? 0,
+        pending_actions: pendingActions ?? 0,
+        truncated,
+        note_truncated: truncated ? "Muestra parcial: universo mayor al CAP paginado; conteos exactos sí, revenue/desglose parciales." : null,
         icp: (prof.icp_description as string) ?? null,
         business_model: (prof.business_model as string) ?? null,
         industry: (prof.industry as string) ?? null,
@@ -103,15 +149,20 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
-      const rq = withMarket(
+      const db = getSupabase();
+      const { count: totalMeasured } = await withMarket(
         getSupabase()
           .from("proposed_actions")
-          .select("revenue_attributed,dispatched_at,created_at")
+          .select("id", { count: "exact", head: true })
           .eq("store_id", storeId)
           .not("revenue_attributed", "is", null),
       );
-      const { data, error } = await rq.limit(500);
-      if (error) return { error: error.message };
+      // Paginado completo: el universo atribuido suele ser chico, pero .limit(500)
+      // mentía sumas. CAP alto con flag para no colgar el tool.
+      const PAGE = 1000;
+      const CAP = 20000;
+      let offset = 0;
+      let truncated = false;
       const now = new Date();
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
       const last30 = now.getTime() - 30 * 86_400_000;
@@ -120,20 +171,38 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let convertedMonth = 0;
       let converted30d = 0;
       let measured = 0;
-      for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
-        const amt = Number(r.revenue_attributed ?? 0);
-        const atRaw = (r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null;
-        if (!atRaw) continue;
-        const t = Date.parse(atRaw);
-        if (Number.isNaN(t)) continue;
-        measured += 1;
-        if (t >= monthStart) {
-          recoveredMonth += amt;
-          if (amt > 0) convertedMonth += 1;
+      for (;;) {
+        const rq = withMarket(
+          db
+            .from("proposed_actions")
+            .select("revenue_attributed,dispatched_at,created_at")
+            .eq("store_id", storeId)
+            .not("revenue_attributed", "is", null),
+        );
+        const { data, error } = await rq.range(offset, offset + PAGE - 1);
+        if (error) return { error: error.message };
+        const rows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const r of rows) {
+          const amt = Number(r.revenue_attributed ?? 0);
+          const atRaw = (r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null;
+          if (!atRaw) continue;
+          const t = Date.parse(atRaw);
+          if (Number.isNaN(t)) continue;
+          measured += 1;
+          if (t >= monthStart) {
+            recoveredMonth += amt;
+            if (amt > 0) convertedMonth += 1;
+          }
+          if (t >= last30) {
+            recovered30d += amt;
+            if (amt > 0) converted30d += 1;
+          }
         }
-        if (t >= last30) {
-          recovered30d += amt;
-          if (amt > 0) converted30d += 1;
+        offset += rows.length;
+        if (rows.length < PAGE) break;
+        if (offset >= CAP) {
+          truncated = true;
+          break;
         }
       }
       return {
@@ -142,6 +211,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         recovered_30d: Math.round(recovered30d),
         converted_30d: converted30d,
         measured_actions: measured,
+        total_measured: totalMeasured ?? measured,
+        truncated,
         note: "Solo revenue_attributed (retención medida). La facturación bruta de get_store_summary NUNCA es recupero.",
       };
     },
@@ -158,6 +229,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     execute: async ({ status, limit }: { status?: string; limit?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const wanted = status ? [status] : ["open", "prioritized"];
+      const n = limit ?? 10;
+      const { count } = await withMarket(
+        getSupabase().from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", wanted),
+      );
       const sq = withMarket(
         getSupabase()
           .from("churn_signals")
@@ -167,9 +242,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       );
       const { data, error } = await sq
         .order("created_at", { ascending: false })
-        .limit(limit ?? 10);
+        .limit(n);
       if (error) return { error: error.message };
-      return data ?? [];
+      const rows = data ?? [];
+      return {
+        items: rows,
+        total_count: count ?? rows.length,
+        returned_count: rows.length,
+        truncated: (count ?? rows.length) > rows.length,
+      };
     },
   });
 
@@ -184,6 +265,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     }),
     execute: async ({ status, limit, channel }: { status?: string; limit?: number; channel?: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
+      const n = limit ?? 10;
+      let countQ = withMarket(
+        getSupabase()
+          .from("proposed_actions")
+          .select("id", { count: "exact", head: true })
+          .eq("store_id", storeId)
+          .eq("status", status ?? "pending_review"),
+      );
+      if (channel) countQ = countQ.eq("channel", channel);
+      const { count } = await countQ;
       let aq = withMarket(
         getSupabase()
           .from("proposed_actions")
@@ -194,9 +285,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (channel) aq = aq.eq("channel", channel);
       const { data, error } = await aq
         .order("created_at", { ascending: false })
-        .limit(limit ?? 10);
+        .limit(n);
       if (error) return { error: error.message };
-      return data ?? [];
+      const rows = data ?? [];
+      return {
+        items: rows,
+        total_count: count ?? rows.length,
+        returned_count: rows.length,
+        truncated: (count ?? rows.length) > rows.length,
+      };
     },
   });
 
@@ -326,7 +423,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           }
         }
       }
-      return rows;
+      // Recall truncado por diseño (top-5): se declara para no presentar como total.
+      // find_customer es búsqueda por relevancia, no censo: total_count=null
+      // documenta la excepción al envelope (la regla N de M no aplica aquí).
+      return { items: rows, returned_count: rows.length, total_count: null, truncated: false, note: "Top-5 por relevancia; puede haber más coincidencias." };
     },
   });
 
@@ -344,28 +444,31 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   ] as const;
 
   /** Filtra la tabla de Customers: la vista muestra, aquí solo se cuenta.
-   *  Los filtros son los mismos de la tabla (?decision=&vista=&q=):
+   *  Los filtros son los mismos de la tabla (?decision=&vista=&q=&tipo=B2B|B2C):
    *  el chat los escribe, no los duplica. Lo omitido no filtra. */
   const filterCustomers = new FunctionTool({
     name: "filter_customers",
     description:
-      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días. ritmo: con-ritmo, primera o sin-compras (segmentación estructural). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
+      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días. ritmo: con-ritmo, primera o sin-compras (segmentación estructural). customer_type: B2B o B2C (tipo efectivo: override manual ?? clasificación por dominio). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
     parameters: z.object({
       q: z.string().min(2).max(100).optional(),
       decision: z.enum(DECISIONS).optional(),
       vista: z.enum(["ventana7"]).optional(),
       ritmo: z.enum(["con-ritmo", "primera", "sin-compras"] as const).optional(),
+      customer_type: z.enum(["B2B", "B2C"]).optional(),
     }),
     execute: async ({
       q,
       decision,
       vista,
       ritmo,
+      customer_type,
     }: {
       q?: string;
       decision?: string;
       vista?: string;
       ritmo?: string;
+      customer_type?: string;
     }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const scope: MarketScope = {
@@ -383,6 +486,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           decision: (decision as (typeof DECISIONS)[number] | undefined) ?? null,
           vista: vista === "ventana7" ? "ventana7" : null,
           ritmo: ritmo ?? null,
+          customerType: customer_type ?? null,
         },
         scope,
       );
@@ -392,6 +496,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           decision: decision ?? null,
           vista: vista ?? null,
           ritmo: ritmo ?? null,
+          customer_type: customer_type ?? null,
         },
         count: res.totalCount,
       };
@@ -458,11 +563,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const orders = new FunctionTool({
     name: "get_customer_orders",
     description:
-      "Historial de compras del customer en contexto (más reciente primero) con ítems, hechos temporales (recencia, frecuencia, gasto, ticket, ciclo esperado) y, si hay corrida del motor, su predicción (decisión, ventana, probabilidad con rango). Para compras, churn o recompra.",
-    parameters: z.object({}),
-    execute: async () => {
+      "Historial de compras del customer en contexto (más reciente primero) con ítems, hechos temporales (recencia, frecuencia, gasto, ticket, ciclo esperado sobre historial completo) y predicción. Devuelve envelope {orders, summary, prediction, totalOrders, truncated}. Pasa limit (1-30, default 10) y offset para paginar; si truncated=true hay más historial.",
+    parameters: z.object({
+      limit: z.number().int().min(1).max(30).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
+    }),
+    execute: async ({ limit, offset }: { limit?: number; offset?: number }) => {
       if (!customerId) return noCustomer;
-      const result = await loadCustomerOrdersAndRfm(customerId, 30);
+      const n = limit ?? 10;
+      const off = offset ?? 0;
+      const result = await loadCustomerOrdersAndRfm(customerId, n, off);
       if (!result) return { error: "Customer no encontrado." };
       const { data: pred } = await getSupabase()
         .from("customer_predictions")
@@ -498,6 +608,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     }),
     execute: async ({ status, limit }: { status?: string; limit?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
+      const n = limit ?? 10;
+      const { count } = await withMarket(
+        getSupabase()
+          .from("proposed_leads")
+          .select("id", { count: "exact", head: true })
+          .eq("store_id", storeId)
+          .eq("status", status ?? "pending_review"),
+        null,
+      );
       const lq = withMarket(
         getSupabase()
           .from("proposed_leads")
@@ -508,9 +627,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       );
       const { data, error } = await lq
         .order("icp_score", { ascending: false })
-        .limit(limit ?? 10);
+        .limit(n);
       if (error) return { error: error.message };
-      return data ?? [];
+      const rows = data ?? [];
+      return {
+        items: rows,
+        total_count: count ?? rows.length,
+        returned_count: rows.length,
+        truncated: (count ?? rows.length) > rows.length,
+      };
     },
   });
 

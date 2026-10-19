@@ -64,15 +64,18 @@ export interface SynthesisInput {
 /** Sintetiza el perfil desde las 4 evidencias. Lanza si el LLM falla. */
 export async function synthesize(input: SynthesisInput): Promise<Synthesis> {
   const s = input.stats;
+  const sampleFlag = (s as TenantStats & { truncated?: boolean; sampleN?: number }).truncated
+    ? ` MUESTRA PARCIAL (n=${(s as { sampleN?: number }).sampleN ?? s.customers}, truncado): no presentes como universo.`
+    : "";
   const user = [
     `Lo dicho por el merchant:\n${input.description.slice(0, 1000)}`,
-    `Web (${input.investigator.sources?.url ?? "sin web"}):\n${(input.investigator.webText ?? "(sin texto)").slice(0, 3000)}`,
+    `Web (${input.investigator.sources?.url ?? "sin web"}, fragmento 3000/6000):\n${(input.investigator.webText ?? "(sin texto)").slice(0, 3000)}`,
     `Primera lectura: modelo=${input.investigator.businessModel} vertical=${input.investigator.vertical} buyer=${input.investigator.buyerType} ciclo=${input.investigator.cycleDays}`,
     input.sectorBrief
-      ? `Brief del sector (confianza ${input.sectorBrief.confidence}): ${JSON.stringify(input.sectorBrief).slice(0, 2000)}`
+      ? `Brief del sector (confianza ${input.sectorBrief.confidence}, fragmento 2000): ${JSON.stringify(input.sectorBrief).slice(0, 2000)}`
       : "Brief del sector: no disponible.",
-    `Datos de la tienda (${s.customers} customers, ${s.buyers} compradores): empresa=${Math.round(s.companyRate * 100)}%, dominio_propio=${Math.round(s.customDomainRate * 100)}%, repeat_2+compras=${Math.round(s.repeatRate * 100)}%, ticket_mediano=${s.ticketMedian ?? "?"} ${s.ticketCurrency ?? ""}, intervalo_mediano=${s.intervalMedian ?? "?"}d (informa el ${Math.round(s.intervalCoverage * 100)}% de compradores), top_dominios=${s.topDomains.map((t) => `${t.domain}(${t.customers})`).join(", ") || "—"}, enriquecidos=${s.enrichedSample.map((e) => `${e.domain}:${e.company ?? "?"}:${e.industry ?? "?"}`).join("; ") || "—"}`,
-    input.icp ? `ICP declarado: ${input.icp.slice(0, 500)}` : "ICP: no declarado.",
+    `Datos de la tienda (${s.customers} customers, ${s.buyers} compradores): empresa=${Math.round(s.companyRate * 100)}%, dominio_propio=${Math.round(s.customDomainRate * 100)}%, repeat_2+compras=${Math.round(s.repeatRate * 100)}%, ticket_mediano=${s.ticketMedian ?? "?"} ${s.ticketCurrency ?? ""}, intervalo_mediano=${s.intervalMedian ?? "?"}d (informa el ${Math.round(s.intervalCoverage * 100)}% de compradores), top_dominios=${s.topDomains.map((t) => `${t.domain}(${t.customers})`).join(", ") || "—"}, enriquecidos=${s.enrichedSample.map((e) => `${e.domain}:${e.company ?? "?"}:${e.industry ?? "?"}`).join("; ") || "—"}.${sampleFlag}`,
+    input.icp ? `ICP declarado (fragmento 500): ${input.icp.slice(0, 500)}` : "ICP: no declarado.",
   ].join("\n\n");
   const raw = await completeProcessJson("profiler_synthesize", SYSTEM, user);
   const p = JSON.parse(raw) as Record<string, unknown>;

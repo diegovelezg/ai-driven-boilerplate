@@ -27,6 +27,7 @@ interface PredRow {
   p25_days: number | null;
   p75_days: number | null;
   decision: string;
+  as_of: string | null;
   evidence_json: Record<string, unknown> | null;
 }
 
@@ -69,6 +70,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
 
     // Última predicción por cliente (las de hoy si existen, si no las últimas).
     const predByCust = new Map<string, PredRow>();
+    let newestAsOf: string | null = null;
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db
         .from("customer_predictions")
@@ -80,6 +82,8 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
       const rows = (data ?? []) as Array<Record<string, unknown>>;
       for (const r of rows) {
         const cid = String(r.customer_id ?? "");
+        const asOf = (r.as_of as string | null) ?? null;
+        if (asOf && (!newestAsOf || asOf > newestAsOf)) newestAsOf = asOf;
         if (!cid || predByCust.has(cid)) continue;
         predByCust.set(cid, {
           customer_id: cid,
@@ -88,15 +92,38 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           p25_days: r.p25_days == null ? null : Number(r.p25_days),
           p75_days: r.p75_days == null ? null : Number(r.p75_days),
           decision: String(r.decision ?? ""),
+          as_of: asOf,
           evidence_json: (r.evidence_json as Record<string, unknown> | null) ?? null,
         });
       }
       if (!rows || rows.length < 1000) break;
-      // Suficiente para cubrir la tienda en la práctica; el loop completo
-      // garantiza última-por-cliente aunque haya varias fechas.
-      if (from > 9000) break;
+      // CAP de seguridad: si se alcanza, se loguea truncamiento en vez de
+      // cerrar señales a ciegas (predByCust incompleto → cierres incorrectos).
+      if (from >= 50000) {
+        log(`run ${runId} predicciones truncadas en ${predByCust.size} (CAP 50k filas): no se cierran faltantes`);
+        break;
+      }
     }
     log(`run ${runId} predicciones=${predByCust.size}`);
+    // Issue #11 P2: fail-open silencioso con predicciones viejas.
+    // Si la predicción más nueva tiene >7d, abortar con error visible
+    // en vez de actuar sobre un pasado rancio.
+    if (newestAsOf) {
+      const ageDays = (Date.now() - new Date(newestAsOf).getTime()) / 86_400_000;
+      if (Number.isFinite(ageDays) && ageDays > 7 && predByCust.size > 0) {
+        const freshNow = await db
+          .from("customer_predictions")
+          .select("id")
+          .eq("store_id", storeId)
+          .gte("as_of", dayStart)
+          .limit(1);
+        if (!freshNow.data || freshNow.data.length === 0) {
+          throw new Error(
+            `Predicciones rancias (más nuevas: ${newestAsOf.slice(0, 10)}, hace ${Math.round(ageDays)}d): retention no corrió. Abortando, no fail-open.`,
+          );
+        }
+      }
+    }
 
     // Clientes con ≥1 compra (F=1 incluido: la distinción la hace el modelo).
     const customers: Array<{
@@ -133,14 +160,14 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         const pred = predByCust.get(c.id) ?? null;
         const { data: existing } = await db
           .from("churn_signals")
-          .select("id,score,status")
+          .select("id,kind,score,status")
           .eq("store_id", storeId)
           .eq("customer_id", c.id)
           .in("status", ["open", "prioritized", "actioned"])
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        const prev = (existing ?? null) as { id: string; score: number | null; status: string } | null;
+        const prev = (existing ?? null) as { id: string; kind: string | null; score: number | null; status: string } | null;
         // Anti-duplicado por customer (issue #9): un cliente = una señal viva.
         // Se conserva la más reciente (prev) y se cierran las demás
         // open/prioritized, esté gestionada o no. Antes solo se limpiaba con
@@ -169,7 +196,48 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           } catch {
             // Limpieza best-effort: no rompe el escaneo.
           }
-          if (prev.status === "actioned") continue;
+          if (prev.status === "actioned") {
+            // Issue #11 P2: señal actioned con borrador rechazado queda
+            // atrapada. Si no hay borrador vivo (pending/approved/dispatched),
+            // se reabre a open para retrabajarla; si hay uno vivo, se salta.
+            try {
+              const { data: acts } = await db
+                .from("proposed_actions")
+                .select("status")
+                .eq("store_id", storeId)
+                .eq("signal_id", prev.id)
+                .in("status", ["pending_review", "approved", "dispatched"])
+                .limit(1);
+              if ((acts ?? []).length > 0) continue;
+              const { error: reopenErr } = await db
+                .from("churn_signals")
+                .update({ status: "open" })
+                .eq("id", prev.id);
+              if (reopenErr) continue;
+              log(`run ${runId} ${c.email || c.id} reabierta (borrador rechazado/descartado)`);
+              // prev ahora es open: sigue el flujo normal abajo.
+              prev.status = "open";
+            } catch {
+              continue;
+            }
+          }
+          // Issue #11 P1: scout no reescribe señales prioritized salvo
+          // score/reason. El kind (origen detector) se preserva; el
+          // tratamiento vive en objective (lo escribe strategist).
+          if (prev.status === "prioritized") {
+            const actionablePri =
+              pred?.decision === "actuar" || pred?.decision === "revision_humana";
+            if (!actionablePri) {
+              const { error } = await db
+                .from("churn_signals")
+                .update({ status: "closed", closed_at: new Date().toISOString() })
+                .eq("id", prev.id);
+              if (error) throw new Error(`Signal close: ${error.message}`);
+              closed += 1;
+            }
+            // Priorizada y aún accionable: no se toca (ni kind ni score).
+            continue;
+          }
         }
 
         const actionable =
@@ -199,7 +267,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           if (prev) {
             const { error } = await db
               .from("churn_signals")
-              .update({ score, reason, kind, country: c.country })
+              .update({ score, reason, country: c.country })
               .eq("id", prev.id);
             if (error) throw new Error(`Signal update: ${error.message}`);
             updated += 1;
@@ -236,35 +304,56 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     // predicción (0 sesiones reales o fuera del loop) y sin borrador vivo.
     // Limpia basura de la era v1 (p. ej. cuentas test) sin tocar lo gestionado.
     try {
-      const { data: orphans, error: oErr } = await db
-        .from("churn_signals")
-        .select("id,customer_id")
-        .eq("store_id", storeId)
-        .in("status", ["open", "prioritized"])
-        .limit(1000);
-      if (oErr) throw new Error(`Orphans read: ${oErr.message}`);
-      const rows = (orphans ?? []) as Array<Record<string, unknown>>;
+      // Huérfanas paginadas: el universo open/prioritized puede superar 1000.
+      const allOrphans: Array<Record<string, unknown>> = [];
+      for (let off = 0; ; off += 1000) {
+        const { data: opage, error: oErr } = await db
+          .from("churn_signals")
+          .select("id,customer_id")
+          .eq("store_id", storeId)
+          .in("status", ["open", "prioritized"])
+          .range(off, off + 999);
+        if (oErr) throw new Error(`Orphans read: ${oErr.message}`);
+        const rows = (opage ?? []) as Array<Record<string, unknown>>;
+        allOrphans.push(...rows);
+        if (rows.length < 1000) break;
+        if (allOrphans.length >= 10000) break;
+      }
+      const rows = allOrphans;
       const noPred = rows.filter((r) => !predByCust.has(String(r.customer_id ?? "")));
       if (noPred.length > 0) {
-        const { data: busy } = await db
-          .from("proposed_actions")
-          .select("signal_id")
-          .eq("store_id", storeId)
-          .in("status", ["pending_review", "approved"])
-          .not("signal_id", "is", null)
-          .limit(500);
-        const busySet = new Set(
-          ((busy ?? []) as Array<Record<string, unknown>>).map((a) => String(a.signal_id ?? "")),
-        );
-        const stale = noPred.filter((r) => !busySet.has(String(r.id ?? "")));
-        for (const r of stale) {
-          const { error } = await db
-            .from("churn_signals")
-            .update({ status: "closed", closed_at: new Date().toISOString() })
-            .eq("id", String(r.id));
-          if (!error) closed += 1;
+        // Borradores vivos paginados: si se truncan, NO cerrar (fail-open).
+        const busySet = new Set<string>();
+        let busyTruncated = false;
+        for (let off = 0; ; off += 1000) {
+          const { data: bpage } = await db
+            .from("proposed_actions")
+            .select("signal_id")
+            .eq("store_id", storeId)
+            .in("status", ["pending_review", "approved"])
+            .not("signal_id", "is", null)
+            .range(off, off + 999);
+          const brows = (bpage ?? []) as Array<Record<string, unknown>>;
+          for (const a of brows) busySet.add(String(a.signal_id ?? ""));
+          if (brows.length < 1000) break;
+          if (busySet.size >= 10000) {
+            busyTruncated = true;
+            break;
+          }
         }
-        if (stale.length > 0) log(`run ${runId} huérfanas cerradas=${stale.length}`);
+        if (busyTruncated) {
+          log(`run ${runId} huérfanas omitidas: busySet truncado, no se cierra a ciegas`);
+        } else {
+          const stale = noPred.filter((r) => !busySet.has(String(r.id ?? "")));
+          for (const r of stale) {
+            const { error } = await db
+              .from("churn_signals")
+              .update({ status: "closed", closed_at: new Date().toISOString() })
+              .eq("id", String(r.id));
+            if (!error) closed += 1;
+          }
+          if (stale.length > 0) log(`run ${runId} huérfanas cerradas=${stale.length}`);
+        }
       }
     } catch (e) {
       log(`run ${runId} orphans ERROR ${e instanceof Error ? e.message : e}`);

@@ -30,16 +30,38 @@ export function displayMarket(m: TenantMarket): string {
   return cur ? `${geo} · ${cur}` : geo;
 }
 
-/** Markets de la tienda ordenados por nombre (límite 50). */
-export async function listStoreMarkets(storeId: string): Promise<TenantMarket[]> {
+/** Markets de la tienda ordenados por nombre. Si hay más de 50, valida el
+ *  ?market= pedido por ID directo para no caer a "todos" por ventana. */
+export async function listStoreMarkets(storeId: string, requestedId?: string | null): Promise<TenantMarket[]> {
   const db = getSupabase();
-  const { data, error } = await db
+  if (requestedId) {
+    const { data: one } = await db
+      .from("market_regions")
+      .select("id,name,currency,countries")
+      .eq("store_id", storeId)
+      .eq("id", requestedId)
+      .maybeSingle();
+    if (one) {
+      const r = one as Record<string, unknown>;
+      return [{
+        id: String(r.id),
+        name: String(r.name ?? ""),
+        currency: String(r.currency ?? ""),
+        countries: ((r.countries as string[] | null) ?? []).map(String),
+      }];
+    }
+  }
+  const { data, error, count } = await db
     .from("market_regions")
-    .select("id,name,currency,countries")
+    .select("id,name,currency,countries", { count: "exact" })
     .eq("store_id", storeId)
     .order("name", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Markets read: ${error.message}`);
+  if ((count ?? 0) > 50) {
+    const { createLogger } = await import("@/lib/log");
+    createLogger("tenant")(`markets truncados a 50/${count} (store ${storeId}): validar ?market= por ID directo`);
+  }
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     name: String(r.name ?? ""),
@@ -162,7 +184,7 @@ export async function resolveMarketScope(
   storeId: string,
   requestedId: string | null | undefined,
 ): Promise<MarketScope> {
-  const markets = await listStoreMarkets(storeId);
+  const markets = await listStoreMarkets(storeId, requestedId);
   const market = pickRequestedMarket(markets, requestedId);
   if (!market) return { market: null, countries: null, customerIds: null };
   const seen = new Set<string>();

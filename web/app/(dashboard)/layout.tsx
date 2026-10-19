@@ -11,6 +11,9 @@ import { listStoreMarkets, type TenantMarket } from "@/lib/markets";
 // Solo aplica a las rutas del grupo (dashboard); /login no lo hereda.
 // El layout carga tiendas + markets para el filtro global por país (?market=);
 // si falla, el header sigue funcionando sin selector.
+// Nota CAP 50: es solo el selector UI. La resolución real del tenant/market
+// (getActiveStore/resolveMarketScope en cada page) valida ?store=/?market=
+// por ID directo, fuera de esta ventana.
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   let stores: TenantStore[] = [];
   let marketsByStore: Record<string, TenantMarket[]> = {};

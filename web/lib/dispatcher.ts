@@ -17,15 +17,32 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
   const stub = process.env.RETAIN_DISPATCH_STUB === "1";
   let dispatched = 0;
   try {
-    const { data, error } = await db
+    // Cola aprobada paginada + conteo exacto: .limit(50) dejaba excedente sin
+    // enviar y lo reportaba como total.
+    const { count: totalApproved } = await db
       .from("proposed_actions")
-      .select("id,customer_id,channel,evidence_json,customers(email)")
+      .select("id", { count: "exact", head: true })
       .eq("store_id", storeId)
-      .eq("status", "approved")
-      .order("created_at", { ascending: true })
-      .limit(50);
-    if (error) throw new Error(`Actions read: ${error.message}`);
-    const rows = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      .eq("status", "approved");
+    const all: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 500) {
+      const { data, error } = await db
+        .from("proposed_actions")
+        .select("id,customer_id,channel,evidence_json,customers(email)")
+        .eq("store_id", storeId)
+        .eq("status", "approved")
+        .order("created_at", { ascending: true })
+        .range(off, off + 499);
+      if (error) throw new Error(`Actions read: ${error.message}`);
+      const page = (data ?? []) as Array<Record<string, unknown>>;
+      all.push(...page);
+      if (page.length < 500) break;
+      if (all.length >= 5000) break;
+    }
+    if ((totalApproved ?? all.length) > all.length) {
+      log(`run ${runId} cola truncada: ${all.length}/${totalApproved} aprobadas (CAP 5k)`);
+    }
+    const rows = (all as Array<Record<string, unknown>>).map((r) => ({
       id: String(r.id),
       customer_id: String(r.customer_id ?? ""),
       email: String((r.customers as Record<string, unknown> | null)?.email ?? ""),

@@ -288,12 +288,15 @@ export interface CustomerFilters {
   vista: string | null;
   /** Ritmo estructural: con-ritmo|primera|sin-compras. */
   ritmo: string | null;
+  /** Tipo efectivo (manual_edits.customer_type ?? customer_type): B2B|B2C. */
+  customerType: string | null;
 }
 
 export const NO_CUSTOMER_FILTERS: CustomerFilters = {
   decision: null,
   vista: null,
   ritmo: null,
+  customerType: null,
 };
 
 const DECISION_VALUES = new Set([
@@ -307,21 +310,42 @@ const DECISION_VALUES = new Set([
   "revision_humana",
 ]);
 
-/** Valida decision/vista/ritmo de searchParams; lo inválido se ignora. */
+/** Valida decision/vista/ritmo/tipo de searchParams; lo inválido se ignora. */
 export function parseCustomerFilters(sp: {
   decision?: string;
   vista?: string;
   ritmo?: string;
+  tipo?: string;
+  customer_type?: string;
 }): CustomerFilters {
   const decision =
     sp.decision && DECISION_VALUES.has(sp.decision) ? sp.decision : null;
   const vista = sp.vista === "ventana7" ? "ventana7" : null;
   const ritmo = sp.ritmo && RITMO_VALUES.has(sp.ritmo) ? sp.ritmo : null;
-  return { decision, vista, ritmo };
+  const rawTipo = (sp.tipo ?? sp.customer_type ?? "").trim().toUpperCase();
+  const customerType = rawTipo === "B2B" || rawTipo === "B2C" ? rawTipo : null;
+  return { decision, vista, ritmo, customerType };
 }
 
 export function hasCustomerFilters(f: CustomerFilters): boolean {
-  return f.decision !== null || f.vista !== null || f.ritmo !== null;
+  return (
+    f.decision !== null ||
+    f.vista !== null ||
+    f.ritmo !== null ||
+    f.customerType !== null
+  );
+}
+
+/** Tipo efectivo: override manual ?? base Medusa (misma regla que toEditableCustomer). */
+export function effectiveCustomerType(r: Record<string, unknown>): string {
+  const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
+  const manual =
+    typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
+      ? (overrides["customer_type"] as string)
+      : null;
+  return (manual ?? (r.customer_type as string) ?? "B2C").toUpperCase() === "B2B"
+    ? "B2B"
+    : "B2C";
 }
 
 /** Predicción mínima para columnas/filtros (foto del día, solo lectura).
@@ -330,33 +354,38 @@ export function hasCustomerFilters(f: CustomerFilters): boolean {
  *  (este módulo arrastra `server-only` vía sync). */
 export type { CustomerPredictionLite } from "@/lib/customer-predictions";
 
-/** Última predicción por cliente (una foto, no historia; tope 5000). */
+/** Última predicción por cliente (una foto; pagina completo hasta CAP). */
 export async function getPredictionsMap(
   storeId: string,
 ): Promise<Map<string, CustomerPredictionLite>> {
   const db = getSupabase();
   const map = new Map<string, CustomerPredictionLite>();
-  const { data, error } = await db
-    .from("customer_predictions")
-    .select("customer_id,decision,model,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
-    .eq("store_id", storeId)
-    .order("as_of", { ascending: false })
-    .limit(5000);
-  if (error) return map;
-  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-    const cid = String(r.customer_id ?? "");
-    if (!cid || map.has(cid)) continue;
-    const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
-    map.set(cid, {
-      decision: String(r.decision ?? ""),
-      model: (r.model as string | null) ?? null,
-      tDays: ev.t_days == null ? null : Number(ev.t_days),
-      p25Days: r.p25_days == null ? null : Number(r.p25_days),
-      p75Days: r.p75_days == null ? null : Number(r.p75_days),
-      valorEsperadoMinor:
-        r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
-    });
-  }
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await db
+      .from("customer_predictions")
+      .select("customer_id,decision,model,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
+      .eq("store_id", storeId)
+      .order("as_of", { ascending: false })
+      .range(off, off + 999);
+    if (error) return map;
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      const cid = String(r.customer_id ?? "");
+      if (!cid || map.has(cid)) continue;
+      const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+      map.set(cid, {
+        decision: String(r.decision ?? ""),
+        model: (r.model as string | null) ?? null,
+        tDays: ev.t_days == null ? null : Number(ev.t_days),
+        p25Days: r.p25_days == null ? null : Number(r.p25_days),
+        p75Days: r.p75_days == null ? null : Number(r.p75_days),
+        valorEsperadoMinor:
+          r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor),
+      });
+    }
+    if (rows.length < 1000) break;
+    if (off >= 30000) break;
+    }
   return map;
 }
 
@@ -427,27 +456,33 @@ export async function getRitmoSummary(
 ): Promise<RitmoSummary> {
   const db = getSupabase();
   const out: RitmoSummary = { conRitmo: emptyBucket(), primera: emptyBucket(), sinCompras: 0 };
-  const [photo, sinN] = await Promise.all([
-    db
+  // Foto paginada completa (no tope 5000): última-por-cliente en memoria.
+  const photo: Array<Record<string, unknown>> = [];
+  for (let off = 0; ; off += 1000) {
+    const rows = await db
       .from("customer_predictions")
-      .select("customer_id,model,currency,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
+      .select("customer_id,model,currency,valor_esperado_minor,p25_days,p75_days,ventana,evidence_json,as_of")
       .eq("store_id", storeId)
       .order("as_of", { ascending: false })
-      .limit(5000)
+      .range(off, off + 999)
       .then(
         (res) => res.data as Array<Record<string, unknown>> | null,
         () => null as Array<Record<string, unknown>> | null,
-      ),
-    db
-      .from("customers")
-      .select("id", { count: "exact", head: true })
-      .eq("store_id", storeId)
-      .eq("orders_count", 0)
-      .then(
-        (res) => res.count ?? 0,
-        () => 0,
-      ),
-  ]);
+      );
+    if (!rows || rows.length === 0) break;
+    photo.push(...rows);
+    if (rows.length < 1000) break;
+    if (photo.length >= 30000) break;
+  }
+  const sinN = await db
+    .from("customers")
+    .select("id", { count: "exact", head: true })
+    .eq("store_id", storeId)
+    .eq("orders_count", 0)
+    .then(
+      (res) => res.count ?? 0,
+      () => 0,
+    );
   const seen = new Set<string>();
   for (const r of photo ?? []) {
     const cid = String(r.customer_id ?? "");
@@ -459,23 +494,99 @@ export async function getRitmoSummary(
     const target =
       r.model === "renovacion" ? out.conRitmo : r.model === "segunda_compra" ? out.primera : null;
     if (!target) continue;
+    // n cuenta universo (toda moneda); valorMinor solo intra-moneda vista.
+    // No comparables sin etiqueta: se marca para la UI.
     target.n += 1;
+    (target as RitmoBucket & { nOutOfView?: number }).nOutOfView =
+      ((target as RitmoBucket & { nOutOfView?: number }).nOutOfView ?? 0) + (inView ? 0 : 1);
     const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
     if (inView && v !== null) target.valorMinor += v;
     const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
     const t = ev.t_days == null ? null : Number(ev.t_days);
     const p25 = r.p25_days == null ? null : Number(r.p25_days);
     const p75 = r.p75_days == null ? null : Number(r.p75_days);
+    // Posición en ventana desde el eje persistido (issue #14A): con cuantiles
+    // condicionales p25/p75 nunca bajan de t, así que t>p75 jamás se cumplía
+    // y todo caía en "entra" (0 pasaron · 0 en ventana). El eje ventana ya
+    // trae la clasificación auditable del motor.
+    const vej = (r.ventana as string | null) ?? null;
     const seg =
-      t !== null && p75 !== null && t > p75
+      vej === "dormido" || vej === "pasada"
         ? target.pasado
-        : t !== null && p25 !== null && t >= p25
+        : vej === "en"
           ? target.enVentana
-          : target.entra;
+          : vej === "antes"
+            ? target.entra
+            : t !== null && p75 !== null && t > p75
+              ? target.pasado
+              : t !== null && p25 !== null && t >= p25
+                ? target.enVentana
+                : target.entra;
     seg.n += 1;
     if (inView && v !== null) seg.valorMinor += v;
   }
   out.sinCompras = sinN;
+  return out;
+}
+
+/** En juego mensual desde el motor (issue #12): por cada fin de mes, la foto
+ *  de predicciones más cercana sin pasarlo; Σ valor esperado de
+ *  actuar+revisión+vigilar en la moneda de la vista. Sin foto para un mes
+ *  (el motor aún no corría), el mes queda fuera del mapa y la serie usa
+ *  reconstrucción pre-motor etiquetada. Sin leakage: nunca fotos futuras. */
+export async function getPredEnJuegoByMonth(
+  storeId: string,
+  monthEnds: Array<{ key: string; endMs: number }>,
+  viewCurrency: string | null,
+): Promise<Map<string, { minor: number; count: number }>> {
+  const out = new Map<string, { minor: number; count: number }>();
+  if (monthEnds.length === 0) return out;
+  const db = getSupabase();
+  const maxEnd = Math.max(...monthEnds.map((m) => m.endMs));
+  const rows: Array<Record<string, unknown>> = [];
+  for (let from = 0; ; from += 5000) {
+    const { data, error } = await db
+      .from("customer_predictions")
+      .select("as_of,decision,valor_esperado_minor,currency")
+      .eq("store_id", storeId)
+      .lte("as_of", new Date(maxEnd).toISOString())
+      .order("as_of", { ascending: false })
+      .range(from, from + 4999);
+    if (error) return out;
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) rows.push(r);
+    if (!data || data.length < 5000) break;
+    if (from > 30000) break;
+  }
+  // Agrupar por fecha de foto (desc) y caminar los fines de mes (desc).
+  const byPhoto = new Map<string, Array<Record<string, unknown>>>();
+  for (const r of rows) {
+    const k = String(r.as_of ?? "");
+    if (!k) continue;
+    const list = byPhoto.get(k) ?? [];
+    list.push(r);
+    byPhoto.set(k, list);
+  }
+  const photoDates = [...byPhoto.keys()].sort().reverse();
+  const endsDesc = [...monthEnds].sort((a, b) => b.endMs - a.endMs);
+  let pi = 0;
+  for (const m of endsDesc) {
+    while (pi < photoDates.length && Date.parse(photoDates[pi]) > m.endMs) pi += 1;
+    if (pi >= photoDates.length) continue;
+    const photo = byPhoto.get(photoDates[pi]) ?? [];
+    let minor = 0;
+    let count = 0;
+    for (const r of photo) {
+      const d = String(r.decision ?? "");
+      if (d !== "actuar" && d !== "revision_humana" && d !== "vigilar") continue;
+      const cur = (r.currency as string | null) ?? null;
+      if (viewCurrency !== null && cur !== null && cur.toUpperCase() !== viewCurrency.toUpperCase()) continue;
+      const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
+      if (v === null) continue;
+      minor += v;
+      count += 1;
+    }
+    if (count > 0) out.set(m.key, { minor, count });
+  }
   return out;
 }
 
@@ -551,6 +662,7 @@ export async function queryStoreCustomers(
     const matched: EditableCustomer[] = [];
     scoped.forEach((r) => {
       const pred = predMap.get(String(r.id ?? ""));
+      if (filters.customerType !== null && effectiveCustomerType(r) !== filters.customerType) return;
       if (filters.decision !== null && !matchesDecisionFilter(pred, filters.decision)) return;
       if (filters.ritmo !== null) {
         const oc = Number(r.orders_count ?? 0);

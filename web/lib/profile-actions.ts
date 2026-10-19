@@ -132,7 +132,8 @@ export async function chatProfileStepAction(
       const s = await getProfileSignals(storeId);
       chatLog(`chat turn=${userTurns} signals=${s ? `${s.customers}c` : "none"}`);
       if (s && s.customers >= 5) {
-        signalsCtx = `Datos de tu tienda (${s.customers} customers): ${Math.round(s.companyRate * 100)}% con empresa, ${Math.round(s.customDomainRate * 100)}% con dominio propio, ${Math.round(s.repeatRate * 100)}% con 2+ compras.`;
+        const partial = (s as { truncated?: boolean }).truncated ? " (muestra parcial)" : "";
+        signalsCtx = `Datos de tu tienda (${s.customers} customers)${partial}: ${Math.round(s.companyRate * 100)}% con empresa, ${Math.round(s.customDomainRate * 100)}% con dominio propio, ${Math.round(s.repeatRate * 100)}% con 2+ compras.`;
       }
     } catch {
       // sin señales: se sigue solo con lo dicho + la web

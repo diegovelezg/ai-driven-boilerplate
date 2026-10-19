@@ -13,15 +13,37 @@ export interface TenantStore {
   shop_currency: string;
 }
 
-/** Lista tiendas ordenadas por creación (límite 50, mismo que Overview/Chat). */
-export async function listStores(): Promise<TenantStore[]> {
+/** Lista tiendas ordenadas por creación. Si hay más de 50, valida el ?store=
+ *  pedido por ID directo para no caer al tenant equivocado por ventana. */
+export async function listStores(requestedId?: string | null): Promise<TenantStore[]> {
   const db = getSupabase();
-  const { data, error } = await db
+  if (requestedId) {
+    const { data: one } = await db
+      .from("stores")
+      .select("id,name,shop_url,platform,shop_currency")
+      .eq("id", requestedId)
+      .maybeSingle();
+    if (one) {
+      const r = one as Record<string, unknown>;
+      return [{
+        id: String(r.id),
+        name: (r.name as string | null) ?? null,
+        shop_url: String(r.shop_url ?? ""),
+        platform: String(r.platform ?? ""),
+        shop_currency: String(r.shop_currency ?? "PEN"),
+      }];
+    }
+  }
+  const { data, error, count } = await db
     .from("stores")
-    .select("id,name,shop_url,platform,shop_currency")
+    .select("id,name,shop_url,platform,shop_currency", { count: "exact" })
     .order("created_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Stores read: ${error.message}`);
+  if ((count ?? 0) > 50) {
+    const { createLogger } = await import("@/lib/log");
+    createLogger("tenant")(`stores truncados a 50/${count}: validar ?store= por ID directo`);
+  }
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     name: (r.name as string | null) ?? null,
@@ -62,11 +84,19 @@ export async function resolveActiveStore(
   return stores[0];
 }
 
-/** Atajo: lista + resuelve. Devuelve tiendas vacías si aún no hay sync. */
+/** Atajo: lista + resuelve. Devuelve tiendas vacías si aún no hay sync.
+ *  Ventana 50 para el switcher + validación por ID directo si ?store= cae
+ *  fuera (merge, no reemplazo: el switcher sigue viendo la lista). */
 export async function getActiveStore(
   requestedId: string | null | undefined,
 ): Promise<{ stores: TenantStore[]; active: TenantStore | null }> {
   const stores = await listStores();
+  if (requestedId && !stores.some((s) => s.id === requestedId)) {
+    const direct = await listStores(requestedId).catch(() => [] as TenantStore[]);
+    for (const d of direct) {
+      if (!stores.some((s) => s.id === d.id)) stores.push(d);
+    }
+  }
   if (stores.length === 0) return { stores, active: null };
   return { stores, active: await resolveActiveStore(stores, requestedId) };
 }
