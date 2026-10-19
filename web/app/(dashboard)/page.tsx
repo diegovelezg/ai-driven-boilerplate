@@ -221,6 +221,10 @@ export default async function DashboardPage({
   // Se cuenta aparte y se declara en el subtítulo (no se descuenta en
   // silencio: el dueño decide si actuar igual).
   let hoyDebiles = 0;
+  // Analista: "con pocos datos" también en seguimiento cercano (no solo
+  // actuar): una partición chica (MX, n=4) declara confidence=baja y el
+  // héroe no debe mostrarla como cercana sin advertencia. Solo display.
+  let hoyDebilesCercano = 0;
   // Foto del día del motor por cliente (héroe, fila, "No tocamos", Finanzas).
   const predByCust = new Map<
     string,
@@ -517,8 +521,10 @@ export default async function DashboardPage({
           hoyVigilar += 1;
           const banda = (r.banda_p as string | null) ?? null;
           const p = r.p_recompra_h == null ? null : Number(r.p_recompra_h);
-          if (isCercano({ decision: d, bandaP: banda, pRecompraH: p }, closeWatchP)) hoyCercano += 1;
+          const cercano = isCercano({ decision: d, bandaP: banda, pRecompraH: p }, closeWatchP);
+          if (cercano) hoyCercano += 1;
           else hoyResidual += 1;
+          if ((r.confidence as string | null) === "baja" && cercano) hoyDebilesCercano += 1;
         } else hoyAuto += 1;
         if ((r.confidence as string | null) === "baja" && (d === "actuar" || d === "revision_humana")) hoyDebiles += 1;
         if (d === "organico") hoyGroups.organico += 1;
@@ -838,6 +844,7 @@ export default async function DashboardPage({
                     <>
                       {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático · {formatNumber(hoyAuto)} al día · entre {money(hoyLow)} y {money(hoyHigh)}
                       {hoyDebiles > 0 ? ` · ${formatNumber(hoyDebiles)} con pocos datos` : ""}
+                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} en cercano con pocos datos` : ""}
                       {hoyForeign.map((fl) => (
                         <span key={fl.code}>
                           {" "}+{formatNumber(fl.n)} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
@@ -847,6 +854,7 @@ export default async function DashboardPage({
                   ) : (
                     <>
                       {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático
+                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} en cercano con pocos datos` : ""}
                       {nextWindowDate ? ` · el próximo puede necesitar mensaje el ${nextWindowDate}` : ""}
                     </>
                   )}

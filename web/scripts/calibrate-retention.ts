@@ -163,17 +163,29 @@ async function main() {
   const obsRate = n > 0 ? events / n : null;
   // Calibración por deciles de p + cobertura de intervalos (issue #10 P2:
   // antes sin cobertura) + desglose por modelo A/B (issue #12).
+  // Analista: cada decil lleva IC95% Wilson del observado (con 39 eventos
+  // el top tiene ±25pp: "aceptada" = sin evidencia de desastre, no probada).
+  const wilson = (k: number, n: number): [number, number] => {
+    if (n === 0) return [0, 0];
+    const z = 1.96;
+    const p = k / n;
+    const den = 1 + (z * z) / n;
+    const c = p + (z * z) / 2 / n;
+    const m = z * Math.sqrt((p * (1 - p)) / n + (z * z) / 4 / n / n);
+    return [Math.max(0, (c - m) / den), Math.min(1, (c + m) / den)];
+  };
   const buildDecis = (rows: typeof pairs) => {
-    const decis: Array<{ decil: string; n: number; predicho: number; observado: number; cubierto: boolean }> = [];
+    const decis: Array<{ decil: string; n: number; predicho: number; observado: number; cubierto: boolean; nEventos: number; ic95: [number, number] }> = [];
     for (let d = 0; d < 10; d += 1) {
       const lo = d / 10;
       const hi = (d + 1) / 10;
       const bin = rows.filter((x) => (d === 9 ? x.p >= lo && x.p <= hi : x.p >= lo && x.p < hi));
       const predicho = bin.length > 0 ? bin.reduce((a, x) => a + x.p, 0) / bin.length : 0;
-      const observado = bin.length > 0 ? bin.filter((x) => x.y === 1).length / bin.length : 0;
+      const k = bin.filter((x) => x.y === 1).length;
+      const observado = bin.length > 0 ? k / bin.length : 0;
       const lowMean = bin.length > 0 ? bin.reduce((a, x) => a + x.pLow, 0) / bin.length : 0;
       const highMean = bin.length > 0 ? bin.reduce((a, x) => a + x.pHigh, 0) / bin.length : 0;
-      decis.push({ decil: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: bin.length, predicho, observado, cubierto: observado >= lowMean - 0.05 && observado <= highMean + 0.05 });
+      decis.push({ decil: `${lo.toFixed(1)}–${hi.toFixed(1)}`, n: bin.length, predicho, observado, cubierto: observado >= lowMean - 0.05 && observado <= highMean + 0.05, nEventos: k, ic95: wilson(k, bin.length) });
     }
     return decis;
   };
@@ -184,6 +196,10 @@ async function main() {
   // KM(t) = fracción sin compra hasta t; predicha media = 1 - mean(p) en H.
   const kmObsH = n > 0 ? 1 - obsRate! : null;
   const kmPredH = meanP !== null ? 1 - meanP : null;
+  // Skill vs predictor ingenuo (tasa base global): cuánto del Brier elimina
+  // el modelo. Sin esta línea el Brier solo no dice si hay predictibilidad.
+  const brierNaive = obsRate !== null ? obsRate * (1 - obsRate) : null;
+  const skill = brier !== null && brierNaive !== null && brierNaive > 0 ? 1 - brier / brierNaive : null;
   const out = {
     store_id: storeId,
     archetype,
@@ -196,6 +212,8 @@ async function main() {
     n,
     eventos: events,
     brier,
+    brierNaive,
+    skillVsNaive: skill,
     meanPredicho: meanP,
     observadoGlobal: obsRate,
     porDecil: decis,
@@ -203,9 +221,9 @@ async function main() {
     porDecilSegundaCompra: decisB,
     coberturaDeciles: decis.filter((d) => d.n > 0 && d.cubierto).length,
     km: { observadaSinCompraH: kmObsH, predichaMediaSinCompraH: kmPredH },
-    nota: "Aceptación: en deciles centrales el observado cae dentro del predicho ±10pp en la cohorte agregada; si no, ajustar sigma0/k y repetir.",
+    nota: "Aceptación: en deciles centrales el observado cae dentro del predicho ±10pp en la cohorte agregada. Con pocos eventos el ±10pp es más estricto que el ruido (ver ic95 por decil): un fallo aislado NO autoriza tocar sigma0/k — se requieren 2 corridas consecutivas fuera de tolerancia o evidencia pooled. Si no, ajustar sigma0/k y repetir.",
   };
-  console.log(`predicciones=${nPred} eventos=${events}/${n} brier=${brier?.toFixed(4)}`);
+  console.log(`predicciones=${nPred} eventos=${events}/${n} brier=${brier?.toFixed(4)} naive=${brierNaive?.toFixed(4)} skill=${skill !== null ? (skill * 100).toFixed(1) + "%" : "n/a"}`);
   console.table(decis);
   console.log(`KM observada sin compra en H: ${kmObsH?.toFixed(3)} vs predicha media: ${kmPredH?.toFixed(3)}`);
   writeFileSync(".data/calibrate-retention.json", JSON.stringify(out, null, 2));
