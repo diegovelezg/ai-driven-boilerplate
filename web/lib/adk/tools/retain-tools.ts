@@ -2,12 +2,14 @@ import { FunctionTool, type BaseTool } from "@google/adk";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
+import { isRealDbOrder } from "@/lib/medusa";
+import { rankItems } from "@/lib/finance";
 import { domainFromEmail } from "@/lib/domains";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 import { queryStoreCustomers } from "@/lib/customers-db";
 import { loadCustomerOrdersAndRfm, loadCustomerFirmographics } from "@/lib/customer-data";
 import { getIcp, runProspect } from "@/lib/prospect";
-import { startRun } from "@/lib/background";
+import { hasConflict, startRun } from "@/lib/background";
 
 /**
  * Contexto inyectado por la GUI: la tienda siempre; el customer solo cuando hay
@@ -650,25 +652,102 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     }),
     execute: async ({ queries, perQuery, focus }: { queries?: number; perQuery?: number; focus?: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
-      const db = getSupabase();
       try {
         await getIcp(storeId);
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
-      const { data: running } = await db
-        .from("background_runs")
-        .select("id")
-        .eq("store_id", storeId)
-        .eq("kind", "prospect")
-        .eq("status", "running")
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (running) return { run_id: (running as Record<string, unknown>).id, already_running: true };
+      // Lock por compatibilidad (Fase 3): misma granularidad que la UI.
+      const conflict = await hasConflict(storeId, { kind: "prospect" });
+      if (conflict) return { run_id: conflict.id, already_running: true };
       const runId = await startRun(storeId, "prospect", "Prospección", 1);
       void runProspect(runId, storeId, { queries: queries ?? 2, perQuery: perQuery ?? 5, focus: focus?.trim() || null }).catch(() => undefined);
       return { run_id: runId, already_running: false, focus: focus?.trim() || null };
+    },
+  });
+
+  const topProducts = new FunctionTool({
+    name: "get_top_products",
+    description:
+      "Ranking de lo que más vende: agrupa orders.items_json por título en la moneda de la vista (nunca mezcla PEN+MXN). Solo compras reales (no test ni canceladas). Si te piden 'qué es lo que más vendemos' usa esta tool, no get_store_summary.",
+    parameters: z.object({
+      limit: z.number().int().min(1).max(20).optional(),
+      sort: z.enum(["revenue", "quantity", "orders"]).optional(),
+    }),
+    execute: async ({ limit, sort }: { limit?: number; sort?: string }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const n = limit ?? 5;
+      const db = getSupabase();
+      const { resolveShopCurrency } = await import("@/lib/store-profiles");
+      const shopCurrency = (await resolveShopCurrency(storeId).catch(() => null)) ?? "PEN";
+      const viewCurrency = shopCurrency.toUpperCase();
+      // Misma ventana que /finanzas (12m): año móvil para no mezclar historia vieja.
+      const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
+      const PAGE = 1000;
+      const CAP = 20000;
+      let offset = 0;
+      let ordersTruncated = false;
+      const orows: Array<Record<string, unknown>> = [];
+      for (;;) {
+        const oq = withMarket(
+          db
+            .from("orders")
+            .select("currency,items_json,status,payment_status,is_test,placed_at")
+            .eq("store_id", storeId)
+            .gte("placed_at", yearAgoIso)
+            .order("placed_at", { ascending: false }),
+        );
+        const { data, error } = await oq.range(offset, offset + PAGE - 1);
+        if (error) return { error: error.message };
+        const rows = (data ?? []) as Array<Record<string, unknown>>;
+        orows.push(...rows);
+        offset += rows.length;
+        if (rows.length < PAGE) break;
+        if (orows.length >= CAP) {
+          ordersTruncated = true;
+          break;
+        }
+      }
+      // Solo reales: mismo criterio que analyst/RFM (issue #11/#12).
+      const realRows = orows.filter((o) =>
+        isRealDbOrder({
+          status: typeof o.status === "string" ? o.status : null,
+          payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
+          is_test: o.is_test === true,
+        }),
+      );
+      const { top, bottom } = rankItems(
+        realRows.map((r) => ({ currency: (r.currency as string | null) ?? null, items_json: r.items_json })),
+        viewCurrency,
+        n,
+      );
+      const pick = sort === "quantity"
+        ? [...top].sort((a, b) => b.quantity - a.quantity)
+        : sort === "orders"
+          ? [...top].sort((a, b) => b.orders - a.orders)
+          : top;
+      // total_count = títulos distintos intra-moneda (no el largo de la ventana).
+      const seen = new Set<string>();
+      for (const o of realRows) {
+        const cur = (o.currency as string | null) ?? null;
+        if (cur && cur.toUpperCase() !== viewCurrency) continue;
+        const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
+        for (const it of items) {
+          const t = String(it.title ?? "").trim().toLowerCase() || "sin-titulo";
+          seen.add(t);
+        }
+      }
+      const totalCount = seen.size;
+      return {
+        items: pick,
+        bottom,
+        total_count: totalCount,
+        returned_count: pick.length,
+        truncated: ordersTruncated || totalCount > pick.length,
+        view_currency: viewCurrency,
+        note_truncated: ordersTruncated ? "Muestra parcial: órdenes mayores al CAP 20k; ranking parcial." : null,
+        note: "Entre lo vendido (sin feed de productos no se ven items con cero ventas). Montos en minor units (céntimos): dividir /100.",
+      };
     },
   });
 
@@ -684,17 +763,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     args: unknown[] = [],
   ): Promise<Record<string, unknown>> {
     if (!storeId) return { error: "Sin tienda en contexto." };
-    const db = getSupabase();
-    const { data: running } = await db
-      .from("background_runs")
-      .select("id")
-      .eq("store_id", storeId)
-      .eq("kind", kind)
-      .eq("status", "running")
-      .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (running) return { run_id: (running as Record<string, unknown>).id, already_running: true };
+    const conflict = await hasConflict(storeId, { kind });
+    if (conflict) return { run_id: conflict.id, already_running: true };
     const runId = await startRun(storeId, kind, label, 0);
     const worker = (await import(mod)) as Record<
       string,
@@ -758,5 +828,5 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       }),
   );
 
-  return [summary, recovery, signals, actions, approveActions, rejectActions, find, filterCustomers, profile, orders, firmographics, leads, prospect, ...loopTools];
+  return [summary, recovery, signals, actions, approveActions, rejectActions, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...loopTools];
 }
