@@ -3,12 +3,16 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { formatDecimal, formatNumber } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 
-/** Compacta 12345 -> "12,3k", 2000000 -> "2,0M". */
+/** Compacta 1200 -> "1.2K", 2300000 -> "2.3M". */
 function compact(n: number): string {
-  if (n >= 1_000_000) return `${formatDecimal(n / 1_000_000, 1)}M`;
-  if (n >= 1_000) return `${formatDecimal(n / 1_000, 1)}k`;
+  const short = (v: number, suffix: string) => {
+    const s = v.toFixed(1);
+    return `${s.endsWith(".0") ? s.slice(0, -2) : s}${suffix}`;
+  };
+  if (n >= 1_000_000) return short(n / 1_000_000, "M");
+  if (n >= 1_000) return short(n / 1_000, "K");
   return formatNumber(n);
 }
 
@@ -77,7 +81,7 @@ export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
   const label = `● ${day === null ? "…" : compact(day)} hoy · ${all === null ? "…" : compact(all)} total`;
   const title =
     day !== null && all !== null
-      ? `${formatNumber(day)} tokens hoy · ${formatNumber(all)} tokens en total · ${formatNumber(todayCalls ?? 0)} llamadas hoy`
+      ? `${compact(day)} tokens hoy · ${compact(all)} tokens en total · ${formatNumber(todayCalls ?? 0)} llamadas hoy`
       : null;
   return (
     <AppTooltip tip={title ?? "Sin llamadas LLM registradas"}>
