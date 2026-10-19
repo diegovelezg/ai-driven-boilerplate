@@ -93,7 +93,7 @@ export function pickPrimaryMarket(markets: TenantMarket[], shopCurrency: string 
 }
 
 /** IDs de customers con al menos una orden en el market (vía orders.market_id). */
-export async function customerIdsInMarket(
+async function customerIdsInMarket(
   storeId: string,
   marketId: string,
 ): Promise<string[]> {
@@ -203,7 +203,7 @@ export function applyScopeFilter(
  * y mergear en JS (ver mira.ts). 200 UUIDs ≈ 7.2k chars en URL, bajo el
  * límite típico de 8k.
  */
-export const SCOPE_ID_CHUNK_SIZE = 200;
+const SCOPE_ID_CHUNK_SIZE = 200;
 
 export function chunkIds<T>(ids: T[], size: number = SCOPE_ID_CHUNK_SIZE): T[][] {
   if (size <= 0) throw new Error("chunk size debe ser > 0");
@@ -224,7 +224,7 @@ export function isLargeIdScope(scope: MarketScopeLike | null): boolean {
  * vez, luego un `.in(chunk)` por chunk SIN el OR-null (si no, los null se
  * duplican y el count miente). El llamador ordena/limita al final.
  */
-export async function fetchIdChunks<T>(
+async function fetchIdChunks<T>(
   ids: string[],
   fn: (chunk: string[]) => Promise<T[]>,
   key?: (t: T) => string,

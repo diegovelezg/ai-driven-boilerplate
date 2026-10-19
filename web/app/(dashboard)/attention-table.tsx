@@ -260,7 +260,7 @@ export function AttentionTable({
 /** Estado vacío de la mira (Fase 4): SSR inicial + vivo del contexto. Sin
  *  realtime, una corrida que arranca tras el primer render mostraría un
  *  vacío engañoso en vez del skeleton. */
-export function AttentionEmptyState({
+function AttentionEmptyState({
   initialRunning,
   pending,
   masivos,

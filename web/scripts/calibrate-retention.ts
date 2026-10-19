@@ -2,8 +2,7 @@
 // Rolling-origin con solo órdenes ≤ corte; excluye H no madurado.
 // Uso: npx tsx --env-file=.env.local scripts/calibrate-retention.ts
 // Salida: consola + JSON en .data/calibrate-retention.json (no UI).
-import { readFileSync, writeFileSync } from "node:fs";
-import { createClient } from "@supabase/supabase-js";
+import { writeFileSync } from "node:fs";
 import { isRealOrder } from "@/lib/medusa";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 import {
@@ -12,17 +11,12 @@ import {
   predictStore,
   sessionize,
 } from "@/lib/retention-model";
+import { fail, loadServiceStore } from "./lib/run-once";
 
 const DAY_MS = 86_400_000;
 
 async function main() {
-  const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  const medusaUrl = String(
-    JSON.parse(readFileSync(".data/connections.json", "utf-8")).medusaUrl,
-  ).replace(/\/+$/, "");
-  const { data: store } = await db.from("stores").select("id").eq("shop_url", medusaUrl).maybeSingle();
-  if (!store) throw new Error("Sin store para esta conexión.");
-  const storeId = store.id as string;
+  const { db, storeId } = await loadServiceStore();
   const profile = await getStoreProfile(storeId);
   const archetype = profile?.archetype ?? "b2c_consumible";
   const cycle = profile?.repurchaseCycleDays ?? ARCHETYPES[archetype].defaultCycleDays;
@@ -219,6 +213,5 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("CALIBRATE FAIL:", e instanceof Error ? e.message : e);
-  process.exit(1);
+  fail("CALIBRATE", e);
 });

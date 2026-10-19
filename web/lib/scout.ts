@@ -12,14 +12,7 @@ import { formatNumber } from "@/lib/format";
 const log = createLogger("scout");
 
 /** Versión del criterio detector. Sube cuando cambia la regla. */
-export const SCOUT_GEN = "scout:v2:retention";
-
-export interface ScoutSummary {
-  scanned: number;
-  created: number;
-  updated: number;
-  closed: number;
-}
+const SCOUT_GEN = "scout:v2:retention";
 
 interface PredRow {
   customer_id: string;

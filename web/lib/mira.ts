@@ -74,7 +74,7 @@ export function parseContactability(
 }
 
 /** Días sin comprar extraídos del motivo crudo (null = otros tipos de señal). */
-export function parseDaysSince(raw: string | null): number | null {
+function parseDaysSince(raw: string | null): number | null {
   if (!raw) return null;
   const m = raw.match(/sin comprar hace (\d+)d/i) ?? raw.match(/Hace (\d+) días/i);
   return m ? Number(m[1]) : null;

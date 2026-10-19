@@ -21,7 +21,7 @@ import type { DefaultChannel, EmailProvider, Platform, StoreConnections } from "
 
 /** Revocar es destructivo y solo existe cuando hay key: dos pasos
  *  (Revocar → confirmar) y refresh para reflejar el estado real. */
-export function SecretRevokeButton({
+function SecretRevokeButton({
   secret,
 }: {
   secret: RevocableSecret;

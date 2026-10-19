@@ -54,6 +54,7 @@ async function startWorker(
   }
 }
 
+// fallow-ignore-next-line unused-server-action -- wired on demand like startCopywriterAction
 export async function startStrategistAction(): Promise<StartRetentionState> {
   return startWorker("strategist", "Estratega", 0, (runId, storeId) => runStrategist(runId, storeId));
 }
@@ -62,10 +63,12 @@ export async function startCopywriterAction(): Promise<StartRetentionState> {
   return startWorker("copywriter", "Copywriter", 0, (runId, storeId) => runCopywriter(runId, storeId));
 }
 
+// fallow-ignore-next-line unused-server-action -- wired on demand like startCopywriterAction
 export async function startDispatcherAction(): Promise<StartRetentionState> {
   return startWorker("dispatcher", "Dispatcher", 0, (runId, storeId) => runDispatcher(runId, storeId));
 }
 
+// fallow-ignore-next-line unused-server-action -- wired on demand like startCopywriterAction
 export async function startAnalystAction(): Promise<StartRetentionState> {
   return startWorker("analyst", "Analyst", 0, (runId, storeId) => runAnalyst(runId, storeId));
 }

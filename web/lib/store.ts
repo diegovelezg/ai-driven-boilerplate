@@ -41,7 +41,7 @@ const EMPTY: StoreConnections = {
   defaultChannel: "email",
 };
 
-export async function readConnectionsJson(): Promise<StoreConnections> {
+async function readConnectionsJson(): Promise<StoreConnections> {
   try {
     const raw = await readFile(CONFIG_FILE, "utf-8");
     return { ...EMPTY, ...JSON.parse(raw) };

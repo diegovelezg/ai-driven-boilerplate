@@ -41,7 +41,7 @@ export interface JudgeDossier {
 }
 
 /** Dossier de texto para el juez (compacto: lo que necesita, nada más). */
-export function buildJudgeDossier(d: JudgeDossier): string {
+function buildJudgeDossier(d: JudgeDossier): string {
   const lines = [
     `Cliente: ${d.firstName}${d.companyName ? ` — ${d.companyName}` : ""} (objetivo ${d.objetivo})`,
     `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}.`,

@@ -54,7 +54,7 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
 }
 
 /** Fallback legacy: la única conexión guardada en .data/connections.json. */
-export async function getLegacyStoreId(): Promise<string | null> {
+async function getLegacyStoreId(): Promise<string | null> {
   const conn = await readConnections();
   if (!conn.medusaUrl) return null;
   return resolveStoreId(conn.medusaUrl).catch(() => null);
@@ -70,7 +70,7 @@ export function pickRequestedStore(
 }
 
 /** Resuelve el tenant activo con el orden canónico. Nunca null si hay tiendas. */
-export async function resolveActiveStore(
+async function resolveActiveStore(
   stores: TenantStore[],
   requestedId: string | null | undefined,
 ): Promise<TenantStore> {
@@ -115,7 +115,7 @@ export function displayStoreName(s: { name: string | null; shop_url: string }): 
 }
 
 /** Añade/preserva ?store= en un href interno (para InsightStrip/CustomersView). */
-export function withStoreParam(href: string, storeId: string): string {
+function withStoreParam(href: string, storeId: string): string {
   const sep = href.includes("?") ? "&" : "?";
   return `${href}${sep}store=${encodeURIComponent(storeId)}`;
 }

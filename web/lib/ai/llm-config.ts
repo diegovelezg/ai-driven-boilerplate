@@ -64,7 +64,7 @@ const VALID_JSON_MODES = new Set(["none", "native"]);
  * `max_completion_tokens`) y `temperature != 1` (omitir). Aplica al
  * primario y a cualquier fallback con estos prefijos.
  */
-export function isReasoningChatModel(provider: string, model: string): boolean {
+function isReasoningChatModel(provider: string, model: string): boolean {
   return provider === "openai" && OPENAI_REASONING_PREFIXES.some((p) => model.startsWith(p));
 }
 
@@ -89,7 +89,7 @@ const REASONING_EFFORT_NATIVE: Record<string, Record<string, string>> = {
   anthropic: { low: "low", medium: "medium", high: "high", max: "max" },
 };
 
-export function getNativeReasoningEffort(provider: string, normalized: string): string {
+function getNativeReasoningEffort(provider: string, normalized: string): string {
   const mapping = REASONING_EFFORT_NATIVE[provider];
   if (!mapping) return normalized;
   return mapping[normalized] ?? normalized;
@@ -101,7 +101,7 @@ export function getNativeReasoningEffort(provider: string, normalized: string): 
  * ¿Se debe enviar `reasoning_effort` (Chat Completions) a este modelo?
  * Empírico: `gpt-4o-mini` → 400 si se envía. `deepseek-*` → 200 siempre (acepta/ignora).
  */
-export function shouldSendReasoningEffort(provider: string, model: string): boolean {
+function shouldSendReasoningEffort(provider: string, model: string): boolean {
   if (provider === "openai") {
     return OPENAI_REASONING_PREFIXES.some((p) => model.startsWith(p));
   }

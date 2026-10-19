@@ -121,7 +121,7 @@ export async function hasRunningRun(
 }
 
 /** Todas las corridas en curso (el lock granular y la cinta las leen de aquí). */
-export async function getRunningRuns(storeId: string): Promise<BackgroundRun[]> {
+async function getRunningRuns(storeId: string): Promise<BackgroundRun[]> {
   const db = getSupabase();
   const { data, error } = await db
     .from("background_runs")
@@ -174,11 +174,11 @@ export function busyMessage(conflict: BackgroundRun): string {
  *  `advanceRun` toca `updated_at` en cada paso, así que una corrida que
  *  progresa nunca se siega; una colgada (crash, deploy, script manual)
  *  libera el lock sola en vez de bloquear para siempre. */
-export const STALE_RUN_MINUTES = 30;
+const STALE_RUN_MINUTES = 30;
 
 /** Marca como error los `running` sin heartbeat (best-effort, nunca lanza).
  *  Devuelve cuántos segó. */
-export async function reapStaleRuns(storeId: string): Promise<number> {
+async function reapStaleRuns(storeId: string): Promise<number> {
   try {
     const db = getSupabase();
     const cutoff = Date.now() - STALE_RUN_MINUTES * 60_000;
@@ -266,7 +266,7 @@ export async function advanceRun(
 }
 
 /** Heartbeat explícito para tramos largos sin progreso (nunca lanza). */
-export async function touchRun(runId: string): Promise<void> {
+async function touchRun(runId: string): Promise<void> {
   try {
     await getSupabase()
       .from("background_runs")

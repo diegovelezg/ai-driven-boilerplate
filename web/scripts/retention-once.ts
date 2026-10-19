@@ -1,24 +1,11 @@
 // Corrida manual del motor de retención (como scout-once.ts).
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/retention-once.ts
-import { readFileSync } from "node:fs";
 import { getSupabase } from "@/lib/supabase";
 import { runRetentionModel } from "@/lib/retention";
-
-async function resolveStoreId(medusaUrl: string): Promise<string | null> {
-  const normalized = medusaUrl.trim().replace(/\/+$/, "").toLowerCase();
-  const { data } = await getSupabase()
-    .from("stores")
-    .select("id")
-    .eq("platform", "medusa")
-    .eq("shop_url", normalized)
-    .maybeSingle();
-  return (data?.id as string) ?? null;
-}
+import { fail, loadStoreId } from "./lib/run-once";
 
 async function main() {
-  const conn = JSON.parse(readFileSync(".data/connections.json", "utf-8"));
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) throw new Error("Tienda sin sincronizar en Supabase.");
+  const storeId = await loadStoreId();
   const res = await runRetentionModel(storeId, new Date());
   console.log(
     `predicted=${res.predicted} actuar=${res.actuar} vigilar=${res.vigilar} suprimidos=${res.suprimidos}`,
@@ -39,6 +26,5 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("RETENTION FAIL:", e instanceof Error ? e.message : e);
-  process.exit(1);
+  fail("RETENTION", e);
 });

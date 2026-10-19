@@ -163,12 +163,6 @@ async function rescueDomain(
   return null;
 }
 
-export interface EnrichSummary {
-  processed: number;
-  failed: number;
-  remaining: number;
-}
-
 /**
  * Dominios de negocio/institucionales presentes entre los customers de la tienda
  * que aún no están resueltos en `domains`. Terminal = business/institutional/
@@ -266,7 +260,7 @@ async function domainUsers(domain: string): Promise<DomainUsers> {
 }
 
 /** Intentos fetch+rescue antes de marcar un dominio como terminal (unreachable). */
-export const MAX_DOMAIN_ATTEMPTS = 3;
+const MAX_DOMAIN_ATTEMPTS = 3;
 
 /**
  * Persiste un fallo fetch+rescue: incrementa failed_attempts y guarda last_error.

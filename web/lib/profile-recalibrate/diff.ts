@@ -67,7 +67,7 @@ export interface DiffContext {
   rejectedKeys: Set<string>;
 }
 
-export function deltaKey(slot: ProfileSlot, a: string | null): string {
+function deltaKey(slot: ProfileSlot, a: string | null): string {
   return `${slot}:${a ?? ""}`;
 }
 

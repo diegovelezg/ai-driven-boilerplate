@@ -2,22 +2,15 @@
 // Uso: npx tsx --env-file=.env.local scripts/profiler-once.ts "descripción del negocio"
 // Persiste la síntesis en store_profiles (archetypeSource=auto).
 // Las correcciones del critic con arquetipo fuera del catálogo se descartan con log.
-import { readFileSync } from "node:fs";
-import { createClient } from "@supabase/supabase-js";
 import { runProfiler } from "@/lib/profiling/pipeline";
 import { startRun, finishRun } from "@/lib/background";
 import { ARCHETYPES, upsertStoreProfile, type ArchetypeId } from "@/lib/store-profiles";
+import { fail, loadServiceStore } from "./lib/run-once";
 
 async function main() {
   const description = process.argv[2];
   if (!description) throw new Error("Falta la descripción del negocio como argumento.");
-  const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  const medusaUrl = String(
-    JSON.parse(readFileSync(".data/connections.json", "utf-8")).medusaUrl,
-  ).replace(/\/+$/, "");
-  const { data: store } = await db.from("stores").select("id").eq("shop_url", medusaUrl).maybeSingle();
-  if (!store) throw new Error("Sin store para esta conexión.");
-  const storeId = store.id as string;
+  const { storeId } = await loadServiceStore();
 
   // Cerebro visible en la cinta + TeamPulse: sin run, su trabajo es invisible.
   const runId = await startRun(storeId, "profiler", "Cerebro", 1);
@@ -67,6 +60,5 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("PROFILER FAIL:", e instanceof Error ? e.message : e);
-  process.exit(1);
+  fail("PROFILER", e);
 });

@@ -17,9 +17,9 @@ import {
 } from "@/lib/retention-model";
 
 /** Versión del criterio: se guarda en evidence_json.generator. */
-export const RETENTION_GEN = "retention:v1:lognormal-grid";
+const RETENTION_GEN = "retention:v1:lognormal-grid";
 /** model_version para la clave única (store, customer, as_of). */
-export const RETENTION_VERSION = "retention:v1";
+const RETENTION_VERSION = "retention:v1";
 
 const DAY_MS = 86_400_000;
 

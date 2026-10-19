@@ -7,7 +7,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const RECALIBRATE_LOG = join(process.cwd(), ".data", "recalibrate.jsonl");
+const RECALIBRATE_LOG = join(process.cwd(), ".data", "recalibrate.jsonl");
 
 export type RecalibrationSource = "post-sync" | "manual" | "script";
 

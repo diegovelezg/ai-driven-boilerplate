@@ -13,7 +13,7 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import type { ChatArtifact } from "./types";
 import { ChatPanel } from "./chat-panel";
 
-export interface ChatDockState {
+interface ChatDockState {
   storeId: string;
   storeName: string;
   marketId: string | null;

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { getSupabase } from "@/lib/supabase";
 
 /** sha256 hex de la URL: misma clave que el backfill (dedup por creativo). */
-export function mediaUrlHash(url: string): string {
+function mediaUrlHash(url: string): string {
   return createHash("sha256").update(url).digest("hex");
 }
 
@@ -42,7 +42,7 @@ function shortDate(v: unknown): string | null {
 }
 
 /** Parte determinista (sin DB): pauta + clienteDijo + detalles desde metadata crudo. */
-export function rawItemContext(
+function rawItemContext(
   metadata: Record<string, unknown> | null | undefined,
 ): Pick<EnrichedOrderItem, "pauta" | "clienteDijo" | "detalles"> {
   const md = metadata ?? {};

@@ -253,7 +253,7 @@ export async function listMedusaRegions(
 }
 
 /** Estados de orden que NO cuentan como compra real (RFM/agregados). */
-export const EXCLUDED_ORDER_STATUSES = new Set([
+const EXCLUDED_ORDER_STATUSES = new Set([
   "canceled",
   "cancelled",
   "archived",
@@ -261,13 +261,13 @@ export const EXCLUDED_ORDER_STATUSES = new Set([
 ]);
 
 /** Estados de pago que NO cuentan como compra real. */
-export const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
+const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
 
 /**
  * Palabras que delatan ítems de prueba, ES + EN. Se matchea por palabra
  * completa (no subcadena): "test" marca "Prueba MX" pero no "contest".
  */
-export const TEST_ITEM_KEYWORDS = [
+const TEST_ITEM_KEYWORDS = [
   "prueba",
   "pruebas",
   "probando",
@@ -293,12 +293,12 @@ export const TEST_ITEM_KEYWORDS = [
 const TEST_ITEM_RE = new RegExp(`\\b(${TEST_ITEM_KEYWORDS.join("|")})\\b`, "i");
 
 /** true si el título del ítem parece de prueba (ES/EN, palabra completa). */
-export function isTestItemTitle(title: string): boolean {
+function isTestItemTitle(title: string): boolean {
   return TEST_ITEM_RE.test(title.trim());
 }
 
 /** true si algún ítem de la orden parece de prueba. */
-export function isTestOrder(
+function isTestOrder(
   items: Array<{ title?: unknown } | Record<string, unknown>>,
 ): boolean {
   return items.some((i) =>

@@ -34,6 +34,27 @@ function needStore(ctx: AgentContext): string | null {
   return ctx.storeId ?? null;
 }
 
+/** Fusiona una página por chunks en `merged` sin duplicar ids (señales/acciones). */
+function mergeChunkPage(
+  merged: Map<string, Record<string, unknown>>,
+  rows: Array<Record<string, unknown>> | null | undefined,
+): void {
+  for (const r of (rows ?? [])) if (!merged.has(String(r.id))) merged.set(String(r.id), r);
+}
+
+/** Recorta el top `n` por `created_at` desc con el sobre de paginado estándar. */
+function finishMergedPage(merged: Map<string, Record<string, unknown>>, total: number, n: number) {
+  const rows = [...merged.values()]
+    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+    .slice(0, n);
+  return {
+    items: rows,
+    total_count: total,
+    returned_count: rows.length,
+    truncated: total > rows.length,
+  };
+}
+
 /**
  * Tools del agente generalista de retención. Ámbito tienda (resumen, señales,
  * acciones, buscar customer) + ámbito ficha (perfil, compras/RFM, empresa)
@@ -286,18 +307,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
             ]);
             if (ce) return { error: ce.message };
             total += cc ?? 0;
-            for (const r of ((cd ?? []) as Array<Record<string, unknown>>))
-              if (!merged.has(String(r.id))) merged.set(String(r.id), r);
+            mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
           }
-          const rows = [...merged.values()]
-            .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
-            .slice(0, n);
-          return {
-            items: rows,
-            total_count: total,
-            returned_count: rows.length,
-            truncated: total > rows.length,
-          };
+          return finishMergedPage(merged, total, n);
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) };
         }
@@ -382,18 +394,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
             ]);
             if (ce) return { error: ce.message };
             total += cc ?? 0;
-            for (const r of ((cd ?? []) as Array<Record<string, unknown>>))
-              if (!merged.has(String(r.id))) merged.set(String(r.id), r);
+            mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
           }
-          const rows = [...merged.values()]
-            .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
-            .slice(0, n);
-          return {
-            items: rows,
-            total_count: total,
-            returned_count: rows.length,
-            truncated: total > rows.length,
-          };
+          return finishMergedPage(merged, total, n);
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) };
         }

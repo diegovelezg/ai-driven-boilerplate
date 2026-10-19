@@ -75,7 +75,7 @@ export interface CustomerFirmographics {
 /** Mediana de intervalos entre compras (días). null si F<2 o sin fechas.
  *  Un solo gap no es ritmo: se exigen ≥2 gaps (≥3 sesiones); si no, null y el
  *  ciclo cae a tienda/arquetipo. */
-export function medianInterval(datesAsc: Date[]): number | null {
+function medianInterval(datesAsc: Date[]): number | null {
   if (datesAsc.length < 2) return null;
   // Sesiones: pedidos con <1d de separación son una sola compra en cuotas
   // (mismo día / pagos partidos), no cadencia. Solo gaps entre sesiones cuentan.

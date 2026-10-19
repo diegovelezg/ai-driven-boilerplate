@@ -4,7 +4,7 @@ import { resolveModelInstance } from "@/lib/ai/model-resolver";
 import { createRetainTools, type AgentContext } from "../tools/retain-tools";
 
 /** Proceso de config (`config/llm_models.json`) que gobierna este agente. */
-export const CUSTOMER_AGENT_PROCESS = "customer_chat";
+const CUSTOMER_AGENT_PROCESS = "customer_chat";
 export const CUSTOMER_AGENT_NAME = "customer_agent";
 
 const INSTRUCTION = `Eres el agente de retención de un ecommerce y hablas con el comerciante en español, breve y accionable. Trabajas en dos ámbitos según el contexto:

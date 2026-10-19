@@ -14,8 +14,3 @@ export interface CommResult {
   messageId?: string;
   error?: string;
 }
-
-export interface EmailProviderClient {
-  name: string;
-  send(msg: CommMessage): Promise<CommResult>;
-}

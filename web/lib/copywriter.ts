@@ -10,7 +10,8 @@ import { JUDGE_VETO_PREFIX } from "@/lib/single-audit";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
-import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { getLlmConfig } from "@/lib/ai/llm-config";
+import { completeJson } from "@/lib/retrieval";
 import { formatNumber } from "@/lib/format";
 
 const log = createLogger("copywriter");
@@ -23,7 +24,7 @@ export { COPYWRITER_GEN };
 
 /** Sustantivo neutro para el brief según catálogo (el LLM repite esta palabra).
  *  Sin esto, todo tenant suena a vía pública ("pauta", "circuito", "zona"). */
-export function briefNoun(catalog: CatalogType | null): {
+function briefNoun(catalog: CatalogType | null): {
   last: string;
   repeat: string;
   empty: string;
@@ -38,7 +39,7 @@ export function briefNoun(catalog: CatalogType | null): {
 }
 /** Verbo de compra según qué vende el tenant. Sin esto, el redactor habla
  *  como bodega (“llevaste un Rp Cajamarca”) aunque venda espacios/servicios. */
-export function purchaseLanguage(
+function purchaseLanguage(
   catalog: CatalogType | null,
   vertical: string | null,
 ): string {
@@ -119,7 +120,7 @@ function hasAnchor(body: string, tokens: Array<string | null>): boolean {
 
 /** El juez dijo no-contactable: no es un fallo (no suma a failed), es una
  *  omisión auditada. Lleva el motivo para el log y el flag en evidence. */
-export class ContactabilitySkip extends Error {}
+class ContactabilitySkip extends Error {}
 
 /** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes.
  *  Acepta también el formato retention:v1
@@ -148,39 +149,6 @@ function fechaCorta(iso: string | null): string | null {
     "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
   ];
   return `${d.getDate()} de ${meses[d.getMonth()]}`;
-}
-
-async function completeJson(
-  ref: ModelRef,
-  temp: number,
-  maxTokens: number,
-  effort: string | null,
-  system: string,
-  user: string,
-): Promise<string> {
-  const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
-  if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
-  const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
-  const body: Record<string, unknown> = {
-    model: ref.model,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    ...chatCompletionParams(ref.provider, ref.model, temp, maxTokens),
-    response_format: { type: "json_object" },
-    ...reasoningBody(ref.provider, ref.model, effort),
-  };
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) throw new Error(`${ref.provider}: respuesta vacía`);
-  return content;
 }
 
 async function draft(system: string, user: string): Promise<string> {

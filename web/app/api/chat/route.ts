@@ -18,9 +18,7 @@ const SESSION_USER_ID = "merchant";
 const sessionService = new InMemorySessionService();
 
 /** Chat único: el orquestador (customer_agent generalista) decide qué
- *  especialista invocar por turno. El user nunca elige agente: es orgánico.
- *  Se acepta `foco` legacy pero se ignora (compat con URLs/bookmarks viejos). */
-export type AgentFoco = "general";
+ *  especialista invocar por turno. El user nunca elige agente: es orgánico. */
 
 interface IncomingMessage {
   role: "user" | "assistant";

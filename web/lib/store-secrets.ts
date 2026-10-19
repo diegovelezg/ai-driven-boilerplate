@@ -12,19 +12,19 @@ import {
   maskSecret,
 } from "@/lib/secrets-crypto";
 
-export const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
+const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
-export type SecretAction = "upsert" | "revoke" | "migrate";
+type SecretAction = "upsert" | "revoke" | "migrate";
 
-export interface SecretStatus {
+interface SecretStatus {
   keyName: SecretKeyName;
   configured: boolean;
   masked: string;
   updatedAt: string | null;
 }
 
-export interface SecretAuditRow {
+interface SecretAuditRow {
   id: string;
   storeId: string;
   keyName: string;
@@ -38,7 +38,7 @@ function shaShort(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
 }
 
-export function isSecretsDbReady(): boolean {
+function isSecretsDbReady(): boolean {
   return isSupabaseConfigured() && isEncryptionConfigured();
 }
 
@@ -106,7 +106,7 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
 }
 
 /** Estado sin valores (para Settings): configurado + máscara + updated_at. */
-export async function getStoreSecretStatus(storeId: string): Promise<SecretStatus[]> {
+async function getStoreSecretStatus(storeId: string): Promise<SecretStatus[]> {
   const secrets = await getStoreSecrets(storeId);
   const updatedByKey = new Map<string, string>();
   if (isSupabaseConfigured()) {
@@ -172,7 +172,7 @@ export async function setStoreSecret(
 }
 
 /** Últimas auditorías (sin valores, solo quién/cuándo/qué). */
-export async function getSecretAudits(
+async function getSecretAudits(
   storeId: string,
   limit = 20,
 ): Promise<SecretAuditRow[]> {
@@ -199,4 +199,3 @@ export async function getSecretAudits(
   }
 }
 
-export { fingerprintSecret };

@@ -5,7 +5,7 @@
 // NUNCA toca metadata.media_comments (fuente humana de Medusa).
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";

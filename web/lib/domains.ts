@@ -4,7 +4,7 @@
 export type DomainType = "webmail" | "institutional" | "business";
 
 /** Webmails/personales comunes (global + LatAm). */
-export const WEBMAIL: ReadonlySet<string> = new Set([
+const WEBMAIL: ReadonlySet<string> = new Set([
   "gmail.com", "googlemail.com",
   "hotmail.com", "hotmail.es", "hotmail.com.pe",
   "outlook.com", "outlook.es", "outlook.com.pe",

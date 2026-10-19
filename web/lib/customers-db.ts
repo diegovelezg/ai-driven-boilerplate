@@ -126,7 +126,7 @@ export interface DbCustomersPage {
   totalCount: number;
 }
 
-export interface PendingCustomer {
+interface PendingCustomer {
   customer: EditableCustomer;
   inputHash: string;
 }
@@ -136,7 +136,7 @@ export interface PendingCustomer {
  * cambios desde el último procesamiento. `needs_processing` lo mantiene el
  * trigger `customers_input_hash`; esta query no necesita comparar hashes.
  */
-export async function queryPendingCustomers(
+async function queryPendingCustomers(
   storeId: string,
   limit = 50,
 ): Promise<PendingCustomer[]> {
@@ -160,7 +160,7 @@ export async function queryPendingCustomers(
  * lo tocó en el medio (input_hash intacto); si devuelve false, re-leer.
  * `patch` = columnas de resultado del worker (se guardan en el mismo UPDATE).
  */
-export async function markCustomerProcessed(
+async function markCustomerProcessed(
   id: string,
   inputHash: string,
   patch: Record<string, unknown> = {},
@@ -220,7 +220,7 @@ async function loadEnrichedByDomain(
 }
 
 /** Firmográficos enriquecidos por dominio: qué es la empresa, no solo su nombre. */
-export interface EnrichedFirm {
+interface EnrichedFirm {
   company: string | null;
   industry: string | null;
   description: string | null;
@@ -292,7 +292,7 @@ export interface CustomerFilters {
   customerType: string | null;
 }
 
-export const NO_CUSTOMER_FILTERS: CustomerFilters = {
+const NO_CUSTOMER_FILTERS: CustomerFilters = {
   decision: null,
   vista: null,
   ritmo: null,
@@ -327,7 +327,7 @@ export function parseCustomerFilters(sp: {
   return { decision, vista, ritmo, customerType };
 }
 
-export function hasCustomerFilters(f: CustomerFilters): boolean {
+function hasCustomerFilters(f: CustomerFilters): boolean {
   return (
     f.decision !== null ||
     f.vista !== null ||
@@ -337,7 +337,7 @@ export function hasCustomerFilters(f: CustomerFilters): boolean {
 }
 
 /** Tipo efectivo: override manual ?? base Medusa (misma regla que toEditableCustomer). */
-export function effectiveCustomerType(r: Record<string, unknown>): string {
+function effectiveCustomerType(r: Record<string, unknown>): string {
   const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
   const manual =
     typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
@@ -391,10 +391,8 @@ export async function getPredictionsMap(
 }
 
 /** ¿La predicción calza con el filtro `decision`? Ver `lib/customer-predictions`. */
-export { matchesDecisionFilter } from "@/lib/customer-predictions";
 
 /** Etiqueta de ventana desde t y p25/p75. Ver `lib/customer-predictions`. */
-export { ventanaLabel } from "@/lib/customer-predictions";
 
 /** Resumen "entran en ventana en 7 días" (vigilar con p25−t ∈ [0,7]). */
 export async function getVentana7Summary(
@@ -419,7 +417,7 @@ export async function getVentana7Summary(
 /** Ritmo de un cliente para filtro: del modelo, o sin-compras si no hay
  *  predicción y nunca compró. Clientes con compras pero sin predicción
  *  (alta posterior a la corrida) no calzan en ningún ritmo. */
-export function matchesRitmoFilter(
+function matchesRitmoFilter(
   pred: CustomerPredictionLite | undefined,
   ordersCount: number,
   filter: string,
@@ -430,13 +428,13 @@ export function matchesRitmoFilter(
   return false;
 }
 
-export interface RitmoSummary {
+interface RitmoSummary {
   conRitmo: RitmoBucket;
   primera: RitmoBucket;
   sinCompras: number;
 }
 
-export interface RitmoBucket {
+interface RitmoBucket {
   n: number;
   valorMinor: number;
   pasado: { n: number; valorMinor: number };
@@ -451,7 +449,7 @@ function emptyBucket(): RitmoBucket {
 
 /** La base en 3 ritmos (conteos + $ en juego intra-moneda, sin mezclar),
  *  con apertura por posición en ventana (pasó / en ventana / entra). */
-export async function getRitmoSummary(
+async function getRitmoSummary(
   storeId: string,
   viewCurrency: string | null,
 ): Promise<RitmoSummary> {

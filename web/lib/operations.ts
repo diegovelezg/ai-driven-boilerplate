@@ -9,24 +9,8 @@ export type ScopeKind = "global" | "signal" | "customer" | "domain";
 export type ErrorCode = "judge_veto" | "busy" | "llm_fail" | "stale" | "conflict";
 
 /** Kinds con corrida en `background_runs`. Los instantáneos (`approve`,
- *  `reject`, `dismiss`) no crean run: no participan del lock. */
-export type OperationKind =
-  | "sync"
-  | "enrichment"
-  | "enrich_single"
-  | "scout"
-  | "strategist"
-  | "copywriter"
-  | "copywriter_single"
-  | "regenerate"
-  | "dispatcher"
-  | "analyst"
-  | "prospect"
-  | "profiler"
-  | "approve_batch"
-  | "approve"
-  | "reject"
-  | "dismiss";
+ *  `reject`, `dismiss`) no crean run: no participan del lock.
+ *  (Referencia: los kinds se usan como string literals en llamadas.) */
 
 export interface ActiveOp {
   kind: string;

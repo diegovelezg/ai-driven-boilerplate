@@ -7,7 +7,7 @@ interface SseEvent {
 
 /** Extrae tokens OpenAI-style (`data: {choices[0].delta.content}`) y
  *  artefactos (`data: {artifact}`) de un stream SSE. */
-export async function consumeSseStream(
+async function consumeSseStream(
   res: Response,
   onToken: (token: string) => void,
   onArtifact?: (artifact: ChatArtifact) => void,

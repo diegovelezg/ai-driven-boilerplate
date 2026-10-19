@@ -4,32 +4,32 @@
 // Solo clasifica (predicate/choice/score con probabilidades); NUNCA genera texto.
 // Los errores HTTP lanzan (sin fallback silencioso); `refusal` es un veredicto explícito.
 
-export const DECISIONS_MODEL = "gpt-6-luna";
+const DECISIONS_MODEL = "gpt-6-luna";
 const DECISIONS_URL = "https://api.openai.com/v1/decisions";
 
-export interface PredicateQuestion {
+interface PredicateQuestion {
   type: "predicate";
   name: string;
   instructions: string;
 }
 
-export interface ChoiceQuestion {
+interface ChoiceQuestion {
   type: "choice";
   name: string;
   instructions: string;
   choices: Array<{ value: string; description: string }>;
 }
 
-export interface ScoreQuestion {
+interface ScoreQuestion {
   type: "score";
   name: string;
   instructions: string;
   levels: Array<{ label: string; description: string }>;
 }
 
-export type DecisionQuestion = PredicateQuestion | ChoiceQuestion | ScoreQuestion;
+type DecisionQuestion = PredicateQuestion | ChoiceQuestion | ScoreQuestion;
 
-export type DecisionAnswer =
+type DecisionAnswer =
   | { type: "predicate"; name: string; probability: number }
   | {
       type: "choice";
@@ -54,7 +54,7 @@ function apiKey(): string {
 }
 
 /** Una llamada Decisions: mismo `input` como evidencia, N preguntas independientes. */
-export async function decide(
+async function decide(
   input: string,
   questions: DecisionQuestion[],
 ): Promise<DecisionAnswer[]> {

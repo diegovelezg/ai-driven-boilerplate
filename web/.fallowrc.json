@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": ["scripts/**/*.ts"],
+  "ignorePatterns": ["components/ui/dialog.tsx", "lib/utils.ts"],
+  "ignoreDependencies": ["supabase", "@google/adk-devtools", "@tailwindcss/turbopack"],
+  "usedClassMembers": [{ "extends": "BaseLlm", "members": ["supportedModels", "generateContentAsync", "connect"] }],
+  "ignoreExports": [
+    {
+      "file": "lib/profile-interpreter.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "lib/store-profiles.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "components/ui/*.tsx",
+      "exports": ["*"]
+    },
+    {
+      "file": "lib/utils.ts",
+      "exports": ["*"]
+    }
+  ]
+}

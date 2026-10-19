@@ -4,24 +4,13 @@
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/refresh-retention-v1.ts [copyLimit]
 // Nunca toca: señales retention:v1, señales con borrador vivo
 // (pending_review/approved) ni borradores approved/dispatched.
-import { readFileSync } from "node:fs";
 import { getSupabase } from "@/lib/supabase";
 import { runRetentionModel } from "@/lib/retention";
 import { runScout } from "@/lib/scout";
 import { runStrategist } from "@/lib/strategist";
 import { runCopywriter } from "@/lib/copywriter";
 import { startRun } from "@/lib/background";
-
-async function resolveStoreId(medusaUrl: string): Promise<string | null> {
-  const normalized = medusaUrl.trim().replace(/\/+$/, "").toLowerCase();
-  const { data } = await getSupabase()
-    .from("stores")
-    .select("id")
-    .eq("platform", "medusa")
-    .eq("shop_url", normalized)
-    .maybeSingle();
-  return (data?.id as string) ?? null;
-}
+import { fail, loadStoreId } from "./lib/run-once";
 
 /** Formato viejo del scout pre-retention ("media Nd"); el nuevo es "ciclo ~Nd". */
 function isLegacyReason(reason: string | null): boolean {
@@ -30,9 +19,7 @@ function isLegacyReason(reason: string | null): boolean {
 }
 
 async function main() {
-  const conn = JSON.parse(readFileSync(".data/connections.json", "utf-8"));
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) throw new Error("Tienda sin sincronizar en Supabase.");
+  const storeId = await loadStoreId();
   const db = getSupabase();
   const copyLimit = Number(process.argv[2] ?? 10);
 
@@ -96,6 +83,5 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("REFRESH FAIL:", e instanceof Error ? e.message : e);
-  process.exit(1);
+  fail("REFRESH", e);
 });

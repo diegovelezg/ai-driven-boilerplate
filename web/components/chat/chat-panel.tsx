@@ -9,7 +9,7 @@ import type { ChatMessage } from "@/components/chat/types";
 /** Pool de presets alineados al motor: decisiones (actuar/vigilar/no-tocar),
  *  ventanas de recompra, recupero medido, borradores, leads y resumen.
  *  Cada preset mapea a una tool real. Cada apertura muestra 3 al azar. */
-export const SUGGESTION_POOL = [
+const SUGGESTION_POOL = [
   "¿A quién debo actuar hoy y por qué?",
   "¿Cuánto recuperamos este mes?",
   "Muéstrame los borradores pendientes",
@@ -30,7 +30,7 @@ export const SUGGESTION_POOL = [
 ];
 
 /** 3 al azar sin repetir (Fisher-Yates parcial). */
-export function pickRandomSuggestions(pool: string[], n = 3): string[] {
+function pickRandomSuggestions(pool: string[], n = 3): string[] {
   const arr = [...pool];
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

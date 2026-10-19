@@ -17,12 +17,12 @@ export interface CustomerPredictionLite {
 
 /** Ritmo del cliente (segmentación estructural, estable): con ritmo (F≥2),
  *  primera recompra (F=1) o sin compras (el motor no los ve). */
-export type Ritmo = "con-ritmo" | "primera" | "sin-compras";
+type Ritmo = "con-ritmo" | "primera" | "sin-compras";
 
 export const RITMO_VALUES = new Set<string>(["con-ritmo", "primera", "sin-compras"]);
 
 /** Etiqueta humana del ritmo. */
-export function ritmoLabel(r: Ritmo | string | null | undefined): string {
+function ritmoLabel(r: Ritmo | string | null | undefined): string {
   if (r === "con-ritmo") return "Con ritmo";
   if (r === "primera") return "Primera recompra";
   if (r === "sin-compras") return "Sin compras";

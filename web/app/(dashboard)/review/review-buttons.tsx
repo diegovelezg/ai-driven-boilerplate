@@ -167,7 +167,7 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
 
 /** Cambia un pendiente al otro canal (solo si el cliente tiene ambos
  *  contactos). Re-redacta la misma fila: nunca hay dos borradores vivos. */
-export function SwitchChannelButton({
+function SwitchChannelButton({
   id,
   toLabel,
   onSwitch,

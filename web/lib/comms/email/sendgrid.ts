@@ -11,7 +11,7 @@ function escapeHtml(s: string): string {
 }
 
 /** Texto plano → HTML mínimo para el cuerpo del correo. */
-export function textToHtml(text: string): string {
+function textToHtml(text: string): string {
   const paras = text
     .split(/\n{2,}/)
     .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`)

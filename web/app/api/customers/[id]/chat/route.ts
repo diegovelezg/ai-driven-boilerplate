@@ -1,5 +1,6 @@
 import { InMemorySessionService } from "@google/adk";
-import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
+import { resolveRouteCustomerId } from "@/lib/api/guard";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
 import { loadHistory, saveTurn } from "@/lib/conversations";
@@ -26,11 +27,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!isSupabaseConfigured()) {
-    return Response.json({ error: "Supabase no configurado." }, { status: 500 });
-  }
-  const { id } = await params;
-  if (!id) return Response.json({ error: "Falta id." }, { status: 400 });
+  const idOrErr = await resolveRouteCustomerId(params);
+  if (idOrErr instanceof Response) return idOrErr;
+  const id = idOrErr;
 
   let body: { messages?: IncomingMessage[] };
   try {

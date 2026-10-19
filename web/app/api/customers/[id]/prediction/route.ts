@@ -1,6 +1,7 @@
-import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
+import { resolveRouteCustomerId } from "@/lib/api/guard";
 
-export interface CustomerPredictionDTO {
+interface CustomerPredictionDTO {
   model: string;
   pRecompraH: number | null;
   pLow: number | null;
@@ -23,11 +24,9 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!isSupabaseConfigured()) {
-    return Response.json({ error: "Supabase no configurado." }, { status: 500 });
-  }
-  const { id } = await params;
-  if (!id) return Response.json({ error: "Falta id." }, { status: 400 });
+  const idOrErr = await resolveRouteCustomerId(params);
+  if (idOrErr instanceof Response) return idOrErr;
+  const id = idOrErr;
   const db = getSupabase();
   const { data: cust } = await db
     .from("customers")

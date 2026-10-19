@@ -13,7 +13,7 @@ import { formatNumber } from "@/lib/format";
 const log = createLogger("strategist");
 
 /** Versión del criterio de priorización. Sube cuando cambia la regla. */
-export const STRATEGIST_GEN = "strategist:v2:retention";
+const STRATEGIST_GEN = "strategist:v2:retention";
 
 interface OpenSignal {
   id: string;

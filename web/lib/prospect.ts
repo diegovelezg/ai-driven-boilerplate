@@ -24,7 +24,7 @@ import { createLogger } from "@/lib/log";
 const log = createLogger("prospect");
 
 /** Versión del criterio prospector. Sube cuando cambia scoring/retrieval. */
-export const PROSPECT_GEN = "prospect:v4:contacts";
+const PROSPECT_GEN = "prospect:v4:contacts";
 
 export interface Icp {
   text: string;
@@ -64,7 +64,7 @@ export async function getIcp(storeId: string): Promise<Icp> {
 }
 
 /** Top compradores → industrias/tipos dominantes → texto ICP. null si sin base. */
-export async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>): Promise<string | null> {
+async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>): Promise<string | null> {
   const db = getSupabase();
   const { data: top, error } = await db
     .from("customers")
@@ -121,7 +121,7 @@ async function prospectComplete(system: string, user: string): Promise<string> {
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
-export interface SimilarPoolEntry {
+interface SimilarPoolEntry {
   domain: string;
   label: string;
   industry: string;
@@ -133,7 +133,7 @@ export interface SimilarPoolEntry {
 
 /** Pool determinista (query, sin LLM): top compradores con industria verificada.
  *  El MODELO elige los parecidos dentro de este pool al puntuar. */
-export async function buildSimilarPool(storeId: string, limit = 15): Promise<SimilarPoolEntry[]> {
+async function buildSimilarPool(storeId: string, limit = 15): Promise<SimilarPoolEntry[]> {
   const db = getSupabase();
   // Dominios de ESTA tienda (no tabla global cortada a 2000): paginado + .in chunkeado.
   const storeDomains = new Set<string>();
@@ -199,7 +199,7 @@ export async function buildSimilarPool(storeId: string, limit = 15): Promise<Sim
   return out;
 }
 
-export interface SimilarPick {
+interface SimilarPick {
   domain: string;
   why: string;
 }
@@ -221,7 +221,7 @@ function leadCountry(
   return modeCountry(votes);
 }
 
-export interface Scored {
+interface Scored {
   index: number;
   company: string | null;
   domain: string | null;
@@ -233,7 +233,7 @@ export interface Scored {
 
 /** Embeddings runtime (sin BD): 1 fetch batch por corrida (~2s, <$0.001).
  *  Falla → el llamador usa el pool completo (conducta anterior). */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
+async function embedTexts(texts: string[]): Promise<number[][]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Falta OPENAI_API_KEY");
   const res = await fetch("https://api.openai.com/v1/embeddings", {
@@ -262,7 +262,7 @@ function cosine(a: number[], b: number[]): number {
 
 /** Top-k del pool por similitud semántica con el texto del candidato.
  *  Puro retrieval: no decide, solo recorta para que el LLM vea 3 en vez de 12. */
-export function rankTop(
+function rankTop(
   query: number[],
   pool: SimilarPoolEntry[],
   poolVecs: number[][],
@@ -275,7 +275,7 @@ export function rankTop(
     .map((r) => r.p);
 }
 
-export async function scoreLeads(
+async function scoreLeads(
   icp: string,
   cands: Scraped[],
   focus?: string | null,
@@ -374,7 +374,7 @@ async function scoreChunk(
 }
 
 /** Dedupe: ni URLs ya propuestas ni dominios que ya son customers. Paginado completo. */
-export async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]): Promise<Scored[]> {
+async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]): Promise<Scored[]> {
   const db = getSupabase();
   const seenUrls = new Set<string>();
   for (let off = 0; ; off += 1000) {

@@ -25,7 +25,7 @@ export interface InvestigateResult extends DescriptionInterpretation {
 
 /** Extrae la primera URL o dominio suelto del texto libre ("mi web es tupantalla.com").
  *  Normaliza acentos para el match ("tupàntalla.com" → "tupantalla.com"). */
-export function extractWebsite(raw: string): string | null {
+function extractWebsite(raw: string): string | null {
   const text = (raw ?? "")
     .toLowerCase()
     .normalize("NFD")
