@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { PenLine, Radar, TriangleAlert, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { countDuplicateEmails } from "@/lib/duplicates";
@@ -6,7 +7,6 @@ import { pendingDomains } from "@/lib/enrich";
 import { formatMoney } from "@/lib/medusa";
 import { getStoreProfile, resolveTenantCycleDays } from "@/lib/store-profiles";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { getRitmoSummary, getPredEnJuegoByMonth, type RitmoSummary } from "@/lib/customers-db";
 import { applyScopeFilter, displayMarket, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
 import {
   displayStoreName,
@@ -17,21 +17,10 @@ import { AgentCard } from "./ask-agent";
 import { TeamPulse } from "./team-pulse";
 import { AttentionTable, AttentionEmptyState, type AttentionItem } from "./attention-table";
 import { HoyHeroActions } from "./hoy-hero-actions";
-import { FinanceStrip } from "./finance-strip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  bucketMonthly,
-  computeFinanceKpis,
-  computeRetentionKpis,
-  last12MonthKeys,
-  monthEndMs,
-  rescateMonthly,
-  type AttributedRevenue,
-  type FinanceKpis,
-  type MonthBucket,
-  type RetentionKpis,
-} from "@/lib/finance";
 import { avgTicket, getRankedMira } from "@/lib/mira";
+import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
+import { approverLabel, dispatchedOutcome } from "@/lib/action-trace";
 
 export const instant = false;
 
@@ -120,63 +109,6 @@ function ago(iso: string | null): string | null {
   if (d === 1) return "ayer";
   if (d < 30) return `hace ${d} días`;
   return `hace ${Math.floor(d / 30)} meses`;
-}
-
-/** Fila del mapa Ritmo × Ventana: conteo + $ y barra apilada
- *  (pasó / en ventana / entra). SVG a mano, sin dependencias. */
-function RitmoRow({
-  noun,
-  href,
-  bucket,
-  money,
-}: {
-  noun: string;
-  href: string;
-  bucket: { n: number; valorMinor: number; pasado: { n: number }; enVentana: { n: number }; entra: { n: number } };
-  money: (n: number) => string;
-}) {
-  const label = noun === "con ritmo" ? "Con ritmo" : "Primera recompra";
-  const segs = [
-    { key: "pasaron", n: bucket.pasado.n, cls: "fill-amber-500/80" },
-    { key: "en ventana", n: bucket.enVentana.n, cls: "fill-emerald-500/70" },
-    { key: "entran", n: bucket.entra.n, cls: "fill-primary/40" },
-  ];
-  const W = 300;
-  let x = 0;
-  return (
-    <div className="flex flex-col gap-1">
-      <p className="text-[13px] tabular-nums">
-        <Link href={href} className="underline">
-          {bucket.n} {noun}
-        </Link>{" "}
-        · {money(bucket.valorMinor)} valor esperado
-      </p>
-      {bucket.n > 0 && (
-        <>
-          <svg
-            viewBox={`0 0 ${W} 10`}
-            className="w-full"
-            role="img"
-            aria-label={`${label}: ${segs.map((s) => `${s.n} ${s.key}`).join(", ")}`}
-          >
-            {segs.map((s) => {
-              const w = bucket.n > 0 ? Math.max(s.n > 0 ? 2 : 0, (s.n / bucket.n) * W) : 0;
-              const el = (
-                <rect key={s.key} x={x} y={0} width={w} height={10} rx={2} className={s.cls}>
-                  <title>{`${s.n} ${s.key}`}</title>
-                </rect>
-              );
-              x += w;
-              return el;
-            })}
-          </svg>
-          <p className="text-xs text-muted-foreground tabular-nums">
-            {segs.map((s) => `${s.n} ${s.key}`).join(" · ")}
-          </p>
-        </>
-      )}
-    </div>
-  );
 }
 
 export default async function DashboardPage({
@@ -268,11 +200,7 @@ export default async function DashboardPage({
   let valorAprobados = 0;
   let topLead: AttentionRow | null = null;
   let foreignLines: Array<{ code: string; n: number; value: number }> = [];
-  let financeBuckets: MonthBucket[] = [];
-  let financeKpis: FinanceKpis | null = null;
-  let rescate: ReturnType<typeof rescateMonthly> = null;
   let cycleDays: number | null = null;
-  let retention: RetentionKpis | null = null;
   let hoyActuar = 0;
   let hoyVigilar = 0;
   let hoyAuto = 0;
@@ -305,15 +233,14 @@ export default async function DashboardPage({
   // Fecha de la foto del día: si es anterior a hoy, se avisa (sin cron diario
   // garantizado, la frescura se declara en vez de asumirse).
   let fotoVieja = false;
-  let juegoMinor = 0;
-  let juegoLow = 0;
-  let juegoHigh = 0;
-  let juegoCount = 0;
-  let hasJuego = false;
   // Verbo del tenant para motivos ("pauta" en servicio/digital, "compra" en
   // el resto): la fila de Hoy no puede hablar como bodega en TuPantalla.
   let purchaseVerb = "compra";
-  let ritmo: RitmoSummary | null = null;
+  // Issue #19 Paso 3: últimos enviados (feed "¿volvieron?").
+  let sentFeed: Array<{
+    id: string; customerId: string; name: string; email: string; channel: string; body: string;
+    approvedBy: string | null; dispatchedAt: string | null; revenue: number | null;
+  }> = [];
   let team: TeamProfile = { vertical: null, buyerType: null, cycle: null, archetype: null, confidence: null, learnedAt: null };
   // Filtro global por país/mercado (?market= del header). Lo que se filtra es
   // el contenido operativo: conteos, mira, revenue y órdenes.
@@ -322,7 +249,6 @@ export default async function DashboardPage({
   try {
     scope = await resolveMarketScope(active.id, sp.market).catch(() => scope);
     const weekAgoIso = new Date(Date.now() - 7 * 86_400_000).toISOString();
-    const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
     const [
       openN,
       priN,
@@ -337,7 +263,6 @@ export default async function DashboardPage({
       revRows,
       runRows,
       profileRow,
-      finRows,
       actRows,
     ] = await Promise.all([
       countExact("churn_signals", active.id, (q) => q.in("status", ["open"]), scope),
@@ -388,17 +313,6 @@ export default async function DashboardPage({
         .select("vertical_detected,buyer_type,repurchase_cycle_days,archetype,interpretation_confidence,interpreted_at")
         .eq("store_id", active.id)
         .maybeSingle(),
-      (async () => {
-        let fq = db
-          .from("orders")
-          .select("total_amount,currency,placed_at,customer_id")
-          .eq("store_id", active.id)
-          .gte("placed_at", yearAgoIso)
-          .order("placed_at", { ascending: false });
-        // Mismo criterio que recentOrders: market exacto + NULL-comodín.
-        if (scope.market) fq = fq.or(`market_id.eq.${scope.market.id},country.is.null`);
-        return fq.limit(5000);
-      })(),
       // Clientes con borrador/aprobado (para plata por etapa del embudo).
       (async () => {
         try {
@@ -445,36 +359,8 @@ export default async function DashboardPage({
       // Sin perfil: se queda "compra".
     }
 
-    // Finanzas simples: solo moneda de la vista, nunca se mezclan monedas.
-    // Límite 5000 igual que popRows: suficiente para el MVP, se refina si crece.
-    if (!finRows.error) {
-      const finOrders = ((finRows.data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-        total_amount: Number(r.total_amount ?? 0),
-        currency: (r.currency as string | null) ?? null,
-        placed_at: (r.placed_at as string | null) ?? null,
-        customer_id: r.customer_id,
-      }));
-      const viewCur = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
-      financeBuckets = bucketMonthly(finOrders, viewCur);
-      financeKpis = computeFinanceKpis(finOrders, viewCur);
-      // En juego vs rescatado: atribuido con fecha de acción en el mes.
-      const attributed: AttributedRevenue[] = (
-        (revRows.data ?? []) as Array<Record<string, unknown>>
-      ).map((r) => ({
-        amount: Number(r.revenue_attributed ?? 0),
-        at: ((r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null),
-      }));
-      cycleDays = tenantCycleDays;
-      // En juego con origen por punto (issue #12): meses con foto del motor
-      // usan valor esperado; meses sin foto, reconstrucción pre-motor.
-      const predSnap = await getPredEnJuegoByMonth(
-        active.id,
-        last12MonthKeys(Date.now()).map((k) => ({ key: k.key, endMs: monthEndMs(k.key) })),
-        viewCur,
-      ).catch(() => new Map<string, { minor: number; count: number }>());
-      rescate = rescateMonthly(finOrders, attributed, tenantCycleDays, viewCur, Date.now(), predSnap);
-      retention = computeRetentionKpis(finOrders, attributed, tenantCycleDays, viewCur);
-    }
+    // Ciclo del tenant para el héroe Hoy y TeamPulse (la salud 12m vive en /finanzas).
+    cycleDays = tenantCycleDays;
 
     // Ranking único (lib/mira): mismo criterio en Overview, Review y Copywriter.
     // Si Pepita es top en Hoy, es top en todos lados. Universos monetarios
@@ -635,16 +521,6 @@ export default async function DashboardPage({
             foreign.set(code, g);
           }
         }
-        // En juego (Finanzas): actuar + vigilar, intra-moneda.
-        if ((d === "actuar" || d === "revision_humana" || d === "vigilar") && inView && v !== null) {
-          hasJuego = true;
-          juegoMinor += v;
-          juegoCount += 1;
-          if (tk !== null) {
-            juegoLow += Number(r.p_low ?? 0) * tk;
-            juegoHigh += Number(r.p_high ?? 0) * tk;
-          }
-        }
         // Próximo en entrar a ventana: vigilar con (p25 - t) futuro mínimo.
         if (d === "vigilar" && entry.p25 !== null && t !== null) {
           const diff = entry.p25 - t;
@@ -694,16 +570,39 @@ export default async function DashboardPage({
         else if (a.st === "approved") valorAprobados += v;
       }
     }
-    // La base en 3 ritmos (conteos + $ en juego, sin mezclar monedas).
+    // Últimos enviados: 8 despachados recientes con su aprobador (Paso 3).
+    // Fallback sin approved_by si la migración 20261022000000 aún no corrió:
+    // el feed se muestra igual, con "sin registro".
     try {
-      ritmo = await getRitmoSummary(
-        active.id,
-        scope.market?.currency?.toUpperCase() ?? active.shop_currency,
-      );
+      const feedSelect = (cols: string) =>
+        applyScopeFilter(
+          db.from("proposed_actions").select(cols).eq("store_id", active.id)
+            .eq("status", "dispatched").not("dispatched_at", "is", null),
+          scope,
+        ).order("dispatched_at", { ascending: false }).limit(8);
+      let feedRes = await feedSelect("id,customer_id,channel,body,approved_by,dispatched_at,revenue_attributed,customers(email,first_name,last_name)");
+      if (feedRes.error) {
+        feedRes = await feedSelect("id,customer_id,channel,body,dispatched_at,revenue_attributed,customers(email,first_name,last_name)");
+      }
+      if (!feedRes.error) {
+        sentFeed = ((feedRes.data ?? []) as Array<Record<string, unknown>>).map((r) => {
+          const c = (r.customers ?? {}) as Record<string, unknown>;
+          return {
+            id: String(r.id ?? ""),
+            customerId: String(r.customer_id ?? ""),
+            name: [c.first_name, c.last_name].filter(Boolean).join(" ") || String(c.email ?? ""),
+            email: String(c.email ?? ""),
+            channel: String(r.channel ?? ""),
+            body: String(r.body ?? ""),
+            approvedBy: (r.approved_by as string | null) ?? null,
+            dispatchedAt: (r.dispatched_at as string | null) ?? null,
+            revenue: r.revenue_attributed == null ? null : Number(r.revenue_attributed),
+          };
+        });
+      }
     } catch {
-      ritmo = null;
+      sentFeed = [];
     }
-
     runs = ((runRows.data ?? []) as Array<Record<string, unknown>>).map((r) => ({
       kind: String(r.kind ?? ""),
       label: String(r.label ?? ""),
@@ -729,6 +628,8 @@ export default async function DashboardPage({
     error = e instanceof Error ? e.message : "DB read failed";
   }
 
+  // Ventana del analyst (H por arquetipo) para el feed de enviados.
+  const analystWindowDays = HORIZON_BY_ARCHETYPE[team.archetype ?? ""] ?? 14;
   const atRisk = open + prioritized;
   const hasMotor = hoyActuar + hoyVigilar + hoyAuto > 0;
   const riskPct = buyers > 0 ? Math.round((atRisk / buyers) * 100) : 0;
@@ -762,7 +663,7 @@ export default async function DashboardPage({
           <h1 className="text-lg font-semibold tracking-tight">
             {hasMotor
               ? hoyActuar > 0
-                ? `Hola, ${storeName} — hoy tienes ${hoyActuar} para actuar`
+                ? `Hola, ${storeName} — ${hoyActuar} ${hoyActuar === 1 ? "cliente" : "clientes"} esperando tu mensaje hoy`
                 : `Todo al día, ${storeName}`
               : atRisk > 0
                 ? `Hola, ${storeName} — hoy tienes ${atRisk} ${atRisk === 1 ? "cliente" : "clientes"} por recuperar`
@@ -822,7 +723,7 @@ export default async function DashboardPage({
                   <span className="text-3xl font-semibold tabular-nums">{hoyActuar}</span>
                   <span className="text-[15px]">para actuar hoy</span>
                   <span className="text-sm text-muted-foreground tabular-nums">
-                    {money(hoyValor)} en juego · solo actuar
+                    {money(hoyValor)} valor de actuar hoy
                   </span>
                 </div>
               ) : pending > 0 ? (
@@ -880,7 +781,12 @@ export default async function DashboardPage({
       )}
       <section id="hoy-tabla">
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium">En la mira hoy ({attention.length})</h2>
+          <div>
+            <h2 className="text-sm font-medium">Casos abiertos por gestionar ({attention.length})</h2>
+            <p className="text-xs text-muted-foreground">
+              Cola con memoria: no desaparece aunque el motor cambie de opinión mañana.
+            </p>
+          </div>
           <span className="text-xs text-muted-foreground">
             {pending > 0 ? (
               <>
@@ -891,7 +797,7 @@ export default async function DashboardPage({
               </>
             ) : atRisk > 0 ? (
               <>
-                {atRisk} en la mira · redacta y pasan a{" "}
+                {atRisk} casos abiertos · redacta y pasan a{" "}
                 <Link href={reviewHref} className="underline">
                   Review
                 </Link>
@@ -920,117 +826,6 @@ export default async function DashboardPage({
                 )}
               </>
             )}
-          </CardContent>
-        </Card>
-        {(hoyGroups.organico + hoyGroups.dormido + hoyGroups.contactado_reciente + hoyGroups.sin_canal > 0) && (
-          <details className="mt-2 rounded-lg border px-4 py-3">
-            <summary className="cursor-pointer text-[13px] font-medium hover:text-foreground">
-              No tocamos hoy ({hoyGroups.organico + hoyGroups.dormido + hoyGroups.contactado_reciente + hoyGroups.sin_canal})
-            </summary>
-            <p className="mt-1 text-xs text-muted-foreground">
-              El motor también decide a quién NO escribir: esto ahorra mensajes, no se escribe por escribir.
-            </p>
-            <ul className="mt-2 flex flex-col gap-1 text-[13px] tabular-nums">
-              <li>
-                {hoyGroups.organico} volverán solos ·{" "}
-                <Link href={withMarketParam("/customers?decision=organico", scope.market?.id ?? null)} className="underline">
-                  ver
-                </Link>
-              </li>
-              <li>
-                {hoyGroups.dormido} dormidos (se re-evalúan solos) ·{" "}
-                <Link href={withMarketParam("/customers?decision=dormido", scope.market?.id ?? null)} className="underline">
-                  ver
-                </Link>
-              </li>
-              <li>
-                {hoyGroups.contactado_reciente} contactados hace poco ·{" "}
-                <Link href={withMarketParam("/customers?decision=contactado_reciente", scope.market?.id ?? null)} className="underline">
-                  ver
-                </Link>
-              </li>
-              <li>
-                {hoyGroups.sin_canal} sin canal utilizable ·{" "}
-                <Link href={withMarketParam("/customers?decision=sin_canal", scope.market?.id ?? null)} className="underline">
-                  ver
-                </Link>
-              </li>
-            </ul>
-          </details>
-        )}
-      </section>
-
-
-      {ritmo && (ritmo.conRitmo.n + ritmo.primera.n + ritmo.sinCompras > 0) && (
-        <section aria-label="La base">
-          <Card>
-            <CardContent className="flex flex-col gap-3 p-4">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                La base · por ritmo de recompra
-              </span>
-              <RitmoRow
-                noun="con ritmo"
-                href={withMarketParam("/customers?ritmo=con-ritmo", scope.market?.id ?? null)}
-                bucket={ritmo.conRitmo}
-                money={money}
-              />
-              <RitmoRow
-                noun="en primera recompra"
-                href={withMarketParam("/customers?ritmo=primera", scope.market?.id ?? null)}
-                bucket={ritmo.primera}
-                money={money}
-              />
-              <p className="text-[13px] text-muted-foreground tabular-nums">
-                <Link href={withMarketParam("/customers?ritmo=sin-compras", scope.market?.id ?? null)} className="underline">
-                  {ritmo.sinCompras} sin compras
-                </Link>{" "}
-                · el motor aún no los ve
-              </p>
-            </CardContent>
-          </Card>
-        </section>
-      )}
-
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Card>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Por contactar
-            </span>
-            <span className="text-2xl font-semibold tabular-nums tracking-tight">
-              {hasMotor ? hoyActuar : atRisk}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {hasMotor
-                ? `para actuar hoy · ${hoyVigilar} en vigilancia`
-                : buyers > 0
-                  ? `${riskPct}% de tus ${buyers} compradores`
-                  : "conecta y sincroniza para empezar"}
-            </span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Mensajes listos
-            </span>
-            <span className="text-2xl font-semibold tabular-nums tracking-tight">{pending}</span>
-            <span className="text-xs text-muted-foreground">
-              {pending > 0 ? (
-                <>para revisar y enviar · <Link href={reviewHref} className="underline">revisar ahora</Link></>
-              ) : (
-                "sin borradores pendientes"
-              )}
-            </span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Recuperado · atribuido
-            </span>
-            <span className="text-2xl font-semibold tabular-nums tracking-tight">{money(revenue)}</span>
-            <span className="text-xs text-muted-foreground">{converted} clientes volvieron tras el mensaje</span>
           </CardContent>
         </Card>
       </section>
@@ -1063,7 +858,7 @@ export default async function DashboardPage({
                 },
                 {
                   key: "actuar",
-                  label: "Para actuar",
+                  label: "Actuar hoy",
                   n: hoyActuar,
                   minor: hoyActuar > 0 ? hoyValor : null,
                   tip: `Lo que dice el modelo hoy, sin memoria: a quién conviene escribir (probabilidad + ventana + valor). Mañana puede decir otra cosa.${ejemploActuar}`,
@@ -1177,24 +972,192 @@ export default async function DashboardPage({
         </Card>
       </section>
 
-      {financeKpis && (
-        <FinanceStrip
-          buckets={financeBuckets}
-          kpis={financeKpis}
-          currency={viewCurrency}
-          recoveredMinor={revenue}
-          marketLabel={marketLabel}
-          rescate={rescate}
-          cycleDays={cycleDays}
-          retention={retention ?? undefined}
-          enJuegoProb={
-            hasJuego
-              ? { minor: Math.round(juegoMinor), low: Math.round(juegoLow), high: Math.round(juegoHigh), count: juegoCount }
-              : null
-          }
-          organicosEnAuto={hoyGroups.organico}
-        />
-      )}
+
+
+      <section aria-label="Por revisar" className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Card>
+          <CardContent className="flex flex-col gap-2 p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Por revisar
+            </span>
+            <ul className="flex flex-col gap-1 text-[13px] tabular-nums">
+              <li>
+                <Link href={reviewHref} className="flex items-center gap-2 underline underline-offset-4">
+                  <PenLine className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span>
+                    <strong>{pending}</strong> mensaje{pending === 1 ? "" : "s"} por aprobar
+                  </span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href={withMarketParam("/review?tab=signals", scope.market?.id ?? null)}
+                  className="flex items-center gap-2 underline underline-offset-4"
+                >
+                  <Radar className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span>
+                    <strong>{open}</strong> cliente{open === 1 ? "" : "s"} en riesgo
+                  </span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href={withMarketParam("/review?tab=leads", scope.market?.id ?? null)}
+                  className="flex items-center gap-2 underline underline-offset-4"
+                >
+                  <UserPlus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span>
+                    <strong>{leadsPending}</strong> empresa{leadsPending === 1 ? "" : "s"} por contactar
+                  </span>
+                </Link>
+              </li>
+              {hoyDebiles > 0 && (
+                <li>
+                  <Link
+                    href={withMarketParam("/customers?decision=actuar", scope.market?.id ?? null)}
+                    className="flex items-center gap-2 underline underline-offset-4"
+                  >
+                    <TriangleAlert className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span>
+                      <strong>{hoyDebiles}</strong> con estimación inicial (pocos datos) entre quienes toca contactar
+                    </span>
+                  </Link>
+                </li>
+              )}
+            </ul>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex flex-col gap-1 p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Recuperado · atribuido
+            </span>
+            <span className="text-2xl font-semibold tabular-nums tracking-tight">{money(revenue)}</span>
+            <span className="text-xs text-muted-foreground">{converted} clientes volvieron tras el mensaje</span>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section aria-label="Últimos enviados">
+        <div className="mb-2">
+          <h2 className="text-sm font-medium">Últimos enviados — ¿volvieron?</h2>
+        </div>
+        <Card>
+          <CardContent className="flex flex-col gap-2 p-4">
+            {sentFeed.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">
+                Todavía no se envió ningún mensaje. Cuando apruebes y se despache el primero, acá ves si volvió.
+              </p>
+            ) : (
+              sentFeed.map((s) => {
+                const out = dispatchedOutcome({
+                  dispatchedAt: s.dispatchedAt,
+                  revenueAttributed: s.revenue,
+                  windowDays: analystWindowDays,
+                  nowMs: Date.now(),
+                });
+                const agoLabel = s.dispatchedAt ? ago(s.dispatchedAt) : null;
+                return (
+                  <div key={s.id} className="flex flex-wrap items-baseline justify-between gap-2 text-[13px]">
+                    <span className="min-w-0">
+                      <span className="font-medium">{s.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
+                      {" · "}
+                      <Link href={withMarketParam(`/customers?q=${encodeURIComponent(s.email || s.name)}`, scope.market?.id ?? null)} className="underline">
+                        {s.name}
+                      </Link>{" "}
+                      <span className="text-muted-foreground">
+                        · {s.body.length > 90 ? `${s.body.slice(0, 90)}…` : s.body}
+                      </span>
+                      <span className="block text-xs text-muted-foreground tabular-nums">
+                        aprobado por {approverLabel(s.approvedBy)}{agoLabel ? ` · ${agoLabel}` : ""}
+                      </span>
+                    </span>
+                    <span className="text-xs font-medium tabular-nums">
+                      {out?.kind === "volvio"
+                        ? `volvió · ${money(out.revenue)}`
+                        : out?.kind === "en_ventana"
+                          ? `en ventana (quedan ${out.daysLeft}d)`
+                          : "no volvió"}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section aria-label="Salud de tu cartera">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-medium">Salud de tu cartera</h2>
+          <span className="text-xs text-muted-foreground">para que el equipo IA trabaje con datos limpios</span>
+        </div>
+        <Card>
+          <CardContent className="flex flex-col gap-2 p-4">
+            {duplicateCount === 0 && enrichPending === 0 && hoyGroups.sin_canal === 0 ? (
+              <p className="text-[13px]">Cartera limpia ✓ — sin duplicados, sin dominios pendientes y con canal utilizable.</p>
+            ) : (
+              <>
+                {duplicateCount > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[13px]">
+                      <strong>{duplicateCount}</strong>{" "}
+                      {duplicateCount === 1 ? "email duplicado" : "emails duplicados"}: el mismo
+                      contacto en más de una ficha parte el historial y el RFM.
+                    </p>
+                    <Button render={<Link href="/customers/duplicates" />} nativeButton={false} size="sm">
+                      Revisar duplicados
+                    </Button>
+                  </div>
+                )}
+                {enrichPending > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[13px]">
+                      <strong>{enrichPending}</strong>{" "}
+                      {enrichPending === 1 ? "dominio sin enriquecer" : "dominios sin enriquecer"}: sin
+                      empresa e industria el Estratega y el Redactor trabajan a ciegas.
+                    </p>
+                    <Button render={<Link href="/customers" />} nativeButton={false} size="sm">
+                      Enriquecer en Customers
+                    </Button>
+                  </div>
+                )}
+                {hoyGroups.sin_canal > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[13px]">
+                      <strong>{hoyGroups.sin_canal}</strong>{" "}
+                      {hoyGroups.sin_canal === 1 ? "cliente" : "clientes"} sin canal utilizable: el motor no puede escribirles.
+                    </p>
+                    <Button render={<Link href={withMarketParam("/customers?decision=sin_canal", scope.market?.id ?? null)} />} nativeButton={false} size="sm">
+                      Ver sin canal
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+            {buyers > 0 && (
+              <div className="mt-1 flex flex-col gap-1">
+                <div className="h-2 overflow-hidden rounded-full bg-muted" role="img" aria-label={`Cartera lista: ${Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}%`}>
+                  <div
+                    className="h-full rounded-full bg-emerald-500/80"
+                    style={{ width: `${Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}% de cartera lista ({buyers} con compras)
+                </p>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              La base por ritmo de recompra vive en{" "}
+              <Link href={withMarketParam("/customers?ritmo=con-ritmo", scope.market?.id ?? null)} className="underline">
+                Customers (filtro por ritmo)
+              </Link>
+              .
+            </p>
+          </CardContent>
+        </Card>
+      </section>
 
       <section aria-label="Tu equipo IA">
         <AgentCard storeId={active.id} storeName={storeName}>
@@ -1240,45 +1203,6 @@ export default async function DashboardPage({
           />
         </AgentCard>
       </section>
-
-
-
-      {(duplicateCount > 0 || enrichPending > 0) && (
-        <section>
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-medium">Salud de datos</h2>
-            <span className="text-xs text-muted-foreground">para que el equipo IA trabaje con datos limpios</span>
-          </div>
-          <Card>
-            <CardContent className="flex flex-col gap-2 p-4">
-              {duplicateCount > 0 && (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[13px]">
-                    <strong>{duplicateCount}</strong>{" "}
-                    {duplicateCount === 1 ? "email duplicado" : "emails duplicados"}: el mismo
-                    contacto en más de una ficha parte el historial y el RFM.
-                  </p>
-                  <Button render={<Link href="/customers/duplicates" />} nativeButton={false} size="sm">
-                    Revisar duplicados
-                  </Button>
-                </div>
-              )}
-              {enrichPending > 0 && (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[13px]">
-                    <strong>{enrichPending}</strong>{" "}
-                    {enrichPending === 1 ? "dominio sin enriquecer" : "dominios sin enriquecer"}: sin
-                    empresa e industria el Estratega y el Redactor trabajan a ciegas.
-                  </p>
-                  <Button render={<Link href="/customers" />} nativeButton={false} size="sm">
-                    Enriquecer en Customers
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </section>
-      )}
 
       <details className="text-[13px]">
         <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
