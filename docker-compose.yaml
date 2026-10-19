@@ -14,6 +14,9 @@ services:
     # ese combo está probado con nuestras migraciones.
     image: public.ecr.aws/supabase/postgres:17.11.0.004
     restart: unless-stopped
+    ports:
+      # TEMPORAL para la migración inicial de datos (luego se quita).
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # Init oficial Supabase (solo primera vez del volumen): passwords de roles
