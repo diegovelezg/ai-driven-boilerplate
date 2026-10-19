@@ -1,5 +1,5 @@
 import { ProfileProposalsPanel } from "@/components/profile-proposals";
-import { EmailSettingsForm, SettingsForm } from "@/components/settings-form";
+import { EmailSettingsForm, SecretsAuditCard, SettingsForm } from "@/components/settings-form";
 import { TenantProfileForm } from "@/components/tenant-profile-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { resolveStoreId } from "@/lib/customers-db";
@@ -45,13 +45,28 @@ export default async function SettingsPage() {
     isSupabaseConfigured() && defaults.medusaUrl
       ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
       : null;
-  const [profile, signals, proposal] = storeId
+  const [profile, signals, proposal, secretAudits, secretsInDb] = storeId
     ? await Promise.all([
         getStoreProfile(storeId).catch(() => null),
         getProfileSignals(storeId).catch(() => null),
         getPendingProposal(storeId).catch(() => null),
+        import("@/lib/store-secrets")
+          .then((m) => m.getSecretAudits(storeId, 20))
+          .catch(() => []),
+        import("@/lib/secrets-crypto")
+          .then(async (c) => {
+            if (!c.isEncryptionConfigured()) return false;
+            const { getSupabase } = await import("@/lib/supabase");
+            const { data } = await getSupabase()
+              .from("store_secrets")
+              .select("key_name")
+              .eq("store_id", storeId)
+              .limit(1);
+            return (data?.length ?? 0) > 0;
+          })
+          .catch(() => false),
       ])
-    : [null, null, null];
+    : [null, null, null, [], false];
   const suggestion = suggestArchetype(signals);
   // Qué aprendió el motor (solo lectura de predicciones + órdenes, sin priors ni grillas).
   let motorCard: {
@@ -106,8 +121,13 @@ export default async function SettingsPage() {
       <header className="flex items-center justify-between">
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
       </header>
-      <SettingsForm defaults={defaults} />
-      <EmailSettingsForm defaults={defaults} />
+      <SettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+      <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+      {storeId && secretAudits.length > 0 && (
+        <div className="w-full max-w-2xl">
+          <SecretsAuditCard audits={secretAudits} />
+        </div>
+      )}
       <TenantProfileForm storeId={storeId} profile={profile} suggestion={suggestion} />
       {motorCard && (
         <Card>

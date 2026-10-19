@@ -77,7 +77,7 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
     if (!stub) {
       // Ruta real: solo email/SendGrid. WhatsApp queda en cola (sin proveedor).
       const { readConnections } = await import("@/lib/store");
-      const conn = await readConnections().catch(() => null);
+      const conn = await readConnections(storeId).catch(() => null);
       const emailReady =
         conn?.emailProvider === "sendgrid" && !!conn.emailApiKey && !!conn.emailFrom;
       const emails = sendable.filter((r) => r.channel === "email");

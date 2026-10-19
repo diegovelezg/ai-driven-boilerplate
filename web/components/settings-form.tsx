@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,10 +13,80 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { saveConnectionsAction, saveEmailAction, testEmailAction } from "@/lib/settings-actions";
+import { revokeSecretAction, saveConnectionsAction, saveEmailAction, testEmailAction } from "@/lib/settings-actions";
+import type { RevocableSecret } from "@/lib/settings-actions";
 import type { DefaultChannel, EmailProvider, Platform, StoreConnections } from "@/lib/store";
 
-export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
+export function SecretRevokeButton({
+  secret,
+  disabled,
+}: {
+  secret: RevocableSecret;
+  disabled?: boolean;
+}) {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+  if (disabled) return null;
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={pending}
+        onClick={() =>
+          start(async () => {
+            const r = await revokeSecretAction(secret);
+            setMsg(r.message);
+          })
+        }
+      >
+        {pending ? "Revocando…" : "Revocar"}
+      </Button>
+      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+    </span>
+  );
+}
+
+export function SecretsAuditCard({
+  audits,
+}: {
+  audits: Array<{
+    id: string;
+    keyName: string;
+    action: string;
+    actor: string | null;
+    createdAt: string;
+  }>;
+}) {
+  if (audits.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Auditoría de secretos</CardTitle>
+        <CardDescription>Quién/cuándo por key. Nunca se muestra el valor.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+          {audits.map((a) => (
+            <li key={a.id} className="tabular-nums">
+              {a.keyName} · {a.action} · {a.actor ?? "settings-ui"} ·{" "}
+              {a.createdAt ? new Date(a.createdAt).toLocaleString() : "—"}
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function SettingsForm({
+  defaults,
+  secretsInDb,
+}: {
+  defaults: StoreConnections;
+  secretsInDb?: boolean;
+}) {
   const [state, action, pending] = useActionState(saveConnectionsAction, null);
   const [platform, setPlatform] = useState<Platform>(defaults.platform);
 
@@ -38,6 +108,8 @@ export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
           </div>
           <CardDescription>
             Elige la plataforma. Solo se guarda el token, nunca el password.
+            {secretsInDb === true && " Token en DB cifrada."}
+            {secretsInDb === false && " Token en JSON local (solo dev)."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -140,6 +212,12 @@ export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
         <Button type="submit" disabled={pending}>
           {pending ? "Conectando…" : "Guardar y conectar"}
         </Button>
+        {platform === "medusa" && defaults.medusaToken && (
+          <SecretRevokeButton secret="medusa_token" />
+        )}
+        {platform === "shopify" && defaults.shopifyToken && (
+          <SecretRevokeButton secret="shopify_token" />
+        )}
         {state && (
           <p className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
             {state.message}
@@ -150,7 +228,13 @@ export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
   );
 }
 
-export function EmailSettingsForm({ defaults }: { defaults: StoreConnections }) {
+export function EmailSettingsForm({
+  defaults,
+  secretsInDb,
+}: {
+  defaults: StoreConnections;
+  secretsInDb?: boolean;
+}) {
   const [saveState, saveAction, savePending] = useActionState(saveEmailAction, null);
   const [testState, testAction, testPending] = useActionState(testEmailAction, null);
   const [provider, setProvider] = useState<EmailProvider>(defaults.emailProvider || "sendgrid");
@@ -173,6 +257,8 @@ export function EmailSettingsForm({ defaults }: { defaults: StoreConnections }) 
             </div>
             <CardDescription>
               Proveedor de envío. Solo se guarda la key, nunca se muestra completa.
+              {secretsInDb === true && " Key en DB cifrada."}
+              {secretsInDb === false && " Key en JSON local (solo dev)."}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -240,6 +326,7 @@ export function EmailSettingsForm({ defaults }: { defaults: StoreConnections }) 
           <Button type="submit" disabled={savePending}>
             {savePending ? "Guardando…" : "Guardar email"}
           </Button>
+          {defaults.emailApiKey && <SecretRevokeButton secret="email_api_key" />}
           {saveState && (
             <p className={saveState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
               {saveState.message}

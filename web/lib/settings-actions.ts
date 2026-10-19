@@ -21,11 +21,14 @@ export async function saveConnectionsAction(
   const prev = await readConnections();
 
   if (platform === "shopify") {
+    const shopifyStore = String(formData.get("shopifyStore") ?? "").trim();
+    const shopifyToken = String(formData.get("shopifyToken") ?? "").trim();
     await writeConnections({
       ...prev,
       platform,
-      shopifyStore: String(formData.get("shopifyStore") ?? "").trim(),
-      shopifyToken: String(formData.get("shopifyToken") ?? "").trim(),
+      shopifyStore: shopifyStore || prev.shopifyStore,
+      // Vacío = conservar (los inputs deshabilitados no se envían).
+      shopifyToken: shopifyToken || prev.shopifyToken,
     });
     revalidatePath("/settings");
     return { ok: true, message: "Preset Shopify guardado (aún sin backend)." };
@@ -141,4 +144,46 @@ export async function testEmailAction(
   } catch (e) {
     return { ok: false, message: `Prueba falla: ${e instanceof Error ? e.message : "error"}` };
   }
+}
+
+export type RevocableSecret = "medusa_token" | "shopify_token" | "email_api_key";
+
+/**
+ * Revoca un secreto (issue #20): borra la fila en `store_secrets` (+ auditoría)
+ * y limpia el fallback JSON. Sin DB/key, limpia solo el JSON (dev).
+ * El password de Medusa nunca se guarda (solo token post-login).
+ */
+export async function revokeSecretAction(secret: RevocableSecret): Promise<SaveState> {
+  const conn = await readConnectionsJsonSafe();
+  let storeId: string | null = null;
+  if (isSupabaseConfigured() && conn.medusaUrl) {
+    try {
+      const { resolveStoreId } = await import("@/lib/customers-db");
+      storeId = await resolveStoreId(conn.medusaUrl).catch(() => null);
+    } catch {
+      storeId = null;
+    }
+  }
+  if (storeId) {
+    try {
+      const { isEncryptionConfigured } = await import("@/lib/secrets-crypto");
+      if (isEncryptionConfigured()) {
+        const { setStoreSecret } = await import("@/lib/store-secrets");
+        await setStoreSecret(storeId, secret, "");
+      }
+    } catch {
+      // Sigue al JSON como fallback.
+    }
+  }
+  const { writeConnectionsJson } = await import("@/lib/store");
+  const jsonKey =
+    secret === "medusa_token" ? "medusaToken" : secret === "shopify_token" ? "shopifyToken" : "emailApiKey";
+  await writeConnectionsJson({ ...conn, [jsonKey]: "" });
+  revalidatePath("/settings");
+  return { ok: true, message: `Secreto ${secret} revocado.` };
+}
+
+async function readConnectionsJsonSafe() {
+  const { readConnections } = await import("@/lib/store");
+  return readConnections();
 }
