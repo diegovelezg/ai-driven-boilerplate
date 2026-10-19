@@ -205,7 +205,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       icon: PenLine,
       status: "paused",
       headline: "Sin borradores",
-      why: "En pausa: no había a quién escribir, no inventa mensajes",
+      why: "En pausa: no había priorizados frescos, no inventa mensajes",
     });
   }
 

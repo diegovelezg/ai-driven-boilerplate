@@ -14,16 +14,19 @@ import { displayMarket, type TenantMarket } from "@/lib/markets";
 /**
  * Filtro global por país/mercado (?market= en URL, como ?store=).
  * Solo visible si la tienda activa tiene 2+ markets; con uno no filtra nada.
- * Al cambiar: preserva el resto de params, resetea `page`.
+ * Sin "todos": mezclar monedas confunde; el default es el mercado primario
+ * (moneda de la tienda). Al cambiar: preserva el resto de params, resetea `page`.
  * Persiste por tienda en localStorage (`retain.market.<storeId>`): al volver
  * a una ruta sin ?market= se restaura, y al navegar se conserva.
  */
 export function MarketSelector({
   stores,
   marketsByStore,
+  primaryByStore = {},
 }: {
   stores: Array<{ id: string }>;
   marketsByStore: Record<string, TenantMarket[]>;
+  primaryByStore?: Record<string, string>;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -34,8 +37,9 @@ export function MarketSelector({
   const param = sp.get("store");
   const activeId = stores.some((s) => s.id === param) ? (param as string) : (stores[0]?.id ?? null);
   const markets: TenantMarket[] = (activeId && marketsByStore[activeId]) || [];
+  const primaryId = (activeId && primaryByStore[activeId]) || markets[0]?.id || null;
   const raw = sp.get("market");
-  const value = raw && markets.some((m) => m.id === raw) ? raw : "all";
+  const value = (raw && markets.some((m) => m.id === raw) ? raw : primaryId) ?? markets[0]?.id ?? "";
 
   // Restaura la selección persistida si la URL viene sin ?market=
   // (navegación directa, bookmark, o link sin params). Solo si el id
@@ -48,9 +52,16 @@ export function MarketSelector({
     } catch {
       saved = null;
     }
-    if (saved && markets.some((m) => m.id === saved)) {
+    if (saved && saved !== primaryId && markets.some((m) => m.id === saved)) {
       const next = new URLSearchParams(sp.toString());
       next.set("market", saved);
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    } else if (!raw && primaryId) {
+      // Sin selección: fija el primario en la URL para que servidor y
+      // cliente vean lo mismo (nunca "todos" implícito).
+      const next = new URLSearchParams(sp.toString());
+      next.set("market", primaryId);
       const qs = next.toString();
       router.replace(qs ? `${pathname}?${qs}` : pathname);
     }
@@ -63,20 +74,18 @@ export function MarketSelector({
   // Base UI resuelve <Select.Value> contra `items` cuando el popup (Portal)
   // aún no montó los <SelectItem>: sin esto el trigger muestra el UUID crudo
   // en lugar de la etiqueta humana.
-  const items: Record<string, ReactNode> = { all: "Todos los países" };
+  const items: Record<string, ReactNode> = {};
   for (const m of markets) items[m.id] = displayMarket(m);
 
   const onChange = (v: string | null) => {
     if (!v) return;
     try {
-      if (v === "all") window.localStorage.removeItem(`retain.market.${activeId}`);
-      else if (activeId) window.localStorage.setItem(`retain.market.${activeId}`, v);
+      if (activeId) window.localStorage.setItem(`retain.market.${activeId}`, v);
     } catch {
       // localStorage no disponible: el filtro sigue funcionando por URL
     }
     const next = new URLSearchParams(sp.toString());
-    if (v === "all") next.delete("market");
-    else next.set("market", v);
+    next.set("market", v);
     next.delete("page");
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
@@ -85,10 +94,9 @@ export function MarketSelector({
   return (
     <Select value={value} onValueChange={onChange} items={items}>
       <SelectTrigger className="h-8 w-40" aria-label="Filtrar por país">
-        <SelectValue placeholder="Todos los países" />
+        <SelectValue placeholder="Mercado" />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="all">Todos los países</SelectItem>
         {markets.map((m) => (
           <SelectItem key={m.id} value={m.id}>
             {displayMarket(m)}

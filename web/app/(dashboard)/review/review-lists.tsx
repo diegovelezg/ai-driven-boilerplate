@@ -6,6 +6,7 @@ import { Mail, PenLine, Phone, Radar, Share2, UserPlus, type LucideIcon } from "
 import { cn } from "cn";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
@@ -15,12 +16,18 @@ import {
   approveBatchAction,
   approveLeadAction,
   dismissSignalAction,
+  markDispatchedAction,
   regenerateStaleDraftsAction,
   rejectActionAction,
   rejectLeadAction,
   revokeApprovalAction,
+  getDrawerCustomerAction,
+  switchChannelAction,
+  updateDraftContentAction,
 } from "@/lib/review-actions";
-import { ApprovePair, DismissButton, RegenerateButton, RevokeButton } from "./review-buttons";
+import { ApprovePair, DismissButton, DraftActions, EditableDraft, MarkSentButton, RegenerateButton, RevokeButton } from "./review-buttons";
+import { CustomerDrawer } from "../customers/customer-drawer";
+import type { EditableCustomer } from "@/lib/customers-db";
 import { approverLabel } from "@/lib/action-trace";
 
 export interface ActionRow {
@@ -40,6 +47,10 @@ export interface ActionRow {
   /** Issue #19: auditoría de aprobación (null = sin registro, pre-migración). */
   approvedBy?: string | null;
   approvedAt?: string | null;
+  /** Link wa.me con mensaje prellenado (whatsapp + teléfono normalizable). */
+  wameUrl?: string | null;
+  /** El cliente tiene email y WhatsApp: se ofrece cambiar de canal. */
+  canSwitchChannel?: boolean;
   /** Evidencia del motor (opcionales: borradores viejos usan el respaldo). */
   predCycleDays?: number | null;
   predTDays?: number | null;
@@ -168,6 +179,19 @@ export function ReviewLists({
       return next;
     });
   };
+  // Ficha del cliente desde cualquier nombre/email de las cards.
+  const [drawerCustomer, setDrawerCustomer] = useState<EditableCustomer | null>(null);
+  const [drawerBusy, setDrawerBusy] = useState(false);
+  const openDrawer = async (customerId?: string) => {
+    if (!customerId || drawerBusy) return;
+    setDrawerBusy(true);
+    try {
+      const r = await getDrawerCustomerAction(customerId);
+      if (r.ok && r.customer) setDrawerCustomer(r.customer);
+    } finally {
+      setDrawerBusy(false);
+    }
+  };
   const approveSelected = async () => {
     if (batchBusy || selected.size === 0) return;
     setBatchBusy(true);
@@ -265,14 +289,19 @@ export function ReviewLists({
             : null;
           return (
           <Card key={a.id}>
-            <CardContent className="flex flex-col gap-2 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardContent className="flex flex-col gap-3 px-4 pb-4">
+              <div
+                className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded px-1 py-2 -mx-1 hover:bg-muted/40"
+                title="Abrir ficha del cliente"
+                onClick={() => void openDrawer(a.customerId)}
+              >
                 <span className="flex items-center gap-2 text-[13px] font-medium">
                   {!isB2B && (
                     <input
                       type="checkbox"
                       checked={selected.has(a.id)}
                       onChange={() => toggleSelect(a.id)}
+                      onClick={(e) => e.stopPropagation()}
                       aria-label={`Seleccionar borrador de ${a.name}`}
                       className="size-4 accent-primary"
                     />
@@ -287,8 +316,14 @@ export function ReviewLists({
               {a.reason && (
                 <p className="text-xs text-muted-foreground">Motivo: {a.reason}</p>
               )}
-              {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
-              <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+              <EditableDraft
+                key={`${a.id}-${a.body.length}-${a.subject ?? ""}`}
+                id={a.id}
+                channel={a.channel}
+                subject={a.subject}
+                body={a.body}
+                onSave={updateDraftContentAction}
+              />
               <details className="rounded-md bg-muted/50 px-3 py-2">
                 <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
                   Por qué se propone (sustento)
@@ -336,7 +371,16 @@ export function ReviewLists({
                   </span>
                 </div>
               </details>
-              <ApprovePair id={a.id} onApprove={approveActionAction} onReject={rejectActionAction} />
+              <DraftActions
+                id={a.id}
+                channel={a.channel}
+                wameUrl={a.wameUrl}
+                canSwitch={!!a.canSwitchChannel && (a.channel === "email" || a.channel === "whatsapp")}
+                toLabel={a.channel === "email" ? "WhatsApp" : "Email"}
+                onApprove={approveActionAction}
+                onReject={rejectActionAction}
+                onSwitch={switchChannelAction}
+              />
             </CardContent>
           </Card>
           );
@@ -346,13 +390,17 @@ export function ReviewLists({
             <h3 className="text-sm font-medium">
               Aprobadas por enviar ({approvedActions.length})
               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                salen con el dispatcher; revoca aquí si alguna ya no va
+                los emails salieron al aprobar; WhatsApp es manual · cancela aquí el envío si alguno ya no va
               </span>
             </h3>
             {approvedActions.map((a) => (
               <Card key={a.id}>
-                <CardContent className="flex flex-col gap-2 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardContent className="flex flex-col gap-3 px-4 pb-4">
+                  <div
+                    className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded px-1 py-2 -mx-1 hover:bg-muted/40"
+                    title="Abrir ficha del cliente"
+                    onClick={() => void openDrawer(a.customerId)}
+                  >
                     <span className="flex items-center gap-2 text-[13px] font-medium">
                       {a.name} <span className="font-normal text-muted-foreground">· {a.email}</span>
                     </span>
@@ -368,6 +416,31 @@ export function ReviewLists({
                     Aprobado por {approverLabel(a.approvedBy)}
                     {a.approvedAt ? ` · ${a.approvedAt.slice(0, 10)}` : ""}
                   </p>
+                  {a.channel === "whatsapp" ? (
+                    <span className="flex flex-wrap items-center gap-2">
+                      {a.wameUrl ? (
+                        <AppTooltip tip="Abre el chat con el mensaje prellenado. Envías desde tu número.">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            render={<a href={a.wameUrl} target="_blank" rel="noopener noreferrer" />}
+                            nativeButton={false}
+                          >
+                            Abrir en WhatsApp
+                          </Button>
+                        </AppTooltip>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          Sin teléfono válido: revoca y genera la versión email.
+                        </span>
+                      )}
+                      <MarkSentButton id={a.id} onMarkSent={markDispatchedAction} />
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      No salió al aprobar · lo reintenta el dispatcher.
+                    </span>
+                  )}
                   <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
                 </CardContent>
               </Card>
@@ -403,7 +476,7 @@ export function ReviewLists({
           ))}
         {leads.map((l) => (
           <Card key={l.id}>
-            <CardContent className="flex flex-col gap-2 p-4">
+            <CardContent className="flex flex-col gap-3 px-4 pb-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[13px] font-medium">
                   {l.company ?? l.domain ?? l.url}
@@ -557,6 +630,14 @@ export function ReviewLists({
           </Card>
         ))}
       </section>
+      )}
+      {drawerCustomer && (
+        <CustomerDrawer
+          key={drawerCustomer.dbId}
+          customer={drawerCustomer}
+          initialTab="compras"
+          onClose={() => setDrawerCustomer(null)}
+        />
       )}
     </>
   );

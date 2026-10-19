@@ -71,7 +71,7 @@ Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradore
 - Tono por objetivo (viene en el brief): vip_care = leal, trato 1-a-1. nurture = hábito cortado, una lectura útil. winback = simple, baja fricción.
 - Empieza con "Hola {primer nombre}," (solo primer nombre, nunca apellido ni email).
 - Voz: primera persona singular + tuteo. PROHIBIDO "reservamos/preparamos" o el trato de usted.
-- whatsapp: 250-400 caracteres, sin asunto (subject null). email: subject corto + body de máximo 750 caracteres.
+- whatsapp: 1 sola idea, 250-400 caracteres, sin asunto (subject null). email: subject corto + cuerpo de 450-750 caracteres con estructura saludo + desarrollo (2 ideas: qué retomar y por qué ahora) + cierre.
 - Un solo mensaje, listo para enviar. Sin placeholders tipo [NOMBRE].`;
 
 /** Frases plantilla que delatan al redactor genérico: si el borrador las
@@ -228,14 +228,21 @@ async function buildSystem(storeId: string): Promise<{ system: string; catalog: 
   return { system: `${SYSTEM}\nLenguaje del negocio: ${langLine}`, catalog: profile?.catalogType ?? null };
 }
 
-/** Redacta UN borrador para la señal (historial real → LLM → insert → actioned). Lanza si falla. */
-async function draftForSignal(
+/** Compone el copy de UN borrador (historial real → juez → LLM → controles).
+ *  No escribe: `draftForSignal` persiste (insert + actioned) y
+ *  `previewSignalCopy` lo devuelve para re-redactar in place. Lanza si falla. */
+async function composeDraftCopy(
   db: Db,
   storeId: string,
   system: string,
   s: Prioritized,
   stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
-): Promise<{ channel: string; chars: number }> {
+): Promise<{
+  channel: string;
+  body: string;
+  subject: string | null;
+  verdict: { reason: string; failOpen: boolean };
+}> {
   const { data: orders } = await db
     .from("orders")
     .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
@@ -504,7 +511,26 @@ async function draftForSignal(
   }
   if (channel === "whatsapp" && body.length > 450) throw new Error("WhatsApp demasiado largo (>450).");
   if (body.length > 800) throw new Error("Body demasiado largo (>800).");
+  // Email corto no se distingue del WhatsApp: un reintento para desarrollar;
+  // si persiste, se descarta (mismo patrón que plantilla/ancla).
+  if (channel === "email" && body.length < 400) {
+    const retry = await attempt("tu borrador de email quedó muy corto: desarrolla con saludo + 2 ideas (qué retomar y por qué ahora) + cierre, mínimo 450 caracteres.");
+    if (retry.channel !== "email" || retry.body.length < 400) throw new Error("Email demasiado corto (<400).");
+    ({ channel, body, subject } = retry);
+  }
 
+  return { channel, body, subject, verdict };
+}
+
+/** Persiste UN borrador (insert + señal a actioned). Usado por el bulk y el single. */
+async function draftForSignal(
+  db: Db,
+  storeId: string,
+  system: string,
+  s: Prioritized,
+  stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
+): Promise<{ channel: string; chars: number }> {
+  const { channel, body, subject, verdict } = await composeDraftCopy(db, storeId, system, s, stamp);
   const { error: insErr } = await db.from("proposed_actions").insert({
     store_id: storeId,
     customer_id: s.customer_id,
@@ -541,6 +567,52 @@ async function draftForSignal(
     .eq("id", s.id);
   if (sigErr) throw new Error(`Signal update: ${sigErr.message}`);
   return { channel, chars: body.length };
+}
+
+/**
+ * Compone el copy para UNA señal sin persistir (switch de canal en Review:
+ * re-redacta la misma fila in place). Sin checks de duplicado: el llamador
+ * es dueño de la fila. Error honesto si la señal no está disponible.
+ */
+export async function previewSignalCopy(
+  storeId: string,
+  signalId: string,
+  forceChannel: "email" | "whatsapp",
+): Promise<
+  | { ok: true; channel: string; body: string; subject: string | null }
+  | { ok: false; message: string }
+> {
+  const mira = await getRankedMira(storeId);
+  const found = [...mira.rows, ...mira.foreign].find((r) => r.signalId === signalId);
+  if (!found || (found.status !== "open" && found.status !== "prioritized")) {
+    return { ok: false, message: "Señal no disponible (ya resuelta o inexistente)." };
+  }
+  try {
+    const db = getSupabase();
+    const { system, catalog } = await buildSystem(storeId);
+    const { channel, body, subject } = await composeDraftCopy(db, storeId, system, {
+      id: found.signalId,
+      kind: found.kind,
+      objective: found.objective ?? null,
+      score: found.score,
+      reason: found.reason,
+      customer_id: found.customerDbId,
+      email: found.email,
+      first_name: found.firstName,
+      last_name: found.lastName,
+      phone: found.phone,
+      companyName: found.companyName ?? null,
+      country: found.country,
+      decision: found.decision ?? null,
+      pRecompraH: found.pRecompraH ?? null,
+    }, { runId: null, catalog, forceChannel });
+    return { ok: true, channel, body, subject };
+  } catch (e) {
+    if (e instanceof ContactabilitySkip) {
+      return { ok: false, message: `${JUDGE_VETO_PREFIX}: ${e.message}` };
+    }
+    return { ok: false, message: e instanceof Error ? e.message : "No se pudo redactar." };
+  }
 }
 
 /**
@@ -705,11 +777,18 @@ export async function runCopywriter(
     await step(null);
     const status: RunStatus = drafted === 0 && failed > 0 ? "error" : "done";
     // Filosofía TeamPulse: outcome + ahorro de tiempo. Los fallidos van en su
-    // columna, no en el texto.
+    // columna, no en el texto. El 0 se desambigua: no es lo mismo "nada
+    // priorizado" que "ya tenían borrador" o "juez vetó". Sin esto el botón
+    // "Redactar los N" parece roto cuando en realidad no duplicó.
+    const alreadyHad = rows.length - fresh.length;
     const summary =
       drafted > 0
         ? `${drafted} ${drafted === 1 ? "listo" : "listos"} para tu visto bueno · te ahorran ~${drafted * 15} min`
-        : "Sin borradores, no había a quién escribir · no invento mensajes";
+        : alreadyHad > 0
+          ? `Sin borradores nuevos, ${alreadyHad} ya ${alreadyHad === 1 ? "tenía borrador" : "tenían borrador"} en Review · no duplico`
+          : skipped > 0
+            ? `Sin borradores, ${skipped} ${skipped === 1 ? "omitido" : "omitidos"} por juez · no invento mensajes`
+            : "Sin borradores, no había priorizados frescos · no invento mensajes";
     await finishRun(runId, {
       status,
       processed: drafted,

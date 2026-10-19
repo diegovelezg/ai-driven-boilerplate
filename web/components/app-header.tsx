@@ -22,9 +22,11 @@ const titles = [
 export function AppHeader({
   stores = [],
   marketsByStore = {},
+  primaryByStore = {},
 }: {
   stores?: Array<{ id: string }>;
   marketsByStore?: Record<string, TenantMarket[]>;
+  primaryByStore?: Record<string, string>;
 }) {
   const pathname = usePathname();
   const title =
@@ -40,7 +42,7 @@ export function AppHeader({
       <span className="ms-auto flex items-center gap-2">
         <Suspense>
           <UsagePill stores={stores} />
-          <MarketSelector stores={stores} marketsByStore={marketsByStore} />
+          <MarketSelector stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} />
         </Suspense>
         <UserMenu />
       </span>

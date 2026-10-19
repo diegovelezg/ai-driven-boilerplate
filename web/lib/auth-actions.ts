@@ -99,7 +99,19 @@ function scheduleSyncOnLogin(): void {
         const msg = e instanceof Error ? e.message : "error";
         await finishRun(runId, { status: "error", processed: 0, failed: 0, error: msg });
         log(`login sync run ${runId} error ${msg}`);
+        // El sync fallido (ej. Medusa 401 por token vencido) no bloquea la
+        // mañana: se trabaja con la BD cacheada (último sync ok).
       }
+      // Orquestador de mañana: enrichment → scout (auto-retention) →
+      // strategist → copywriter. Corre con o sin sync fresco; el héroe
+      // "actuar hoy" llega con borrador ya en Review.
+      try {
+        const { runMorningPipeline } = await import("@/lib/morning-run");
+        await runMorningPipeline(storeId);
+      } catch (e) {
+        log(`morning omitido: ${e instanceof Error ? e.message : "error"}`);
+      }
+      return;
     } catch (e) {
       log(`login sync omitido: ${e instanceof Error ? e.message : "error"}`);
     }

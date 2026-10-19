@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { Building2, ExternalLink, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,8 @@ import type {
   CustomerRfm,
 } from "@/app/api/customers/[id]/orders/route";
 import type { CustomerFirmographics } from "@/app/api/customers/[id]/firmographics/route";
+import type { CustomerContactDTO } from "@/app/api/customers/[id]/contacts/route";
+import { approverLabel } from "@/lib/action-trace";
 import { CustomerChat } from "./customer-chat";
 
 const FIELDS: Array<{ key: ManualField; label: string; placeholder: string }> = [
@@ -96,15 +99,16 @@ function FieldMeta({
           <Badge variant="secondary" className="font-normal">
             Editado
           </Badge>
-          <button
-            type="button"
-            onClick={onRevert}
-            title="Volver al valor de Medusa"
-            aria-label={`Revertir ${label} a valor de Medusa`}
-            className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <Undo2 className="size-3.5" aria-hidden />
-          </button>
+          <AppTooltip tip="Volver al valor de Medusa">
+            <button
+              type="button"
+              onClick={onRevert}
+              aria-label={`Revertir ${label} a valor de Medusa`}
+              className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Undo2 className="size-3.5" aria-hidden />
+            </button>
+          </AppTooltip>
         </span>
       ) : (
         willRevert && (
@@ -476,12 +480,15 @@ function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
         aria-label={`Historial de ${orders.length} compras`}
       >
         {chrono.map((o, i) => (
-          <div
+          <AppTooltip
             key={i}
-            title={`${o.date ? o.date.slice(0, 10) : "s/f"}: ${formatMoney(o.total, o.currency)}`}
-            style={{ height: `${Math.max(6, Math.round((o.total / max) * 100))}%` }}
-            className="min-w-0 flex-1 rounded-t bg-primary/70 transition-colors hover:bg-primary"
-          />
+            tip={`${o.date ? o.date.slice(0, 10) : "s/f"}: ${formatMoney(o.total, o.currency)}`}
+          >
+            <div
+              style={{ height: `${Math.max(6, Math.round((o.total / max) * 100))}%` }}
+              className="min-w-0 flex-1 rounded-t bg-primary/70 transition-colors hover:bg-primary"
+            />
+          </AppTooltip>
         ))}
       </div>
       <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
@@ -799,15 +806,17 @@ function DecisionCard({
 }) {
   if (!mpred) {
     return (
-      <Card title="Decisión del motor (se revisa a diario)">
-        <CardContent className="px-4 py-3.5">
-          <p className="text-xs text-muted-foreground">Decisión</p>
-          <p className="mt-1 truncate text-xl font-semibold">Sin datos</p>
-          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            aún sin predicción del motor
-          </p>
-        </CardContent>
-      </Card>
+      <AppTooltip tip="Decisión del motor (se revisa a diario)">
+        <Card>
+          <CardContent className="px-4 py-3.5">
+            <p className="text-xs text-muted-foreground">Decisión</p>
+            <p className="mt-1 truncate text-xl font-semibold">Sin datos</p>
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              aún sin predicción del motor
+            </p>
+          </CardContent>
+        </Card>
+      </AppTooltip>
     );
   }
   const titulo =
@@ -842,15 +851,17 @@ function DecisionCard({
         ? `${pct(mpred.pRecompraH)}${mpred.pLow !== null && mpred.pHigh !== null ? ` (${pct(mpred.pLow)}–${pct(mpred.pHigh)})` : ""}`
         : null;
   return (
-    <Card title="Decisión del motor (se revisa a diario)">
-      <CardContent className="px-4 py-3.5">
-        <p className="text-xs text-muted-foreground">Decisión</p>
-        <p className="mt-1 truncate text-xl font-semibold">{titulo}</p>
-        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-          {[ventana, prob].filter(Boolean).join(" · ") || "—"}
-        </p>
-      </CardContent>
-    </Card>
+    <AppTooltip tip="Decisión del motor (se revisa a diario)">
+      <Card>
+        <CardContent className="px-4 py-3.5">
+          <p className="text-xs text-muted-foreground">Decisión</p>
+          <p className="mt-1 truncate text-xl font-semibold">{titulo}</p>
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+            {[ventana, prob].filter(Boolean).join(" · ") || "—"}
+          </p>
+        </CardContent>
+      </Card>
+    </AppTooltip>
   );
 }
 
@@ -1022,49 +1033,57 @@ function ComprasTab({
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <DecisionCard mpred={mpred} />
-        <Card
-          title={
+        <AppTooltip
+          tip={
             summary.expectedCycleDays !== null
               ? `Ciclo esperado cada ${summary.expectedCycleDays}d (fuente: ${summary.cycleSource ?? "—"})`
               : "Sin ciclo esperado"
           }
         >
-          <CardContent className="px-4 py-3.5">
-            <p className="text-xs text-muted-foreground">Ritmo</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">
-              {summary.expectedCycleDays !== null ? `~${summary.expectedCycleDays}d` : "—"}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-              {gapMed !== null ? `observado ~${gapMed}d · ` : ""}
-              última {recencyLabel}
-            </p>
-          </CardContent>
-        </Card>
-        <Card title={totals.length > 0 ? `Tickets: min ${formatMoney(tMin, summary.currency)} · mediana ${formatMoney(tMed, summary.currency)} · max ${formatMoney(tMax, summary.currency)} (últimas ${orders.length})` : "Sin tickets"}>
-          <CardContent className="px-4 py-3.5">
-            <p className="text-xs text-muted-foreground">Ticket prom.</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">
-              {formatMoney(summary.avgTicket, summary.currency)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-              {totals.length > 0
-                ? `${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}${trendLabel ? ` · ${trendLabel}` : ""}`
-                : "—"}
-            </p>
-          </CardContent>
-        </Card>
-        <Card title={`Acumulado en ${summary.frequency} compras`}>
-          <CardContent className="px-4 py-3.5">
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">
-              {formatMoney(summary.monetary, summary.currency)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-              {summary.frequency} compra{summary.frequency === 1 ? "" : "s"}
-              {cycleSrc ? ` · ${cycleSrc}` : ""}
-            </p>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs text-muted-foreground">Ritmo</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums">
+                {summary.expectedCycleDays !== null ? `~${summary.expectedCycleDays}d` : "—"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {gapMed !== null ? `observado ~${gapMed}d · ` : ""}
+                última {recencyLabel}
+              </p>
+            </CardContent>
+          </Card>
+        </AppTooltip>
+        <AppTooltip
+          tip={totals.length > 0 ? `Tickets: min ${formatMoney(tMin, summary.currency)} · mediana ${formatMoney(tMed, summary.currency)} · max ${formatMoney(tMax, summary.currency)} (últimas ${orders.length})` : "Sin tickets"}
+        >
+          <Card>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs text-muted-foreground">Ticket prom.</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums">
+                {formatMoney(summary.avgTicket, summary.currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {totals.length > 0
+                  ? `${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}${trendLabel ? ` · ${trendLabel}` : ""}`
+                  : "—"}
+              </p>
+            </CardContent>
+          </Card>
+        </AppTooltip>
+        <AppTooltip tip={`Acumulado en ${summary.frequency} compras`}>
+          <Card>
+            <CardContent className="px-4 py-3.5">
+              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums">
+                {formatMoney(summary.monetary, summary.currency)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {summary.frequency} compra{summary.frequency === 1 ? "" : "s"}
+                {cycleSrc ? ` · ${cycleSrc}` : ""}
+              </p>
+            </CardContent>
+          </Card>
+        </AppTooltip>
       </div>
 
       {orders.length > 0 && (
@@ -1122,12 +1141,10 @@ function ComprasTab({
                 <TableCell className="whitespace-nowrap py-2.5 pl-2 pr-4 text-[13px] tabular-nums">
                   {o.date ? o.date.slice(0, 10) : "—"}
                 </TableCell>
-                <TableCell
-                  className="px-3 py-2.5 text-[13px] text-muted-foreground"
-                  title={o.items.map((it) => `${it.title} x${it.quantity}`).join("; ")}
-                >
+                <TableCell className="px-3 py-2.5 text-[13px] text-muted-foreground">
                   {o.items.length > 0 ? (
-                    <div className="flex flex-col gap-1.5">
+                    <AppTooltip tip={o.items.map((it) => `${it.title} x${it.quantity}`).join("; ")}>
+                      <div className="flex flex-col gap-1.5">
                       {o.items.map((it, j) => (
                         <div key={j} className="min-w-0">
                           <div className="break-words">
@@ -1148,7 +1165,8 @@ function ComprasTab({
                           )}
                         </div>
                       ))}
-                    </div>
+                      </div>
+                    </AppTooltip>
                   ) : (
                     "—"
                   )}
@@ -1165,6 +1183,85 @@ function ComprasTab({
   );
 }
 
+const CONTACT_STATUS_LABEL: Record<string, string> = {
+  dispatched: "Enviado",
+  approved: "Aprobado, esperando envío",
+  pending_review: "Borrador sin aprobar",
+  rejected: "Rechazado",
+};
+
+/** Issue #19 Paso 5: ¿ya le escribimos? Contactos separados de Compras. */
+function ContactosTab({ dbId }: { dbId: string }) {
+  const [contacts, setContacts] = useState<CustomerContactDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/customers/${dbId}/contacts`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const j = (await res.json()) as { contacts?: CustomerContactDTO[] };
+        if (alive) setContacts(j.contacts ?? []);
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : "No se pudo cargar.");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [dbId]);
+
+  if (error) return <p className="px-8 py-6 text-sm text-destructive">{error}</p>;
+  if (!contacts) return <p className="px-8 py-6 text-sm text-muted-foreground">Cargando contactos…</p>;
+  if (contacts.length === 0) {
+    return (
+      <p className="px-8 py-6 text-sm text-muted-foreground">
+        Nunca se le envió un mensaje desde acá.
+      </p>
+    );
+  }
+  return (
+    <div className="grid gap-3 px-8 py-6">
+      {contacts.map((c) => {
+        const when = (c.dispatchedAt ?? c.createdAt).slice(0, 10);
+        return (
+          <Card key={c.id}>
+            <CardContent className="flex flex-col gap-2 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
+                <span className="font-medium">
+                  {c.channel === "whatsapp" ? "WhatsApp" : "Email"} · {when}
+                </span>
+                <Badge variant="outline" className="font-normal">
+                  {CONTACT_STATUS_LABEL[c.status] ?? c.status}
+                </Badge>
+              </div>
+              {c.subject && <p className="text-[13px] font-medium">{c.subject}</p>}
+              <details>
+                <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
+                  Ver mensaje completo
+                </summary>
+                <p className="mt-1 whitespace-pre-wrap text-[13px]">{c.body}</p>
+              </details>
+              {(c.status === "approved" || c.status === "dispatched") && (
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  aprobado por {approverLabel(c.approvedBy)}
+                  {c.approvedAt ? ` · ${c.approvedAt.slice(0, 10)}` : ""}
+                </p>
+              )}
+              {c.status === "dispatched" && (
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {c.result
+                    ? `compró ${c.result.boughtAt} · ${formatMoney(c.result.amountMinor, c.result.currency)}`
+                    : "sin compra posterior registrada"}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CustomerDrawer({
   customer,
   onClose,
@@ -1172,9 +1269,9 @@ export function CustomerDrawer({
 }: {
   customer: EditableCustomer;
   onClose: () => void;
-  initialTab?: "datos" | "compras" | "chat";
+  initialTab?: "datos" | "compras" | "contactos" | "chat";
 }) {
-  const [tab, setTab] = useState<"datos" | "compras" | "chat">(initialTab);
+  const [tab, setTab] = useState<"datos" | "compras" | "contactos" | "chat">(initialTab);
   // Prompt con la recomendación del análisis: se auto-envía al abrir el tab Agente.
   const [agentSeed, setAgentSeed] = useState<string | null>(null);
 
@@ -1204,7 +1301,7 @@ export function CustomerDrawer({
         </div>
 
         <div className="flex gap-6 border-b px-8" role="tablist" aria-label="Ficha del customer">
-          {(["datos", "compras", "chat"] as const).map((t) => (
+          {(["datos", "compras", "contactos", "chat"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -1215,7 +1312,7 @@ export function CustomerDrawer({
                 tab === t ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {t === "datos" ? "Datos" : t === "compras" ? "Compras" : "Agente"}
+              {t === "datos" ? "Datos" : t === "compras" ? "Compras" : t === "contactos" ? "Contactos" : "Agente"}
               {tab === t && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
             </button>
           ))}
@@ -1224,6 +1321,8 @@ export function CustomerDrawer({
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {tab === "datos" ? (
             <DatosTab customer={customer} onClose={onClose} />
+          ) : tab === "contactos" ? (
+            <ContactosTab dbId={customer.dbId} />
           ) : tab === "compras" ? (
             <ComprasTab
               dbId={customer.dbId}

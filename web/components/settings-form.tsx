@@ -13,8 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { saveConnectionsAction } from "@/lib/settings-actions";
-import type { Platform, StoreConnections } from "@/lib/store";
+import { saveConnectionsAction, saveEmailAction, testEmailAction } from "@/lib/settings-actions";
+import type { DefaultChannel, EmailProvider, Platform, StoreConnections } from "@/lib/store";
 
 export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
   const [state, action, pending] = useActionState(saveConnectionsAction, null);
@@ -147,5 +147,126 @@ export function SettingsForm({ defaults }: { defaults: StoreConnections }) {
         )}
       </div>
     </form>
+  );
+}
+
+export function EmailSettingsForm({ defaults }: { defaults: StoreConnections }) {
+  const [saveState, saveAction, savePending] = useActionState(saveEmailAction, null);
+  const [testState, testAction, testPending] = useActionState(testEmailAction, null);
+  const [provider, setProvider] = useState<EmailProvider>(defaults.emailProvider || "sendgrid");
+  const [defaultChannel, setDefaultChannel] = useState<DefaultChannel>(
+    defaults.defaultChannel || "email",
+  );
+
+  return (
+    <div className="flex w-full max-w-2xl flex-col gap-4">
+      <form action={saveAction} className="flex flex-col gap-4">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium">Email transaccional</CardTitle>
+              <Badge variant={defaults.emailApiKey ? "default" : "secondary"}>
+                {defaults.emailApiKey
+                  ? `${provider === "none" ? "Desactivado" : `${provider} conectado`}`
+                  : "Sin conectar"}
+              </Badge>
+            </div>
+            <CardDescription>
+              Proveedor de envío. Solo se guarda la key, nunca se muestra completa.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="defaultChannel">Canal de contacto por defecto</Label>
+              <Select
+                name="defaultChannel"
+                value={defaultChannel}
+                onValueChange={(v) => setDefaultChannel(v as DefaultChannel)}
+              >
+                <SelectTrigger id="defaultChannel">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="emailProvider">Proveedor</Label>
+              <Select
+                name="emailProvider"
+                value={provider}
+                onValueChange={(v) => setProvider(v as EmailProvider)}
+              >
+                <SelectTrigger id="emailProvider">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sendgrid">SendGrid</SelectItem>
+                  <SelectItem value="resend">Resend · próximamente</SelectItem>
+                  <SelectItem value="none">Ninguno</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {provider !== "none" && (
+              <>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="emailFrom">Remitente (from)</Label>
+                  <Input
+                    id="emailFrom"
+                    name="emailFrom"
+                    type="email"
+                    placeholder="notificaciones@tutienda.com"
+                    defaultValue={defaults.emailFrom}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="emailApiKey">API key</Label>
+                  <Input
+                    id="emailApiKey"
+                    name="emailApiKey"
+                    type="password"
+                    placeholder={defaults.emailApiKey ? "•••••••• (guardada, vacío = conservar)" : "SG.…"}
+                    autoComplete="off"
+                  />
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={savePending}>
+            {savePending ? "Guardando…" : "Guardar email"}
+          </Button>
+          {saveState && (
+            <p className={saveState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
+              {saveState.message}
+            </p>
+          )}
+        </div>
+      </form>
+
+      {provider !== "none" && defaults.emailApiKey && (
+        <form action={testAction} className="flex items-center gap-2">
+          <Input
+            name="emailTestTo"
+            type="email"
+            placeholder="destino@prueba.com"
+            className="max-w-xs"
+            required
+          />
+          <Button type="submit" variant="outline" size="sm" disabled={testPending}>
+            {testPending ? "Enviando…" : "Probar envío"}
+          </Button>
+          {testState && (
+            <p className={testState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
+              {testState.message}
+            </p>
+          )}
+        </form>
+      )}
+    </div>
   );
 }

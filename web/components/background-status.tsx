@@ -191,20 +191,9 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Terminados: se ocultan solos — el error y el veto aguantan más para
-  // alcanzar a leerse (el veto no es éxito: no se esconde a los 5s).
-  useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    for (const run of runs) {
-      if (run.status === "running" && !isStale(run)) continue;
-      if (dismissed.has(run.id)) continue;
-      const ok = run.status === "done" && !isStale(run) && !isVetoRun(run);
-      timers.push(setTimeout(() => dismiss(run.id), ok ? AUTO_HIDE_MS : ERROR_HIDE_MS));
-    }
-    return () => {
-      for (const t of timers) clearTimeout(t);
-    };
-  }, [runs, dismissed, dismiss, isStale]);
+  // Terminados: los archiva la rotación secuencial de abajo (uno visible N
+  // segundos, luego el siguiente). Sin este relevo, los timers en masa los
+  // apilaban y desaparecían todos juntos.
 
   // Vimos actividad y se aquietó: refresca el server render UNA vez y solo
   // si la actividad cambió algo visible (snapshot al empezar vs al aquietar)
@@ -238,10 +227,37 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     [activeRuns],
   );
 
-  const visible = useMemo(
-    () => runs.filter((r) => !dismissed.has(r.id)).slice(0, 5),
+  const queue = useMemo(
+    () => runs.filter((r) => !dismissed.has(r.id)),
     [runs, dismissed],
   );
+  // Sin apilar: uno a la vez. Activo manda; si no hay activo, se rota por los
+  // terminados (uno visible N segundos, luego el siguiente).
+  const [queueIdx, setQueueIdx] = useState(0);
+  useEffect(() => {
+    setQueueIdx(0);
+  }, [queue.map((r) => r.id).join(",")]);
+  useEffect(() => {
+    const finished = queue.filter((r) => r.status !== "running" || isStale(r));
+    if (activeRuns.length > 0 || finished.length === 0) return;
+    const cur = finished[queueIdx % finished.length];
+    const ok = cur.status === "done" && !isStale(cur) && !isVetoRun(cur);
+    const t = setTimeout(() => {
+      // Secuencia uno por uno: al vencer, se archiva el visible y aparece el
+      // siguiente en vez de apilarse todos a la vez.
+      dismiss(cur.id);
+      setQueueIdx((i) => i + 1);
+    }, ok ? AUTO_HIDE_MS : ERROR_HIDE_MS);
+    return () => clearTimeout(t);
+  }, [queue, queueIdx, activeRuns.length, isStale, dismiss]);
+  const visible = useMemo(() => {
+    if (queue.length === 0) return [];
+    const active = queue.find((r) => r.status === "running" && !isStale(r));
+    if (active) return [active];
+    const finished = queue.filter((r) => r.status !== "running" || isStale(r));
+    if (finished.length === 0) return [];
+    return [finished[queueIdx % finished.length]];
+  }, [queue, queueIdx, isStale]);
 
   return (
     <BackgroundCtx.Provider value={{ runs, activeRuns, starting, start, isBusy }}>
@@ -266,13 +282,13 @@ function RunChip({ run, stale, onDismiss }: { run: BackgroundRun; stale: boolean
 
   if (running) {
     return (
-      <div className="relative h-9 overflow-hidden border-b border-border bg-accent text-accent-foreground">
+      <div className="relative h-9 overflow-hidden border-b border-primary/30 bg-primary/10 text-foreground backdrop-blur">
         <div
           className="absolute inset-y-0 left-0 bg-primary/15 transition-[width] duration-700"
           style={{ width: `${pct}%` }}
         />
         <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
-        <div className="relative flex h-full items-center justify-center gap-2 text-xs font-medium tabular-nums">
+        <div className="relative flex h-full items-center justify-center gap-2 px-10 text-xs font-medium tabular-nums">
           <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
           {run.label}… {done}/{total}
           {run.failed > 0 && <span className="text-destructive">· {run.failed} fallidos</span>}
@@ -285,7 +301,7 @@ function RunChip({ run, stale, onDismiss }: { run: BackgroundRun; stale: boolean
   const succeeded = run.status === "done" && !stale && !veto;
   return (
     <div
-      className={`relative flex h-9 items-center justify-center gap-2 border-b px-10 text-xs font-medium ${
+      className={`relative flex h-9 items-center justify-center gap-2 border-b px-10 text-xs font-medium backdrop-blur ${
         succeeded
           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
           : veto

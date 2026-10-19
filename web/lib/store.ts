@@ -4,6 +4,10 @@ import type { MedusaVersion } from "@/lib/medusa";
 
 export type Platform = "medusa" | "shopify";
 
+export type EmailProvider = "sendgrid" | "resend" | "none";
+
+export type DefaultChannel = "email" | "whatsapp";
+
 export interface StoreConnections {
   platform: Platform;
   medusaUrl: string;
@@ -12,6 +16,10 @@ export interface StoreConnections {
   medusaToken: string;
   shopifyStore: string;
   shopifyToken: string;
+  emailProvider: EmailProvider;
+  emailFrom: string;
+  emailApiKey: string;
+  defaultChannel: DefaultChannel;
 }
 
 const DATA_DIR = join(process.cwd(), ".data");
@@ -25,6 +33,10 @@ const EMPTY: StoreConnections = {
   medusaToken: "",
   shopifyStore: "",
   shopifyToken: "",
+  emailProvider: "sendgrid",
+  emailFrom: "",
+  emailApiKey: "",
+  defaultChannel: "email",
 };
 
 export async function readConnections(): Promise<StoreConnections> {

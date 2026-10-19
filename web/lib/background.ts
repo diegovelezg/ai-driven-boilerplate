@@ -10,7 +10,7 @@
 // Formatos por agente:
 // - scout: "Vigiló N · X listos para actuar" | "Vigiló N, nadie necesita mensaje · no quemamos descuentos"
 // - strategist: "X ordenados, empieza por {nombre}" | "Sin ordenar, nada urgente"
-// - copywriter: "X listos para tu visto bueno" | "Sin borradores, no había a quién escribir"
+// - copywriter: "X listos para tu visto bueno" | "Sin borradores nuevos, X ya tenían borrador · no duplico" | "Sin borradores, no había priorizados frescos"
 // - prospect: "X parecidos a tu ideal por revisar" | "En pausa, primero recuperamos lo tuyo"
 // - dispatcher: "X listos, conecta WhatsApp/email para enviar" | "X enviadas, solo lo aprobado"
 // - analyst: "X volvieron · {monto} recuperado" | "Observando X enviados, mide en N días"
@@ -170,6 +170,48 @@ export function busyMessage(conflict: BackgroundRun): string {
   return conflictMessage(toActiveOp(conflict));
 }
 
+/** Minutos sin heartbeat tras los cuales un `running` se da por muerto.
+ *  `advanceRun` toca `updated_at` en cada paso, así que una corrida que
+ *  progresa nunca se siega; una colgada (crash, deploy, script manual)
+ *  libera el lock sola en vez de bloquear para siempre. */
+export const STALE_RUN_MINUTES = 30;
+
+/** Marca como error los `running` sin heartbeat (best-effort, nunca lanza).
+ *  Devuelve cuántos segó. */
+export async function reapStaleRuns(storeId: string): Promise<number> {
+  try {
+    const db = getSupabase();
+    const cutoff = Date.now() - STALE_RUN_MINUTES * 60_000;
+    const { data, error } = await db
+      .from("background_runs")
+      .select("id,started_at,updated_at")
+      .eq("store_id", storeId)
+      .eq("status", "running");
+    if (error || !data) return 0;
+    const dead = ((data ?? []) as Array<Record<string, unknown>>)
+      .filter((r) => {
+        const beat = String(r.updated_at ?? r.started_at ?? "");
+        const t = beat ? Date.parse(beat) : NaN;
+        return Number.isNaN(t) || t < cutoff;
+      })
+      .map((r) => String(r.id ?? ""))
+      .filter(Boolean);
+    if (dead.length === 0) return 0;
+    await db
+      .from("background_runs")
+      .update({
+        status: "error",
+        error: `Stuck sin cierre ni heartbeat en ${STALE_RUN_MINUTES}min (reap automático)`,
+        current: null,
+        finished_at: new Date().toISOString(),
+      })
+      .in("id", dead);
+    return dead.length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function startRun(
   storeId: string,
   kind: string,
@@ -177,6 +219,8 @@ export async function startRun(
   total: number,
   opts?: { scopeKind?: ScopeKind; scopeId?: string | null },
 ): Promise<string> {
+  // Auto-limpieza: un colgado no debe bloquear a los vivos.
+  await reapStaleRuns(storeId).catch(() => {});
   const db = getSupabase();
   const scopeKind = opts?.scopeKind ?? "global";
   const scopeId = opts?.scopeId ?? null;

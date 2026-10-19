@@ -11,6 +11,8 @@ import {
   type SignalRow,
 } from "./review-lists";
 import { getRankedMira } from "@/lib/mira";
+import { resolveContact } from "@/lib/comms/contact";
+import { buildWaMeUrl } from "@/lib/comms/whatsapp/wame";
 import {
   applyScopeFilter,
   displayMarket,
@@ -67,7 +69,7 @@ export default async function ReviewPage({
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "pending_review"),
                 scope,
@@ -78,7 +80,7 @@ export default async function ReviewPage({
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "approved")
                   .is("dispatched_at", null),
@@ -118,11 +120,28 @@ export default async function ReviewPage({
           const sig = (r.churn_signals ?? {}) as Record<string, unknown>;
           const name =
             [c.first_name, c.last_name].filter(Boolean).join(" ") || String(c.email ?? "");
+          const channel = String(r.channel ?? "?");
+          const body = String(r.body ?? "");
+          // Capacidades del cliente: qué canales se pueden ofrecer y el link
+          // wa.me cuando hay teléfono normalizable (null → solo email).
+          const caps = resolveContact({
+            email: typeof c.email === "string" ? c.email : null,
+            phone: typeof c.phone === "string" ? c.phone : null,
+            countryIso: typeof c.country === "string" ? c.country : null,
+          });
+          const wameUrl =
+            channel === "whatsapp"
+              ? buildWaMeUrl({
+                  phone: typeof c.phone === "string" ? c.phone : null,
+                  countryIso: typeof c.country === "string" ? c.country : null,
+                  text: body,
+                })
+              : null;
           return {
             id: String(r.id),
-            channel: String(r.channel ?? "?"),
+            channel,
             subject: (r.subject as string | null) ?? null,
-            body: String(r.body ?? ""),
+            body,
             status: String(r.status ?? ""),
             created_at: String(r.created_at ?? ""),
             customerId: String(r.customer_id ?? ""),
@@ -132,6 +151,10 @@ export default async function ReviewPage({
             score: sig.score == null ? null : Number(sig.score),
             kind: (sig.kind as string | null) ?? null,
             generator: ((r.evidence_json as Record<string, unknown> | null)?.generator as string | null) ?? null,
+            approvedBy: (r.approved_by as string | null) ?? null,
+            approvedAt: (r.approved_at as string | null) ?? null,
+            wameUrl,
+            canSwitchChannel: caps.capability === "both",
           };
         };
         actions = ((a ?? []) as Array<Record<string, unknown>>).map(toActionRow);

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   CircleHelp,
   Inbox,
@@ -32,7 +32,7 @@ import { useChatDock } from "@/components/chat/chat-dock";
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/finanzas", label: "Finanzas", icon: TrendingUp },
-  { href: "/review", label: "Review Inbox", icon: Inbox, badge: "14" },
+  { href: "/review", label: "Review Inbox", icon: Inbox, badgeKey: "inbox" as const },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/ayuda", label: "Ayuda", icon: CircleHelp },
@@ -61,6 +61,21 @@ function AppSidebarNav() {
     return qs ? `?${qs}` : "";
   })();
   const { dock, toggleChat } = useChatDock();
+  // Badge vivo del inbox con el mismo criterio que /review (no quemado):
+  // borradores + leads + señales del tenant/market actual.
+  const [inboxTotal, setInboxTotal] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/inbox-count${suffix ? `${suffix}` : ""}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (alive && j && typeof j.total === "number") setInboxTotal(j.total);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [suffix]);
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -90,21 +105,25 @@ function AppSidebarNav() {
                   item.href === "/"
                     ? pathname === "/"
                     : pathname.startsWith(item.href);
+                const badge =
+                  "badgeKey" in item && item.badgeKey === "inbox" && (inboxTotal ?? 0) > 0
+                    ? String(inboxTotal)
+                    : null;
                 return (
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       render={<Link href={item.href} />}
                       isActive={active}
                       tooltip={
-                        item.badge ? `${item.label} (${item.badge})` : item.label
+                        badge ? `${item.label} (${badge})` : item.label
                       }
                     >
                       <item.icon strokeWidth={1.75} />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
-                    {item.badge && (
+                    {badge && (
                       <>
-                        <SidebarMenuBadge>{item.badge}</SidebarMenuBadge>
+                        <SidebarMenuBadge>{badge}</SidebarMenuBadge>
                         <span
                           aria-hidden="true"
                           className="pointer-events-none absolute top-1 right-1 hidden size-2 rounded-full bg-destructive ring-2 ring-sidebar group-data-[collapsible=icon]:block"

@@ -63,17 +63,69 @@ async function setLeadStatus(id: string, status: "approved" | "rejected"): Promi
   return { ok: true, message: status === "approved" ? "Lead aprobado." : "Lead rechazado." };
 }
 
+/** Envía un aprobado-email en el acto (aprobar = enviar). Solo sello vigente
+ *  y SendGrid configurado; si algo falta o falla, queda `approved` y lo
+ *  reintenta el dispatcher. Guarda anti-carrera por status. */
+async function trySendApprovedEmail(
+  id: string,
+): Promise<{ sent: boolean; message: string }> {
+  const db = getSupabase();
+  const { data: row } = await db
+    .from("proposed_actions")
+    .select("id,channel,subject,body,evidence_json,customers(email)")
+    .eq("id", id)
+    .eq("status", "approved")
+    .maybeSingle();
+  const r = (row ?? null) as Record<string, unknown> | null;
+  if (!r) return { sent: false, message: "Ya procesada por otro lado." };
+  if (String(r.channel ?? "") !== "email") return { sent: false, message: "No es email." };
+  const body = String(r.body ?? "");
+  const subject = (r.subject as string | null) ?? null;
+  if (!subject || !body) return { sent: false, message: "Sin asunto o cuerpo." };
+  if (isStaleDraft((r.evidence_json as Record<string, unknown> | null) ?? null)) {
+    return { sent: false, message: "Criterios viejos: regenera en Review." };
+  }
+  const to = String(((r.customers as Record<string, unknown> | null)?.email) ?? "");
+  if (!to) return { sent: false, message: "Sin destinatario." };
+  const conn = await readConnections().catch(() => null);
+  if (!conn || conn.emailProvider !== "sendgrid" || !conn.emailApiKey || !conn.emailFrom) {
+    return { sent: false, message: "SendGrid sin configurar en Settings." };
+  }
+  const { sendViaSendGrid } = await import("@/lib/comms/email/sendgrid");
+  const res = await sendViaSendGrid({ apiKey: conn.emailApiKey, from: conn.emailFrom, msg: { to, subject, text: body } });
+  if (!res.ok) return { sent: false, message: res.error ?? "SendGrid falló." };
+  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const { data: won } = await db
+    .from("proposed_actions")
+    .update({
+      status: "dispatched",
+      dispatched_at: new Date().toISOString(),
+      evidence_json: { ...prev, sent_via: "approve" },
+    })
+    .eq("id", id)
+    .eq("status", "approved")
+    .select("id");
+  if (!won || won.length === 0) return { sent: false, message: "Ya procesada por otro lado." };
+  return { sent: true, message: "Aprobada y enviada por email." };
+}
+
 export async function approveActionAction(id: string): Promise<ReviewOp> {
-  return setActionStatus(id, "approved");
+  const base = await setActionStatus(id, "approved");
+  if (!base.ok) return base;
+  // Aprobar = enviar (email): intento inmediato; si falla, queda approved
+  // y lo reintenta el dispatcher. WhatsApp sigue manual (wa.me).
+  const send = await trySendApprovedEmail(id);
+  if (send.sent) return { ok: true, message: send.message };
+  if (send.message === "No es email." || send.message === "Ya procesada por otro lado.") return base;
+  return { ok: true, message: `Aprobada, pero no se pudo enviar: ${send.message} Queda en cola para el dispatcher.` };
 }
 
 export async function rejectActionAction(id: string): Promise<ReviewOp> {
   return setActionStatus(id, "rejected");
 }
 
-/** Revoca una aprobación aún no enviada (approved → rejected, solo si
- *  dispatched_at es null). Sin esto, lo aprobado es invisible en Review
- *  (solo lista pending) y el dispatcher lo enviaría sin remedio. */
+/** Cancela un envío aún no salido (approved → rejected, solo si
+ *  dispatched_at es null). */
 export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
   const { data, error } = await getSupabase()
@@ -87,10 +139,10 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
     .select("id");
   if (error) return { ok: false, message: error.message };
   if (!data || data.length === 0) {
-    return { ok: false, message: "Ya enviada o inexistente: no se puede revocar." };
+    return { ok: false, message: "Ya enviado o inexistente: nada que cancelar." };
   }
   revalidatePath("/review");
-  return { ok: true, message: "Aprobación revocada: no se enviará." };
+  return { ok: true, message: "Envío cancelado: no saldrá." };
 }
 
 /** Edita asunto/cuerpo de un pendiente (solo pending_review). Valida los mismos
@@ -217,7 +269,7 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
   const db = getSupabase();
   const { data: row, error: rErr } = await db
     .from("proposed_actions")
-    .select("id,channel,signal_id,customer_id,customers(email,phone,country)")
+    .select("id,channel,signal_id,customer_id,evidence_json,customers(email,phone,country)")
     .eq("id", id)
     .eq("status", "pending_review")
     .maybeSingle();
@@ -253,20 +305,43 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
   if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
   const storeId = await resolveStoreId(conn.medusaUrl);
   if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
-  // Borra el pendiente y libera la señal; si algo falla después, la señal
-  // queda priorizada y el humano reintenta (nunca dos filas vivas).
-  const { error: dErr } = await db
+  // Re-redacción in place sobre la misma fila: created_at intacto (la cola
+  // no se reordena) y nunca hay dos filas vivas (anti-spam por construcción).
+  // La señal se presta a prioritized para componer y vuelve a actioned.
+  await db.from("churn_signals").update({ status: "prioritized" }).eq("id", signalId);
+  const { previewSignalCopy } = await import("@/lib/copywriter");
+  const preview = await previewSignalCopy(storeId, signalId, target);
+  if (!preview.ok) {
+    await db.from("churn_signals").update({ status: "actioned" }).eq("id", signalId);
+    revalidatePath("/review");
+    return { ok: false, message: preview.message };
+  }
+  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const { error: uErr } = await db
     .from("proposed_actions")
-    .delete()
+    .update({
+      channel: preview.channel,
+      subject: preview.channel === "email" ? preview.subject : null,
+      body: preview.body.slice(0, 2000),
+      evidence_json: {
+        ...prev,
+        channel_switch: {
+          from: current,
+          to: preview.channel,
+          at: new Date().toISOString(),
+          by: await resolveApprover(),
+        },
+      },
+    })
     .eq("id", id)
     .eq("status", "pending_review");
-  if (dErr) return { ok: false, message: dErr.message };
-  await db.from("churn_signals").update({ status: "prioritized" }).eq("id", signalId);
-  const draft = await draftSingleSignal(storeId, signalId, { forceChannel: target });
+  await db.from("churn_signals").update({ status: "actioned" }).eq("id", signalId);
+  if (uErr) {
+    revalidatePath("/review");
+    return { ok: false, message: uErr.message };
+  }
   revalidatePath("/review");
-  return draft.ok
-    ? { ok: true, message: `Ahora en ${target === "email" ? "Email" : "WhatsApp"}.` }
-    : { ok: false, message: `Se liberó la señal pero el borrador falló: ${draft.message}` };
+  return { ok: true, message: `Ahora en ${preview.channel === "email" ? "Email" : "WhatsApp"}.` };
 }
 
 export async function approveLeadAction(id: string): Promise<ReviewOp> {
@@ -376,6 +451,8 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
     log(`batch startRun falló: ${e instanceof Error ? e.message : e}`);
   }
   let ok = 0;
+  let sent = 0;
+  let held = 0;
   try {
     // Un solo aprobador para todo el lote (la sesión no cambia a mitad).
     const approvedBy = await resolveApprover();
@@ -386,12 +463,21 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
         .update({ status: "approved", approved_by: approvedBy, approved_at: approvedAt })
         .eq("id", t.id)
         .eq("status", "pending_review");
-      if (!upErr) ok += 1;
+      if (upErr) continue;
+      ok += 1;
+      // Aprobar = enviar (email): intento inmediato por fila; WhatsApp y
+      // fallos quedan approved para el dispatcher / flujo manual.
+      const send = await trySendApprovedEmail(t.id).catch(() => ({ sent: false as const, message: "error" }));
+      if (send.sent) sent += 1;
+      else if (send.message !== "No es email." && send.message !== "Ya procesada por otro lado.") held += 1;
       if (runId) {
         await advanceRun(runId, { processed: ok, failed: 0, current: null }).catch(() => {});
       }
     }
-    const message = `${ok} de ${targets.length} aprobadas.`;
+    const message =
+      sent > 0
+        ? `${ok} de ${targets.length} aprobadas, ${sent} enviadas por email${held > 0 ? `, ${held} en cola (las envía el dispatcher)` : ""}.`
+        : `${ok} de ${targets.length} aprobadas${held > 0 ? ` (${held} emails en cola para el dispatcher)` : ""}.`;
     if (runId) {
       await finishRun(runId, { status: "done", processed: ok, failed: 0, summary: message, pulseState: "active" }).catch((e) =>
         log(`batch finishRun falló: ${e instanceof Error ? e.message : e}`),

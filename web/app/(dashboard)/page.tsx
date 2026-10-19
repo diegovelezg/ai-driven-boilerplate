@@ -758,6 +758,12 @@ export default async function DashboardPage({
                 {hoyActuar > 0 ? (
                   <HoyHeroActions
                     actuarCount={hoyActuar}
+                    redactableCount={
+                      attention.filter(
+                        (r) => r.draftStatus === "none" && r.contactability?.eligible !== false,
+                      ).length
+                    }
+                    pendingCount={pending}
                     isB2B={team.archetype === "b2b_proyecto" || team.archetype === "b2b_recurrente"}
                     reviewHref={reviewHref}
                   />

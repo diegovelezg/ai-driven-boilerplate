@@ -71,13 +71,25 @@ export async function listStoreMarkets(storeId: string, requestedId?: string | n
   }));
 }
 
-/** Valida ?market= contra los markets; null = todos (o inválido). */
+/** Valida ?market= contra los markets; null = sin pedir (default primario). */
 export function pickRequestedMarket(
   markets: TenantMarket[],
   requestedId: string | null | undefined,
 ): TenantMarket | null {
   if (!requestedId) return null;
   return markets.find((m) => m.id === requestedId) ?? null;
+}
+
+/** Mercado primario: el de la moneda de la tienda, o el primero.
+ *  Sin ?market= se usa este (nunca "todos": mezclar monedas confunde). */
+export function pickPrimaryMarket(markets: TenantMarket[], shopCurrency: string | null): TenantMarket | null {
+  if (markets.length === 0) return null;
+  const cur = (shopCurrency ?? "").trim().toUpperCase();
+  if (cur) {
+    const hit = markets.find((m) => (m.currency ?? "").toUpperCase() === cur);
+    if (hit) return hit;
+  }
+  return markets[0];
 }
 
 /** IDs de customers con al menos una orden en el market (vía orders.market_id). */
@@ -249,7 +261,18 @@ export async function resolveMarketScope(
   requestedId: string | null | undefined,
 ): Promise<MarketScope> {
   const markets = await listStoreMarkets(storeId, requestedId);
-  const market = pickRequestedMarket(markets, requestedId);
+  let market = pickRequestedMarket(markets, requestedId);
+  if (!market && markets.length >= 2) {
+    // Sin pedir (o inválido) con 2+ markets: primario, nunca "todos".
+    // Con 1 market se conserva el legacy null (una sola moneda, no confunde).
+    const db = getSupabase();
+    const { data: s } = await db
+      .from("stores")
+      .select("shop_currency")
+      .eq("id", storeId)
+      .maybeSingle();
+    market = pickPrimaryMarket(markets, (s as Record<string, unknown> | null)?.shop_currency as string ?? null);
+  }
   if (!market) return { market: null, countries: null, customerIds: null };
   const seen = new Set<string>();
   for (const c of market.countries ?? []) {

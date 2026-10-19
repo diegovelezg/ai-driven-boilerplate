@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { medusaLogin, testMedusa } from "@/lib/medusa";
 import type { MedusaVersion } from "@/lib/medusa";
 import { readConnections, writeConnections } from "@/lib/store";
-import type { Platform } from "@/lib/store";
+import type { DefaultChannel, EmailProvider, Platform } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { syncStoreFromMedusa } from "@/lib/sync";
 
@@ -71,5 +71,74 @@ export async function saveConnectionsAction(
     return { ok: true, message: `Medusa ${version} conectado: ${result.store} · ${syncMsg}` };
   } catch (e) {
     return { ok: false, message: `Medusa falla: ${e instanceof Error ? e.message : "error"}` };
+  }
+}
+
+export async function saveEmailAction(
+  _prev: SaveState | null,
+  formData: FormData,
+): Promise<SaveState> {
+  const provider = String(formData.get("emailProvider") ?? "sendgrid") as EmailProvider;
+  const from = String(formData.get("emailFrom") ?? "").trim();
+  const apiKey = String(formData.get("emailApiKey") ?? "");
+  const rawChannel = String(formData.get("defaultChannel") ?? "email");
+  const defaultChannel: DefaultChannel = rawChannel === "whatsapp" ? "whatsapp" : "email";
+  if (provider !== "sendgrid" && provider !== "resend" && provider !== "none") {
+    return { ok: false, message: "Proveedor email inválido" };
+  }
+  if (provider !== "none" && !from) {
+    return { ok: false, message: "Falta remitente (from)" };
+  }
+  const prev = await readConnections();
+  await writeConnections({
+    ...prev,
+    emailProvider: provider,
+    emailFrom: from,
+    // Vacío = conservar la guardada (el input viene con placeholder, no con valor).
+    emailApiKey: apiKey ? apiKey.trim() : prev.emailApiKey,
+    defaultChannel,
+  });
+  revalidatePath("/settings");
+  return {
+    ok: true,
+    message:
+      provider === "none"
+        ? "Email desactivado."
+        : apiKey
+          ? `Email ${provider} guardado.`
+          : `Email ${provider} guardado (key anterior conservada).`,
+  };
+}
+
+export async function testEmailAction(
+  _prev: SaveState | null,
+  formData: FormData,
+): Promise<SaveState> {
+  const to = String(formData.get("emailTestTo") ?? "").trim();
+  if (!to || !to.includes("@")) return { ok: false, message: "Indica un destino válido para la prueba" };
+  const conn = await readConnections();
+  if (conn.emailProvider === "none" || !conn.emailApiKey || !conn.emailFrom) {
+    return { ok: false, message: "Guarda primero proveedor, from y API key" };
+  }
+  try {
+    if (conn.emailProvider === "sendgrid") {
+      const { sendViaSendGrid } = await import("@/lib/comms/email/sendgrid");
+      const r = await sendViaSendGrid({
+        apiKey: conn.emailApiKey,
+        from: conn.emailFrom,
+        msg: {
+          to,
+          subject: "AI Retention Engine · prueba de conexión",
+          text: "Conexión SendGrid OK desde AI Retention Engine.",
+        },
+      });
+      revalidatePath("/settings");
+      return r.ok
+        ? { ok: true, message: `Prueba enviada a ${to} vía SendGrid.` }
+        : { ok: false, message: r.error ?? "SendGrid falló" };
+    }
+    return { ok: false, message: `Proveedor ${conn.emailProvider} aún sin backend (solo SendGrid).` };
+  } catch (e) {
+    return { ok: false, message: `Prueba falla: ${e instanceof Error ? e.message : "error"}` };
   }
 }

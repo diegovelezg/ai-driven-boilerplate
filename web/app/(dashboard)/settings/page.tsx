@@ -1,5 +1,5 @@
 import { ProfileProposalsPanel } from "@/components/profile-proposals";
-import { SettingsForm } from "@/components/settings-form";
+import { EmailSettingsForm, SettingsForm } from "@/components/settings-form";
 import { TenantProfileForm } from "@/components/tenant-profile-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { resolveStoreId } from "@/lib/customers-db";
@@ -107,6 +107,7 @@ export default async function SettingsPage() {
         <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
       </header>
       <SettingsForm defaults={defaults} />
+      <EmailSettingsForm defaults={defaults} />
       <TenantProfileForm storeId={storeId} profile={profile} suggestion={suggestion} />
       {motorCard && (
         <Card>

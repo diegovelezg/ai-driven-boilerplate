@@ -6,7 +6,7 @@ import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppTooltipProvider } from "@/components/ui/app-tooltip";
 import { displayStoreName, listStores, type TenantStore } from "@/lib/tenant";
-import { listStoreMarkets, type TenantMarket } from "@/lib/markets";
+import { listStoreMarkets, pickPrimaryMarket, type TenantMarket } from "@/lib/markets";
 
 // Chrome del dashboard: sidebar + header + cinta de background.
 // Solo aplica a las rutas del grupo (dashboard); /login no lo hereda.
@@ -18,12 +18,17 @@ import { listStoreMarkets, type TenantMarket } from "@/lib/markets";
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   let stores: TenantStore[] = [];
   let marketsByStore: Record<string, TenantMarket[]> = {};
+  const primaryByStore: Record<string, string> = {};
   try {
     stores = await listStores();
     const entries = await Promise.all(
       stores.map(async (s) => [s.id, await listStoreMarkets(s.id)] as const),
     );
     marketsByStore = Object.fromEntries(entries);
+    for (const s of stores) {
+      const primary = pickPrimaryMarket(marketsByStore[s.id] ?? [], s.shop_currency);
+      if (primary) primaryByStore[s.id] = primary.id;
+    }
   } catch {
     // header degradado: sin selector de mercado
   }
@@ -34,7 +39,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           <AppTooltipProvider>
             <AppSidebar />
             <SidebarInset>
-              <AppHeader stores={stores} marketsByStore={marketsByStore} />
+              <AppHeader stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} />
               <DashboardShell>{children}</DashboardShell>
             </SidebarInset>
           </AppTooltipProvider>

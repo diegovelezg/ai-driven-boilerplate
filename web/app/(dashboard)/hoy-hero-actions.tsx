@@ -7,13 +7,21 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startCopywriterAction } from "@/lib/retention-actions";
 
-/** CTAs del héroe de Hoy: lote solo en no-B2B; en B2B se revisa de a uno. */
+/** CTAs del héroe de Hoy: lote solo en no-B2B; en B2B se revisa de a uno.
+ *  El botón solo se ofrece si hay algo redactable: si todo lo accionable ya
+ *  tiene borrador o está vetado, se muestra "Ir a Review" en vez de un
+ *  "Redactar los N" que devolvería 0 y parece roto. */
 export function HoyHeroActions({
   actuarCount,
+  redactableCount,
+  pendingCount = 0,
   isB2B,
   reviewHref,
 }: {
   actuarCount: number;
+  /** Filas de Hoy sin borrador y sin veto (las únicas que el bulk puede crear). */
+  redactableCount: number;
+  pendingCount?: number;
   isB2B: boolean;
   reviewHref: string;
 }) {
@@ -27,6 +35,26 @@ export function HoyHeroActions({
       </Button>
     );
   }
+  // Nada redactable: no ofrecer un bulk que devolvería 0. El trabajo ya está
+  // en Review (o vetado): el CTA honesto es ir ahí.
+  if (redactableCount <= 0) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <Button render={<Link href={reviewHref} />} nativeButton={false} size="sm">
+          Ir a Review
+        </Button>
+        {pendingCount > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            Ya {pendingCount === 1 ? "tiene borrador" : "tienen borrador"}, esperando tu aprobación.
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            Nada fresco que redactar (vetado o ya cubierto).
+          </span>
+        )}
+      </span>
+    );
+  }
   const running = activeRuns.some((r) => r.kind === "copywriter");
   const busy = starting || running || isBusy("copywriter");
   const blocker = !running && isBusy("copywriter") ? activeRuns[0]?.label ?? null : null;
@@ -36,13 +64,13 @@ export function HoyHeroActions({
         <span className="inline-flex">
           <Button
             size="sm"
-            disabled={busy || actuarCount === 0}
+            disabled={busy || redactableCount === 0}
             onClick={async () => {
               const r = await start(startCopywriterAction);
               setMsg(r.message);
             }}
           >
-            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${actuarCount}`}
+            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${redactableCount}`}
           </Button>
         </span>
       </AppTooltip>
