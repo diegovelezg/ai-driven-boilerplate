@@ -12,6 +12,7 @@ import {
 } from "@/lib/profile-actions";
 import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 import { verticalName } from "@/lib/taxonomy";
+import { formatNumber } from "@/lib/format";
 
 type Proposal = DescriptionInterpretation & {
   sourceUrl: string | null;
@@ -162,7 +163,7 @@ export function ProfileChat({
                     : ""}
                 </li>
                 {proposal.buyerType && <li>Quién compra: {proposal.buyerType}</li>}
-                {proposal.cycleDays && <li>Recompra aprox. cada {proposal.cycleDays} días</li>}
+                {proposal.cycleDays && <li>Recompra aprox. cada {formatNumber(proposal.cycleDays)} días</li>}
                 {proposal.sourceUrl && <li>Investigué {proposal.sourceUrl}</li>}
               </ul>
               <AppTooltip

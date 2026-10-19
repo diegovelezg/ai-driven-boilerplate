@@ -18,6 +18,7 @@ import {
   type SearchHit,
 } from "@/lib/retrieval";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { formatNumber } from "@/lib/format";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("prospect");
@@ -93,7 +94,7 @@ export async function buildAutoIcp(storeId: string, profile?: Record<string, unk
   const lines = [
     `Negocio: ${String(p.vertical_detected ?? p.description ?? "ecommerce").toString().slice(0, 200)}`,
     `Comprador ideal: ${String(p.buyer_type ?? "").toString().slice(0, 160) || "negocios que ya compraron y gastaron más"}`,
-    `Evidencia top-20: ${b2b}/20 son B2B · ticket mediano ~S/ ${median}`,
+    `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~S/ ${formatNumber(median)}`,
     industries.length > 0 ? `Industrias top en tus mejores: ${[...new Set(industries)].slice(0, 5).join(", ")}` : null,
     `Ejemplos de dominios que sí te compran: ${doms.slice(0, 8).join(", ") || "—"}`,
     "Buscar: negocios parecidos a esos (misma industria/tamaño, con web propia y contacto público). Excluir marketplaces y redes sociales.",
@@ -505,7 +506,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
     const focusTag = focus ? ` · foco: ${focus.slice(0, 60)}` : "";
     const summary =
       processed > 0
-        ? `${processed} parecidos a tu ideal por revisar${focusTag}`
+        ? `${formatNumber(processed)} parecidos a tu ideal por revisar${focusTag}`
         : `En pausa, primero recuperamos lo tuyo${focusTag}`;
     await finishRun(runId, {
       status,

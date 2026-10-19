@@ -7,6 +7,7 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Mail, MessageCircle } from "lucide-react";
 import { useBackgroundOrNull } from "@/components/background-status";
 import type { ReviewOp } from "@/lib/review-actions";
+import { formatNumber } from "@/lib/format";
 
 type Op = (id: string) => Promise<{ ok: boolean; message: string }>;
 
@@ -123,7 +124,7 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
               }
             }}
           >
-            {busy ? "Regenerando…" : `Regenerar ${count} con criterios actuales`}
+            {busy ? "Regenerando…" : `Regenerar ${formatNumber(count)} con criterios actuales`}
           </Button>
         </span>
       </AppTooltip>
@@ -337,7 +338,7 @@ export function EditableDraft({
         className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-[13px] outline-none focus:border-ring"
       />
       <span className={`text-xs tabular-nums ${over ? "text-destructive" : "text-muted-foreground"}`}>
-        {sBody.trim().length}/{limit} caracteres
+        {formatNumber(sBody.trim().length)}/{formatNumber(limit)} caracteres
       </span>
       <span className="flex items-center gap-2">
         <Button size="sm" disabled={!canSave} onClick={save} title="Ctrl+Enter">

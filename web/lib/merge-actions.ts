@@ -6,6 +6,7 @@ import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
 import { mergeCustomers } from "@/lib/merge";
+import { formatNumber } from "@/lib/format";
 
 export interface MergeState {
   ok: boolean;
@@ -53,15 +54,15 @@ export async function mergeAllDuplicatesAction(): Promise<MergeAllState> {
     if (merged === 0)
       return {
         ok: false,
-        message: `No se pudo combinar ningún caso (${failed} fallo${failed === 1 ? "" : "s"}). ${errors.join(" · ")}`,
+        message: `No se pudo combinar ningún caso (${formatNumber(failed)} fallo${failed === 1 ? "" : "s"}). ${errors.join(" · ")}`,
         merged,
         failed,
         total: groups.length,
       };
-    const tail = failed > 0 ? ` · ${failed} fallo${failed === 1 ? "" : "s"}: ${errors.join(" · ")}` : "";
+    const tail = failed > 0 ? ` · ${formatNumber(failed)} fallo${failed === 1 ? "" : "s"}: ${errors.join(" · ")}` : "";
     return {
       ok: failed === 0,
-      message: `Combinados ${merged}/${groups.length} casos · ${removed} ficha${removed === 1 ? "" : "s"} eliminada${removed === 1 ? "" : "s"} · ${movedOrders} ${movedOrders === 1 ? "orden" : "órdenes"} movida${movedOrders === 1 ? "" : "s"}.${tail}`,
+      message: `Combinados ${formatNumber(merged)}/${formatNumber(groups.length)} casos · ${formatNumber(removed)} ficha${removed === 1 ? "" : "s"} eliminada${removed === 1 ? "" : "s"} · ${formatNumber(movedOrders)} ${movedOrders === 1 ? "orden" : "órdenes"} movida${movedOrders === 1 ? "" : "s"}.${tail}`,
       merged,
       failed,
       total: groups.length,
@@ -91,7 +92,7 @@ export async function mergeCustomersAction(dbIds: string[]): Promise<MergeState>
     revalidatePath("/customers");
     return {
       ok: true,
-      message: `Combinadas ${r.removed + 1} fichas · ${r.movedOrders} órdenes movidas.`,
+      message: `Combinadas ${formatNumber(r.removed + 1)} fichas · ${formatNumber(r.movedOrders)} órdenes movidas.`,
     };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "error" };

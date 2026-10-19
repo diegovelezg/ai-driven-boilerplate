@@ -427,16 +427,5 @@ export function medusaOrderToCanonical(
   };
 }
 
-export function formatMoney(amountMinor: number, currency: string | null): string {
-  const code = (currency ?? "PEN").toUpperCase();
-  try {
-    return new Intl.NumberFormat("es-PE", {
-      style: "currency",
-      currency: code,
-      maximumFractionDigits: 0,
-      minimumFractionDigits: 0,
-    }).format(Math.round(amountMinor / 100));
-  } catch {
-    return `${Math.round(amountMinor / 100)} ${code}`;
-  }
-}
+// El formato vive en un único módulo (`lib/format`): miles "." y decimales ",".
+export { formatMoney } from "@/lib/format";

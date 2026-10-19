@@ -3,12 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Mail, PenLine, Phone, Radar, Share2, UserPlus, type LucideIcon } from "lucide-react";
+import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard, AppCardState } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
 import { useBackgroundOrNull } from "@/components/background-status";
 import {
@@ -144,9 +146,9 @@ export function ReviewLists({
 }) {
   const router = useRouter();
   const tabs: Array<{ id: ReviewTab; label: string; show: boolean; icon: LucideIcon }> = [
-    { id: "actions", label: `Mensajes por aprobar (${actions.length})`, show: visible.actions, icon: PenLine },
-    { id: "leads", label: `Empresas por contactar (${leads.length})`, show: visible.leads, icon: UserPlus },
-    { id: "signals", label: `Clientes en riesgo (${signals.length})`, show: visible.signals, icon: Radar },
+    { id: "actions", label: `Mensajes por aprobar (${formatNumber(actions.length)})`, show: visible.actions, icon: PenLine },
+    { id: "leads", label: `Empresas por contactar (${formatNumber(leads.length)})`, show: visible.leads, icon: UserPlus },
+    { id: "signals", label: `Clientes en riesgo (${formatNumber(signals.length)})`, show: visible.signals, icon: Radar },
   ];
   const shown = tabs.filter((t) => t.show);
   const fallback = shown[0]?.id ?? "actions";
@@ -219,7 +221,7 @@ export function ReviewLists({
   return (
     <>
       {shown.length > 1 && (
-        <div role="tablist" aria-label="Colas de revisión" className="flex w-fit gap-1 rounded-lg bg-muted p-1">
+        <div role="tablist" aria-label="Colas de revisión" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-muted/60 p-1.5">
           {shown.map((t) => (
             <button
               key={t.id}
@@ -227,10 +229,10 @@ export function ReviewLists({
               aria-selected={active === t.id}
               onClick={() => selectTab(t.id)}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
+                "flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-medium transition-colors",
                 active === t.id
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/60"
+                  : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
               )}
             >
               <t.icon className="size-4 shrink-0" aria-hidden />
@@ -240,19 +242,18 @@ export function ReviewLists({
         </div>
       )}
       {visible.actions && active === "actions" && (
-      <section className="flex flex-col gap-3" role="tabpanel">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-medium">
-            Mensajes por aprobar ({actions.length})
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              el copywriter propone, el humano aprueba; dispatcher solo envía aprobadas
-            </span>
-          </h2>
-          <RegenerateButton
-            count={actions.filter((a) => a.generator !== COPYWRITER_GEN).length}
-            onRegenerate={regenerateStaleDraftsAction}
-          />
-        </div>
+      <section className="flex flex-col gap-4" role="tabpanel">
+        <SectionHeading
+          title={`Mensajes por aprobar (${formatNumber(actions.length)})`}
+          hint="El Redactor propone; tú apruebas. Nada se envía sin tu visto bueno."
+          tone="primary"
+          right={
+            <RegenerateButton
+              count={actions.filter((a) => a.generator !== COPYWRITER_GEN).length}
+              onRegenerate={regenerateStaleDraftsAction}
+            />
+          }
+        />
         {!isB2B && actions.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -260,24 +261,18 @@ export function ReviewLists({
               disabled={batchBusy || selected.size === 0}
               onClick={() => void approveSelected()}
             >
-              {batchBusy ? "Aprobando…" : `Aprobar seleccionados (${selected.size})`}
+              {batchBusy ? "Aprobando…" : `Aprobar seleccionados (${formatNumber(selected.size)})`}
             </Button>
             {batchMsg && <span className="text-xs text-muted-foreground">{batchMsg}</span>}
           </div>
         )}
         {actions.length === 0 &&
           (liveKinds.has("copywriter") ? (
-            <Card>
-              <CardContent className="p-4">
-                <SectionLoading label="borradores" />
-              </CardContent>
-            </Card>
+            <AppCardState>
+              <SectionLoading label="borradores" />
+            </AppCardState>
           ) : (
-            <Card>
-              <CardContent className="p-4 text-[13px] text-muted-foreground">
-                {emptyActions}
-              </CardContent>
-            </Card>
+            <AppCardState>{emptyActions}</AppCardState>
           ))}
         {actions.map((a) => {
           const hasPred = a.predHorizon != null && a.predP != null;
@@ -285,37 +280,67 @@ export function ReviewLists({
           const nLow = hasPred && a.predPLow != null ? Math.round(a.predPLow * 10) : null;
           const nHigh = hasPred && a.predPHigh != null ? Math.round(a.predPHigh * 10) : null;
           const hecho = hasPred
-            ? `ciclo ~${a.predCycleDays ?? "?"}d · lleva ${a.predTDays ?? "?"}d · ${ultimaCompraLabel} ${a.lastOrderAt ?? "—"}${a.lastOrderItems && a.lastOrderItems.length > 0 ? ` (${a.lastOrderItems.join(" · ")})` : ""}`
+            ? `ciclo ~${a.predCycleDays != null ? formatNumber(a.predCycleDays) : "?"}d · lleva ${a.predTDays != null ? formatNumber(a.predTDays) : "?"}d · ${ultimaCompraLabel} ${a.lastOrderAt ?? "—"}${a.lastOrderItems && a.lastOrderItems.length > 0 ? ` (${a.lastOrderItems.join(" · ")})` : ""}`
             : null;
           return (
-          <Card key={a.id}>
-            <CardContent className="flex flex-col gap-3 px-4 pb-4">
-              <div
-                className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded px-1 py-2 -mx-1 hover:bg-muted/40"
-                title="Abrir ficha del cliente"
-                onClick={() => void openDrawer(a.customerId)}
-              >
-                <span className="flex items-center gap-2 text-[13px] font-medium">
-                  {!isB2B && (
-                    <input
-                      type="checkbox"
-                      checked={selected.has(a.id)}
-                      onChange={() => toggleSelect(a.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      aria-label={`Seleccionar borrador de ${a.name}`}
-                      className="size-4 accent-primary"
-                    />
+          <AppCard
+            key={a.id}
+            tone="primary"
+            title={
+              <span className="flex min-w-0 items-center gap-2">
+                {!isB2B && (
+                  <input
+                    type="checkbox"
+                    checked={selected.has(a.id)}
+                    onChange={() => toggleSelect(a.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Seleccionar borrador de ${a.name}`}
+                    className="size-4 shrink-0 accent-primary"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => void openDrawer(a.customerId)}
+                  title="Abrir ficha del cliente"
+                  className="flex min-w-0 items-center gap-2 rounded-md hover:underline"
+                >
+                  <span className="truncate">{a.name}</span>
+                  <span className="truncate text-xs font-normal text-muted-foreground">
+                    · {a.email}
+                  </span>
+                </button>
+              </span>
+            }
+            description={a.reason ? `Motivo: ${a.reason}` : undefined}
+            action={
+              <span className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                    a.channel === "whatsapp"
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
                   )}
-                  {a.name} <span className="font-normal text-muted-foreground">· {a.email}</span>
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
+                >
                   {a.channel}
-                  {a.kind ? ` · ${a.kind}` : ""}
                 </span>
-              </div>
-              {a.reason && (
-                <p className="text-xs text-muted-foreground">Motivo: {a.reason}</p>
-              )}
+                {a.kind ? <span>{a.kind}</span> : null}
+              </span>
+            }
+            footer={
+              <DraftActions
+                id={a.id}
+                channel={a.channel}
+                wameUrl={a.wameUrl}
+                canSwitch={!!a.canSwitchChannel && (a.channel === "email" || a.channel === "whatsapp")}
+                toLabel={a.channel === "email" ? "WhatsApp" : "Email"}
+                onApprove={approveActionAction}
+                onReject={rejectActionAction}
+                onSwitch={switchChannelAction}
+              />
+            }
+            contentClassName="flex flex-col gap-3"
+          >
               <EditableDraft
                 key={`${a.id}-${a.body.length}-${a.subject ?? ""}`}
                 id={a.id}
@@ -324,8 +349,8 @@ export function ReviewLists({
                 body={a.body}
                 onSave={updateDraftContentAction}
               />
-              <details className="rounded-md bg-muted/50 px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
+              <details className="rounded-lg bg-muted/40 px-3.5 py-2.5">
+                <summary className="text-xs font-medium hover:text-foreground">
                   Por qué se propone (sustento)
                 </summary>
                 <div className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
@@ -336,7 +361,7 @@ export function ReviewLists({
                       </span>
                       <span>
                         <strong className="text-foreground">Evidencia:</strong> sin escribirle,
-                        de cada 10 similares vuelven ~{n10} en {a.predHorizon}d (rango {nLow}–{nHigh})
+                        de cada 10 similares vuelven ~{formatNumber(n10)} en {formatNumber(a.predHorizon)}d (rango {formatNumber(nLow)}–{formatNumber(nHigh)})
                         {a.predConfidence === "baja" ? " (estimación inicial: aún hay pocos datos de esta tienda)" : ""}.
                       </span>
                       <span>
@@ -356,7 +381,7 @@ export function ReviewLists({
                             : a.kind === "nurture"
                               ? "2+ compras, gasto medio → nurture, reactivar hábito"
                               : "señal de churn vencida → recupero"}{" "}
-                        {a.score != null ? `· score ${a.score}` : ""} {a.reason ? `· ${a.reason}` : ""}
+                        {a.score != null ? `· score ${formatNumber(a.score)}` : ""} {a.reason ? `· ${a.reason}` : ""}
                       </span>
                       <span>
                         Canal {a.channel}: {a.channel === "whatsapp" ? "hay teléfono, se prefiere WhatsApp (≤400 chars)" : "sin teléfono a la vista, se usa email"} ·
@@ -371,79 +396,81 @@ export function ReviewLists({
                   </span>
                 </div>
               </details>
-              <DraftActions
-                id={a.id}
-                channel={a.channel}
-                wameUrl={a.wameUrl}
-                canSwitch={!!a.canSwitchChannel && (a.channel === "email" || a.channel === "whatsapp")}
-                toLabel={a.channel === "email" ? "WhatsApp" : "Email"}
-                onApprove={approveActionAction}
-                onReject={rejectActionAction}
-                onSwitch={switchChannelAction}
-              />
-            </CardContent>
-          </Card>
+            </AppCard>
           );
         })}
         {approvedActions.length > 0 && (
-          <div className="mt-2 flex flex-col gap-3">
-            <h3 className="text-sm font-medium">
-              Aprobadas por enviar ({approvedActions.length})
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                los emails salieron al aprobar; WhatsApp es manual · cancela aquí el envío si alguno ya no va
-              </span>
-            </h3>
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Aprobadas por enviar (${formatNumber(approvedActions.length)})`}
+              hint="Los emails salieron al aprobar; WhatsApp es manual. Cancela aquí si alguno ya no va."
+              tone="emerald"
+            />
             {approvedActions.map((a) => (
-              <Card key={a.id}>
-                <CardContent className="flex flex-col gap-3 px-4 pb-4">
-                  <div
-                    className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded px-1 py-2 -mx-1 hover:bg-muted/40"
-                    title="Abrir ficha del cliente"
+              <AppCard
+                key={a.id}
+                tone="emerald"
+                title={
+                  <button
+                    type="button"
                     onClick={() => void openDrawer(a.customerId)}
+                    title="Abrir ficha del cliente"
+                    className="flex min-w-0 items-center gap-2 rounded-md hover:underline"
                   >
-                    <span className="flex items-center gap-2 text-[13px] font-medium">
-                      {a.name} <span className="font-normal text-muted-foreground">· {a.email}</span>
+                    <span className="truncate">{a.name}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      · {a.email}
                     </span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {a.channel}
-                      {a.kind ? ` · ${a.kind}` : ""}
-                      {a.generator !== COPYWRITER_GEN ? " · ⚠ criterios anteriores" : ""}
-                    </span>
-                  </div>
-                  {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
-                  <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
-                  <p className="text-xs text-muted-foreground tabular-nums">
+                  </button>
+                }
+                description={
+                  <span className="tabular-nums">
                     Aprobado por {approverLabel(a.approvedBy)}
                     {a.approvedAt ? ` · ${a.approvedAt.slice(0, 10)}` : ""}
-                  </p>
-                  {a.channel === "whatsapp" ? (
-                    <span className="flex flex-wrap items-center gap-2">
-                      {a.wameUrl ? (
-                        <AppTooltip tip="Abre el chat con el mensaje prellenado. Envías desde tu número.">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            render={<a href={a.wameUrl} target="_blank" rel="noopener noreferrer" />}
-                            nativeButton={false}
-                          >
-                            Abrir en WhatsApp
-                          </Button>
-                        </AppTooltip>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">
-                          Sin teléfono válido: revoca y genera la versión email.
-                        </span>
-                      )}
-                      <MarkSentButton id={a.id} onMarkSent={markDispatchedAction} />
-                    </span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">
-                      No salió al aprobar · lo reintenta el dispatcher.
-                    </span>
-                  )}
-                  <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
-                </CardContent>
-              </Card>
+                  </span>
+                }
+                action={
+                  <span className="tabular-nums">
+                    {a.channel}
+                    {a.kind ? ` · ${a.kind}` : ""}
+                    {a.generator !== COPYWRITER_GEN ? " · ⚠ criterios anteriores" : ""}
+                  </span>
+                }
+                footer={
+                  <span className="flex flex-wrap items-center gap-2">
+                    {a.channel === "whatsapp" ? (
+                      <>
+                        {a.wameUrl ? (
+                          <AppTooltip tip="Abre el chat con el mensaje prellenado. Envías desde tu número.">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              render={<a href={a.wameUrl} target="_blank" rel="noopener noreferrer" />}
+                              nativeButton={false}
+                            >
+                              Abrir en WhatsApp
+                            </Button>
+                          </AppTooltip>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            Sin teléfono válido: revoca y genera la versión email.
+                          </span>
+                        )}
+                        <MarkSentButton id={a.id} onMarkSent={markDispatchedAction} />
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        No salió al aprobar · lo reintenta el dispatcher.
+                      </span>
+                    )}
+                    <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
+                  </span>
+                }
+                contentClassName="flex flex-col gap-3"
+              >
+                {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
+                <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+              </AppCard>
             ))}
           </div>
         )}
@@ -451,43 +478,38 @@ export function ReviewLists({
       )}
 
       {visible.leads && active === "leads" && (
-      <section className="flex flex-col gap-3" role="tabpanel">
-        <h2 className="text-sm font-medium">
-          Empresas por contactar ({leads.length})
-          {marketLabel && (
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              sin país atribuido: van todos
-            </span>
-          )}
-        </h2>
+      <section className="flex flex-col gap-4" role="tabpanel">
+        <SectionHeading
+          title={`Empresas por contactar (${formatNumber(leads.length)})`}
+          hint={
+            marketLabel
+              ? "Sin país atribuido: van todos."
+              : "Negocios parecidos a tu mejor cliente, con contacto público."
+          }
+          tone="sky"
+        />
         {leads.length === 0 &&
           (liveKinds.has("prospect") ? (
-            <Card>
-              <CardContent className="p-4">
-                <SectionLoading label="leads" rows={2} />
-              </CardContent>
-            </Card>
+            <AppCardState>
+              <SectionLoading label="leads" rows={2} />
+            </AppCardState>
           ) : (
-            <Card>
-              <CardContent className="p-4 text-[13px] text-muted-foreground">
-                {emptyLeads}
-              </CardContent>
-            </Card>
+            <AppCardState>{emptyLeads}</AppCardState>
           ))}
         {leads.map((l) => (
-          <Card key={l.id}>
-            <CardContent className="flex flex-col gap-3 px-4 pb-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[13px] font-medium">
-                  {l.company ?? l.domain ?? l.url}
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {l.icp_score != null ? `score ${l.icp_score}` : ""}
-                </span>
-              </div>
-              {l.reason && (
-                <p className="text-xs text-muted-foreground">{l.reason}</p>
-              )}
+          <AppCard
+            key={l.id}
+            tone="sky"
+            title={l.company ?? l.domain ?? l.url}
+            description={l.reason ?? undefined}
+            action={
+              l.icp_score != null ? (
+                <span className="tabular-nums">score {formatNumber(l.icp_score)}</span>
+              ) : undefined
+            }
+            footer={<ApprovePair id={l.id} onApprove={approveLeadAction} onReject={rejectLeadAction} />}
+            contentClassName="flex flex-col gap-3"
+          >
               <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
                 {l.url}
               </a>
@@ -542,8 +564,8 @@ export function ReviewLists({
                   </div>
                 );
               })()}
-              <details className="rounded-md bg-muted/50 px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
+              <details className="rounded-lg bg-muted/40 px-3.5 py-2.5">
+                <summary className="text-xs font-medium hover:text-foreground">
                   Por qué se propone (sustento del agente)
                 </summary>
                 <div className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
@@ -561,7 +583,7 @@ export function ReviewLists({
                           · <strong className="text-foreground">{s.label ?? s.domain}</strong> ({s.domain})
                           {s.industry ? ` · ${s.industry}` : ""}
                           {s.spent_minor != null ? ` · ${formatMoney(s.spent_minor, shopCurrency)}` : ""}
-                          {s.orders != null ? ` en ${s.orders} ${s.orders === 1 ? "compra" : "compras"}` : ""} ·{" "}
+                          {s.orders != null ? ` en ${formatNumber(s.orders)} ${s.orders === 1 ? "compra" : "compras"}` : ""} ·{" "}
                           {s.why}
                         </span>
                       ))}
@@ -586,7 +608,7 @@ export function ReviewLists({
                       if (l.contact) bits.push(`✓ contacto público: ${l.contact}`);
                       else bits.push("✓ contacto público detectado");
                       if (nEmails + nPhones + nSocials > 0)
-                        bits.push(`${nEmails} email${nEmails === 1 ? "" : "s"} · ${nPhones} tel${nPhones === 1 ? "" : "s"} · ${nSocials} rrss`);
+                        bits.push(`${formatNumber(nEmails)} email${nEmails === 1 ? "" : "s"} · ${formatNumber(nPhones)} tel${nPhones === 1 ? "" : "s"} · ${formatNumber(nSocials)} rrss`);
                       return bits.join(" · ");
                     })()} ·{" "}
                     score {l.icp_score ?? "?"} · {l.source ?? "searxng"}
@@ -594,40 +616,44 @@ export function ReviewLists({
                   </span>
                 </div>
               </details>
-              <ApprovePair id={l.id} onApprove={approveLeadAction} onReject={rejectLeadAction} />
-            </CardContent>
-          </Card>
+            </AppCard>
         ))}
       </section>
       )}
 
       {visible.signals && active === "signals" && (
-      <section className="flex flex-col gap-3" role="tabpanel">
-        <h2 className="text-sm font-medium">Clientes en riesgo ({signals.length})</h2>
+      <section className="flex flex-col gap-4" role="tabpanel">
+        <SectionHeading
+          title={`Clientes en riesgo (${formatNumber(signals.length)})`}
+          hint="Señales abiertas del motor que todavía no tienen mensaje."
+          tone="amber"
+        />
         {signals.length === 0 &&
           (liveKinds.has("scout") || liveKinds.has("strategist")) && (
-            <Card>
-              <CardContent className="p-4">
-                <SectionLoading label="señales" rows={2} />
-              </CardContent>
-            </Card>
+            <AppCardState>
+              <SectionLoading label="señales" rows={2} />
+            </AppCardState>
           )}
         {signals.map((s) => (
-          <Card key={s.id}>
-            <CardContent className="flex items-center justify-between gap-3 p-4">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[13px] font-medium">
-                  {s.name} <span className="font-normal text-muted-foreground">· {s.email}</span>
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {s.status} · {s.kind}
-                  {s.score != null ? ` · score ${s.score}` : ""}
-                  {s.reason ? ` · ${s.reason}` : ""}
-                </span>
-              </div>
-              <DismissButton id={s.id} onDismiss={dismissSignalAction} />
-            </CardContent>
-          </Card>
+          <AppCard
+            key={s.id}
+            tone="amber"
+            title={
+              <span>
+                {s.name} <span className="font-normal text-muted-foreground">· {s.email}</span>
+              </span>
+            }
+            description={
+              <span>
+                {s.status} · {s.kind}
+                {s.score != null ? ` · score ${formatNumber(s.score)}` : ""}
+                {s.reason ? ` · ${s.reason}` : ""}
+              </span>
+            }
+            action={<DismissButton id={s.id} onDismiss={dismissSignalAction} />}
+          >
+            <></>
+          </AppCard>
         ))}
       </section>
       )}

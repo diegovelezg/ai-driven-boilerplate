@@ -3,7 +3,7 @@
 import { useActionState, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -17,6 +17,7 @@ import { saveTenantProfileAction } from "@/lib/profile-actions";
 import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 import { ProfileChat } from "@/components/profile-chat";
 import { VERTICALS, verticalName } from "@/lib/taxonomy";
+import { formatNumber } from "@/lib/format";
 import {
   ARCHETYPES,
   type ArchetypeId,
@@ -86,14 +87,12 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
 
   if (!storeId) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Perfil del negocio</CardTitle>
-          <CardDescription>
-            Conecta Medusa arriba (Guardar y conectar) para crear el store y describir tu negocio.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <AppCard
+        title="Perfil del negocio"
+        description="Conecta Medusa arriba (Guardar y conectar) para crear el store y describir tu negocio."
+      >
+        <span className="text-xs text-muted-foreground">Sin store todavía.</span>
+      </AppCard>
     );
   }
 
@@ -165,33 +164,53 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     }
   };
 
+  const profileFooter = (
+    <span className="flex flex-wrap items-center gap-3">
+      <Button type="button" variant="outline" onClick={() => setStep(1)}>
+        Atrás
+      </Button>
+      <Button type="submit" disabled={pending}>
+        {pending ? "Guardando…" : "Guardar perfil"}
+      </Button>
+      {state && (
+        <span className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
+          {state.message}
+        </span>
+      )}
+    </span>
+  );
+
   return (
     <div className="flex w-full max-w-2xl flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <CardTitle className="text-sm font-medium">
-              Perfil del negocio · paso {step} de 2
-            </CardTitle>
+      {step === 1 ? (
+        <AppCard
+          title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
+          description="Cuéntanos qué vendes y a quién, con tus palabras."
+          action={
             <Badge variant={profile ? "default" : "secondary"}>
               {profile ? "Perfil configurado" : "Sin perfil"}
             </Badge>
-          </div>
-          <CardDescription>
-            {step === 1
-              ? "Cuéntanos qué vendes y a quién, con tus palabras."
-              : "Confirma lo que generó el set — ajusta lo que sea antes de guardar."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {step === 1 ? (
-            <ProfileChat
-              storeId={storeId}
-              onConfirm={handleChatConfirm}
-              onUseDataSignal={useDataSignal}
-            />
-          ) : (
-            <form action={action} className="flex flex-col gap-3">
+          }
+        >
+          <ProfileChat
+            storeId={storeId}
+            onConfirm={handleChatConfirm}
+            onUseDataSignal={useDataSignal}
+          />
+        </AppCard>
+      ) : (
+        <form action={action} className="flex flex-col">
+          <AppCard
+            title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
+            description="Confirma lo que generó el set — ajusta lo que sea antes de guardar."
+            action={
+              <Badge variant={profile ? "default" : "secondary"}>
+                {profile ? "Perfil configurado" : "Sin perfil"}
+              </Badge>
+            }
+            footer={profileFooter}
+          >
+            <div className="flex flex-col gap-3">
               {/* Todo lo derivado viaja oculto (el submit ocurre en el paso 2
                   pero la evidencia se acumula en el paso 1). */}
               <input type="hidden" name="description" value={description} />
@@ -306,7 +325,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </div>
               </div>
 
-              <label className="flex cursor-pointer items-center gap-2 text-sm" htmlFor="companyRequired">
+              <label className="flex items-center gap-2 text-sm" htmlFor="companyRequired">
                 <input
                   id="companyRequired"
                   type="checkbox"
@@ -329,24 +348,10 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                   Según tu descripción: {reading.understood.join(" · ")}.
                 </p>
               )}
-
-              <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" variant="outline" onClick={() => setStep(1)}>
-                  Atrás
-                </Button>
-                <Button type="submit" disabled={pending}>
-                  {pending ? "Guardando…" : "Guardar perfil"}
-                </Button>
-                {state && (
-                  <p className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
-                    {state.message}
-                  </p>
-                )}
-              </div>
-            </form>
-          )}
-        </CardContent>
-      </Card>
+            </div>
+          </AppCard>
+        </form>
+      )}
     </div>
   );
 }

@@ -1,13 +1,15 @@
 import { ProfileProposalsPanel } from "@/components/profile-proposals";
 import { EmailSettingsForm, SecretsAuditCard, SettingsForm } from "@/components/settings-form";
 import { TenantProfileForm } from "@/components/tenant-profile-form";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
 import { resolveStoreId } from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
 import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from "@/lib/store-profiles";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { getPendingProposal } from "@/lib/profile-recalibrate/service";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { formatNumber } from "@/lib/format";
 
 export const instant = false;
 
@@ -117,46 +119,45 @@ export default async function SettingsPage() {
     }
   }
   return (
-    <div className="flex w-full flex-col gap-6 p-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
-      </header>
-      <SettingsForm defaults={defaults} secretsInDb={secretsInDb} />
-      <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} />
-      {storeId && secretAudits.length > 0 && (
-        <div className="w-full max-w-2xl">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 p-6 md:p-8">
+      <PageHeader
+        eyebrow="Configuración"
+        title="Settings"
+        description="Conecta tu tienda, calibra tu negocio y revisa lo que aprendió el motor."
+      />
+      <div className="flex w-full max-w-2xl flex-col gap-6">
+        <SettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+        <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+        {storeId && secretAudits.length > 0 && (
           <SecretsAuditCard audits={secretAudits} />
-        </div>
-      )}
-      <TenantProfileForm storeId={storeId} profile={profile} suggestion={suggestion} />
-      {motorCard && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Qué aprendió el motor</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-1 text-[13px]">
-            <p className="tabular-nums">
-              {motorCard.declarado !== null
-                ? `Declaraste ~${motorCard.declarado}d`
-                : "Sin ciclo declarado (auto del arquetipo)"}
-              {motorCard.observado !== null ? `; tus clientes vuelven cada ~${motorCard.observado}d.` : "."}
-            </p>
-            <p className="text-muted-foreground">
-              Patrón {motorCard.archetypeLabel} · ventana de decisión: {motorCard.h} días.
-            </p>
-            {motorCard.total > 0 && (
-              <p className="text-muted-foreground tabular-nums">
-                Estimaciones firmes en {motorCard.firmes} de {motorCard.total} clientes
-                (el resto aún afina con más datos).
+        )}
+        <TenantProfileForm storeId={storeId} profile={profile} suggestion={suggestion} />
+        {motorCard && (
+          <AppCard
+            title="Qué aprendió el motor"
+            description={`Patrón ${motorCard.archetypeLabel} · ventana de decisión: ${formatNumber(motorCard.h)} días.`}
+          >
+            <div className="flex flex-col gap-1 text-[13px]">
+              <p className="tabular-nums">
+                {motorCard.declarado !== null
+                  ? `Declaraste ~${formatNumber(motorCard.declarado)}d`
+                  : "Sin ciclo declarado (auto del arquetipo)"}
+                {motorCard.observado !== null ? `; tus clientes vuelven cada ~${formatNumber(motorCard.observado)}d.` : "."}
               </p>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Si cambias el ciclo arriba, las predicciones de mañana ya usan este ciclo.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-      {storeId && <ProfileProposalsPanel proposal={proposal} />}
+              {motorCard.total > 0 && (
+                <p className="text-muted-foreground tabular-nums">
+                  Estimaciones firmes en {formatNumber(motorCard.firmes)} de {formatNumber(motorCard.total)} clientes
+                  (el resto aún afina con más datos).
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Si cambias el ciclo arriba, las predicciones de mañana ya usan este ciclo.
+              </p>
+            </div>
+          </AppCard>
+        )}
+        {storeId && <ProfileProposalsPanel proposal={proposal} />}
+      </div>
     </div>
   );
 }

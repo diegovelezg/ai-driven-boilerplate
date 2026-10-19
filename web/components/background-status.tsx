@@ -16,6 +16,7 @@ import { getActiveRunsAction } from "@/lib/background-actions";
 import type { BackgroundRun } from "@/lib/background";
 import { errorCodeMessage, isCompatible } from "@/lib/operations";
 import { isJudgeVetoMessage } from "@/lib/single-audit";
+import { formatNumber } from "@/lib/format";
 
 export interface BackgroundTaskResult {
   ok: boolean;
@@ -290,8 +291,8 @@ function RunChip({ run, stale, onDismiss }: { run: BackgroundRun; stale: boolean
         <div className="pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[enrich-sheen_1.6s_linear_infinite] bg-gradient-to-r from-transparent via-primary/25 to-transparent" />
         <div className="relative flex h-full items-center justify-center gap-2 px-10 text-xs font-medium tabular-nums">
           <Icon className="size-3.5 animate-pulse text-primary" aria-hidden />
-          {run.label}… {done}/{total}
-          {run.failed > 0 && <span className="text-destructive">· {run.failed} fallidos</span>}
+          {run.label}… {formatNumber(done)}/{formatNumber(total)}
+          {run.failed > 0 && <span className="text-destructive">· {formatNumber(run.failed)} fallidos</span>}
         </div>
       </div>
     );

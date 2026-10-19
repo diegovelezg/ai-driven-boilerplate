@@ -10,6 +10,7 @@ import { runSingleWithAudit, singleSignalScope, type SingleFinish } from "@/lib/
 import { createLogger } from "@/lib/log";
 import { startCopywriterAction } from "@/lib/retention-actions";
 import { createServerSupabase } from "@/lib/supabase-server";
+import { formatNumber } from "@/lib/format";
 
 export interface ReviewOp {
   ok: boolean;
@@ -170,13 +171,13 @@ export async function updateDraftContentAction(
   let cleanSubject: string | null = null;
   if (channel === "whatsapp") {
     if (cleanBody.length > 450) {
-      return { ok: false, message: `WhatsApp admite hasta 450 caracteres (van ${cleanBody.length}).` };
+      return { ok: false, message: `WhatsApp admite hasta 450 caracteres (van ${formatNumber(cleanBody.length)}).` };
     }
   } else if (channel === "email") {
     cleanSubject = (subject ?? "").trim().slice(0, 200) || null;
     if (!cleanSubject) return { ok: false, message: "El email necesita asunto." };
     if (cleanBody.length > 800) {
-      return { ok: false, message: `Email admite hasta 800 caracteres (van ${cleanBody.length}).` };
+      return { ok: false, message: `Email admite hasta 800 caracteres (van ${formatNumber(cleanBody.length)}).` };
     }
   } else {
     return { ok: false, message: `Canal desconocido: ${channel}.` };
@@ -476,8 +477,8 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
     }
     const message =
       sent > 0
-        ? `${ok} de ${targets.length} aprobadas, ${sent} enviadas por email${held > 0 ? `, ${held} en cola (las envía el dispatcher)` : ""}.`
-        : `${ok} de ${targets.length} aprobadas${held > 0 ? ` (${held} emails en cola para el dispatcher)` : ""}.`;
+        ? `${formatNumber(ok)} de ${formatNumber(targets.length)} aprobadas, ${formatNumber(sent)} enviadas por email${held > 0 ? `, ${formatNumber(held)} en cola (las envía el dispatcher)` : ""}.`
+        : `${formatNumber(ok)} de ${formatNumber(targets.length)} aprobadas${held > 0 ? ` (${formatNumber(held)} emails en cola para el dispatcher)` : ""}.`;
     if (runId) {
       await finishRun(runId, { status: "done", processed: ok, failed: 0, summary: message, pulseState: "active" }).catch((e) =>
         log(`batch finishRun falló: ${e instanceof Error ? e.message : e}`),
@@ -575,7 +576,7 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   if (ids.length === 0) {
     return {
       ok: true,
-      message: `Nada que regenerar por aquí: ${legacyIds.length} legacy + ${noSignal} sin señal intactos (cúbrelos con scripts/refresh-retention-v1.ts).`,
+      message: `Nada que regenerar por aquí: ${formatNumber(legacyIds.length)} legacy + ${formatNumber(noSignal)} sin señal intactos (cúbrelos con scripts/refresh-retention-v1.ts).`,
     };
   }
   for (let i = 0; i < ids.length; i += 200) {
@@ -587,10 +588,10 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   }
   revalidatePath("/review");
   const started = await startCopywriterAction();
-  const extra = skipped > 0 ? ` ${skipped} intacto(s) legacy/sin señal (van por refresh).` : "";
+  const extra = skipped > 0 ? ` ${formatNumber(skipped)} intacto(s) legacy/sin señal (van por refresh).` : "";
   return {
     ok: started.ok,
-    message: `${ids.length} borrador(es) viejo(s) a regenerar.${extra} ${started.message}`,
+    message: `${formatNumber(ids.length)} borrador(es) viejo(s) a regenerar.${extra} ${started.message}`,
     run: started.run,
   };
 }

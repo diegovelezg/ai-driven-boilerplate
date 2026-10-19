@@ -10,6 +10,7 @@ import { judgeBusinessDomain, B2B_GATE_THRESHOLD } from "@/lib/ai/decisions";
 import { searchSearxng, scrapable } from "@/lib/retrieval";
 import { mapPool } from "@/lib/parallel";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
+import { formatNumber } from "@/lib/format";
 
 const UA = "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)";
 // Sitios legítimos responden en <3s (medido); colgados = muertos. 8s acota el
@@ -453,8 +454,8 @@ export async function runEnrichment(
   });
 
   const status: RunStatus = processed === 0 && failed > 0 ? "error" : "done";
-  const summary = `${processed} dominio${processed === 1 ? "" : "s"}${
-    failed > 0 ? ` · ${failed} fallidos` : ""
+  const summary = `${formatNumber(processed)} dominio${processed === 1 ? "" : "s"}${
+    failed > 0 ? ` · ${formatNumber(failed)} fallidos` : ""
   }`;
   await finishRun(runId, { status, processed, failed, summary });
   log(`run ${runId} ${status} processed=${processed} failed=${failed}`);

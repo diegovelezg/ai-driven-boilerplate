@@ -11,6 +11,7 @@ import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { formatNumber } from "@/lib/format";
 
 const log = createLogger("copywriter");
 
@@ -783,11 +784,11 @@ export async function runCopywriter(
     const alreadyHad = rows.length - fresh.length;
     const summary =
       drafted > 0
-        ? `${drafted} ${drafted === 1 ? "listo" : "listos"} para tu visto bueno · te ahorran ~${drafted * 15} min`
+        ? `${formatNumber(drafted)} ${drafted === 1 ? "listo" : "listos"} para tu visto bueno · te ahorran ~${formatNumber(drafted * 15)} min`
         : alreadyHad > 0
-          ? `Sin borradores nuevos, ${alreadyHad} ya ${alreadyHad === 1 ? "tenía borrador" : "tenían borrador"} en Review · no duplico`
+          ? `Sin borradores nuevos, ${formatNumber(alreadyHad)} ya ${alreadyHad === 1 ? "tenía borrador" : "tenían borrador"} en Review · no duplico`
           : skipped > 0
-            ? `Sin borradores, ${skipped} ${skipped === 1 ? "omitido" : "omitidos"} por juez · no invento mensajes`
+            ? `Sin borradores, ${formatNumber(skipped)} ${skipped === 1 ? "omitido" : "omitidos"} por juez · no invento mensajes`
             : "Sin borradores, no había priorizados frescos · no invento mensajes";
     await finishRun(runId, {
       status,

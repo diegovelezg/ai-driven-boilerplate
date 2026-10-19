@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Card } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useChatDock } from "@/components/chat/chat-dock";
 
@@ -22,7 +22,7 @@ export function AgentCard({
 
   return (
     <AppTooltip tip="Click para preguntar a tu equipo">
-      <Card
+      <AppCard
         role="button"
         tabIndex={0}
         onClick={() => openDock({ storeId, storeName })}
@@ -32,10 +32,10 @@ export function AgentCard({
           openDock({ storeId, storeName });
         }
       }}
-      className={`cursor-pointer transition-colors hover:border-primary/40${active ? " border-primary/60 ring-1 ring-primary/30" : ""}`}
+      className={`transition-colors hover:border-primary/40${active ? " border-primary/60 ring-1 ring-primary/30" : ""}`}
       >
         {children}
-      </Card>
+      </AppCard>
     </AppTooltip>
   );
 }

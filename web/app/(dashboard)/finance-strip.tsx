@@ -1,6 +1,7 @@
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import type { FinanceKpis, MonthBucket, RescateBucket, RetentionKpis } from "@/lib/finance";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber, formatPercentPoints } from "@/lib/format";
 
 function Delta({ pct }: { pct: number | null }) {
   if (pct === null)
@@ -9,7 +10,7 @@ function Delta({ pct }: { pct: number | null }) {
   const up = pct > 0;
   return (
     <span className={`text-xs tabular-nums ${up ? "text-green-600" : "text-red-500"}`}>
-      {up ? "▲" : "▼"} {Math.abs(pct)}% vs 30d previos
+      {up ? "▲" : "▼"} {formatPercentPoints(Math.abs(pct))} vs 30d previos
     </span>
   );
 }
@@ -30,7 +31,12 @@ function Trend({
   currency: string | null;
 }) {
   const W = 600;
-  const H = 150;
+  // Chart más bajo: antes H=150 (≈288px de alto en desktop). Con H=112
+  // queda ≈215px y conserva el aire de las etiquetas y del legend.
+  const H = 112;
+  const BASE = H - 18;
+  const TOP = 18;
+  const PLOT_H = BASE - TOP;
   const PAD = 8;
   const fused = rescate && rescate.length === buckets.length ? rescate : null;
   const moneyMax = Math.max(
@@ -41,8 +47,8 @@ function Trend({
   const maxOrders = Math.max(...buckets.map((b) => b.orders), 1);
   const slot = (W - PAD * 2) / buckets.length;
   const barW = Math.min(18, slot * 0.4);
-  const yOf = (v: number) => H - 22 - (v / moneyMax) * (H - 50);
-  const hOf = (v: number) => (v / moneyMax) * (H - 50);
+  const yOf = (v: number) => BASE - (v / moneyMax) * PLOT_H;
+  const hOf = (v: number) => (v / moneyMax) * PLOT_H;
   const salesPts = buckets.map((b, i) => {
     const cx = PAD + slot * i + slot / 2;
     return `${cx.toFixed(1)},${yOf(b.salesMinor).toFixed(1)}`;
@@ -68,14 +74,14 @@ function Trend({
           empty
             ? "Sin ventas en los últimos 12 meses"
             : fused
-              ? `Ventas, rescatado y fugado 12 meses: ${buckets.map((b, i) => `${b.label}: ${fused[i].enJuegoCount} en juego`).join(", ")}`
-              : `Ventas 12 meses: ${buckets.map((b) => `${b.label} ${b.orders}`).join(", ")}`
+              ? `Ventas, rescatado y fugado 12 meses: ${buckets.map((b, i) => `${b.label}: ${formatNumber(fused[i].enJuegoCount)} en juego`).join(", ")}`
+              : `Ventas 12 meses: ${buckets.map((b) => `${b.label} ${formatNumber(b.orders)}`).join(", ")}`
         }
       >
         {buckets.map((b, i) => {
           const cx = PAD + slot * i + slot / 2;
           const fv = fused?.[i];
-          const base = H - 22;
+          const base = BASE;
           return (
             <g key={b.key}>
               {fused && fv ? (
@@ -92,12 +98,12 @@ function Trend({
                 </>
               ) : (
                 <>
-                  <title>{`${b.label}: ${b.orders} órdenes`}</title>
+                  <title>{`${b.label}: ${formatNumber(b.orders)} órdenes`}</title>
                   <rect
                     x={cx - barW / 2}
-                    y={base - (b.orders / maxOrders) * (H - 50)}
+                    y={base - (b.orders / maxOrders) * PLOT_H}
                     width={barW}
-                    height={(b.orders / maxOrders) * (H - 50)}
+                    height={(b.orders / maxOrders) * PLOT_H}
                     rx={2}
                     className="fill-primary/20"
                   />
@@ -105,13 +111,13 @@ function Trend({
               )}
               <text
                 x={cx}
-                y={H - 8}
+                y={H - 5}
                 textAnchor="middle"
                 className="fill-muted-foreground opacity-60"
                 fontSize={8}
               >
-                {fused ? `${b.label} · ${b.orders} órd.` : b.label}
-                <title>{`${b.label}: ${b.orders} órdenes`}</title>
+                {fused ? `${b.label} · ${formatNumber(b.orders)} órd.` : b.label}
+                <title>{`${b.label}: ${formatNumber(b.orders)} órdenes`}</title>
               </text>
             </g>
           );
@@ -143,7 +149,7 @@ function Trend({
           />
         )}
       </svg>
-      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+      <div className="mt-1.5 flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
           <span aria-hidden className="inline-block h-0.5 w-4 bg-primary" /> Ventas
         </span>
@@ -207,13 +213,15 @@ export function FinanceStrip({
   const fused = rescate && rescate.length === buckets.length ? rescate : null;
   return (
     <section aria-label="Salud del negocio">
-      <Card>
-        <CardContent className="flex flex-col gap-4 p-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Salud del negocio · últimos 12 meses{marketLabel ? ` · ${marketLabel}` : ""}
-            </span>
-          </div>
+      <AppCard
+        title={
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className="size-1.5 rounded-full bg-emerald-500" />
+            Salud del negocio · últimos 12 meses{marketLabel ? ` · ${marketLabel}` : ""}
+          </span>
+        }
+        contentClassName="flex flex-col gap-4"
+      >
           <div className={`grid gap-4 ${retention ? "grid-cols-2 lg:grid-cols-5" : "grid-cols-3"}`}>
             <div className="flex flex-col gap-0.5">
               <span className="text-[11px] text-muted-foreground">Ventas 30d</span>
@@ -225,7 +233,7 @@ export function FinanceStrip({
             <div className="flex flex-col gap-0.5">
               <span className="text-[11px] text-muted-foreground">Órdenes 30d</span>
               <span className="text-xl font-semibold tabular-nums tracking-tight">
-                {kpis.orders30d}
+                {formatNumber(kpis.orders30d)}
               </span>
               <Delta pct={kpis.ordersDeltaPct} />
             </div>
@@ -255,7 +263,7 @@ export function FinanceStrip({
                         {formatMoney(enJuegoProb.minor, currency)}
                       </span>
                       <span className="text-xs text-muted-foreground tabular-nums">
-                        {enJuegoProb.count}{" "}
+                        {formatNumber(enJuegoProb.count)}{" "}
                         {enJuegoProb.count === 1 ? "cliente" : "clientes"} · rango{" "}
                         {formatMoney(enJuegoProb.low, currency)}–{formatMoney(enJuegoProb.high, currency)}
                       </span>
@@ -266,7 +274,7 @@ export function FinanceStrip({
                         {formatMoney(retention.enJuegoNowMinor, currency)}
                       </span>
                       <span className="text-xs text-muted-foreground tabular-nums">
-                        {retention.enJuegoNowCount} por volver · ticket medio
+                        {formatNumber(retention.enJuegoNowCount)} por volver · ticket medio
                       </span>
                     </>
                   )}
@@ -275,7 +283,7 @@ export function FinanceStrip({
             )}
           </div>
           <Trend buckets={buckets} rescate={rescate} currency={currency} />
-          <span className="text-xs text-muted-foreground tabular-nums">
+          <p className="text-xs text-muted-foreground tabular-nums">
             {(() => {
               // Issue #12: el % mezclaba atribuido histórico (all-time) contra
               // ventas 30d. Con retention se usa rescatado30d (misma ventana);
@@ -285,7 +293,7 @@ export function FinanceStrip({
               if (r30 !== null && kpis.sales30dMinor > 0) {
                 const pct = Math.round((r30 / kpis.sales30dMinor) * 100);
                 return r30 > 0
-                  ? `Atribuido 30d ${formatMoney(r30, currency)} = ${pct}% de tus ventas 30d (atribuido, no incremental). `
+                  ? `Atribuido 30d ${formatMoney(r30, currency)} = ${formatPercentPoints(pct)} de tus ventas 30d (atribuido, no incremental). `
                   : "Aún sin recupero medido — cuando un cliente vuelva, se refleja aquí. ";
               }
               if (recoveredMinor !== undefined) {
@@ -322,18 +330,17 @@ export function FinanceStrip({
               return "";
             })()}
             {fused && cycleDays !== null
-              ? `Verde = rescatado; el gap con la línea punteada (en juego, ciclo ~${cycleDays}d) es tu fuga. `
+              ? `Verde = rescatado; el gap con la línea punteada (en juego, ciclo ~${formatNumber(cycleDays)}d) es tu fuga. `
               : ""}
             {organicosEnAuto !== null && organicosEnAuto > 0
-              ? `${organicosEnAuto} volverán solos y no les escribimos. `
+              ? `${formatNumber(organicosEnAuto)} volverán solos y no les escribimos. `
               : ""}
             {rescate === null
               ? "Sin ciclo calibrado: enseña tu negocio en Settings para ver en juego vs rescatado. "
               : ""}
             Montos en {(currency ?? "PEN").toUpperCase()}; otras monedas van aparte.
-          </span>
-        </CardContent>
-      </Card>
-    </section>
+          </p>
+        </AppCard>
+      </section>
   );
 }

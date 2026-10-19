@@ -3,7 +3,7 @@
 import { useActionState, useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -61,22 +61,19 @@ export function SecretsAuditCard({
 }) {
   if (audits.length === 0) return null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm font-medium">Auditoría de secretos</CardTitle>
-        <CardDescription>Quién/cuándo por key. Nunca se muestra el valor.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
-          {audits.map((a) => (
-            <li key={a.id} className="tabular-nums">
-              {a.keyName} · {a.action} · {a.actor ?? "settings-ui"} ·{" "}
-              {a.createdAt ? new Date(a.createdAt).toLocaleString() : "—"}
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
+    <AppCard
+      title="Auditoría de secretos"
+      description="Quién/cuándo por key. Nunca se muestra el valor."
+    >
+      <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+        {audits.map((a) => (
+          <li key={a.id} className="tabular-nums">
+            {a.keyName} · {a.action} · {a.actor ?? "settings-ui"} ·{" "}
+            {a.createdAt ? new Date(a.createdAt).toLocaleString() : "—"}
+          </li>
+        ))}
+      </ul>
+    </AppCard>
   );
 }
 
@@ -92,27 +89,28 @@ export function SettingsForm({
 
   return (
     <form action={action} className="flex w-full max-w-2xl flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-medium">Ecommerce</CardTitle>
-            {platform === "medusa" ? (
-              <Badge variant={defaults.medusaToken ? "default" : "secondary"}>
-                {defaults.medusaToken
-                  ? `Medusa ${defaults.medusaVersion || ""} conectado`.trim()
-                  : "Medusa sin conectar"}
-              </Badge>
-            ) : (
-              <Badge variant="outline">Shopify · próximamente</Badge>
-            )}
-          </div>
-          <CardDescription>
+      <AppCard
+        title="Ecommerce"
+        description={
+          <>
             Elige la plataforma. Solo se guarda el token, nunca el password.
             {secretsInDb === true && " Token en DB cifrada."}
             {secretsInDb === false && " Token en JSON local (solo dev)."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
+          </>
+        }
+        action={
+          platform === "medusa" ? (
+            <Badge variant={defaults.medusaToken ? "default" : "secondary"}>
+              {defaults.medusaToken
+                ? `Medusa ${defaults.medusaVersion || ""} conectado`.trim()
+                : "Medusa sin conectar"}
+            </Badge>
+          ) : (
+            <Badge variant="outline">Shopify · próximamente</Badge>
+          )
+        }
+      >
+        <div className="flex flex-col gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="platform">Plataforma</Label>
             <Select
@@ -205,8 +203,8 @@ export function SettingsForm({
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </AppCard>
 
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
@@ -245,23 +243,24 @@ export function EmailSettingsForm({
   return (
     <div className="flex w-full max-w-2xl flex-col gap-4">
       <form action={saveAction} className="flex flex-col gap-4">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium">Email transaccional</CardTitle>
-              <Badge variant={defaults.emailApiKey ? "default" : "secondary"}>
-                {defaults.emailApiKey
-                  ? `${provider === "none" ? "Desactivado" : `${provider} conectado`}`
-                  : "Sin conectar"}
-              </Badge>
-            </div>
-            <CardDescription>
+        <AppCard
+          title="Email transaccional"
+          description={
+            <>
               Proveedor de envío. Solo se guarda la key, nunca se muestra completa.
               {secretsInDb === true && " Key en DB cifrada."}
               {secretsInDb === false && " Key en JSON local (solo dev)."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
+            </>
+          }
+          action={
+            <Badge variant={defaults.emailApiKey ? "default" : "secondary"}>
+              {defaults.emailApiKey
+                ? `${provider === "none" ? "Desactivado" : `${provider} conectado`}`
+                : "Sin conectar"}
+            </Badge>
+          }
+        >
+          <div className="flex flex-col gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="defaultChannel">Canal de contacto por defecto</Label>
               <Select
@@ -320,8 +319,8 @@ export function EmailSettingsForm({
                 </div>
               </>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </AppCard>
         <div className="flex items-center gap-3">
           <Button type="submit" disabled={savePending}>
             {savePending ? "Guardando…" : "Guardar email"}

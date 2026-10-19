@@ -1,10 +1,23 @@
 import Link from "next/link";
-import { PenLine, Radar, TriangleAlert, UserPlus } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Mail,
+  MessageCircle,
+  PenLine,
+  Radar,
+  TriangleAlert,
+  UserPlus,
+} from "lucide-react";
+import { cn } from "cn";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
+import { SectionHeading } from "@/components/section-heading";
 import { countDuplicateEmails } from "@/lib/duplicates";
 import { pendingDomains } from "@/lib/enrich";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber, formatPercentPoints } from "@/lib/format";
 import { getStoreProfile, resolveTenantCycleDays } from "@/lib/store-profiles";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { applyScopeFilter, displayMarket, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
@@ -13,9 +26,8 @@ import {
   getActiveStore,
   type TenantStore,
 } from "@/lib/tenant";
-import { AgentCard } from "./ask-agent";
 import { TeamPulse } from "./team-pulse";
-import { AttentionTable, AttentionEmptyState, type AttentionItem } from "./attention-table";
+import { AttentionTable, type AttentionItem } from "./attention-table";
 import { HoyHeroActions } from "./hoy-hero-actions";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { avgTicket, getRankedMira } from "@/lib/mira";
@@ -81,7 +93,7 @@ function humanReason(raw: string | null, verb: string, fallbackKind: string): st
   const since = raw.match(/sin comprar hace (\d+)d/i);
   const win = raw.match(/vuelve t[ií]picamente entre (\d+)[–-](\d+)d/i);
   if (since && win) {
-    return `Hace ${since[1]} días que ${no} · suele volver entre los ${win[1]}–${win[2]}d`;
+    return `Hace ${formatNumber(Number(since[1]))} días que ${no} · suele volver entre los ${formatNumber(Number(win[1]))}–${formatNumber(Number(win[2]))}d`;
   }
   const m =
     raw.match(/sin comprar hace (\d+)d \(media (\d+)d/i) ??
@@ -90,8 +102,8 @@ function humanReason(raw: string | null, verb: string, fallbackKind: string): st
     const s = Number(m[1]);
     const cycle = Math.max(1, Number(m[2]));
     if (s > 10 * cycle)
-      return `Hace ${m[1]} días que ${no} · sin ritmo detectable de recompra`;
-    return `Hace ${m[1]} días que ${no} · suele volver cada ${m[2]}d`;
+      return `Hace ${formatNumber(Number(m[1]))} días que ${no} · sin ritmo detectable de recompra`;
+    return `Hace ${formatNumber(Number(m[1]))} días que ${no} · suele volver cada ${formatNumber(Number(m[2]))}d`;
   }
   return raw;
 }
@@ -102,13 +114,13 @@ function ago(iso: string | null): string | null {
   if (Number.isNaN(ms) || ms < 0) return null;
   const min = Math.floor(ms / 60_000);
   if (min < 1) return "ahora mismo";
-  if (min < 60) return `hace ${min} min`;
+  if (min < 60) return `hace ${formatNumber(min)} min`;
   const h = Math.floor(min / 60);
-  if (h < 24) return `hace ${h} h`;
+  if (h < 24) return `hace ${formatNumber(h)} h`;
   const d = Math.floor(h / 24);
   if (d === 1) return "ayer";
-  if (d < 30) return `hace ${d} días`;
-  return `hace ${Math.floor(d / 30)} meses`;
+  if (d < 30) return `hace ${formatNumber(d)} días`;
+  return `hace ${formatNumber(Math.floor(d / 30))} meses`;
 }
 
 export default async function DashboardPage({
@@ -123,11 +135,9 @@ export default async function DashboardPage({
     return (
       <div className="flex w-full flex-col gap-6 p-6">
         <h1 className="text-lg font-semibold tracking-tight">Overview</h1>
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">
-            Supabase no configurado (`supabase start` + `web/.env.local`).
-          </CardContent>
-        </Card>
+        <AppCardState>
+          Supabase no configurado (`supabase start` + `web/.env.local`).
+        </AppCardState>
       </div>
     );
   }
@@ -147,11 +157,9 @@ export default async function DashboardPage({
     return (
       <div className="flex w-full flex-col gap-6 p-6">
         <h1 className="text-lg font-semibold tracking-tight">Overview</h1>
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">
-            Stores read: {storesError}
-          </CardContent>
-        </Card>
+        <AppCardState>
+          Stores read: {storesError}
+        </AppCardState>
       </div>
     );
   }
@@ -159,16 +167,15 @@ export default async function DashboardPage({
     return (
       <div className="flex w-full flex-col gap-6 p-6">
         <h1 className="text-lg font-semibold tracking-tight">Overview</h1>
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <p className="text-[13px] text-muted-foreground">
-              Conecta tu tienda para empezar a recuperar clientes.
-            </p>
+        <AppCard
+          footer={
             <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
               Ir a Settings
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          Conecta tu tienda para empezar a recuperar clientes.
+        </AppCard>
       </div>
     );
   }
@@ -633,6 +640,19 @@ export default async function DashboardPage({
   const atRisk = open + prioritized;
   const hasMotor = hoyActuar + hoyVigilar + hoyAuto > 0;
   const riskPct = buyers > 0 ? Math.round((atRisk / buyers) * 100) : 0;
+  const hasRecovered = revenue > 0;
+  const healthPct =
+    buyers > 0
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            Math.round(
+              ((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100,
+            ),
+          ),
+        )
+      : 0;
   // Minor units → moneda real (formatMoney divide ÷100; no formatear a mano).
   // Con filtro de mercado los montos van en la moneda del market (MX→MXN).
   const viewCurrency = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
@@ -643,8 +663,6 @@ export default async function DashboardPage({
 
   const lastRun = (kinds: string[]): RunRow | null =>
     runs.find((r) => kinds.includes(r.kind)) ?? null;
-  const bgRunning = (kinds: string[]): boolean =>
-    runs.some((r) => kinds.includes(r.kind) && r.status === "running");
   const scoutRun = lastRun(["scout"]);
   const strategistRun = lastRun(["strategist"]);
   const copywriterRun = lastRun(["copywriter"]);
@@ -657,107 +675,96 @@ export default async function DashboardPage({
     team.learnedAt != null && Date.now() - Date.parse(team.learnedAt) > 30 * 86_400_000;
 
   return (
-    <div className="flex w-full flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-col gap-0.5">
-          <h1 className="text-lg font-semibold tracking-tight">
-            {hasMotor
-              ? hoyActuar > 0
-                ? `Hola, ${storeName} — ${hoyActuar} ${hoyActuar === 1 ? "cliente" : "clientes"} esperando tu mensaje hoy`
-                : `Todo al día, ${storeName}`
-              : atRisk > 0
-                ? `Hola, ${storeName} — hoy tienes ${atRisk} ${atRisk === 1 ? "cliente" : "clientes"} por recuperar`
-                : `Todo al día, ${storeName}`}
-          </h1>
-          <span className="text-xs text-muted-foreground">
-            {hasMotor
-              ? hoyActuar > 0
-                ? `${hoyVigilar} en vigilancia · ${hoyAuto} en automático`
-                : pending > 0
-                  ? `Nada nuevo que detectar; ${pending} por tu visto bueno en Review.`
-                  : "Ningún mensaje necesario hoy; la vigilancia sigue."
-              : atRisk > 0
-                ? `${riskPct}% de tus ${buyers} compradores debería haber vuelto ya`
-                : "Ningún cliente vencido. Tu equipo IA sigue vigilando."}
-            {marketLabel ? ` · viendo ${marketLabel}` : ""}
-          </span>
-        </div>
-        {stores.length > 1 && (
-          <span className="flex flex-wrap items-center gap-2">
-            {stores.map((s) => (
-              <Button
-                key={s.id}
-                render={<Link href={s.id === active.id ? withMarketParam("/", scope.market?.id ?? null) : `/?store=${s.id}`} />}
-                nativeButton={false}
-                variant={s.id === active.id ? "default" : "outline"}
-                size="sm"
-              >
-                {displayStoreName(s)}
-              </Button>
-            ))}
-          </span>
-        )}
-      </header>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <PageHeader
+        eyebrow="Tu operación de hoy"
+        pulse={hasMotor && hoyActuar > 0}
+        title={
+          hasMotor
+            ? hoyActuar > 0
+              ? `Hola, ${storeName} — ${formatNumber(hoyActuar)} ${hoyActuar === 1 ? "mensaje listo para aprobar" : "mensajes listos para aprobar"}`
+              : `Todo al día, ${storeName}`
+            : atRisk > 0
+              ? `Hola, ${storeName} — hoy tienes ${formatNumber(atRisk)} ${atRisk === 1 ? "cliente" : "clientes"} por recuperar`
+              : `Todo al día, ${storeName}`
+        }
+        description={
+          (hasMotor
+            ? hoyActuar > 0
+              ? `${formatNumber(hoyVigilar)} en seguimiento · ${formatNumber(hoyAuto)} al día`
+              : pending > 0
+                ? `Nada nuevo hoy; ${formatNumber(pending)} por aprobar en Review.`
+                : "Ningún mensaje necesario hoy; la vigilancia sigue."
+            : atRisk > 0
+              ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
+              : "Ningún cliente vencido. Tu equipo IA sigue vigilando.") +
+          (marketLabel ? ` · viendo ${marketLabel}` : "")
+        }
+        right={
+          stores.length > 1 ? (
+            <span className="flex flex-wrap items-center gap-2">
+              {stores.map((s) => (
+                <Button
+                  key={s.id}
+                  render={<Link href={s.id === active.id ? withMarketParam("/", scope.market?.id ?? null) : `/?store=${s.id}`} />}
+                  nativeButton={false}
+                  variant={s.id === active.id ? "default" : "outline"}
+                  size="sm"
+                >
+                  {displayStoreName(s)}
+                </Button>
+              ))}
+            </span>
+          ) : undefined
+        }
+      />
 
       {error && (
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">{error}</CardContent>
-        </Card>
+        <AppCardState>{error}</AppCardState>
       )}
 
       {(hoyActuar + hoyVigilar + hoyAuto > 0) && (
         <section aria-label="Hoy">
-          <Card>
-            <CardContent className="flex flex-col gap-3 p-5">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <AppCard
+            variant="hero"
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <span aria-hidden className="size-1.5 rounded-full bg-primary" />
                 Hoy · {storeName}
-                {cycleDays !== null ? ` (ciclo ~${cycleDays}d)` : ""}
+                {cycleDays !== null ? ` · compran cada ~${formatNumber(cycleDays)}d` : ""}
               </span>
-              {fotoVieja && (
-                <p className="text-xs text-muted-foreground">
-                  Predicciones de ayer: se actualizan con la próxima corrida del motor.
-                </p>
-              )}
-              {hoyActuar > 0 ? (
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="text-3xl font-semibold tabular-nums">{hoyActuar}</span>
-                  <span className="text-[15px]">para actuar hoy</span>
-                  <span className="text-sm text-muted-foreground tabular-nums">
-                    {money(hoyValor)} valor de actuar hoy
+            }
+            description={
+              <>
+                {fotoVieja && (
+                  <span className="block">
+                    Predicciones de ayer: se actualizan con la próxima corrida del motor.
                   </span>
-                </div>
-              ) : pending > 0 ? (
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="text-3xl font-semibold tabular-nums">{pending}</span>
-                  <span className="text-[15px]">
-                    borrador{pending === 1 ? "" : "es"} por tu visto bueno
-                  </span>
-                </div>
-              ) : (
-                <p className="text-[15px]">Al día — nadie necesita un mensaje.</p>
-              )}
-              <p className="text-xs text-muted-foreground tabular-nums">
-                {hoyActuar > 0 ? (
-                  <>
-                    {hoyVigilar} vigilando · {hoyAuto} en automático · entre {money(hoyLow)} y {money(hoyHigh)}
-                    {hoyDebiles > 0 ? ` · incluye ${hoyDebiles} estimación${hoyDebiles === 1 ? "" : "es"} inicial${hoyDebiles === 1 ? "" : "es"} (pocos datos)` : ""}
-                    {hoyForeign.map((fl) => (
-                      <span key={fl.code}>
-                        {" "}+{fl.n} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
-                      </span>
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    {hoyVigilar} en vigilancia
-                    {nextWindowDate ? ` · el próximo entra en ventana el ${nextWindowDate}` : ""}
-                  </>
                 )}
-              </p>
+                <span className="block tabular-nums">
+                  {hoyActuar > 0 ? (
+                    <>
+                      {formatNumber(hoyVigilar)} en seguimiento · {formatNumber(hoyAuto)} al día · entre {money(hoyLow)} y {money(hoyHigh)}
+                      {hoyDebiles > 0 ? ` · ${formatNumber(hoyDebiles)} con pocos datos` : ""}
+                      {hoyForeign.map((fl) => (
+                        <span key={fl.code}>
+                          {" "}+{formatNumber(fl.n)} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
+                        </span>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      {formatNumber(hoyVigilar)} en seguimiento
+                      {nextWindowDate ? ` · el próximo puede necesitar mensaje el ${nextWindowDate}` : ""}
+                    </>
+                  )}
+                </span>
+              </>
+            }
+            footer={
               <span className="flex flex-wrap items-center gap-2">
                 {hoyActuar > 0 ? (
                   <HoyHeroActions
-                    actuarCount={hoyActuar}
                     redactableCount={
                       attention.filter(
                         (r) => r.draftStatus === "none" && r.contactability?.eligible !== false,
@@ -781,67 +788,79 @@ export default async function DashboardPage({
                   Ver vigilando
                 </Button>
               </span>
-            </CardContent>
-          </Card>
+            }
+          >
+            {hoyActuar > 0 ? (
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(hoyActuar)}</span>
+                <span className="text-base">para hoy</span>
+                <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary tabular-nums">
+                  {money(hoyValor)} en juego
+                </span>
+              </div>
+            ) : pending > 0 ? (
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(pending)}</span>
+                <span className="text-base">
+                  borrador{pending === 1 ? "" : "es"} por tu visto bueno
+                </span>
+              </div>
+            ) : (
+              <p className="text-[15px]">Al día — nadie necesita un mensaje.</p>
+            )}
+          </AppCard>
         </section>
       )}
+      {attention.length > 0 && (
       <section id="hoy-tabla">
-        <div className="mb-2 flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-medium">Casos abiertos por gestionar ({attention.length})</h2>
-            <p className="text-xs text-muted-foreground">
-              Cola con memoria: no desaparece aunque el motor cambie de opinión mañana.
-            </p>
-          </div>
-          <span className="text-xs text-muted-foreground">
-            {pending > 0 ? (
-              <>
-                en Review con borrador ·{" "}
-                <Link href={reviewHref} className="underline">
-                  revisar ahora
-                </Link>
-              </>
-            ) : atRisk > 0 ? (
-              <>
-                {atRisk} casos abiertos · redacta y pasan a{" "}
-                <Link href={reviewHref} className="underline">
-                  Review
-                </Link>
-              </>
-            ) : (
-              "sin pendientes"
-            )}
-          </span>
-        </div>
-        <Card>
-          <CardContent className="p-0">
-            {attention.length === 0 ? (
-              <AttentionEmptyState
-                initialRunning={bgRunning(["scout", "strategist"])}
-                pending={pending}
-                masivos={masivos}
-                reviewHref={reviewHref}
-              />
-            ) : (
-              <>
-                <AttentionTable rows={attention} currency={viewCurrency} />
-                {masivos > 0 && (
-                  <p className="px-4 pb-4 text-xs text-muted-foreground tabular-nums">
-                    +{masivos} inactivos antiguos van con reactivación masiva, no 1-a-1.
-                  </p>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <SectionHeading
+          title={`Pendientes que no se pudieron redactar solos (${formatNumber(attention.length)})`}
+          hint="Si no los ves hoy, siguen mañana."
+          tone="amber"
+          right={
+            <span className="text-xs text-muted-foreground">
+              {pending > 0 ? (
+                <>
+                  Listos en Review ·{" "}
+                  <Link href={reviewHref} className="underline underline-offset-4">
+                    aprobar ahora
+                  </Link>
+                </>
+              ) : atRisk > 0 ? (
+                <>
+                  {formatNumber(atRisk)} pendientes · se redactan solos y pasan a{" "}
+                  <Link href={reviewHref} className="underline underline-offset-4">
+                    Review
+                  </Link>
+                </>
+              ) : (
+                "sin pendientes"
+              )}
+            </span>
+          }
+        />
+        <AppCard
+          variant="table"
+          footer={
+            masivos > 0 ? (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                +{formatNumber(masivos)} inactivos antiguos van con reactivación masiva, no 1-a-1.
+              </span>
+            ) : undefined
+          }
+        >
+          <AttentionTable rows={attention} currency={viewCurrency} />
+        </AppCard>
       </section>
+      )}
 
       <section aria-label="Embudo de recuperación">
-        <Card>
-          <CardContent className="flex flex-col gap-2 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Embudo de recuperación
-            </span>
+        <SectionHeading
+          title="Embudo de recuperación"
+          hint="De todos los vigilados a los que vuelven: la selectividad es la historia."
+          tone="violet"
+        />
+        <AppCard contentClassName="flex flex-col gap-3">
             {(() => {
               // Funnel completo: empieza en el barrido del motor (el filtro
               // más importante es a quién NO tocar) y termina en recupero.
@@ -861,13 +880,15 @@ export default async function DashboardPage({
                   label: "Vigilados hoy",
                   n: vigilados,
                   minor: null as number | null,
-                  tip: `El motor revisó hoy a cada cliente con compras y decidió: actuar, vigilar o dejar en automático. Ej.: hoy ${vigilados} (${hoyActuar} para actuar, ${hoyVigilar} en vigilancia, ${hoyAuto} en automático).`,
+                  bar: "bg-muted-foreground/30",
+                  tip: `El motor revisó hoy a cada cliente con compras y decidió: actuar, vigilar o dejar en automático. Ej.: hoy ${formatNumber(vigilados)} (${formatNumber(hoyActuar)} para actuar, ${formatNumber(hoyVigilar)} en vigilancia, ${formatNumber(hoyAuto)} en automático).`,
                 },
                 {
                   key: "actuar",
                   label: "Actuar hoy",
                   n: hoyActuar,
                   minor: hoyActuar > 0 ? hoyValor : null,
+                  bar: "bg-primary",
                   tip: `Lo que dice el modelo hoy, sin memoria: a quién conviene escribir (probabilidad + ventana + valor). Mañana puede decir otra cosa.${ejemploActuar}`,
                 },
                 {
@@ -875,6 +896,7 @@ export default async function DashboardPage({
                   label: "En la mira",
                   n: atRisk,
                   minor: atRisk > 0 ? miraValue : null,
+                  bar: "bg-violet-500",
                   tip: "El trabajo pendiente: casos abiertos esperando gestión. Es una cola con memoria, no se borra sola aunque el motor cambie de opinión mañana.",
                 },
                 {
@@ -882,6 +904,7 @@ export default async function DashboardPage({
                   label: "Con borrador",
                   n: pending,
                   minor: pending > 0 ? valorBorrador : null,
+                  bar: "bg-amber-500",
                   tip: "Casos con mensaje ya redactado, esperando tu visto bueno en Review. Nada se envía sin tu aprobación.",
                 },
                 {
@@ -889,6 +912,7 @@ export default async function DashboardPage({
                   label: "Aprobados",
                   n: approved,
                   minor: approved > 0 ? valorAprobados : null,
+                  bar: "bg-sky-500",
                   tip: "Borradores que aprobaste y están listos para que el mensajero los envíe.",
                 },
                 {
@@ -896,6 +920,7 @@ export default async function DashboardPage({
                   label: "Recuperados",
                   n: converted,
                   minor: converted > 0 ? revenue : null,
+                  bar: "bg-emerald-500",
                   tip: "Clientes que volvieron a comprar tras tu mensaje dentro de la ventana. Es atribuido, no incremental: sin grupo de control no se puede afirmar que fue gracias al mensaje.",
                 },
               ];
@@ -908,27 +933,28 @@ export default async function DashboardPage({
                     return (
                       <li key={e.key}>
                         <div className="flex items-baseline justify-between gap-2 text-[13px]">
-                          <span>
+                          <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <span aria-hidden className={cn("size-1.5 rounded-full", e.bar)} />
                             <AppTooltip tip={e.tip} contentClassName="max-w-sm">
                               <span>{e.label}</span>
-                            </AppTooltip>{" "}
-                            <strong className="tabular-nums">{e.n}</strong>
+                            </AppTooltip>
+                            <strong className="tabular-nums">{formatNumber(e.n)}</strong>
                             {e.minor !== null && (
-                              <span className="text-muted-foreground tabular-nums"> · {money(e.minor)}</span>
+                              <span className="text-muted-foreground tabular-nums">· {money(e.minor)}</span>
                             )}
                           </span>
                           {conv !== null && (
-                            <span className="text-xs text-muted-foreground tabular-nums">{conv}% avanza</span>
+                            <span className="text-xs text-muted-foreground tabular-nums">{formatPercentPoints(conv)} avanza</span>
                           )}
                         </div>
                         <div
                           className="mt-1 h-2 overflow-hidden rounded-full bg-muted"
                           role="img"
-                          aria-label={`${e.label}: ${e.n} (${pct}% de los vigilados)`}
+                          aria-label={`${e.label}: ${formatNumber(e.n)} (${formatPercentPoints(pct)} de los vigilados)`}
                         >
                           {e.n > 0 && (
                             <div
-                              className="h-full rounded-full bg-primary/70"
+                              className={cn("h-full rounded-full", e.bar)}
                               style={{ width: `${Math.max(4, pct)}%` }}
                             />
                           )}
@@ -941,17 +967,17 @@ export default async function DashboardPage({
             })()}
             {foreignLines.map((fl) => (
               <span key={fl.code} className="text-xs text-muted-foreground tabular-nums">
-                +{fl.n} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)}) fuera de esta moneda
+                +{formatNumber(fl.n)} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)}) fuera de esta moneda
               </span>
             ))}
             <p className="text-[13px]">
               Lo próximo:{" "}
               {pending > 0 ? (
                 <Link href={reviewHref} className="underline">
-                  revisa {pending} {pending === 1 ? "borrador" : "borradores"}
+                  revisa {formatNumber(pending)} {pending === 1 ? "borrador" : "borradores"}
                 </Link>
               ) : approved > 0 ? (
-                `${approved} ${approved === 1 ? "aprobado listo" : "aprobados listos"} para enviar`
+                `${formatNumber(approved)} ${approved === 1 ? "aprobado listo" : "aprobados listos"} para enviar`
               ) : atRisk > 0 ? (
                 "contacta a tu mira de hoy"
               ) : (
@@ -967,49 +993,50 @@ export default async function DashboardPage({
               )}
             </p>
             <p className="text-xs text-muted-foreground tabular-nums">
-              {recentOrders} {purchaseVerb === "pauta" ? "pautas" : "compras"} últimos 7
+              {formatNumber(recentOrders)} {purchaseVerb === "pauta" ? "pautas" : "compras"} últimos 7
               días.
             </p>
-          </CardContent>
-        </Card>
-      </section>
+          </AppCard>
+        </section>
 
 
 
-      <section aria-label="Por revisar" className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card>
-          <CardContent className="flex flex-col gap-2 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Por revisar
-            </span>
-            <ul className="flex flex-col gap-1 text-[13px] tabular-nums">
+      <section aria-label="Por revisar" className="grid grid-cols-1 gap-5 md:grid-cols-2">
+        <AppCard title="Por revisar" contentClassName="flex flex-col gap-3">
+          <ul className="flex flex-col gap-1.5 text-[13px] tabular-nums">
               <li>
-                <Link href={reviewHref} className="flex items-center gap-2 underline underline-offset-4">
-                  <PenLine className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span>
-                    <strong>{pending}</strong> mensaje{pending === 1 ? "" : "s"} por aprobar
+                <Link href={reviewHref} className="flex items-center gap-2.5 py-1">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                    <PenLine className="size-4" aria-hidden />
+                  </span>
+                  <span className="underline underline-offset-4">
+                    <strong>{formatNumber(pending)}</strong> mensaje{pending === 1 ? "" : "s"} por aprobar
                   </span>
                 </Link>
               </li>
               <li>
                 <Link
                   href={withMarketParam("/review?tab=signals", scope.market?.id ?? null)}
-                  className="flex items-center gap-2 underline underline-offset-4"
+                  className="flex items-center gap-2.5 py-1"
                 >
-                  <Radar className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span>
-                    <strong>{open}</strong> cliente{open === 1 ? "" : "s"} en riesgo
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                    <Radar className="size-4" aria-hidden />
+                  </span>
+                  <span className="underline underline-offset-4">
+                    <strong>{formatNumber(open)}</strong> por recuperar
                   </span>
                 </Link>
               </li>
               <li>
                 <Link
                   href={withMarketParam("/review?tab=leads", scope.market?.id ?? null)}
-                  className="flex items-center gap-2 underline underline-offset-4"
+                  className="flex items-center gap-2.5 py-1"
                 >
-                  <UserPlus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                  <span>
-                    <strong>{leadsPending}</strong> empresa{leadsPending === 1 ? "" : "s"} por contactar
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                    <UserPlus className="size-4" aria-hidden />
+                  </span>
+                  <span className="underline underline-offset-4">
+                    <strong>{formatNumber(leadsPending)}</strong> empresa{leadsPending === 1 ? "" : "s"} por contactar
                   </span>
                 </Link>
               </li>
@@ -1017,35 +1044,50 @@ export default async function DashboardPage({
                 <li>
                   <Link
                     href={withMarketParam("/customers?decision=actuar", scope.market?.id ?? null)}
-                    className="flex items-center gap-2 underline underline-offset-4"
+                    className="flex items-center gap-2.5 py-1"
                   >
-                    <TriangleAlert className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                    <span>
-                      <strong>{hoyDebiles}</strong> con estimación inicial (pocos datos) entre quienes toca contactar
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                      <TriangleAlert className="size-4" aria-hidden />
+                    </span>
+                    <span className="underline underline-offset-4">
+                      <strong>{formatNumber(hoyDebiles)}</strong> con pocos datos
                     </span>
                   </Link>
                 </li>
               )}
             </ul>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex flex-col gap-1 p-4">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Recuperado · atribuido
+          </AppCard>
+        <AppCard
+          title="Recuperado · atribuido"
+          contentClassName="flex flex-col gap-1"
+          className={cn(
+            hasRecovered && "bg-gradient-to-br from-emerald-500/[0.07] via-card to-card",
+          )}
+        >
+          <span
+              className={cn(
+                "text-3xl font-semibold tracking-tight tabular-nums",
+                hasRecovered
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-foreground",
+              )}
+            >
+              {money(revenue)}
             </span>
-            <span className="text-2xl font-semibold tabular-nums tracking-tight">{money(revenue)}</span>
-            <span className="text-xs text-muted-foreground">{converted} clientes volvieron tras el mensaje</span>
-          </CardContent>
-        </Card>
-      </section>
+            <span className="text-xs text-muted-foreground">
+              {formatNumber(converted)} clientes volvieron tras el mensaje
+            </span>
+            <span className="text-xs text-muted-foreground">Atribuido, no incremental.</span>
+          </AppCard>
+        </section>
 
       <section aria-label="Últimos enviados">
-        <div className="mb-2">
-          <h2 className="text-sm font-medium">Últimos enviados — ¿volvieron?</h2>
-        </div>
-        <Card>
-          <CardContent className="flex flex-col gap-2 p-4">
+        <SectionHeading
+          title="Últimos enviados — ¿volvieron?"
+          hint="Qué pasó después del mensaje."
+          tone="sky"
+        />
+        <AppCard contentClassName="flex flex-col divide-y divide-border/60">
             {sentFeed.length === 0 ? (
               <p className="text-[13px] text-muted-foreground">
                 Todavía no se envió ningún mensaje. Cuando apruebes y se despache el primero, acá ves si volvió.
@@ -1059,12 +1101,31 @@ export default async function DashboardPage({
                   nowMs: Date.now(),
                 });
                 const agoLabel = s.dispatchedAt ? ago(s.dispatchedAt) : null;
+                const outcomeClass =
+                  out?.kind === "volvio"
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                    : out?.kind === "en_ventana"
+                      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                      : "bg-muted text-muted-foreground";
                 return (
-                  <div key={s.id} className="flex flex-wrap items-baseline justify-between gap-2 text-[13px]">
+                  <div
+                    key={s.id}
+                    className="flex flex-wrap items-start justify-between gap-3 py-3 text-[13px] first:pt-0 last:pb-0"
+                  >
                     <span className="min-w-0">
-                      <span className="font-medium">{s.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
+                      <span className="inline-flex items-center gap-1.5 font-medium">
+                        {s.channel === "whatsapp" ? (
+                          <MessageCircle className="size-3.5 text-emerald-500" aria-hidden />
+                        ) : (
+                          <Mail className="size-3.5 text-sky-500" aria-hidden />
+                        )}
+                        {s.channel === "whatsapp" ? "WhatsApp" : "Email"}
+                      </span>
                       {" · "}
-                      <Link href={withMarketParam(`/customers?q=${encodeURIComponent(s.email || s.name)}`, scope.market?.id ?? null)} className="underline">
+                      <Link
+                        href={withMarketParam(`/customers?q=${encodeURIComponent(s.email || s.name)}`, scope.market?.id ?? null)}
+                        className="underline underline-offset-4"
+                      >
                         {s.name}
                       </Link>{" "}
                       <span className="text-muted-foreground">
@@ -1074,36 +1135,43 @@ export default async function DashboardPage({
                         aprobado por {approverLabel(s.approvedBy)}{agoLabel ? ` · ${agoLabel}` : ""}
                       </span>
                     </span>
-                    <span className="text-xs font-medium tabular-nums">
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
+                        outcomeClass,
+                      )}
+                    >
                       {out?.kind === "volvio"
                         ? `volvió · ${money(out.revenue)}`
                         : out?.kind === "en_ventana"
-                          ? `en ventana (quedan ${out.daysLeft}d)`
+                          ? `en ventana (quedan ${formatNumber(out.daysLeft)}d)`
                           : "no volvió"}
                     </span>
                   </div>
                 );
               })
             )}
-          </CardContent>
-        </Card>
-      </section>
+          </AppCard>
+        </section>
 
       <section aria-label="Salud de tu cartera">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-medium">Salud de tu cartera</h2>
-          <span className="text-xs text-muted-foreground">para que el equipo IA trabaje con datos limpios</span>
-        </div>
-        <Card>
-          <CardContent className="flex flex-col gap-2 p-4">
+        <SectionHeading
+          title="Salud de tu cartera"
+          hint="Para que el equipo IA trabaje con datos limpios."
+          tone="emerald"
+        />
+        <AppCard contentClassName="flex flex-col gap-3">
             {duplicateCount === 0 && enrichPending === 0 && hoyGroups.sin_canal === 0 ? (
-              <p className="text-[13px]">Cartera limpia ✓ — sin duplicados, sin dominios pendientes y con canal utilizable.</p>
+              <p className="inline-flex items-center gap-2 text-[13px] text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="size-4 shrink-0" aria-hidden />
+                Cartera limpia — sin duplicados, sin dominios pendientes y con canal utilizable.
+              </p>
             ) : (
               <>
                 {duplicateCount > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-amber-500/50 pl-3">
                     <p className="text-[13px]">
-                      <strong>{duplicateCount}</strong>{" "}
+                      <strong>{formatNumber(duplicateCount)}</strong>{" "}
                       {duplicateCount === 1 ? "email duplicado" : "emails duplicados"}: el mismo
                       contacto en más de una ficha parte el historial y el RFM.
                     </p>
@@ -1113,9 +1181,9 @@ export default async function DashboardPage({
                   </div>
                 )}
                 {enrichPending > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-sky-500/50 pl-3">
                     <p className="text-[13px]">
-                      <strong>{enrichPending}</strong>{" "}
+                      <strong>{formatNumber(enrichPending)}</strong>{" "}
                       {enrichPending === 1 ? "dominio sin enriquecer" : "dominios sin enriquecer"}: sin
                       empresa e industria el Estratega y el Redactor trabajan a ciegas.
                     </p>
@@ -1125,9 +1193,9 @@ export default async function DashboardPage({
                   </div>
                 )}
                 {hoyGroups.sin_canal > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-l-2 border-rose-500/50 pl-3">
                     <p className="text-[13px]">
-                      <strong>{hoyGroups.sin_canal}</strong>{" "}
+                      <strong>{formatNumber(hoyGroups.sin_canal)}</strong>{" "}
                       {hoyGroups.sin_canal === 1 ? "cliente" : "clientes"} sin canal utilizable: el motor no puede escribirles.
                     </p>
                     <Button render={<Link href={withMarketParam("/customers?decision=sin_canal", scope.market?.id ?? null)} />} nativeButton={false} size="sm">
@@ -1138,15 +1206,24 @@ export default async function DashboardPage({
               </>
             )}
             {buyers > 0 && (
-              <div className="mt-1 flex flex-col gap-1">
-                <div className="h-2 overflow-hidden rounded-full bg-muted" role="img" aria-label={`Cartera lista: ${Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}%`}>
+              <div className="mt-1 flex flex-col gap-1.5">
+                <div className="flex items-center gap-3">
                   <div
-                    className="h-full rounded-full bg-emerald-500/80"
-                    style={{ width: `${Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}%` }}
-                  />
+                    className="h-2 flex-1 overflow-hidden rounded-full bg-muted"
+                    role="img"
+                    aria-label={`Cartera lista: ${formatPercentPoints(healthPct)}`}
+                  >
+                    <div
+                      className="h-full rounded-full bg-emerald-500/80"
+                      style={{ width: `${healthPct}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-medium text-emerald-600 tabular-nums dark:text-emerald-400">
+                    {formatPercentPoints(healthPct)}
+                  </span>
                 </div>
                 <p className="text-xs text-muted-foreground tabular-nums">
-                  {Math.max(0, Math.min(100, Math.round(((buyers - duplicateCount - enrichPending - hoyGroups.sin_canal) / buyers) * 100)))}% de cartera lista ({buyers} con compras)
+                  {formatPercentPoints(healthPct)} de cartera lista ({formatNumber(buyers)} con compras)
                 </p>
               </div>
             )}
@@ -1157,13 +1234,11 @@ export default async function DashboardPage({
               </Link>
               .
             </p>
-          </CardContent>
-        </Card>
-      </section>
+          </AppCard>
+        </section>
 
       <section aria-label="Tu equipo IA">
-        <AgentCard storeId={active.id} storeName={storeName}>
-          <TeamPulse
+        <TeamPulse
             teamVertical={team.vertical}
             teamCycle={team.cycle ?? cycleDays}
             teamConfidence={team.confidence}
@@ -1203,22 +1278,21 @@ export default async function DashboardPage({
             }}
             runningLabels={runs.filter((r) => r.status === "running").map((r) => r.label)}
           />
-        </AgentCard>
       </section>
 
-      <details className="text-[13px]">
-        <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+      <details className="group text-[13px]">
+        <summary className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+          <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" aria-hidden />
           Cómo va el motor (detalle técnico)
         </summary>
-        <Card className="mt-2">
-          <CardContent className="flex flex-col gap-2 p-4">
+        <AppCard contentClassName="flex flex-col gap-2" className="mt-3">
             <p className="tabular-nums">
-              <strong>{open}</strong> <span className="text-muted-foreground">detectadas</span>
-              {" → "}<strong>{prioritized}</strong> <span className="text-muted-foreground">priorizadas</span>
-              {" → "}<strong>{pending}</strong> <span className="text-muted-foreground">borradores</span>
-              {" → "}<strong>{approved}</strong> <span className="text-muted-foreground">aprobadas</span>
-              {" → "}<strong>{dispatched}</strong> <span className="text-muted-foreground">enviadas</span>
-              {" → "}<strong>{converted}</strong> <span className="text-muted-foreground">recuperadas</span>
+              <strong>{formatNumber(open)}</strong> <span className="text-muted-foreground">detectadas</span>
+              {" → "}<strong>{formatNumber(prioritized)}</strong> <span className="text-muted-foreground">priorizadas</span>
+              {" → "}<strong>{formatNumber(pending)}</strong> <span className="text-muted-foreground">borradores</span>
+              {" → "}<strong>{formatNumber(approved)}</strong> <span className="text-muted-foreground">aprobadas</span>
+              {" → "}<strong>{formatNumber(dispatched)}</strong> <span className="text-muted-foreground">enviadas</span>
+              {" → "}<strong>{formatNumber(converted)}</strong> <span className="text-muted-foreground">recuperadas</span>
             </p>
             {runs.length > 0 && (
               <div className="flex flex-col gap-1">
@@ -1230,8 +1304,7 @@ export default async function DashboardPage({
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </AppCard>
       </details>
     </div>
   );

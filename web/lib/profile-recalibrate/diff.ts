@@ -4,6 +4,7 @@
 // Puro y determinista: el humano decide después, delta por delta.
 import { isKnownTaxonomyId } from "@/lib/taxonomy";
 import { ARCHETYPES, type ArchetypeId, type StoreProfile } from "@/lib/store-profiles";
+import { formatNumber, formatPercentPoints } from "@/lib/format";
 
 export type ProfileSlot =
   | "archetype"
@@ -125,7 +126,7 @@ export function buildDeltas(
       profile.repurchaseCycleDays !== null ? String(profile.repurchaseCycleDays) : null,
       cycleProposed,
       ctx.intervalMedian !== null
-        ? `Intervalo mediano medido: ${ctx.intervalMedian}d (cobertura ${Math.round(ctx.intervalCoverage * 100)}%).`
+        ? `Intervalo mediano medido: ${formatNumber(ctx.intervalMedian)}d (cobertura ${formatPercentPoints(ctx.intervalCoverage * 100)}).`
         : "Ciclo propuesto por el set con datos de la tienda.",
     );
   } else if (cycleProposed === null && profile.repurchaseCycleDays !== null) {

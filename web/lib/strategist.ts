@@ -8,6 +8,7 @@ import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
 import { advanceRun, finishRun, setRunTotal, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
+import { formatNumber } from "@/lib/format";
 
 const log = createLogger("strategist");
 
@@ -133,7 +134,7 @@ export async function runStrategist(
     const leftover = rows.length - batch.length;
     const summary =
       prioritized > 0
-        ? `Ordenó ${prioritized}, empieza por ${topName}${leftover > 0 ? ` · ${leftover} quedan` : ""}`
+        ? `Ordenó ${formatNumber(prioritized)}, empieza por ${topName}${leftover > 0 ? ` · ${formatNumber(leftover)} quedan` : ""}`
         : "Sin ordenar, nada urgente · no hay a quién priorizar";
     await finishRun(runId, {
       status,

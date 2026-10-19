@@ -7,6 +7,7 @@ import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { createLogger } from "@/lib/log";
 import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
+import { formatNumber } from "@/lib/format";
 import { recalibrateWithRun } from "@/lib/profile-recalibrate/service";
 import {
   advanceRun,
@@ -61,7 +62,7 @@ export async function syncCustomersAction(): Promise<SyncState> {
           status: "done",
           processed: SYNC_TOTAL,
           failed: 0,
-          summary: `${s.customers} customers, ${s.orders} orders (test excl: ${s.excludedTestOrders}, inválidas excl: ${s.excludedInvalidOrders})`,
+          summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders (test excl: ${formatNumber(s.excludedTestOrders)}, inválidas excl: ${formatNumber(s.excludedInvalidOrders)})`,
         });
         log(`run ${runId} done`);
         // Vigilante de perfil (#6): con datos frescos, si toca la revisión

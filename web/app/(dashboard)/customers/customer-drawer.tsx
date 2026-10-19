@@ -1,12 +1,22 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { Building2, ExternalLink, Undo2 } from "lucide-react";
+import {
+  Bot,
+  Building2,
+  ExternalLink,
+  Mail,
+  MessageCircle,
+  ShoppingBag,
+  Undo2,
+  UserRound,
+} from "lucide-react";
+import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { AppCard } from "@/components/app-card";
+import { SectionHeading } from "@/components/section-heading";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -35,6 +45,7 @@ import { reenrichDomainAction } from "@/lib/enrich-actions";
 import { useBackground } from "@/components/background-status";
 import type { EditableCustomer, ManualField } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber, formatPercent, formatPercentPoints } from "@/lib/format";
 import type {
   CustomerOrder,
   CustomerRfm,
@@ -215,65 +226,75 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
   );
 
   return (
-    <div className="grid gap-5 px-8 py-6">
-      <div className="grid gap-4 sm:grid-cols-2">
-        {renderTextField("first_name", "Nombre", "Nombre")}
-        {renderTextField("last_name", "Apellido", "Apellido")}
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        {renderTextField("phone", "Teléfono", "+51 …")}
-        {renderTextField("company_name", "Empresa", "Empresa")}
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid gap-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="cm-type" className="text-[13px]">
-              Tipo
-            </Label>
-            <FieldMeta
-              overridden={isOverridden("customer_type")}
-              willRevert={reverted.includes("customer_type")}
-              onRevert={() => markRevert("customer_type")}
-              label="Tipo"
-            />
-          </div>
-          <Select
-            value={drafts.customer_type}
-            onValueChange={(v) => {
-              if (v) setDraft("customer_type", v);
-            }}
-            disabled={isPending}
-          >
-            <SelectTrigger id="cm-type" className="h-10 w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="B2C">B2C · Consumidor final</SelectItem>
-              <SelectItem value="B2B">B2B · Empresa</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <p className="hidden items-end pb-1 text-xs text-muted-foreground sm:flex">
-          Lo editado se conserva ante el sync de Medusa.
-        </p>
-      </div>
-
-      <EnrichedCompany
-        dbId={customer.dbId}
-        onUseCompany={(name) => setDraft("company_name", name)}
+    <div className="flex flex-col gap-6 px-8 py-6">
+      <SectionHeading
+        title="Datos del cliente"
+        hint="Identidad y clasificación. Lo editado se conserva ante el sync de Medusa."
+        tone="primary"
+        className="mb-0"
       />
+      <div className="grid gap-5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          {renderTextField("first_name", "Nombre", "Nombre")}
+          {renderTextField("last_name", "Apellido", "Apellido")}
+        </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="grid gap-4 sm:grid-cols-2">
+          {renderTextField("phone", "Teléfono", "+51 …")}
+          {renderTextField("company_name", "Empresa", "Empresa")}
+        </div>
 
-      <div className="flex justify-end gap-3 pt-1">
-        <Button variant="outline" onClick={onClose} disabled={isPending} className="h-10 px-5">
-          Cancelar
-        </Button>
-        <Button onClick={save} disabled={isPending || !dirty} className="h-10 px-6">
-          {isPending ? "Guardando…" : "Guardar"}
-        </Button>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="cm-type" className="text-[13px]">
+                Tipo
+              </Label>
+              <FieldMeta
+                overridden={isOverridden("customer_type")}
+                willRevert={reverted.includes("customer_type")}
+                onRevert={() => markRevert("customer_type")}
+                label="Tipo"
+              />
+            </div>
+            <Select
+              value={drafts.customer_type}
+              onValueChange={(v) => {
+                if (v) setDraft("customer_type", v);
+              }}
+              disabled={isPending}
+            >
+              <SelectTrigger id="cm-type" className="h-10 w-full">
+                <SelectValue>
+                  {(value) => (value === "B2B" ? "B2B · Empresa" : "B2C · Consumidor final")}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="B2C">B2C · Consumidor final</SelectItem>
+                <SelectItem value="B2B">B2B · Empresa</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="hidden items-end pb-1 text-xs text-muted-foreground sm:flex">
+            El tipo cambia cómo el motor interpreta su comportamiento.
+          </p>
+        </div>
+
+        <EnrichedCompany
+          dbId={customer.dbId}
+          onUseCompany={(name) => setDraft("company_name", name)}
+        />
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <div className="sticky bottom-0 z-10 -mx-8 -mb-6 flex justify-end gap-3 border-t bg-background/95 px-8 py-4 backdrop-blur">
+          <Button variant="outline" onClick={onClose} disabled={isPending} className="h-10 px-5">
+            Cancelar
+          </Button>
+          <Button onClick={save} disabled={isPending || !dirty} className="h-10 px-6">
+            {isPending ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -334,7 +355,7 @@ function EnrichedCompany({
     .join(" · ");
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-4">
+    <div className="rounded-xl border bg-muted/30 p-5">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-[13px] font-medium">
           <Building2 className="size-3.5 text-primary" aria-hidden />
@@ -342,7 +363,7 @@ function EnrichedCompany({
         </p>
         {data.enriched && data.confidence !== null && (
           <span className="text-[11px] text-muted-foreground">
-            confianza {Math.round(data.confidence * 100)}%
+            confianza {formatPercent(data.confidence)}
           </span>
         )}
       </div>
@@ -441,8 +462,12 @@ function medianGapDays(chrono: CustomerOrder[]): number | null {
 
 function CumulativeSpark({ chrono }: { chrono: CustomerOrder[] }) {
   if (chrono.length === 0) return null;
-  let acc = 0;
-  const cum = chrono.map((o) => (acc += o.total));
+  const cum: number[] = [];
+  let running = 0;
+  for (const o of chrono) {
+    running += o.total;
+    cum.push(running);
+  }
   const max = Math.max(...cum, 1);
   const w = 100;
   const h = 36;
@@ -458,7 +483,7 @@ function CumulativeSpark({ chrono }: { chrono: CustomerOrder[] }) {
       viewBox={`0 0 ${w} ${h}`}
       className="h-9 w-full"
       role="img"
-      aria-label={`Gasto acumulado en ${chrono.length} compras`}
+      aria-label={`Gasto acumulado en ${formatNumber(chrono.length)} compras`}
       preserveAspectRatio="none"
     >
       <polyline points={pts} fill="none" strokeWidth="1.5" className="stroke-primary" />
@@ -477,7 +502,7 @@ function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
       <div
         className="flex h-32 items-end gap-1.5"
         role="img"
-        aria-label={`Historial de ${orders.length} compras`}
+        aria-label={`Historial de ${formatNumber(orders.length)} compras`}
       >
         {chrono.map((o, i) => (
           <AppTooltip
@@ -494,7 +519,7 @@ function PurchaseBars({ orders }: { orders: CustomerOrder[] }) {
       <div className="mt-1.5 flex justify-between text-xs text-muted-foreground tabular-nums">
         <span>{first}</span>
         <span>
-          {orders.length} compra{orders.length === 1 ? "" : "s"}
+          {formatNumber(orders.length)} compra{orders.length === 1 ? "" : "s"}
         </span>
         <span>{last}</span>
       </div>
@@ -566,7 +591,7 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dbId]);
   if (!pred) return null;
-  const pct = (x: number | null) => (x === null ? "—" : `${Math.round(x * 100)}%`);
+  const pct = (x: number | null) => (x === null ? "—" : formatPercent(x));
   const cycleDays = pred.cycleDays !== null ? Math.round(pred.cycleDays) : null;
   const tDays = pred.tDays !== null ? Math.round(pred.tDays) : null;
   const overdueCycle =
@@ -577,7 +602,6 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
       : pred.model === "segunda_compra"
         ? "primera recompra"
         : null;
-  const horizon = pred.horizonDays ?? "—";
   const supMotivo =
     pred.decision === "organico"
       ? "No tocar: suele volver solo"
@@ -624,16 +648,21 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
   const windowState = overdueBy > 0 ? "atrasado" : inWindow ? "en_ventana" : "temprano";
   const ariaVentana =
     sortedAt.length > 0 && band !== null && tDays !== null
-      ? `Última compra hace ${tDays} días. Suele volver entre ${pred.p25Days} y ${pred.p75Days} días tras la última; hoy va ${tDays} días.`
+      ? `Última compra hace ${formatNumber(tDays)} días. Suele volver entre ${formatNumber(pred.p25Days)} y ${formatNumber(pred.p75Days)} días tras la última; hoy va ${formatNumber(tDays)} días.`
       : null;
   return (
-    <Card>
-      <CardContent className="px-5 py-4">
-        {/* Encabezado: qué es + modelo */}
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            Probabilidad de recompra
-          </p>
+    <AppCard
+      variant="hero"
+      title="Probabilidad de recompra"
+      description={
+        <>
+          de que vuelva en {pred.horizonDays !== null ? formatNumber(pred.horizonDays) : "—"}d sin
+          escribirle · rango {pct(pred.pLow)}–{pct(pred.pHigh)}
+          {pred.confidence === "baja" ? " · aún hay pocos datos de esta tienda" : ""}
+        </>
+      }
+      action={
+        <span className="flex items-center gap-2">
           {modelLabel && (
             <Badge variant="secondary" className="font-normal">
               {modelLabel}
@@ -644,33 +673,34 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
               estimación inicial
             </Badge>
           )}
-        </div>
+        </span>
+      }
+      footer={
+        supMotivo ? (
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Badge variant="outline" className="font-normal">
+              {supMotivo}
+            </Badge>
+            <span className="text-[11px] text-muted-foreground">
+              Se re-evalúa automáticamente cada día.
+            </span>
+          </span>
+        ) : undefined
+      }
+    >
+      {/* Héroe: el número manda, el contexto acompaña */}
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+        <p className="text-4xl leading-none font-semibold tracking-tight tabular-nums">
+          {pct(pred.pRecompraH)}
+        </p>
+      </div>
 
-        {/* Héroe: el número manda, el contexto acompaña */}
-        <div className="mt-3 flex flex-wrap items-end gap-x-3 gap-y-1">
-          <p className="text-4xl leading-none font-semibold tracking-tight tabular-nums">
-            {pct(pred.pRecompraH)}
-          </p>
-          <div className="pb-0.5">
-            <p className="text-[13px] text-muted-foreground">
-              de que vuelva en <span className="font-medium text-foreground tabular-nums">{horizon}d</span>{" "}
-              sin escribirle
-            </p>
-            <p className="text-xs text-muted-foreground tabular-nums">
-              rango {pct(pred.pLow)}–{pct(pred.pHigh)}
-              {pred.confidence === "baja" ? " · aún hay pocos datos de esta tienda" : ""}
-            </p>
-          </div>
-        </div>
-
-        <Separator className="my-4" />
-
-        {/* Datos de soporte en 3 columnas legibles */}
-        <dl className="grid grid-cols-3 gap-3">
+      {/* Datos de soporte en 3 columnas legibles */}
+      <dl className="grid grid-cols-3 gap-3">
           <div className="min-w-0">
             <dt className="text-[11px] tracking-wide text-muted-foreground uppercase">Ciclo</dt>
             <dd className="mt-0.5 truncate text-sm font-medium tabular-nums">
-              {cycleDays !== null ? `~${cycleDays}d` : "—"}
+              {cycleDays !== null ? `~${formatNumber(cycleDays)}d` : "—"}
             </dd>
           </div>
           <div className="min-w-0">
@@ -678,9 +708,9 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
             <dd className="mt-0.5 truncate text-sm font-medium tabular-nums">
               {tDays !== null ? (
                 <>
-                  {tDays}d
+                  {formatNumber(tDays)}d
                   {overdueCycle > 0 && (
-                    <span className="ml-1 font-normal text-destructive">+{overdueCycle}d</span>
+                    <span className="ml-1 font-normal text-destructive">+{formatNumber(overdueCycle)}d</span>
                   )}
                 </>
               ) : (
@@ -706,18 +736,18 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
               <p className="text-xs text-muted-foreground tabular-nums">
                 Suele volver entre{" "}
                 <span className="font-medium text-foreground">
-                  {pred.p25Days}–{pred.p75Days}d
+                  {formatNumber(pred.p25Days)}–{formatNumber(pred.p75Days)}d
                 </span>{" "}
                 tras su última compra
                 {pred.expectedDays !== null ? (
                   <>
-                    {" "}· típico <span className="font-medium text-foreground">~{pred.expectedDays}d</span>
+                    {" "}· típico <span className="font-medium text-foreground">~{formatNumber(pred.expectedDays)}d</span>
                   </>
                 ) : null}
               </p>
               {windowState === "atrasado" ? (
                 <Badge variant="destructive" className="tabular-nums">
-                  +{overdueBy}d de atraso
+                  +{formatNumber(overdueBy)}d de atraso
                 </Badge>
               ) : windowState === "en_ventana" ? (
                 <Badge variant="default" className="tabular-nums">
@@ -725,7 +755,7 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
                 </Badge>
               ) : (
                 <Badge variant="outline" className="tabular-nums">
-                  entra en ~{entersIn}d
+                  entra en ~{formatNumber(entersIn)}d
                 </Badge>
               )}
             </div>
@@ -771,21 +801,29 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
             </div>
           </div>
         )}
-
-        {supMotivo && (
-          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t pt-3">
-            <Badge variant="outline" className="font-normal">
-              {supMotivo}
-            </Badge>
-            <span className="text-[11px] text-muted-foreground">
-              Se re-evalúa automáticamente cada día.
-            </span>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      </AppCard>
   );
 }
+
+/** Color de la decisión: mismo código que los chips de Customers. */
+const DECISION_TONES: Record<string, { text: string; dot: string }> = {
+  actuar: { text: "text-primary", dot: "bg-primary" },
+  revision_humana: {
+    text: "text-violet-600 dark:text-violet-400",
+    dot: "bg-violet-500",
+  },
+  vigilar: { text: "text-amber-600 dark:text-amber-400", dot: "bg-amber-500" },
+  organico: {
+    text: "text-emerald-600 dark:text-emerald-400",
+    dot: "bg-emerald-500",
+  },
+  dormido: { text: "text-muted-foreground", dot: "bg-muted-foreground/40" },
+  sin_canal: { text: "text-rose-600 dark:text-rose-400", dot: "bg-rose-500" },
+  contactado_reciente: {
+    text: "text-sky-600 dark:text-sky-400",
+    dot: "bg-sky-500",
+  },
+};
 
 /** Tarjeta titular: con predicción manda la decisión del motor (Decisión +
  *  Ventana + probabilidad con rango); sin predicción, respaldo clásico RFM. */
@@ -807,15 +845,9 @@ function DecisionCard({
   if (!mpred) {
     return (
       <AppTooltip tip="Decisión del motor (se revisa a diario)">
-        <Card>
-          <CardContent className="px-4 py-3.5">
-            <p className="text-xs text-muted-foreground">Decisión</p>
-            <p className="mt-1 truncate text-xl font-semibold">Sin datos</p>
-            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-              aún sin predicción del motor
-            </p>
-          </CardContent>
-        </Card>
+        <AppCard title="Decisión" description="aún sin predicción del motor">
+          <p className="truncate text-xl font-semibold">Sin datos</p>
+        </AppCard>
       </AppTooltip>
     );
   }
@@ -835,15 +867,19 @@ function DecisionCard({
                 : mpred.decision === "contactado_reciente"
                   ? "Contactado"
                   : "—";
+  const tone = DECISION_TONES[mpred.decision] ?? {
+    text: "text-foreground",
+    dot: "bg-muted-foreground/40",
+  };
   const ventana =
     mpred.tDays === null || mpred.p25Days === null
       ? null
       : mpred.p75Days !== null && mpred.tDays > mpred.p75Days
-        ? `pasó hace ${Math.round(mpred.tDays - mpred.p75Days)}d`
+        ? `pasó hace ${formatNumber(mpred.tDays - mpred.p75Days)}d`
         : mpred.tDays >= mpred.p25Days
           ? "en ventana"
-          : `entra en ${Math.max(0, Math.ceil(mpred.p25Days - mpred.tDays))}d`;
-  const pct = (x: number | null) => (x === null ? null : `${Math.round(x * 100)}%`);
+          : `entra en ${formatNumber(Math.max(0, Math.ceil(mpred.p25Days - mpred.tDays)))}d`;
+  const pct = (x: number | null) => (x === null ? null : formatPercent(x));
   const prob =
     mpred.confidence === "baja"
       ? "(estimación inicial)"
@@ -852,15 +888,17 @@ function DecisionCard({
         : null;
   return (
     <AppTooltip tip="Decisión del motor (se revisa a diario)">
-      <Card>
-        <CardContent className="px-4 py-3.5">
-          <p className="text-xs text-muted-foreground">Decisión</p>
-          <p className="mt-1 truncate text-xl font-semibold">{titulo}</p>
-          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            {[ventana, prob].filter(Boolean).join(" · ") || "—"}
-          </p>
-        </CardContent>
-      </Card>
+      <AppCard
+        title={
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden className={cn("size-1.5 rounded-full", tone.dot)} />
+            Decisión
+          </span>
+        }
+        description={[ventana, prob].filter(Boolean).join(" · ") || "—"}
+      >
+        <p className={cn("truncate text-xl font-semibold", tone.text)}>{titulo}</p>
+      </AppCard>
     </AppTooltip>
   );
 }
@@ -922,7 +960,7 @@ function ComprasTab({
         ? "hoy"
         : summary.recencyDays === 1
           ? "ayer"
-          : `hace ${summary.recencyDays} días`;
+          : `hace ${formatNumber(summary.recencyDays)} días`;
 
   // Derivados integradores (solo con lo ya cargado: orders + summary).
   const chrono = [...orders].reverse();
@@ -943,7 +981,7 @@ function ComprasTab({
   const trendLabel =
     trend === null
       ? null
-      : `${trend >= 0 ? "↑" : "↓"} ${Math.abs(Math.round(trend))}% vs primeras`;
+      : `${trend >= 0 ? "↑" : "↓"} ${formatPercentPoints(Math.abs(trend))} vs primeras`;
   const firstDate = chrono[0]?.date?.slice(0, 10) ?? null;
   const lastDate = chrono[chrono.length - 1]?.date?.slice(0, 10) ?? null;
   // Sugerencia del motor (o genérica sin predicción): el segmento RFM ya no
@@ -970,8 +1008,8 @@ function ComprasTab({
     summary.frequency === 0
       ? "Sin compras registradas."
       : [
-          `${summary.frequency} compra${summary.frequency === 1 ? "" : "s"}`,
-          summary.expectedCycleDays !== null ? `cada ~${summary.expectedCycleDays}d` : null,
+          `${formatNumber(summary.frequency)} compra${summary.frequency === 1 ? "" : "s"}`,
+          summary.expectedCycleDays !== null ? `cada ~${formatNumber(summary.expectedCycleDays)}d` : null,
           `ticket ${formatMoney(summary.avgTicket, summary.currency)}`,
           trendLabel ? `(${trendLabel})` : null,
           `última ${recencyLabel}`,
@@ -985,7 +1023,7 @@ function ComprasTab({
     mpred !== null
       ? `Decisión del motor: ${mpred.decision}` +
         (mpred.tDays !== null && mpred.p25Days !== null && mpred.p75Days !== null
-          ? ` (lleva ${Math.round(mpred.tDays)}d, ventana ${Math.round(mpred.p25Days)}–${Math.round(mpred.p75Days)}d).`
+          ? ` (lleva ${formatNumber(mpred.tDays)}d, ventana ${formatNumber(mpred.p25Days)}–${formatNumber(mpred.p75Days)}d).`
           : ".")
       : null;
   const agentPrompt =
@@ -995,7 +1033,7 @@ function ComprasTab({
             ? `El motor recomienda para ${customerLabel}: ${suggestion}. ${motorCtx}`
             : `El historial sugiere para ${customerLabel}: ${suggestion}.`,
           `Contexto: ${resumen}.`,
-          `Detalle: ticket prom. ${formatMoney(summary.avgTicket, summary.currency)} (rango ${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}, mediana ${formatMoney(tMed, summary.currency)}${trendLabel ? `, ${trendLabel}` : ""}); ritmo esperado ~${summary.expectedCycleDays ?? "–"}d${cycleSrc ? ` (${cycleSrc})` : ""}${gapMed !== null ? `, observado ~${gapMed}d` : ""}; última compra ${recencyLabel}.`,
+          `Detalle: ticket prom. ${formatMoney(summary.avgTicket, summary.currency)} (rango ${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}, mediana ${formatMoney(tMed, summary.currency)}${trendLabel ? `, ${trendLabel}` : ""}); ritmo esperado ~${summary.expectedCycleDays !== null ? formatNumber(summary.expectedCycleDays) : "–"}d${cycleSrc ? ` (${cycleSrc})` : ""}${gapMed !== null ? `, observado ~${formatNumber(gapMed)}d` : ""}; última compra ${recencyLabel}.`,
           "¿Qué acción concreta propones para este cliente y por qué? Básate en su historial real.",
         ].join(" ")
       : null;
@@ -1016,7 +1054,7 @@ function ComprasTab({
                 onClick={() => onGoAgent(agentPrompt)}
                 className="text-[13px] font-medium text-primary underline-offset-2 hover:underline"
               >
-                Abrir agente
+                Abrir agentes
               </button>
             )}
           </div>
@@ -1031,124 +1069,147 @@ function ComprasTab({
         />
       </div>
 
+      <SectionHeading
+        title="Su historial"
+        hint="Ritmo, ticket y total acumulado."
+        tone="sky"
+        className="mb-0"
+      />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <DecisionCard mpred={mpred} />
         <AppTooltip
           tip={
             summary.expectedCycleDays !== null
-              ? `Ciclo esperado cada ${summary.expectedCycleDays}d (fuente: ${summary.cycleSource ?? "—"})`
+              ? `Ciclo esperado cada ${formatNumber(summary.expectedCycleDays)}d (fuente: ${summary.cycleSource ?? "—"})`
               : "Sin ciclo esperado"
           }
         >
-          <Card>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs text-muted-foreground">Ritmo</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">
-                {summary.expectedCycleDays !== null ? `~${summary.expectedCycleDays}d` : "—"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                {gapMed !== null ? `observado ~${gapMed}d · ` : ""}
+          <AppCard
+            title="Ritmo"
+            description={
+              <>
+                {gapMed !== null ? `observado ~${formatNumber(gapMed)}d · ` : ""}
                 última {recencyLabel}
-              </p>
-            </CardContent>
-          </Card>
+              </>
+            }
+          >
+            <p className="text-xl font-semibold tabular-nums">
+              {summary.expectedCycleDays !== null ? `~${formatNumber(summary.expectedCycleDays)}d` : "—"}
+            </p>
+          </AppCard>
         </AppTooltip>
         <AppTooltip
-          tip={totals.length > 0 ? `Tickets: min ${formatMoney(tMin, summary.currency)} · mediana ${formatMoney(tMed, summary.currency)} · max ${formatMoney(tMax, summary.currency)} (últimas ${orders.length})` : "Sin tickets"}
+          tip={totals.length > 0 ? `Tickets: min ${formatMoney(tMin, summary.currency)} · mediana ${formatMoney(tMed, summary.currency)} · max ${formatMoney(tMax, summary.currency)} (últimas ${formatNumber(orders.length)})` : "Sin tickets"}
         >
-          <Card>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs text-muted-foreground">Ticket prom.</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatMoney(summary.avgTicket, summary.currency)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                {totals.length > 0
-                  ? `${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}${trendLabel ? ` · ${trendLabel}` : ""}`
-                  : "—"}
-              </p>
-            </CardContent>
-          </Card>
+          <AppCard
+            title="Ticket prom."
+            description={
+              totals.length > 0
+                ? `${formatMoney(tMin, summary.currency)}–${formatMoney(tMax, summary.currency)}${trendLabel ? ` · ${trendLabel}` : ""}`
+                : "—"
+            }
+          >
+            <p className="text-xl font-semibold tabular-nums">
+              {formatMoney(summary.avgTicket, summary.currency)}
+            </p>
+          </AppCard>
         </AppTooltip>
-        <AppTooltip tip={`Acumulado en ${summary.frequency} compras`}>
-          <Card>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs text-muted-foreground">Total</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatMoney(summary.monetary, summary.currency)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                {summary.frequency} compra{summary.frequency === 1 ? "" : "s"}
+        <AppTooltip tip={`Acumulado en ${formatNumber(summary.frequency)} compras`}>
+          <AppCard
+            title="Total"
+            description={
+              <>
+                {formatNumber(summary.frequency)} compra{summary.frequency === 1 ? "" : "s"}
                 {cycleSrc ? ` · ${cycleSrc}` : ""}
-              </p>
-            </CardContent>
-          </Card>
+              </>
+            }
+          >
+            <p className="text-xl font-semibold tabular-nums">
+              {formatMoney(summary.monetary, summary.currency)}
+            </p>
+          </AppCard>
         </AppTooltip>
       </div>
 
       {orders.length > 0 && (
         <div className="grid gap-3 md:grid-cols-2">
-          <Card>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs font-medium">Ticket en el tiempo</p>
-              <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          <AppCard
+            title="Ticket en el tiempo"
+            description={
+              <>
                 {firstDate ?? "—"} → {lastDate ?? "—"}
                 {trendLabel ? ` · ${trendLabel}` : ""}
-              </p>
-              <div className="mt-2">
-                <PurchaseBars orders={orders} />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground tabular-nums">
+              </>
+            }
+            footer={
+              <span className="text-xs text-muted-foreground tabular-nums">
                 mediana {formatMoney(tMed, summary.currency)} · rango {formatMoney(tMin, summary.currency)}–
                 {formatMoney(tMax, summary.currency)}
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="px-4 py-3.5">
-              <p className="text-xs font-medium">Trayectoria acumulada</p>
-              <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                {formatMoney(summary.monetary, summary.currency)} en {summary.frequency} compras
-              </p>
-              <div className="mt-2">
-                <CumulativeSpark chrono={chrono} />
-              </div>
-              <p className="mt-2 text-xs text-muted-foreground tabular-nums">
-                {gapMed !== null ? `compra cada ~${gapMed}d (observado)` : "1 sola compra"}
+              </span>
+            }
+          >
+            <PurchaseBars orders={orders} />
+          </AppCard>
+          <AppCard
+            title="Trayectoria acumulada"
+            description={
+              <>
+                {formatMoney(summary.monetary, summary.currency)} en {formatNumber(summary.frequency)} compras
+              </>
+            }
+            footer={
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {gapMed !== null ? `compra cada ~${formatNumber(gapMed)}d (observado)` : "1 sola compra"}
                 {summary.expectedCycleDays !== null && gapMed !== null
-                  ? ` · esperado ~${summary.expectedCycleDays}d`
+                  ? ` · esperado ~${formatNumber(summary.expectedCycleDays)}d`
                   : ""}
-              </p>
-            </CardContent>
-          </Card>
+              </span>
+            }
+          >
+            <CumulativeSpark chrono={chrono} />
+          </AppCard>
         </div>
       )}
 
+      {orders.length > 0 && (
+        <SectionHeading
+          title={`Compras (${formatNumber(orders.length)})`}
+          hint="Detalle de cada pedido."
+          tone="emerald"
+          className="mb-0"
+        />
+      )}
       {orders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
       ) : (
         <Table className="table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[112px] px-3">Fecha</TableHead>
-              <TableHead className="px-3">Detalle</TableHead>
-              <TableHead className="w-[96px] px-3 text-right">Total</TableHead>
+              <TableHead className="w-[112px] px-3 text-[11px] tracking-wide text-muted-foreground uppercase">
+                Fecha
+              </TableHead>
+              <TableHead className="px-3 text-[11px] tracking-wide text-muted-foreground uppercase">
+                Detalle
+              </TableHead>
+              <TableHead className="w-[96px] px-3 text-right text-[11px] tracking-wide text-muted-foreground uppercase">
+                Total
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {orders.map((o, i) => (
               <TableRow key={i}>
-                <TableCell className="whitespace-nowrap py-2.5 pl-2 pr-4 text-[13px] tabular-nums">
+                <TableCell className="px-3 py-3 text-[13px] whitespace-nowrap tabular-nums">
                   {o.date ? o.date.slice(0, 10) : "—"}
                 </TableCell>
-                <TableCell className="px-3 py-2.5 text-[13px] text-muted-foreground">
+                <TableCell className="px-3 py-3 text-[13px] text-muted-foreground">
                   {o.items.length > 0 ? (
-                    <AppTooltip tip={o.items.map((it) => `${it.title} x${it.quantity}`).join("; ")}>
+                    <AppTooltip tip={o.items.map((it) => `${it.title} x${formatNumber(it.quantity)}`).join("; ")}>
                       <div className="flex flex-col gap-1.5">
                       {o.items.map((it, j) => (
                         <div key={j} className="min-w-0">
                           <div className="break-words">
-                            {it.title} x{it.quantity}
+                            {it.title} x{formatNumber(it.quantity)}
                           </div>
                           {it.contiene && (
                             <div className="break-words text-[12px]">
@@ -1171,7 +1232,7 @@ function ComprasTab({
                     "—"
                   )}
                 </TableCell>
-                <TableCell className="whitespace-nowrap px-3 py-2.5 text-right text-[13px] tabular-nums">
+                <TableCell className="px-3 py-3 text-right text-[13px] whitespace-nowrap tabular-nums">
                   {formatMoney(o.total, o.currency)}
                 </TableCell>
               </TableRow>
@@ -1188,6 +1249,15 @@ const CONTACT_STATUS_LABEL: Record<string, string> = {
   approved: "Aprobado, esperando envío",
   pending_review: "Borrador sin aprobar",
   rejected: "Rechazado",
+};
+
+const CONTACT_STATUS_CLASS: Record<string, string> = {
+  dispatched:
+    "border-transparent bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  approved: "border-transparent bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  pending_review:
+    "border-transparent bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  rejected: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
 /** Issue #19 Paso 5: ¿ya le escribimos? Contactos separados de Compras. */
@@ -1210,54 +1280,121 @@ function ContactosTab({ dbId }: { dbId: string }) {
     };
   }, [dbId]);
 
-  if (error) return <p className="px-8 py-6 text-sm text-destructive">{error}</p>;
-  if (!contacts) return <p className="px-8 py-6 text-sm text-muted-foreground">Cargando contactos…</p>;
+  if (error) {
+    return (
+      <div className="flex flex-col gap-3 px-8 py-6">
+        <SectionHeading
+          title="Mensajes enviados"
+          hint="Historial de contacto y resultado."
+          tone="sky"
+          className="mb-0"
+        />
+        <p className="text-sm text-destructive">{error}</p>
+      </div>
+    );
+  }
+  if (!contacts) {
+    return (
+      <div className="flex flex-col gap-3 px-8 py-6">
+        <SectionHeading
+          title="Mensajes enviados"
+          hint="Historial de contacto y resultado."
+          tone="sky"
+          className="mb-0"
+        />
+        <p className="text-sm text-muted-foreground">Cargando contactos…</p>
+      </div>
+    );
+  }
   if (contacts.length === 0) {
     return (
-      <p className="px-8 py-6 text-sm text-muted-foreground">
-        Nunca se le envió un mensaje desde acá.
-      </p>
+      <div className="flex flex-col gap-3 px-8 py-6">
+        <SectionHeading
+          title="Mensajes enviados"
+          hint="Historial de contacto y resultado."
+          tone="sky"
+          className="mb-0"
+        />
+        <p className="text-sm text-muted-foreground">
+          Nunca se le envió un mensaje desde acá.
+        </p>
+      </div>
     );
   }
   return (
-    <div className="grid gap-3 px-8 py-6">
-      {contacts.map((c) => {
-        const when = (c.dispatchedAt ?? c.createdAt).slice(0, 10);
-        return (
-          <Card key={c.id}>
-            <CardContent className="flex flex-col gap-2 px-5 py-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
-                <span className="font-medium">
+    <div className="flex flex-col gap-4 px-8 py-6">
+      <SectionHeading
+        title="Mensajes enviados"
+        hint="Historial de contacto y resultado."
+        tone="sky"
+        className="mb-0"
+      />
+      <div className="grid gap-3">
+        {contacts.map((c) => {
+          const when = (c.dispatchedAt ?? c.createdAt).slice(0, 10);
+          return (
+            <AppCard
+              key={c.id}
+              tone="sky"
+              title={
+                <span className="inline-flex items-center gap-1.5 font-medium">
+                  {c.channel === "whatsapp" ? (
+                    <MessageCircle className="size-3.5 text-emerald-500" aria-hidden />
+                  ) : (
+                    <Mail className="size-3.5 text-sky-500" aria-hidden />
+                  )}
                   {c.channel === "whatsapp" ? "WhatsApp" : "Email"} · {when}
                 </span>
-                <Badge variant="outline" className="font-normal">
+              }
+              action={
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "font-normal",
+                    CONTACT_STATUS_CLASS[c.status] ?? "text-muted-foreground",
+                  )}
+                >
                   {CONTACT_STATUS_LABEL[c.status] ?? c.status}
                 </Badge>
-              </div>
-              {c.subject && <p className="text-[13px] font-medium">{c.subject}</p>}
+              }
+              footer={
+                (c.status === "approved" || c.status === "dispatched") || c.status === "dispatched" ? (
+                  <span className="flex flex-col gap-1">
+                    {(c.status === "approved" || c.status === "dispatched") && (
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        aprobado por {approverLabel(c.approvedBy)}
+                        {c.approvedAt ? ` · ${c.approvedAt.slice(0, 10)}` : ""}
+                      </span>
+                    )}
+                    {c.status === "dispatched" && (
+                      <span
+                        className={cn(
+                          "text-xs font-medium tabular-nums",
+                          c.result
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {c.result
+                          ? `compró ${c.result.boughtAt} · ${formatMoney(c.result.amountMinor, c.result.currency)}`
+                          : "sin compra posterior registrada"}
+                      </span>
+                    )}
+                  </span>
+                ) : undefined
+              }
+            >
+              {c.subject && <p className="text-sm font-medium">{c.subject}</p>}
               <details>
-                <summary className="cursor-pointer text-xs font-medium hover:text-foreground">
+                <summary className="text-xs font-medium hover:text-foreground">
                   Ver mensaje completo
                 </summary>
                 <p className="mt-1 whitespace-pre-wrap text-[13px]">{c.body}</p>
               </details>
-              {(c.status === "approved" || c.status === "dispatched") && (
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  aprobado por {approverLabel(c.approvedBy)}
-                  {c.approvedAt ? ` · ${c.approvedAt.slice(0, 10)}` : ""}
-                </p>
-              )}
-              {c.status === "dispatched" && (
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  {c.result
-                    ? `compró ${c.result.boughtAt} · ${formatMoney(c.result.amountMinor, c.result.currency)}`
-                    : "sin compra posterior registrada"}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })}
+            </AppCard>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1272,7 +1409,7 @@ export function CustomerDrawer({
   initialTab?: "datos" | "compras" | "contactos" | "chat";
 }) {
   const [tab, setTab] = useState<"datos" | "compras" | "contactos" | "chat">(initialTab);
-  // Prompt con la recomendación del análisis: se auto-envía al abrir el tab Agente.
+  // Prompt con la recomendación del análisis: se auto-envía al abrir el tab Agentes.
   const [agentSeed, setAgentSeed] = useState<string | null>(null);
 
   const displayName = [customer.firstName, customer.lastName].filter(Boolean).join(" ");
@@ -1284,38 +1421,68 @@ export function CustomerDrawer({
     .map((w) => w[0]!.toUpperCase())
     .join("");
 
+  const drawerTabs = [
+    { id: "datos", label: "Datos", icon: UserRound },
+    { id: "compras", label: "Compras", icon: ShoppingBag },
+    { id: "contactos", label: "Contactos", icon: MessageCircle },
+    { id: "chat", label: "Agentes", icon: Bot },
+  ] as const;
+
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent className="w-full gap-0 p-0 data-[side=right]:sm:max-w-[min(920px,94vw)]">
-        <div className="flex items-center gap-4 px-8 pt-6 pb-5">
+        <div className="flex items-center gap-4 border-b border-border/60 bg-gradient-to-br from-primary/[0.05] via-background to-background px-8 pt-6 pb-4">
           <div
             aria-hidden
-            className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold tracking-wide text-primary"
+            className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold tracking-wide text-primary ring-1 ring-primary/15"
           >
             {initials || "—"}
           </div>
           <div className="min-w-0 pr-8">
-            <SheetTitle className="truncate text-lg">{displayName || "Sin nombre"}</SheetTitle>
+            <SheetTitle className="truncate text-xl font-semibold tracking-tight">{displayName || "Sin nombre"}</SheetTitle>
             <SheetDescription className="truncate">{customer.email}</SheetDescription>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className="font-normal">
+                {customer.customerType === "B2B" ? "B2B · Empresa" : "B2C · Consumidor"}
+              </Badge>
+              {customer.country && (
+                <span className="text-[11px] text-muted-foreground">{customer.country}</span>
+              )}
+              {customer.manualFields.length > 0 && (
+                <span className="text-[11px] text-muted-foreground">· editado</span>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="flex gap-6 border-b px-8" role="tablist" aria-label="Ficha del customer">
-          {(["datos", "compras", "contactos", "chat"] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              onClick={() => setTab(t)}
-              className={`relative py-3 text-sm transition-colors ${
-                tab === t ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t === "datos" ? "Datos" : t === "compras" ? "Compras" : t === "contactos" ? "Contactos" : "Agente"}
-              {tab === t && <span className="absolute inset-x-0 -bottom-px h-0.5 bg-primary" />}
-            </button>
-          ))}
+        <div className="px-8 pt-5 pb-5">
+          <div
+            className="flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
+            role="tablist"
+            aria-label="Ficha del customer"
+          >
+            {drawerTabs.map((t) => {
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-medium transition-colors",
+                    tab === t.id
+                      ? "bg-background text-foreground shadow-sm ring-1 ring-border/60"
+                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" aria-hidden />
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">

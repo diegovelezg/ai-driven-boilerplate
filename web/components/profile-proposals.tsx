@@ -5,7 +5,7 @@
 import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import {
   decideProfileDeltaAction,
   runRecalibrationAction,
@@ -13,6 +13,7 @@ import {
 import type { ProfileProposal } from "@/lib/profile-recalibrate/service";
 import type { ProfileDelta, ProfileSlot } from "@/lib/profile-recalibrate/diff";
 import { ARCHETYPES, type ArchetypeId } from "@/lib/store-profiles";
+import { formatNumber } from "@/lib/format";
 import { verticalName } from "@/lib/taxonomy";
 
 const SLOT_LABEL: Record<ProfileSlot, string> = {
@@ -27,7 +28,7 @@ function formatValue(slot: ProfileSlot, v: string | null): string {
   if (slot === "archetype") {
     return ARCHETYPES[v as ArchetypeId]?.label ?? v;
   }
-  if (slot === "repurchase_cycle_days") return `${v} días`;
+  if (slot === "repurchase_cycle_days") return `${formatNumber(Number(v))} días`;
   if (slot === "taxonomy_id") return verticalName(v) ?? v;
   return v;
 }
@@ -99,19 +100,20 @@ export function ProfileProposalsPanel({
     });
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-sm font-medium">Vigilante de perfil</CardTitle>
-          {proposal?.provisional && <Badge variant="secondary">Provisional</Badge>}
-        </div>
-        <CardDescription>
-          Cada semana comparo tu perfil con tus datos reales. Si algo cambió,
-          te propongo corregirlo aquí: nada se aplica sin tu decisión. La revisión
-          tarda ~1 min en segundo plano: recarga la página para verla.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <AppCard
+      title="Vigilante de perfil"
+      description="Cada semana comparo tu perfil con tus datos reales. Si algo cambió, te propongo corregirlo aquí: nada se aplica sin tu decisión. La revisión tarda ~1 min en segundo plano: recarga la página para verla."
+      action={proposal?.provisional ? <Badge variant="secondary">Provisional</Badge> : undefined}
+      footer={
+        <span className="flex flex-wrap items-center gap-3">
+          <Button type="button" variant="outline" disabled={reviewing} onClick={runReview}>
+            {reviewing ? "Revisando…" : "Revisar mi perfil"}
+          </Button>
+          {message && <span className="text-xs text-muted-foreground">{message}</span>}
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-3">
         {proposal ? (
           <>
             <p className="text-xs text-muted-foreground">
@@ -134,13 +136,7 @@ export function ProfileProposalsPanel({
             Sin propuestas pendientes: tu perfil sigue representando a tu tienda.
           </p>
         )}
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant="outline" disabled={reviewing} onClick={runReview}>
-            {reviewing ? "Revisando…" : "Revisar mi perfil"}
-          </Button>
-          {message && <p className="text-xs text-muted-foreground">{message}</p>}
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </AppCard>
   );
 }

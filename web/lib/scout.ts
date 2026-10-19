@@ -7,6 +7,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { advanceRun, finishRun, setRunTotal, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
+import { formatNumber } from "@/lib/format";
 
 const log = createLogger("scout");
 
@@ -371,8 +372,8 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
     const ready = created + updated;
     const summary: string =
       ready > 0
-        ? `Vigiló ${scanned} · ${ready} listos para actuar`
-        : `Vigiló ${scanned}, nadie necesita mensaje · no quemamos descuentos`;
+        ? `Vigiló ${formatNumber(scanned)} · ${formatNumber(ready)} listos para actuar`
+        : `Vigiló ${formatNumber(scanned)}, nadie necesita mensaje · no quemamos descuentos`;
     await finishRun(runId, {
       status,
       processed: scanned,

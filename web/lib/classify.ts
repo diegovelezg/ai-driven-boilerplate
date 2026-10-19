@@ -6,6 +6,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { classifyDomain, domainFromEmail } from "@/lib/domains";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { formatNumber } from "@/lib/format";
 
 export interface ClassifyCounts {
   b2b: number;
@@ -70,7 +71,7 @@ export async function runClassify(runId: string, storeId: string, limit = 0): Pr
       status,
       processed,
       failed,
-      summary: `${processed} clasificados (B2B ${counts.b2b} · B2C ${counts.b2c}) · ${counts.untouched} intactos`,
+      summary: `${formatNumber(processed)} clasificados (B2B ${formatNumber(counts.b2b)} · B2C ${formatNumber(counts.b2c)}) · ${formatNumber(counts.untouched)} intactos`,
     });
   } catch (e) {
     await finishRun(runId, {

@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import type { EditableCustomer } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import { CustomerDrawer } from "../customers/customer-drawer";
 
 export function TopCustomers({
@@ -20,12 +21,8 @@ export function TopCustomers({
   const visible = expanded ? rows : rows.slice(0, 5);
   const hiddenCount = rows.length - 5;
   return (
-    <section aria-label="Mejores clientes">
-      <Card>
-        <CardContent className="flex flex-col gap-2 p-4">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Mejores clientes · 12m
-          </span>
+    <>
+      <AppCard contentClassName="flex flex-col gap-2.5">
           {visible.map(({ customer, revenueMinor, orders }) => {
             const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ");
             return (
@@ -33,14 +30,14 @@ export function TopCustomers({
                 key={customer.dbId}
                 type="button"
                 onClick={() => setSelectedId(customer.dbId)}
-                className="flex cursor-pointer items-baseline justify-between gap-2 rounded px-1 py-0.5 text-left text-[13px] transition-colors hover:bg-muted"
+                className="flex items-baseline justify-between gap-2 rounded-md px-1.5 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
               >
                 <span className="truncate">
                   {name || "Sin nombre"}
                   <span className="ml-2 text-xs text-muted-foreground">{customer.email}</span>
                 </span>
                 <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {orders} {orders === 1 ? "pedido" : "pedidos"} ·{" "}
+                  {formatNumber(orders)} {orders === 1 ? "pedido" : "pedidos"} ·{" "}
                   <strong className="text-foreground">{formatMoney(revenueMinor, currency)}</strong>
                 </span>
               </button>
@@ -50,17 +47,12 @@ export function TopCustomers({
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="mt-1 cursor-pointer self-start px-1 text-[13px] font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+              className="mt-1 self-start px-1 text-[13px] font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
             >
-              {expanded ? "Ver menos" : `Ver más... (${hiddenCount} más)`}
+              {expanded ? "Ver menos" : `Ver más... (${formatNumber(hiddenCount)} más)`}
             </button>
           )}
-        </CardContent>
-      </Card>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Por revenue en los últimos 12 meses, en {(currency ?? "PEN").toUpperCase()}. Clic para ver la
-        ficha. Cuídalos: son tu base.
-      </p>
+      </AppCard>
       {selected && (
         <CustomerDrawer
           key={selected.dbId}
@@ -69,6 +61,6 @@ export function TopCustomers({
           onClose={() => setSelectedId(null)}
         />
       )}
-    </section>
+    </>
   );
 }

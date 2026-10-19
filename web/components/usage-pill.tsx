@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AppTooltip } from "@/components/ui/app-tooltip";
+import { formatDecimal, formatNumber } from "@/lib/format";
 
-/** Compacta 12345 -> "12.3k", 2000000 -> "2.0M". */
+/** Compacta 12345 -> "12,3k", 2000000 -> "2,0M". */
 function compact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
+  if (n >= 1_000_000) return `${formatDecimal(n / 1_000_000, 1)}M`;
+  if (n >= 1_000) return `${formatDecimal(n / 1_000, 1)}k`;
+  return formatNumber(n);
 }
 
 function today(): string {
@@ -42,7 +43,7 @@ export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
           const total = j.total_tokens as number;
           const calls = typeof j.calls === "number" ? j.calls : 0;
           setText(`● ${compact(total)} hoy`);
-          setTitle(`${total.toLocaleString("es-PE")} tokens hoy · ${calls} llamadas`);
+          setTitle(`${formatNumber(total)} tokens hoy · ${formatNumber(calls)} llamadas`);
         })
         .catch(() => {
           if (alive) setLoaded(true);

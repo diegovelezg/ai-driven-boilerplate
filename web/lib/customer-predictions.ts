@@ -2,6 +2,7 @@
 // server: apto para Client Components (no importar customers-db/sync aquí,
 // su cadena trae `server-only` y rompe el build del Pages/SSR).
 // Lo pesado con BD (getPredictionsMap) vive en `lib/customers-db.ts`.
+import { formatNumber } from "@/lib/format";
 
 /** Predicción mínima para columnas/filtros (foto del día, solo lectura). */
 export interface CustomerPredictionLite {
@@ -45,7 +46,7 @@ export function matchesDecisionFilter(
 export function ventanaLabel(pred: CustomerPredictionLite | undefined): string {
   if (!pred || pred.tDays === null || pred.p25Days === null) return "—";
   if (pred.p75Days !== null && pred.tDays > pred.p75Days)
-    return `pasó hace ${Math.round(pred.tDays - pred.p75Days)}d`;
+    return `pasó hace ${formatNumber(pred.tDays - pred.p75Days)}d`;
   if (pred.tDays >= pred.p25Days) return "en ventana";
-  return `entra en ${Math.max(0, Math.ceil(pred.p25Days - pred.tDays))}d`;
+  return `entra en ${formatNumber(Math.max(0, Math.ceil(pred.p25Days - pred.tDays)))}d`;
 }

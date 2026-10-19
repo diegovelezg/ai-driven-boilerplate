@@ -7,6 +7,7 @@ import { getSupabase } from "@/lib/supabase";
 import { advanceRun, finishRun, setRunTotal } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
+import { formatNumber } from "@/lib/format";
 
 const log = createLogger("dispatcher");
 
@@ -89,7 +90,7 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
         // Filosofía TeamPulse: bloqueado pero explicado, con siguiente paso.
         const summary =
           emails.length > 0
-            ? `${emails.length} ${emails.length === 1 ? "listo" : "listos"}, conecta SendGrid en Settings para enviar · no envío sin tu permiso`
+            ? `${formatNumber(emails.length)} ${emails.length === 1 ? "listo" : "listos"}, conecta SendGrid en Settings para enviar · no envío sin tu permiso`
             : whats.length > 0
               ? "En pausa, solo hay WhatsApp aprobado y no hay proveedor · conecta WhatsApp o revoca en Review"
               : stale > 0
@@ -146,9 +147,9 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
       await advanceRun(runId, { processed: dispatched, failed, current: null });
       const summary =
         dispatched > 0
-          ? `${dispatched} ${dispatched === 1 ? "enviada" : "enviadas"} por email, solo lo aprobado${whats.length > 0 ? ` · ${whats.length} WhatsApp en cola (sin proveedor)` : ""}${failed > 0 ? ` · ${failed} fallidas (reintentan)` : ""}`
+          ? `${formatNumber(dispatched)} ${dispatched === 1 ? "enviada" : "enviadas"} por email, solo lo aprobado${whats.length > 0 ? ` · ${formatNumber(whats.length)} WhatsApp en cola (sin proveedor)` : ""}${failed > 0 ? ` · ${formatNumber(failed)} fallidas (reintentan)` : ""}`
           : failed > 0
-            ? `${failed} fallidas por email (reintentan próximo run) · no invento envíos`
+            ? `${formatNumber(failed)} fallidas por email (reintentan próximo run) · no invento envíos`
             : whats.length > 0
               ? "En pausa, solo hay WhatsApp aprobado y no hay proveedor · no envío sin tu permiso"
               : "En pausa, nada aprobado · no envío sin tu permiso";
@@ -179,7 +180,7 @@ export async function runDispatcher(runId: string, storeId: string): Promise<voi
     // Modo prueba local: se marca para medir el loop sin proveedor real.
     const summary =
       dispatched > 0
-        ? `${dispatched} ${dispatched === 1 ? "enviada" : "enviadas"} (modo prueba), solo lo aprobado`
+        ? `${formatNumber(dispatched)} ${dispatched === 1 ? "enviada" : "enviadas"} (modo prueba), solo lo aprobado`
         : "En pausa, nada aprobado · no envío sin tu permiso";
     await finishRun(runId, {
       status: "done",

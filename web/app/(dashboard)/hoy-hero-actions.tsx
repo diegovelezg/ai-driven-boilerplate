@@ -6,19 +6,18 @@ import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startCopywriterAction } from "@/lib/retention-actions";
+import { formatNumber } from "@/lib/format";
 
 /** CTAs del héroe de Hoy: lote solo en no-B2B; en B2B se revisa de a uno.
  *  El botón solo se ofrece si hay algo redactable: si todo lo accionable ya
  *  tiene borrador o está vetado, se muestra "Ir a Review" en vez de un
  *  "Redactar los N" que devolvería 0 y parece roto. */
 export function HoyHeroActions({
-  actuarCount,
   redactableCount,
   pendingCount = 0,
   isB2B,
   reviewHref,
 }: {
-  actuarCount: number;
   /** Filas de Hoy sin borrador y sin veto (las únicas que el bulk puede crear). */
   redactableCount: number;
   pendingCount?: number;
@@ -45,7 +44,7 @@ export function HoyHeroActions({
         </Button>
         {pendingCount > 0 ? (
           <span className="text-xs text-muted-foreground">
-            Ya {pendingCount === 1 ? "tiene borrador" : "tienen borrador"}, esperando tu aprobación.
+            {pendingCount === 1 ? "Listo en Review, falta tu aprobación." : "Listos en Review, falta tu aprobación."}
           </span>
         ) : (
           <span className="text-xs text-muted-foreground">
@@ -70,7 +69,7 @@ export function HoyHeroActions({
               setMsg(r.message);
             }}
           >
-            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${redactableCount}`}
+            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${formatNumber(redactableCount)}`}
           </Button>
         </span>
       </AppTooltip>

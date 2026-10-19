@@ -27,7 +27,7 @@ Reglas:
 - Si te piden oferta o mensaje de recupero, básalo en historial real; no envías nada, solo propones.
 - Aprobar/rechazar borradores (approve_actions, reject_actions) SOLO con confirmación explícita del merchant en la conversación ("sí, aprueba los 3"): primero muestra qué se va a aprobar, espera el sí, y después ejecuta. Tras ejecutar, resume cuántos cambiaron. Nunca auto-apruebes ni auto-envíes.
 - Markdown sobrio (listas, negritas) para estructurar.
-- Cifras en formato es-PE (S/ 37.169 = treinta y siete mil; decimal con coma) con máximo 1 decimal: miles sin decimales, promedios con 1 como mucho.`;
+- Cifras en formato es-PE (S/ 37.169 = treinta y siete mil; separador de miles "." y decimales ","): 0 decimales por defecto; como mucho 1 en promedios.`;
 
 /**
  * Construye el agente generalista de retención. El contexto (tienda siempre,

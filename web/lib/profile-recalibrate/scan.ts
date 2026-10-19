@@ -2,6 +2,7 @@
 // el snapshot anterior con las stats actuales y decide si hay drift.
 // Basta 1 trigger "fuerte" para llamar al set perfilador; el de perfil
 // viejo solo avisa. Silencio por defecto: sin trigger no pasa nada.
+import { formatDecimal, formatNumber, formatPercentPoints } from "@/lib/format";
 
 export interface StatsLike {
   customers: number;
@@ -60,7 +61,7 @@ export function evaluateDrift(
     if (prev.buyers > 0 && curr.buyers / prev.buyers >= 2.0) {
       triggers.push({
         kind: "buyers_ratio",
-        detail: `Compradores ${prev.buyers} → ${curr.buyers} (x${(curr.buyers / prev.buyers).toFixed(1)}).`,
+        detail: `Compradores ${formatNumber(prev.buyers)} → ${formatNumber(curr.buyers)} (x${formatDecimal(curr.buyers / prev.buyers, 1)}).`,
         requiresProfiler: true,
       });
     }
@@ -69,7 +70,7 @@ export function evaluateDrift(
     if (repeatDelta >= 0.15) {
       triggers.push({
         kind: "repeat_delta",
-        detail: `Repeat ${Math.round(prev.repeatRate * 100)}% → ${Math.round(curr.repeatRate * 100)}% (Δ${Math.round(repeatDelta * 100)}pts).`,
+        detail: `Repeat ${formatPercentPoints(prev.repeatRate * 100)} → ${formatPercentPoints(curr.repeatRate * 100)} (Δ${formatPercentPoints(repeatDelta * 100)}pts).`,
         requiresProfiler: true,
       });
     }
@@ -83,7 +84,7 @@ export function evaluateDrift(
     ) {
       triggers.push({
         kind: "interval_drift",
-        detail: `Intervalo mediano ${prev.intervalMedian}d → ${curr.intervalMedian}d (cobertura ${Math.round(curr.intervalCoverage * 100)}%).`,
+        detail: `Intervalo mediano ${formatNumber(prev.intervalMedian)}d → ${formatNumber(curr.intervalMedian)}d (cobertura ${formatPercentPoints(curr.intervalCoverage * 100)}).`,
         requiresProfiler: true,
       });
     }
@@ -100,7 +101,7 @@ export function evaluateDrift(
     ) {
       triggers.push({
         kind: "ticket_band",
-        detail: `Ticket mediano ${prev.ticketMedian} → ${curr.ticketMedian} ${curr.ticketCurrency}.`,
+        detail: `Ticket mediano ${formatNumber(prev.ticketMedian)} → ${formatNumber(curr.ticketMedian)} ${curr.ticketCurrency}.`,
         requiresProfiler: true,
       });
     }
@@ -148,7 +149,7 @@ export function evaluateDrift(
       if (prevBuyers < t && curr.buyers >= t) {
         triggers.push({
           kind: "buyers_threshold",
-          detail: `Compradores cruzaron ${t} (${prevBuyers} → ${curr.buyers}) con perfil auto.`,
+          detail: `Compradores cruzaron ${formatNumber(t)} (${formatNumber(prevBuyers)} → ${formatNumber(curr.buyers)}) con perfil auto.`,
           requiresProfiler: true,
         });
       }
@@ -159,7 +160,7 @@ export function evaluateDrift(
   if (profile.ageDays !== null && profile.ageDays > 90) {
     triggers.push({
       kind: "stale_profile",
-      detail: `Perfil fijado hace ${Math.round(profile.ageDays)} días.`,
+      detail: `Perfil fijado hace ${formatNumber(Math.round(profile.ageDays))} días.`,
       requiresProfiler: false,
     });
   }
@@ -193,14 +194,14 @@ export function checkCadence(input: CadenceInput): CadenceVerdict {
     if (ageMs < 7 * 86_400_000) {
       return {
         run: false,
-        reason: `Última revisión hace ${Math.max(0, Math.floor(ageMs / 86_400_000))}d (<7d).`,
+        reason: `Última revisión hace ${formatNumber(Math.max(0, Math.floor(ageMs / 86_400_000)))}d (<7d).`,
       };
     }
   }
   if (!input.manual && input.newBuyers < 10) {
     return {
       run: false,
-      reason: `Muestra insuficiente: ${input.newBuyers} compradores nuevos (<10).`,
+      reason: `Muestra insuficiente: ${formatNumber(input.newBuyers)} compradores nuevos (<10).`,
     };
   }
   return { run: true, reason: "Toca revisión semanal." };

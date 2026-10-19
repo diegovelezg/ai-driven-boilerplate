@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
 import type { CustomerFilters, CustomerPredictionLite, EditableCustomer } from "@/lib/customers-db";
 import {
   getPredictionsMap,
@@ -15,6 +16,7 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { pendingDomains } from "@/lib/enrich";
 import { countDuplicateEmails } from "@/lib/duplicates";
 import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
+import { formatNumber } from "@/lib/format";
 import { CustomersView } from "./customers-view";
 import { EnrichmentControls } from "./enrichment-controls";
 import { SyncButton } from "./sync-button";
@@ -104,40 +106,39 @@ export default async function CustomersPage({
   }
 
   return (
-    <div className="flex w-full flex-col gap-6 p-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold tracking-tight">
-          Customers{marketLabel ? ` · ${marketLabel}` : ""}
-        </h1>
-        <span className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">
-            {!connected ? "sin conexión" : !dbReady ? "sin BD" : `${totalCount} en BD`}
+    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-8 p-6 md:p-8">
+      <PageHeader
+        eyebrow="Cartera de clientes"
+        title={`Customers${marketLabel ? ` · ${marketLabel}` : ""}`}
+        description="Cada cliente, su ritmo de recompra y el valor en juego."
+        right={
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              {!connected ? "sin conexión" : !dbReady ? "sin BD" : `${formatNumber(totalCount)} en BD`}
+            </span>
+            {connected && dbReady && (
+              <>
+                {synced && <EnrichmentControls pending={pendingCount} />}
+                {synced && duplicateCount > 0 && (
+                  <Button
+                    render={<Link href={withMarketParam("/customers/duplicates", marketId)} />}
+                    nativeButton={false}
+                    variant="outline"
+                    size="sm"
+                  >
+                    Duplicados ({formatNumber(duplicateCount)})
+                  </Button>
+                )}
+                <SyncButton />
+              </>
+            )}
           </span>
-          {connected && dbReady && (
-            <>
-              {synced && <EnrichmentControls pending={pendingCount} />}
-              {synced && duplicateCount > 0 && (
-                <Button
-                  render={<Link href={withMarketParam("/customers/duplicates", marketId)} />}
-                  nativeButton={false}
-                  variant="outline"
-                  size="sm"
-                >
-                  Duplicados ({duplicateCount})
-                </Button>
-              )}
-              <SyncButton />
-            </>
-          )}
-        </span>
-      </header>
+        }
+      />
 
       {!connected && (
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <p className="text-[13px] text-muted-foreground">
-              Conecta Medusa con tu usuario admin para traer customers.
-            </p>
+        <AppCard
+          footer={
             <Button
               render={<Link href="/settings" />}
               nativeButton={false}
@@ -146,28 +147,27 @@ export default async function CustomersPage({
             >
               Ir a Settings
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          <p className="text-sm text-muted-foreground">
+            Conecta Medusa con tu usuario admin para traer customers.
+          </p>
+        </AppCard>
       )}
 
       {connected && !dbReady && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-[13px] text-muted-foreground">
-              Supabase no configurado. Levanta el stack local (`supabase start`) y define
-              SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY en `web/.env.local`.
-            </p>
-          </CardContent>
-        </Card>
+        <AppCardState>
+          Supabase no configurado. Levanta el stack local (`supabase start`) y define
+          SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY en `web/.env.local`.
+        </AppCardState>
       )}
 
       {error && (
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <p className="text-[13px] text-muted-foreground">{error}</p>
-            {connected && dbReady && !synced && <SyncButton />}
-          </CardContent>
-        </Card>
+        <AppCard
+          footer={connected && dbReady && !synced ? <SyncButton /> : undefined}
+        >
+          <p className="text-sm text-muted-foreground">{error}</p>
+        </AppCard>
       )}
 
       {synced && !error && (

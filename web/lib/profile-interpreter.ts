@@ -1,6 +1,7 @@
 // Intérprete local de la descripción libre del negocio (client-safe: sin imports server).
 // Hoy: scoring por keywords ES/EN, determinista y offline.
 // Mañana: cambiar esta función por una llamada LLM manteniendo el mismo contrato.
+import { formatNumber } from "@/lib/format";
 
 export type BusinessModel = "b2c" | "b2b" | "hybrid";
 export type CatalogType =
@@ -168,7 +169,7 @@ export function interpretBusinessDescription(raw: string): DescriptionInterpreta
 
   // Ciclo explícito
   const cycleDays = parseCycleDays(text);
-  if (cycleDays) understood.push(`Recompra aprox. cada ${cycleDays} días`);
+  if (cycleDays) understood.push(`Recompra aprox. cada ${formatNumber(cycleDays)} días`);
 
   // Arquetipo
   let archetype: ArchetypeId | null = null;

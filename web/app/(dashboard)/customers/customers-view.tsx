@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode
 import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ChevronsUpDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney, type CanonicalCustomer } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import type {
   CustomerFilters,
   CustomersSortDir,
@@ -143,21 +144,42 @@ function EditableCell({
 
 /** Chip de decisión del motor (texto llano, sin scores ni segmentos internos). */
 function decisionChip(decision: string | undefined): ReactNode {
+  const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium";
   switch (decision) {
     case "actuar":
-      return <span className="font-medium">Para actuar</span>;
+      return <span className={`${pill} bg-primary/10 text-primary`}>Para actuar</span>;
     case "revision_humana":
-      return <span className="font-medium">Revisar 1 a 1</span>;
+      return (
+        <span className={`${pill} bg-violet-500/10 text-violet-600 dark:text-violet-400`}>
+          Revisar 1 a 1
+        </span>
+      );
     case "vigilar":
-      return <span className="text-muted-foreground">Vigilar</span>;
+      return (
+        <span className={`${pill} bg-amber-500/10 text-amber-600 dark:text-amber-400`}>
+          Vigilar
+        </span>
+      );
     case "organico":
-      return <span className="text-muted-foreground">Volverá solo</span>;
+      return (
+        <span className={`${pill} bg-emerald-500/10 text-emerald-600 dark:text-emerald-400`}>
+          Volverá solo
+        </span>
+      );
     case "dormido":
-      return <span className="text-muted-foreground">Dormido</span>;
+      return <span className={`${pill} bg-muted text-muted-foreground`}>Dormido</span>;
     case "sin_canal":
-      return <span className="text-muted-foreground">Sin canal</span>;
+      return (
+        <span className={`${pill} bg-rose-500/10 text-rose-600 dark:text-rose-400`}>
+          Sin canal
+        </span>
+      );
     case "contactado_reciente":
-      return <span className="text-muted-foreground">Contactado</span>;
+      return (
+        <span className={`${pill} bg-sky-500/10 text-sky-600 dark:text-sky-400`}>
+          Contactado
+        </span>
+      );
     default:
       return <span className="text-muted-foreground/60">—</span>;
   }
@@ -283,13 +305,13 @@ export function CustomersView({
   };
 
   const sortButtonClass = (column: CustomersSortKey, alignRight = false) =>
-    `inline-flex items-center gap-1 rounded px-1 py-1 text-left font-medium hover:text-foreground ${
+    `inline-flex items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-medium tracking-wide uppercase hover:text-foreground ${
       alignRight ? "flex-row-reverse" : ""
     } ${sortKey === column ? "text-foreground" : ""}`;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2.5 rounded-xl bg-muted/30 p-3 ring-1 ring-border/60">
         <div className="relative max-w-sm flex-1 basis-52">
           <Input
             value={query}
@@ -298,7 +320,7 @@ export function CustomersView({
               if (e.key === "Escape" && query) setQuery("");
             }}
             placeholder="Buscar por email, nombre, empresa o qué es…"
-            className="pr-8"
+            className="bg-background pr-8"
           />
           {query && (
             <button
@@ -315,8 +337,28 @@ export function CustomersView({
           value={filters.decision ?? "all"}
           onValueChange={(v) => setFilter({ decision: v === "all" ? null : v })}
         >
-          <SelectTrigger className="w-44" aria-label="Filtrar por decisión del motor">
-            <SelectValue placeholder="Decisión" />
+          <SelectTrigger className="w-44 bg-background" aria-label="Filtrar por decisión del motor">
+            <SelectValue placeholder="Decisión">
+              {(value) =>
+                value === "all"
+                  ? "Toda decisión"
+                  : value === "actuar"
+                    ? "Para actuar"
+                    : value === "vigilar"
+                      ? "Vigilar"
+                      : value === "no-tocar"
+                        ? "No tocar (todos)"
+                        : value === "organico"
+                          ? "· Volverán solos"
+                          : value === "dormido"
+                            ? "· Dormidos"
+                            : value === "contactado_reciente"
+                              ? "· Contactados"
+                              : value === "sin_canal"
+                                ? "· Sin canal"
+                                : String(value)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Toda decisión</SelectItem>
@@ -345,8 +387,20 @@ export function CustomersView({
           value={filters.ritmo ?? "all"}
           onValueChange={(v) => setFilter({ ritmo: v === "all" ? null : v })}
         >
-          <SelectTrigger className="w-44" aria-label="Filtrar por ritmo de recompra">
-            <SelectValue placeholder="Ritmo" />
+          <SelectTrigger className="w-44 bg-background" aria-label="Filtrar por ritmo de recompra">
+            <SelectValue placeholder="Ritmo">
+              {(value) =>
+                value === "all"
+                  ? "Todo ritmo"
+                  : value === "con-ritmo"
+                    ? "Con ritmo"
+                    : value === "primera"
+                      ? "Primera recompra"
+                      : value === "sin-compras"
+                        ? "Sin compras"
+                        : String(value)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todo ritmo</SelectItem>
@@ -359,8 +413,18 @@ export function CustomersView({
           value={filters.customerType ?? "all"}
           onValueChange={(v) => setFilter({ customerType: v === "all" ? null : v })}
         >
-          <SelectTrigger className="w-36" aria-label="Filtrar por tipo de cliente">
-            <SelectValue placeholder="Tipo" />
+          <SelectTrigger className="w-36 bg-background" aria-label="Filtrar por tipo de cliente">
+            <SelectValue placeholder="Tipo">
+              {(value) =>
+                value === "all"
+                  ? "B2B + B2C"
+                  : value === "B2B"
+                    ? "B2B · Empresas"
+                    : value === "B2C"
+                      ? "B2C · Consumidores"
+                      : String(value)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">B2B + B2C</SelectItem>
@@ -381,54 +445,53 @@ export function CustomersView({
         <span className="ms-auto text-xs text-muted-foreground tabular-nums">
           {isPending
             ? "Buscando…"
-            : `${totalCount} resultado${totalCount === 1 ? "" : "s"}`}
+            : `${formatNumber(totalCount)} resultado${totalCount === 1 ? "" : "s"}`}
         </span>
       </div>
 
       {filters.vista === "ventana7" && ventana7 && (
         <p className="text-[13px] text-muted-foreground tabular-nums">
-          Próximos 7 días: ~{ventana7.n} clientes · ~{formatMoney(ventana7.sumaMinor, shopCurrency)} en juego.
+          Próximos 7 días: ~{formatNumber(ventana7.n)} clientes · ~{formatMoney(ventana7.sumaMinor, shopCurrency)} en juego.
         </p>
       )}
 
-      <Card>
-        <CardContent className="p-0">
-          <Table>
+      <AppCard variant="table">
+        <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="px-4 h-12" aria-sort={sortKey === "email" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="px-3 h-12" aria-sort={sortKey === "email" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("email")} className={sortButtonClass("email")} aria-label="Ordenar por email">
                     Email {getSortIcon("email")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="px-3 h-12" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("name")} className={sortButtonClass("name")} aria-label="Ordenar por nombre">
                     Nombre {getSortIcon("name")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12" aria-sort={sortKey === "phone" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="hidden h-12 px-3 2xl:table-cell" aria-sort={sortKey === "phone" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("phone")} className={sortButtonClass("phone")} aria-label="Ordenar por teléfono">
                     Teléfono {getSortIcon("phone")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12" aria-sort={sortKey === "company" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="hidden h-12 px-3 2xl:table-cell" aria-sort={sortKey === "company" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("company")} className={sortButtonClass("company")} aria-label="Ordenar por empresa">
                     Empresa {getSortIcon("company")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12 text-right" aria-sort={sortKey === "orders" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="px-3 h-12 text-right" aria-sort={sortKey === "orders" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("orders")} className={sortButtonClass("orders", true)} aria-label="Ordenar por compras">
                     Compras {getSortIcon("orders")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12 text-right" aria-sort={sortKey === "total" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="px-3 h-12 text-right" aria-sort={sortKey === "total" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("total")} className={sortButtonClass("total", true)} aria-label="Ordenar por total">
                     Total {getSortIcon("total")}
                   </button>
                 </TableHead>
-                <TableHead className="px-4 h-12">Decisión</TableHead>
-                <TableHead className="px-4 h-12">Ventana</TableHead>
-                <TableHead className="px-4 h-12 text-right" aria-sort={sortKey === "valor" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                <TableHead className="px-3 h-12 text-[11px] tracking-wide uppercase">Decisión</TableHead>
+                <TableHead className="px-3 h-12 text-[11px] tracking-wide uppercase">Ventana</TableHead>
+                <TableHead className="px-3 h-12 text-right" aria-sort={sortKey === "valor" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                   <button type="button" onClick={() => toggleSort("valor")} className={sortButtonClass("valor", true)} aria-label="Ordenar por valor esperado">
                     Valor esp. {getSortIcon("valor")}
                   </button>
@@ -442,11 +505,13 @@ export function CustomersView({
                   onClick={() => setSelectedId(c.id)}
                   className="cursor-pointer"
                 >
-                  <TableCell className="px-4 py-4 font-medium">{c.email}</TableCell>
-                  <TableCell className="px-4 py-4 text-muted-foreground">
-                    <EditableCell value={displayName(c)} onSave={saveName(c)} />
+                  <TableCell className="max-w-[220px] truncate px-3 py-4 font-medium">{c.email}</TableCell>
+                  <TableCell className="px-3 py-4 text-muted-foreground">
+                    <div className="max-w-[170px] truncate">
+                      <EditableCell value={displayName(c)} onSave={saveName(c)} />
+                    </div>
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-muted-foreground">
+                  <TableCell className="hidden px-3 py-4 text-muted-foreground 2xl:table-cell">
                     <EditableCell
                       value={c.phone ?? ""}
                       onSave={(v) =>
@@ -454,27 +519,29 @@ export function CustomersView({
                       }
                     />
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-muted-foreground">
-                    <EditableCell
-                      value={c.companyName ?? ""}
-                      onSave={(v) =>
-                        updateCustomerAction({ id: c.dbId, values: { company_name: v } })
-                      }
-                    />
+                  <TableCell className="hidden px-3 py-4 text-muted-foreground 2xl:table-cell">
+                    <div className="max-w-[190px] truncate">
+                      <EditableCell
+                        value={c.companyName ?? ""}
+                        onSave={(v) =>
+                          updateCustomerAction({ id: c.dbId, values: { company_name: v } })
+                        }
+                      />
+                    </div>
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-right tabular-nums">
-                    {c.ordersCount}
+                  <TableCell className="px-3 py-4 text-right tabular-nums">
+                    {formatNumber(c.ordersCount)}
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-right tabular-nums">
+                  <TableCell className="px-3 py-4 text-right tabular-nums">
                     {formatMoney(c.totalSpent, c.currency)}
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-[13px]">
+                  <TableCell className="px-3 py-4 text-[13px]">
                     {decisionChip(preds[c.dbId]?.decision)}
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-[13px] text-muted-foreground tabular-nums">
+                  <TableCell className="px-3 py-4 text-[13px] text-muted-foreground tabular-nums">
                     {ventanaLabel(preds[c.dbId])}
                   </TableCell>
-                  <TableCell className="px-4 py-4 text-right tabular-nums">
+                  <TableCell className="px-3 py-4 text-right tabular-nums">
                     {preds[c.dbId]?.valorEsperadoMinor != null
                       ? formatMoney(preds[c.dbId].valorEsperadoMinor as number, c.currency)
                       : <span className="text-muted-foreground/60">—</span>}
@@ -483,19 +550,18 @@ export function CustomersView({
               ))}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={9} className="px-4 py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
                     {q ? `Sin resultados para “${q}”.` : "Sin customers en Medusa."}
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+      </AppCard>
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground tabular-nums">
-          Página {page} de {totalPages}
+          Página {formatNumber(page)} de {formatNumber(totalPages)}
         </span>
         <div className="flex gap-2">
           <Button

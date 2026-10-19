@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/table";
 import type { EditableCustomer } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import { useBackgroundOrNull } from "@/components/background-status";
 import { SectionLoading } from "@/components/section-loading";
 import { CustomerDrawer } from "./customers/customer-drawer";
@@ -121,9 +122,15 @@ export function AttentionTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Customer</TableHead>
-            <TableHead>Motivo</TableHead>
-            <TableHead className="w-24 text-right">Action</TableHead>
+            <TableHead className="h-11 px-4 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Customer
+            </TableHead>
+            <TableHead className="h-11 px-4 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Motivo
+            </TableHead>
+            <TableHead className="h-11 w-24 px-4 text-right text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              Action
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -139,16 +146,16 @@ export function AttentionTable({
                 : null;
             const ventana =
               pred && row.tDays !== null && row.tDays !== undefined && row.p25Days != null && row.p75Days != null
-                ? `lleva ${Math.round(row.tDays)}d · suele volver ${Math.round(row.p25Days)}–${Math.round(row.p75Days)}d` +
+                ? `lleva ${formatNumber(row.tDays)}d · suele volver ${formatNumber(row.p25Days)}–${formatNumber(row.p75Days)}d` +
                   (row.tDays > row.p75Days
-                    ? ` (+${Math.round(row.tDays - row.p75Days)}d de su ventana)`
+                    ? ` (+${formatNumber(row.tDays - row.p75Days)}d de su ventana)`
                     : row.tDays < row.p25Days
-                      ? ` (entra en ~${Math.max(0, Math.ceil(row.p25Days - row.tDays))}d)`
+                      ? ` (entra en ~${formatNumber(Math.max(0, Math.ceil(row.p25Days - row.tDays)))}d)`
                       : "")
                 : null;
             const frecuencia =
               pred && row.pRecompraH != null
-                ? `de cada 10 similares, ~${Math.round(row.pRecompraH * 10)} vuelven sin escribir` +
+                ? `de cada 10 similares, ~${formatNumber(row.pRecompraH * 10)} vuelven sin escribir` +
                   (row.confidence === "baja" ? " (estimación inicial)" : "")
                 : null;
             const ticket =
@@ -161,7 +168,7 @@ export function AttentionTable({
               onClick={() => void open(row)}
               className="cursor-pointer"
             >
-              <TableCell className="font-medium">
+              <TableCell className="px-4 py-3.5 font-medium">
                 {loadingId === row.customerDbId ? "Cargando…" : row.name}
                 <span className="block text-xs font-normal text-muted-foreground">
                   {row.email}{" "}
@@ -188,10 +195,10 @@ export function AttentionTable({
                   </span>
                 )}
               </TableCell>
-              <TableCell className="text-muted-foreground">
+              <TableCell className="px-4 py-3.5 text-muted-foreground">
                 {row.reason ?? row.kind}
               </TableCell>
-              <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+              <TableCell className="px-4 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
                 {row.draftStatus === "pending" ? (
                   <Button render={<Link href="/review" />} nativeButton={false} variant="outline" size="sm">
                     Revisar
@@ -277,11 +284,11 @@ export function AttentionEmptyState({
   if (pending > 0) {
     return (
       <p className="p-4 text-[13px] text-muted-foreground">
-        Los de hoy ya tienen borrador: están en{" "}
+        Los de hoy ya están listos en{" "}
         <Link href={reviewHref} className="underline">
           Review
-        </Link>{" "}
-        esperando tu aprobación.
+        </Link>
+        .
       </p>
     );
   }

@@ -129,6 +129,49 @@
   }
 }
 
+/* SSOT cursor interactivo (referencia: "Ir a Review" del hero del home).
+ * TODO interactivo muestra mano. Regla SIN capa a propósito: el CSS sin
+ * `@layer` vence a cualquier capa (base/components/utilities), así ningún
+ * `cursor-default` disperso o preflight futuro puede romperlo.
+ * No poner `cursor-pointer` / `cursor-default` a mano en botones, enlaces,
+ * summary, label, select, triggers o items de menú: heredan de aquí.
+ * Excepciones explícitas: texto editable (`cursor-text`), disabled
+ * (`cursor-not-allowed`) y resize (`cursor-*-resize`). Los contenedores
+ * custom con onClick sin rol (tr/div clicables) sí llevan `cursor-pointer`
+ * puntual hasta tener rol semántico. */
+button:not(:disabled):not([aria-disabled="true"]),
+a[href]:not([aria-disabled="true"]),
+summary,
+label[for]:not([aria-disabled="true"]),
+select:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+input[type="file"]:not(:disabled),
+input[type="range"]:not(:disabled),
+input[type="color"]:not(:disabled),
+[role="button"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="link"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="menuitem"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="menuitemcheckbox"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="menuitemradio"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="option"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="tab"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="switch"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="checkbox"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="radio"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="combobox"]:not([aria-disabled="true"]):not([data-disabled]),
+[role="treeitem"]:not([aria-disabled="true"]):not([data-disabled]),
+[data-slot="select-trigger"]:not([data-disabled]),
+[data-slot="dropdown-menu-trigger"]:not([data-disabled]),
+[data-slot="dropdown-menu-sub-trigger"]:not([data-disabled]),
+[data-slot="tabs-trigger"]:not([data-disabled]) {
+  cursor: pointer;
+}
+button:disabled,
+button[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 /* Cinta de estado de enriquecimiento: brillo que recorre la barra. */
 @keyframes enrich-sheen {
   0% {

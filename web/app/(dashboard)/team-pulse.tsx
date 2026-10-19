@@ -9,8 +9,8 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
-import { CardContent } from "@/components/ui/card";
-import { ClickStop } from "./ask-agent";
+import { AppCard } from "@/components/app-card";
+import { formatNumber } from "@/lib/format";
 
 type Status = "needs" | "active" | "paused";
 
@@ -87,7 +87,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       icon: Brain,
       status: "needs",
       headline: `Calibrado ${p.learnedAgo ?? "hace tiempo"}, ¿cambió tu negocio?`,
-      why: `Ciclo ~${p.teamCycle ?? "?"}d · conviene recalibrar`,
+      why: `Ciclo ~${p.teamCycle !== null ? formatNumber(p.teamCycle) : "?"}d · conviene recalibrar`,
       href: p.settingsHref,
       cta: "Recalibrar",
     });
@@ -97,7 +97,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Cerebro",
       icon: Brain,
       status: "paused",
-      headline: `Calibrado ${p.learnedAgo ?? "reciente"} · ciclo ~${p.teamCycle ?? "?"}d`,
+      headline: `Calibrado ${p.learnedAgo ?? "reciente"} · ciclo ~${p.teamCycle !== null ? formatNumber(p.teamCycle) : "?"}d`,
       why: "En pausa: ya sabe tu ritmo, no necesita correr diario",
     });
   }
@@ -110,10 +110,8 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
         name: "Scout",
         icon: Radar,
         status: "active",
-        headline: `Vigiló ${p.totalVigilados} · ${p.hoyActuar} listos para actuar`,
-        why: `${p.hoyVigilar} en vigilancia, resto en automático${agoSuffix("scout")}`,
-        href: p.reviewHref,
-        cta: "Ver",
+        headline: `Vigiló ${formatNumber(p.totalVigilados)} · ${formatNumber(p.hoyActuar)} para hoy`,
+        why: `${formatNumber(p.hoyVigilar)} en seguimiento, resto al día${agoSuffix("scout")}`,
       });
     } else {
       rows.push({
@@ -121,7 +119,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
         name: "Scout",
         icon: Radar,
         status: "paused",
-        headline: `Vigiló ${p.totalVigilados}, nadie necesita mensaje`,
+        headline: `Vigiló ${formatNumber(p.totalVigilados)}, nadie necesita mensaje`,
         why: `En pausa: no quemas clientes${agoSuffix("scout")}`,
       });
     }
@@ -131,10 +129,8 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Scout",
       icon: Radar,
       status: "active",
-      headline: `${p.atRisk} por recuperar`,
+      headline: `${formatNumber(p.atRisk)} por recuperar`,
       why: `Detecta quién debió volver${agoSuffix("scout")}`,
-      href: p.reviewHref,
-      cta: "Ver",
     });
   } else {
     // Sin motor y sin riesgo: distinguir pausa intencional de nunca-corrió.
@@ -169,8 +165,6 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       status: "active",
       headline: "Todo accionable ya tiene borrador",
       why: `Listo en Review${agoSuffix("strategist")}`,
-      href: p.reviewHref,
-      cta: "Ver",
     });
   } else {
     const everRan = p.runAgos.strategist != null || p.pulseStates?.strategist != null;
@@ -193,7 +187,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Redactor",
       icon: PenLine,
       status: "needs",
-      headline: `Dejó ${p.pending} ${p.pending === 1 ? "listo" : "listos"} para tu visto bueno`,
+      headline: `Dejó ${formatNumber(p.pending)} ${p.pending === 1 ? "listo" : "listos"} para tu aprobación`,
       why: `Te ahorra redactar 1-a-1${agoSuffix("copywriter")}`,
       href: p.reviewHref,
       cta: "Revisar",
@@ -216,7 +210,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Prospector",
       icon: UserPlus,
       status: "needs",
-      headline: `${p.leadsPending} parecidos a tu ideal por revisar`,
+      headline: `${formatNumber(p.leadsPending)} parecidos a tu ideal por revisar`,
       why: `Busca negocios nuevos${agoSuffix("prospect")}`,
       href: p.leadsHref,
       cta: "Ver",
@@ -239,7 +233,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Mensajero",
       icon: Send,
       status: "needs",
-      headline: `${p.approved} ${p.approved === 1 ? "listo" : "listos"}, conecta canal para enviar`,
+      headline: `${formatNumber(p.approved)} ${p.approved === 1 ? "listo" : "listos"}, conecta canal para enviar`,
       why: "Bloqueado: no envío sin tu permiso ni sin WhatsApp/email",
       href: p.settingsHref,
       cta: "Conectar",
@@ -250,7 +244,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Mensajero",
       icon: Send,
       status: "active",
-      headline: `${p.dispatched} enviadas`,
+      headline: `${formatNumber(p.dispatched)} enviadas`,
       why: "Solo lo que aprobaste, nada sin permiso",
     });
   } else {
@@ -271,7 +265,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Analista",
       icon: TrendingUp,
       status: "active",
-      headline: `${p.converted} ${p.converted === 1 ? "volvió" : "volvieron"} · ${p.recoveredLabel} recuperado`,
+      headline: `${formatNumber(p.converted)} ${p.converted === 1 ? "volvió" : "volvieron"} · ${p.recoveredLabel} recuperado`,
       why: `Mide retorno real${agoSuffix("analyst")}`,
     });
   } else if (p.dispatched > 0) {
@@ -280,7 +274,7 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
       name: "Analista",
       icon: TrendingUp,
       status: "paused",
-      headline: `Observando ${p.dispatched} enviados`,
+      headline: `Observando ${formatNumber(p.dispatched)} enviados`,
       why: "En pausa: mide si vuelven en días, aún sin retorno",
     });
   } else {
@@ -304,35 +298,50 @@ export function TeamPulse(p: TeamPulseProps) {
   const alive = activeCount > 0;
 
   return (
-    <CardContent className="flex flex-col gap-1 p-4">
-      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+    <AppCard
+      title={
         <span className="inline-flex items-center gap-1.5">
           <span
             aria-hidden
             className={`size-1.5 rounded-full ${alive ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/40"}`}
           />
-          Tu equipo IA · {activeCount} {activeCount === 1 ? "activo" : "activos"} hoy
+          Tu equipo de agentes IA · {formatNumber(activeCount)} {activeCount === 1 ? "activo" : "activos"} hoy
+          {p.lastActionAgo && (
+            <span className="font-normal text-muted-foreground">· última acción {p.lastActionAgo}</span>
+          )}
         </span>
-        {p.lastActionAgo && (
-          <span className="font-normal normal-case tracking-normal">· última acción {p.lastActionAgo}</span>
-        )}
-      </span>
-      <span className="text-xs text-muted-foreground">
-        {needsCount > 0
-          ? `${needsCount} ${needsCount === 1 ? "agente necesita tu decisión" : "agentes necesitan tu decisión"}, el resto trabaja solo.`
-          : "Nadie te necesita ahora — todos vigilan solos."}
-      </span>
-      {p.runningLabels && p.runningLabels.length > 0 && (
-        <p className="text-xs text-muted-foreground tabular-nums">
-          En curso ahora: {p.runningLabels.join(" · ")}
-        </p>
-      )}
-      <ul className="mt-1 divide-y divide-border/60">
+      }
+      description={
+        <>
+          <span className="block text-[13px] text-foreground">
+            Hoy vigiló {formatNumber(p.totalVigilados)}
+            {p.pending > 0 ? ` · ${formatNumber(p.pending)} ${p.pending === 1 ? "listo" : "listos"} en Review` : ""}
+            {p.converted > 0 ? ` · ${formatNumber(p.converted)} ${p.converted === 1 ? "volvió" : "volvieron"} (${p.recoveredLabel})` : ""}
+          </span>
+          <span className="block text-xs">
+            {needsCount > 0
+              ? `${formatNumber(needsCount)} ${needsCount === 1 ? "agente necesita tu decisión" : "agentes necesitan tu decisión"}, el resto trabaja solo.`
+              : "Nadie te necesita ahora — todos vigilan solos."}
+          </span>
+          {p.runningLabels && p.runningLabels.length > 0 && (
+            <span className="block text-xs tabular-nums">
+              En curso ahora: {p.runningLabels.join(" · ")}
+            </span>
+          )}
+        </>
+      }
+      footer={
+        <span className="text-xs text-muted-foreground">
+          Las pausas ahorran mensajes y descuentos: no se escribe por escribir.
+        </span>
+      }
+    >
+      <ul className="divide-y divide-border/60">
         {rows.map((r) => {
           const Icon = r.icon;
           const dimmed = r.status === "paused";
           return (
-            <li key={r.id} className="flex items-start gap-2.5 py-2">
+            <li key={r.id} className="flex items-start gap-2.5 py-2.5">
               <span
                 aria-hidden
                 className={`mt-[7px] size-1.5 shrink-0 rounded-full ${dotCls[r.status]}${r.status !== "paused" ? " animate-pulse" : ""}`}
@@ -346,12 +355,12 @@ export function TeamPulse(p: TeamPulseProps) {
                   <strong className={dimmed ? "font-medium text-muted-foreground" : ""}>{r.name}</strong>{" "}
                   {r.headline}
                   {r.href && r.cta && (
-                    <ClickStop className="inline">
+                    <>
                       {" → "}
                       <Link href={r.href} className="font-medium text-foreground underline">
                         {r.cta}
                       </Link>
-                    </ClickStop>
+                    </>
                   )}
                 </p>
                 <p className="text-xs leading-snug text-muted-foreground">{r.why}</p>
@@ -360,9 +369,6 @@ export function TeamPulse(p: TeamPulseProps) {
           );
         })}
       </ul>
-      <p className="mt-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
-        Las pausas ahorran mensajes y descuentos: no se escribe por escribir.
-      </p>
-    </CardContent>
+    </AppCard>
   );
 }

@@ -6,6 +6,7 @@ import { getSupabase } from "@/lib/supabase";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { isRealDbOrder } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import { sessionize } from "@/lib/retention-model";
 
 const log = createLogger("analyst");
@@ -201,14 +202,14 @@ export async function runAnalyst(
         const { data: st } = await db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
         const { formatMoney } = await import("@/lib/medusa");
         const cur = ((st ?? {}) as Record<string, unknown>).shop_currency as string | null ?? null;
-        summary = `${converted} ${converted === 1 ? "volvió" : "volvieron"} · ${formatMoney(Math.round(revenueMinor), cur)} recuperado`;
+        summary = `${formatNumber(converted)} ${converted === 1 ? "volvió" : "volvieron"} · ${formatMoney(Math.round(revenueMinor), cur)} recuperado`;
       } catch {
-        summary = `${converted} ${converted === 1 ? "volvió" : "volvieron"} · recupero medido`;
+        summary = `${formatNumber(converted)} ${converted === 1 ? "volvió" : "volvieron"} · recupero medido`;
       }
     } else if (waiting > 0) {
-      summary = `Observando ${waiting} ${waiting === 1 ? "enviado" : "enviados"}, mide si vuelven en ${windowDays}d`;
+      summary = `Observando ${formatNumber(waiting)} ${waiting === 1 ? "enviado" : "enviados"}, mide si vuelven en ${formatNumber(windowDays)}d`;
     } else if (measured > 0) {
-      summary = `${measured} ${measured === 1 ? "medido" : "medidos"}, sin retorno en ventana · seguimos vigilando`;
+      summary = `${formatNumber(measured)} ${measured === 1 ? "medido" : "medidos"}, sin retorno en ventana · seguimos vigilando`;
     } else {
       summary = "Nada que medir aún · mide solo cuando hay envíos";
     }

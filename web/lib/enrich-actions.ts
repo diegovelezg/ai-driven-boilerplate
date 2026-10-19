@@ -18,6 +18,7 @@ import {
   startRun,
   type BackgroundRun,
 } from "@/lib/background";
+import { formatNumber } from "@/lib/format";
 import { createLogger } from "@/lib/log";
 
 export interface StartEnrichState {
@@ -55,7 +56,7 @@ export async function startEnrichmentAction(): Promise<StartEnrichState> {
     revalidatePath("/customers");
     return {
       ok: true,
-      message: `Enriquecimiento iniciado (${pending.length} dominios).`,
+      message: `Enriquecimiento iniciado (${formatNumber(pending.length)} dominios).`,
       run: await getLatestRun(storeId),
     };
   } catch (e) {

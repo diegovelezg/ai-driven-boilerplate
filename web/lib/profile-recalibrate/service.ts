@@ -9,6 +9,7 @@ import {
 } from "@/lib/store-profiles";
 import { tenantStats, type TenantStats } from "@/lib/profiling/analyst";
 import { finishRun, startRun } from "@/lib/background";
+import { formatNumber } from "@/lib/format";
 import {
   checkCadence,
   evaluateDrift,
@@ -256,7 +257,7 @@ async function runRecalibrationInner(
       status: "dry-run",
       reason:
         strong.length > 0
-          ? `Dry-run: ${strong.length} trigger(s) llamarían al set perfilador.`
+          ? `Dry-run: ${formatNumber(strong.length)} trigger(s) llamarían al set perfilador.`
           : "Dry-run: sin drift, no se llamaría al set perfilador.",
       triggers,
     };
@@ -343,7 +344,7 @@ async function runRecalibrationInner(
   const proposal = mapProposal(data as Record<string, unknown>);
   return {
     status: "proposal",
-    reason: `Propuesta creada con ${deltas.length} delta(s) para revisar en Settings.`,
+    reason: `Propuesta creada con ${formatNumber(deltas.length)} delta(s) para revisar en Settings.`,
     triggers,
     proposalId: proposal.id,
     deltas,

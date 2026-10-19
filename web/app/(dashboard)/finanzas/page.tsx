@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
+import { SectionHeading } from "@/components/section-heading";
 import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
 import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
 import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
 import { formatMoney } from "@/lib/medusa";
+import { formatNumber } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getActiveStore, type TenantStore } from "@/lib/tenant";
 import { FinanceStrip } from "../finance-strip";
@@ -20,13 +23,15 @@ export default async function FinanzasPage({
 }) {
   if (!isSupabaseConfigured()) {
     return (
-      <div className="flex w-full flex-col gap-6 p-6">
-        <h1 className="text-lg font-semibold tracking-tight">Finanzas</h1>
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCardState>
             Supabase no configurado (`supabase start` + `web/.env.local`).
-          </CardContent>
-        </Card>
+        </AppCardState>
       </div>
     );
   }
@@ -40,30 +45,37 @@ export default async function FinanzasPage({
     active = resolved.active;
   } catch (e) {
     return (
-      <div className="flex w-full flex-col gap-6 p-6">
-        <h1 className="text-lg font-semibold tracking-tight">Finanzas</h1>
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCardState>
             Stores read: {e instanceof Error ? e.message : "DB read failed"}
-          </CardContent>
-        </Card>
+        </AppCardState>
       </div>
     );
   }
   if (stores.length === 0 || !active) {
     return (
-      <div className="flex w-full flex-col gap-6 p-6">
-        <h1 className="text-lg font-semibold tracking-tight">Finanzas</h1>
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <p className="text-[13px] text-muted-foreground">
-              Conecta tu tienda para ver tus finanzas.
-            </p>
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCard
+          footer={
             <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
               Ir a Settings
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          <p className="text-[13px] text-muted-foreground">
+            Conecta tu tienda para ver tus finanzas.
+          </p>
+        </AppCard>
       </div>
     );
   }
@@ -139,7 +151,6 @@ export default async function FinanzasPage({
       dataPartial = true;
     }
     const data = orows;
-    const revQ = { data: revRows, error: null };
     const finOrders = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
       total_amount: Number(r.total_amount ?? 0),
       currency: (r.currency as string | null) ?? null,
@@ -253,22 +264,15 @@ export default async function FinanzasPage({
   const marketLabel = scope.market ? displayMarket(scope.market) : null;
 
   return (
-    <div className="flex w-full flex-col gap-6 p-6">
-      <header className="flex flex-col gap-0.5">
-        <h1 className="text-lg font-semibold tracking-tight">
-          Finanzas · {displayStoreName(active)}
-        </h1>
-        <span className="text-xs text-muted-foreground">
-          Ventas, órdenes y ticket por mes, en {(viewCurrency ?? "PEN").toUpperCase()}
-          {marketLabel ? ` · viendo ${marketLabel}` : ""}. Otras monedas van aparte.
-          {dataPartial && " · muestra parcial (CAP 20k)"}
-        </span>
-      </header>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <PageHeader
+        eyebrow="Dinero y retención"
+        title={`Finanzas · ${displayStoreName(active)}`}
+        description={`Ventas, órdenes y ticket por mes${marketLabel ? ` · viendo ${marketLabel}` : ` en ${(viewCurrency ?? "PEN").toUpperCase()}`}. Otras monedas van aparte.${dataPartial ? ` · muestra parcial (CAP ${formatNumber(20000)})` : ""}`}
+      />
 
       {error && (
-        <Card>
-          <CardContent className="p-4 text-[13px] text-muted-foreground">{error}</CardContent>
-        </Card>
+        <AppCardState>{error}</AppCardState>
       )}
 
       {kpis && (
@@ -288,21 +292,25 @@ export default async function FinanzasPage({
 
       {buckets.length > 0 && (
         <section aria-label="Detalle mensual">
-          <Card>
-            <CardContent className="p-0">
-              <table className="w-full text-[13px]">
+          <SectionHeading
+            title="Detalle mensual"
+            hint="Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite."
+            tone="sky"
+          />
+          <AppCard variant="table">
+            <table className="w-full text-[13px]">
                 <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="p-3 font-medium">Mes</th>
-                    <th className="p-3 text-right font-medium">Ventas</th>
-                    <th className="p-3 text-right font-medium">Órdenes</th>
-                    <th className="p-3 text-right font-medium">Ticket</th>
+                  <tr className="border-b text-left text-[11px] tracking-wide text-muted-foreground uppercase">
+                    <th className="px-4 py-3 font-medium">Mes</th>
+                    <th className="px-4 py-3 text-right font-medium">Ventas</th>
+                    <th className="px-4 py-3 text-right font-medium">Órdenes</th>
+                    <th className="px-4 py-3 text-right font-medium">Ticket</th>
                   </tr>
                 </thead>
                 <tbody className="tabular-nums">
                   {[...buckets].reverse().map((b, i) => (
-                    <tr key={b.key} className="border-b last:border-0">
-                      <td className="p-3 capitalize">
+                    <tr key={b.key} className="border-b transition-colors last:border-0 hover:bg-muted/30">
+                      <td className="px-4 py-3 capitalize">
                         {`${b.label} ${b.key.slice(0, 4)}`}
                         {i === 0 && (
                           <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
@@ -310,19 +318,19 @@ export default async function FinanzasPage({
                           </span>
                         )}
                         {b.key === bestKey && (
-                          <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-[11px] text-green-700">
+                          <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
                             mejor
                           </span>
                         )}
                         {b.key === worstKey && b.key !== bestKey && (
-                          <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[11px] text-red-600">
+                          <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
                             peor
                           </span>
                         )}
                       </td>
-                      <td className="p-3 text-right">{formatMoney(b.salesMinor, viewCurrency)}</td>
-                      <td className="p-3 text-right">{b.orders}</td>
-                      <td className="p-3 text-right">
+                      <td className="px-4 py-3 text-right">{formatMoney(b.salesMinor, viewCurrency)}</td>
+                      <td className="px-4 py-3 text-right">{formatNumber(b.orders)}</td>
+                      <td className="px-4 py-3 text-right">
                         {b.orders > 0
                           ? formatMoney(Math.round(b.salesMinor / b.orders), viewCurrency)
                           : "—"}
@@ -331,21 +339,18 @@ export default async function FinanzasPage({
                   ))}
                 </tbody>
               </table>
-            </CardContent>
-          </Card>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Mejor/peor sobre meses cerrados (el mes en curso es parcial y no compite).
-          </p>
+          </AppCard>
         </section>
       )}
 
       {items.top.length > 0 && (
         <section aria-label="Items que más y menos venden">
+          <SectionHeading
+            title="Qué más y qué menos vende"
+            hint={`Entre lo que sí se vendió (sin feed no se ven los cero). Montos en ${(viewCurrency ?? "PEN").toUpperCase()}.`}
+            tone="violet"
+          />
           <ItemsRanking top={items.top} bottom={items.bottom} currency={viewCurrency} />
-          <p className="mt-2 text-xs text-muted-foreground">
-            Entre lo que sí se vendió: sin feed de productos no se ven los items con cero ventas.
-            Montos en {(viewCurrency ?? "PEN").toUpperCase()}.
-          </p>
         </section>
       )}
       {items.top.length === 0 && buckets.length > 0 && (
@@ -354,7 +359,14 @@ export default async function FinanzasPage({
         </p>
       )}
 
-      <TopCustomers rows={topCustomers} currency={viewCurrency} />
+      <section aria-label="Mejores clientes">
+        <SectionHeading
+          title="Tus mejores clientes"
+          hint={`Por revenue en los últimos 12 meses, en ${(viewCurrency ?? "PEN").toUpperCase()}. Clic para ver la ficha.`}
+          tone="emerald"
+        />
+        <TopCustomers rows={topCustomers} currency={viewCurrency} />
+      </section>
     </div>
   );
 }

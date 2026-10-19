@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startEnrichmentAction } from "@/lib/enrich-actions";
+import { formatNumber } from "@/lib/format";
 
 export function EnrichmentControls({ pending }: { pending: number }) {
   const { activeRuns, starting, start, isBusy } = useBackground();
@@ -34,7 +35,7 @@ export function EnrichmentControls({ pending }: { pending: number }) {
           onClick={() => start(startEnrichmentAction)}
         >
           <Wand2 className="text-primary" aria-hidden />
-          {running ? `${done}/${total}` : blocked ? "En proceso…" : pending > 0 ? `Enriquecer (${pending})` : "Enriquecer"}
+          {running ? `${formatNumber(done)}/${formatNumber(total)}` : blocked ? "En proceso…" : pending > 0 ? `Enriquecer (${formatNumber(pending)})` : "Enriquecer"}
         </Button>
       </span>
     </AppTooltip>

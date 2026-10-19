@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { ModeToggle } from "@/components/mode-toggle";
+import { formatNumber } from "@/lib/format";
 import {
   Sidebar,
   SidebarContent,
@@ -107,7 +108,7 @@ function AppSidebarNav() {
                     : pathname.startsWith(item.href);
                 const badge =
                   "badgeKey" in item && item.badgeKey === "inbox" && (inboxTotal ?? 0) > 0
-                    ? String(inboxTotal)
+                    ? formatNumber(inboxTotal)
                     : null;
                 return (
                   <SidebarMenuItem key={item.href}>

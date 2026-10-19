@@ -132,15 +132,34 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
       // los filtros humanos) y la vista obedece. Sin tarjetas paralelas.
       if (artifact.tool === "filter_customers") {
         const d = (artifact.data ?? {}) as {
-          filter?: { q?: string | null; decision?: string | null; vista?: string | null; ritmo?: string | null };
+          filter?: {
+            q?: string | null;
+            decision?: string | null;
+            vista?: string | null;
+            ritmo?: string | null;
+            customer_type?: string | null;
+            customerType?: string | null;
+          };
         };
-        const f = d.filter ?? {};
+        // `data.filter` es el eco de la tool; `query` son los args del
+        // functionCall (misma forma). Se fusionan con prioridad al eco.
+        const qargs = (artifact.query ?? {}) as {
+          q?: string | null;
+          decision?: string | null;
+          vista?: string | null;
+          ritmo?: string | null;
+          customer_type?: string | null;
+          customerType?: string | null;
+        };
+        const f = { ...qargs, ...(d.filter ?? {}) };
+        const tipo = f.customer_type ?? f.customerType ?? null;
         const qs = new URLSearchParams();
         if (dock.marketId) qs.set("market", dock.marketId);
         if (f.q) qs.set("q", f.q);
         if (f.decision) qs.set("decision", f.decision);
         if (f.vista) qs.set("vista", f.vista);
         if (f.ritmo) qs.set("ritmo", f.ritmo);
+        if (tipo) qs.set("tipo", tipo);
         const href = `/customers?${qs.toString()}`;
         if (pathname === "/customers") router.replace(href);
         else router.push(href);
@@ -171,7 +190,7 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
         type="button"
         aria-label="Cerrar chat"
         onClick={onClose}
-        className="fixed inset-0 z-40 cursor-default bg-black/40 md:hidden"
+        className="fixed inset-0 z-40 bg-black/40 md:hidden"
       />
       <aside
         aria-label="Chat"

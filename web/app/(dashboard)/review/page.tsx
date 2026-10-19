@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { formatNumber } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured, getSupabase } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
@@ -294,9 +296,9 @@ export default async function ReviewPage({
   if (leadFilter) leads = leads.filter((l) => leadFilter.has(l.id));
   if (signalFilter) signals = signals.filter((s) => signalFilter.has(s.id));
   const chatFiltered =
-    (actionFilter ? ` · ${actions.length} borradores` : "") +
-    (leadFilter ? ` · ${leads.length} leads` : "") +
-    (signalFilter ? ` · ${signals.length} señales` : "");
+    (actionFilter ? ` · ${formatNumber(actions.length)} borradores` : "") +
+    (leadFilter ? ` · ${formatNumber(leads.length)} leads` : "") +
+    (signalFilter ? ` · ${formatNumber(signals.length)} señales` : "");
   // Con filtro del chat, la vista muestra SOLAMENTE lo pedido: las secciones
   // no filtradas se ocultan en vez de seguir listando todo.
   const showActions = !chatFiltered || Boolean(actionFilter);
@@ -311,46 +313,47 @@ export default async function ReviewPage({
   if (sp.tab === "leads" || sp.tab === "signals") clearParams.set("tab", sp.tab);
   const clearQs = clearParams.toString();
   const clearChatFilter = `/review${clearQs ? `?${clearQs}` : ""}`;
+  const inboxTotal = actions.length + leads.length + signals.length;
 
   return (
-    <div className="flex w-full flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold tracking-tight">
-          Review{marketLabel ? ` · ${marketLabel}` : ""}
-        </h1>
-      </header>
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <PageHeader
+        eyebrow="Bandeja de entrada"
+        title={`Review${marketLabel ? ` · ${marketLabel}` : ""}`}
+        description="Mensajes, señales y empresas: todo lo que necesita tu decisión."
+        badge={
+          inboxTotal > 0 ? (
+            <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary tabular-nums">
+              {formatNumber(inboxTotal)} por revisar
+            </span>
+          ) : undefined
+        }
+      />
 
       {chatFiltered && (
-        <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-2 p-4">
-            <p className="text-[13px]">
-              Filtrado por el chat{chatFiltered}.
-            </p>
+        <AppCard
+          footer={
             <Button render={<Link href={clearChatFilter} />} nativeButton={false} variant="outline" size="sm">
               Limpiar filtro
             </Button>
-          </CardContent>
-        </Card>
+          }
+        >
+          <p className="text-sm">
+            Filtrado por el chat{chatFiltered}.
+          </p>
+        </AppCard>
       )}
 
       {(!connected || !dbReady) && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-[13px] text-muted-foreground">
-              {!connected
-                ? "Conecta Medusa en Settings para revisar propuestas."
-                : "Supabase no configurado (`supabase start` + `web/.env.local`)."}
-            </p>
-          </CardContent>
-        </Card>
+        <AppCardState>
+          {!connected
+            ? "Conecta Medusa en Settings para revisar propuestas."
+            : "Supabase no configurado (`supabase start` + `web/.env.local`)."}
+        </AppCardState>
       )}
 
       {error && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-[13px] text-muted-foreground">{error}</p>
-          </CardContent>
-        </Card>
+        <AppCardState>{error}</AppCardState>
       )}
 
       {connected && dbReady && !error && (
