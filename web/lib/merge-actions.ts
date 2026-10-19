@@ -59,6 +59,15 @@ export async function mergeAllDuplicatesAction(): Promise<MergeAllState> {
     const groups = await findDuplicateGroups(storeId);
     if (groups.length === 0)
       return { ok: true, message: "No hay casos pendientes.", merged: 0, failed: 0, total: 0 };
+    // Run propio para la cinta: sin esto el merge (y su re-análisis) es
+    // invisible — el poll solo ve background_runs.
+    const { startRun, advanceRun, finishRun } = await import("@/lib/background");
+    let runId: string | null = null;
+    try {
+      runId = await startRun(storeId, "merge", "Combinar duplicados", groups.length);
+    } catch {
+      runId = null;
+    }
     let merged = 0;
     let failed = 0;
     let removed = 0;
@@ -77,9 +86,31 @@ export async function mergeAllDuplicatesAction(): Promise<MergeAllState> {
         failed += 1;
         if (errors.length < 3) errors.push(`${g.email}: ${e instanceof Error ? e.message : "error"}`);
       }
+      if (runId) {
+        try {
+          await advanceRun(runId, { processed: merged + failed, failed, current: null });
+        } catch {
+          // Progreso best-effort.
+        }
+      }
     }
     revalidatePath("/customers/duplicates");
     revalidatePath("/customers");
+    if (runId) {
+      try {
+        await finishRun(runId, {
+          status: merged === 0 ? "error" : "done",
+          processed: merged,
+          failed,
+          summary:
+            merged === 0
+              ? `No se pudo combinar ningún caso. ${errors.join(" · ")}`
+              : `Combinados ${formatNumber(merged)}/${formatNumber(groups.length)} casos · ${formatNumber(movedOrders)} ${movedOrders === 1 ? "orden" : "órdenes"} movidas`,
+        });
+      } catch {
+        // Cierre best-effort.
+      }
+    }
     if (merged === 0)
       return {
         ok: false,
@@ -117,9 +148,28 @@ export async function mergeCustomersAction(dbIds: string[]): Promise<MergeState>
   const storeId = await resolveStoreId(conn.medusaUrl);
   if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
   try {
+    const { startRun, finishRun } = await import("@/lib/background");
+    let runId: string | null = null;
+    try {
+      runId = await startRun(storeId, "merge", "Combinar duplicados", 1);
+    } catch {
+      runId = null;
+    }
     const r = await mergeCustomers(storeId, dbIds);
     revalidatePath("/customers/duplicates");
     revalidatePath("/customers");
+    if (runId) {
+      try {
+        await finishRun(runId, {
+          status: "done",
+          processed: 1,
+          failed: 0,
+          summary: `Combinadas ${formatNumber(r.removed + 1)} fichas · ${formatNumber(r.movedOrders)} órdenes movidas.`,
+        });
+      } catch {
+        // Cierre best-effort.
+      }
+    }
     triggerPostMergeRefresh(storeId);
     return {
       ok: true,
