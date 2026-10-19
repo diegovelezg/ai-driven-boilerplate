@@ -10,15 +10,25 @@
 
 services:
   db:
-    image: supabase/postgres:17.6.1.136
+    # Misma imagen que el CLI local (public.ecr.aws/...:17.11.0.004):
+    # ese combo está probado con nuestras migraciones.
+    image: public.ecr.aws/supabase/postgres:17.11.0.004
     restart: unless-stopped
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Init oficial Supabase (solo primera vez del volumen): passwords de roles
+      # internos (authenticator, supabase_auth_admin...) + jwt_exp. Sin esto,
+      # postgrest/gotrue mueren con "password authentication failed".
+      - ./infra/supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ./infra/supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
+      # El init con volumen fresco (migraciones + roles de supabase/postgres)
+      # tarda 1-2 min: no contar esos fallos.
+      start_period: 60s
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requerido}
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
@@ -34,8 +44,9 @@ services:
     image: supabase/gotrue:v2.197.0
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
+      # migrator repara ownership de auth.uid/role/email antes del primer boot.
+      migrator:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
       timeout: 5s
@@ -62,19 +73,18 @@ services:
       GOTRUE_SMS_AUTOCONFIRM: "false"
 
   rest:
-    image: postgrest/postgrest:v14.18
+    # Mismo que el CLI local (v16.4): maneja graphql_public/JWT como el local.
+    image: public.ecr.aws/supabase/postgrest:v16.4
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "postgrest", "--ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      # Carga el schema cache DESPUÉS de las migraciones (si no, cachea vacío).
+      migrator:
+        condition: service_completed_successfully
+    # Sin healthcheck: `postgrest --ready` exige admin server (v16) y nada
+    # depende de rest como healthy (gateway usa service_started).
     environment:
       PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
-      PGRST_DB_SCHEMAS: public,graphql_public
+      PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requerido}
       PGRST_DB_USE_LEGACY_GUCS: "false"
@@ -113,7 +123,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requerido}
       POSTGRES_USER_READ_WRITE: postgres
       PG_META_CRYPTO_KEY: ${PG_META_CRYPTO_KEY:?PG_META_CRYPTO_KEY requerido}
-      PGRST_DB_SCHEMAS: public,graphql_public
+      PGRST_DB_SCHEMAS: public
       DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-retain}
       DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-retain-engine-ai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
