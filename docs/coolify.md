@@ -20,7 +20,7 @@ Ver plantilla completa en `.env.deploy.example`.
 ## 2. Crear el servicio en Coolify
 
 1. Coolify → New Project → New Service → Docker Compose → conecta el repo GH (`main`).
-2. Compose file: `./docker-compose.yml` (raíz).
+2. Compose file: `./docker-compose.yaml` (raíz, default de Coolify).
 3. Pega las envs del paso 1 en Environment.
 4. Asigna 3 dominios (en cada servicio del compose):
    - `web:3000` → `https://app.tudominio.com`
