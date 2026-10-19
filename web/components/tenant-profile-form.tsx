@@ -181,9 +181,10 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   );
 
   return (
-    <div className="flex w-full max-w-2xl flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       {step === 1 ? (
         <AppCard
+          tone="violet"
           title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
           description="Cuéntanos qué vendes y a quién, con tus palabras."
           action={
@@ -201,6 +202,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
       ) : (
         <form action={action} className="flex flex-col">
           <AppCard
+            tone="violet"
             title={`Perfil del negocio · paso ${formatNumber(step)} de 2`}
             description="Confirma lo que generó el set — ajusta lo que sea antes de guardar."
             action={
@@ -210,7 +212,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
             }
             footer={profileFooter}
           >
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-6">
               {/* Todo lo derivado viaja oculto (el submit ocurre en el paso 2
                   pero la evidencia se acumula en el paso 1). */}
               <input type="hidden" name="description" value={description} />
@@ -239,115 +241,135 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </div>
               )}
 
-              <div className="grid gap-1.5">
-                <Label htmlFor="businessModel">¿A quién le vendes?</Label>
-                <Select value={model} onValueChange={(v) => onModelChange(v as BusinessModel)}>
-                  <SelectTrigger id="businessModel">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MODELS.map((m) => (
-                      <SelectItem key={m.value} value={m.value}>
-                        {m.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-1.5">
-                <Label htmlFor="taxonomy">¿A qué se dedica tu negocio?</Label>
-                {verticalDetected && (
-                  <p className="text-xs text-muted-foreground">
-                    El agente detectó: {verticalDetected}.
-                  </p>
-                )}
-                <Select value={taxonomyId ?? ""} onValueChange={onTaxonomyChange}>
-                  <SelectTrigger id="taxonomy">
-                    <SelectValue placeholder="Elegir…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VERTICALS.map((v) => (
-                      <SelectItem key={v.taxonomy_id} value={v.taxonomy_id}>
-                        {v.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Elegido: {verticalName(taxonomyId) ?? "sin mapear (vale tu texto libre)"}.
+              <div className="flex flex-col gap-4">
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  A quién vendes
                 </p>
-              </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="businessModel">¿A quién le vendes?</Label>
+                  <Select value={model} onValueChange={(v) => onModelChange(v as BusinessModel)}>
+                    <SelectTrigger id="businessModel">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODELS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className="grid gap-1.5">
-                <Label htmlFor="buyerType">¿Quién te compra?</Label>
-                <Input
-                  id="buyerType"
-                  value={buyerType ?? ""}
-                  maxLength={60}
-                  onChange={(e) => {
-                    setBuyerType(e.target.value || null);
-                    setSource("manual");
-                  }}
-                  placeholder="Ej. negocio pequeño anunciante"
-                />
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="cycle">Recompra cada (días)</Label>
+                <div className="grid gap-2">
+                  <Label htmlFor="buyerType">¿Quién te compra?</Label>
                   <Input
-                    id="cycle"
-                    inputMode="numeric"
-                    value={cycle}
+                    id="buyerType"
+                    value={buyerType ?? ""}
+                    maxLength={60}
                     onChange={(e) => {
-                      setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4));
+                      setBuyerType(e.target.value || null);
                       setSource("manual");
                     }}
-                    placeholder={`Auto (${ARCHETYPES[archetype].defaultCycleDays}d)`}
+                    placeholder="Ej. negocio pequeño anunciante"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Propuesto por el set; vacío = auto del arquetipo.
-                  </p>
                 </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="mult">Multiplicador de churn</Label>
-                  <Input
-                    id="mult"
-                    inputMode="decimal"
-                    value={mult}
-                    onChange={(e) => setMult(e.target.value.replace(/[^0-9.]/g, "").slice(0, 4))}
-                    placeholder="1.25"
+
+                <label
+                  className="flex items-center gap-2.5 rounded-lg border border-input px-3 py-2.5 text-sm"
+                  htmlFor="companyRequired"
+                >
+                  <input
+                    id="companyRequired"
+                    type="checkbox"
+                    checked={companyRequired}
+                    onChange={(e) => {
+                      setCompanyRequired(e.target.checked);
+                      setSource("manual");
+                    }}
+                    className="size-4 accent-primary"
                   />
+                  Mis clientes son empresas (pedir RUC/empresa)
+                </label>
+              </div>
+
+              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  Qué vendes
+                </p>
+                <div className="grid gap-2">
+                  <Label htmlFor="taxonomy">¿A qué se dedica tu negocio?</Label>
+                  {verticalDetected && (
+                    <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                      El agente detectó: {verticalDetected}.
+                    </p>
+                  )}
+                  <Select value={taxonomyId ?? ""} onValueChange={onTaxonomyChange}>
+                    <SelectTrigger id="taxonomy">
+                      <SelectValue placeholder="Elegir…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {VERTICALS.map((v) => (
+                        <SelectItem key={v.taxonomy_id} value={v.taxonomy_id}>
+                          {v.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <p className="text-xs text-muted-foreground">
-                    Alerta cuando inactividad &gt; ciclo × esto (1.0–5.0).
+                    Elegido: {verticalName(taxonomyId) ?? "sin mapear (vale tu texto libre)"}.
                   </p>
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-sm" htmlFor="companyRequired">
-                <input
-                  id="companyRequired"
-                  type="checkbox"
-                  checked={companyRequired}
-                  onChange={(e) => {
-                    setCompanyRequired(e.target.checked);
-                    setSource("manual");
-                  }}
-                  className="size-4 accent-primary"
-                />
-                Mis clientes son empresas (pedir RUC/empresa)
-              </label>
-
-              <p className="text-xs text-muted-foreground">
-                Patrón que usará el motor: {ARCHETYPES[archetype].label}.
-              </p>
-
-              {reading && reading.understood.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Según tu descripción: {reading.understood.join(" · ")}.
+              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  Cada cuánto vuelven
                 </p>
-              )}
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid content-start gap-2">
+                    <Label htmlFor="cycle">Recompra cada (días)</Label>
+                    <Input
+                      id="cycle"
+                      inputMode="numeric"
+                      value={cycle}
+                      onChange={(e) => {
+                        setCycle(e.target.value.replace(/[^0-9]/g, "").slice(0, 4));
+                        setSource("manual");
+                      }}
+                      placeholder={`Auto (${ARCHETYPES[archetype].defaultCycleDays}d)`}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Propuesto por el set; vacío = auto del arquetipo.
+                    </p>
+                  </div>
+                  <div className="grid content-start gap-2">
+                    <Label htmlFor="mult">Multiplicador de churn</Label>
+                    <Input
+                      id="mult"
+                      inputMode="decimal"
+                      value={mult}
+                      onChange={(e) => setMult(e.target.value.replace(/[^0-9.]/g, "").slice(0, 4))}
+                      placeholder="1.25"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Alerta cuando inactividad &gt; ciclo × esto (1.0–5.0).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5 border-t border-border/60 pt-6">
+                <p className="text-xs text-muted-foreground">
+                  Patrón que usará el motor: {ARCHETYPES[archetype].label}.
+                </p>
+
+                {reading && reading.understood.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Según tu descripción: {reading.understood.join(" · ")}.
+                  </p>
+                )}
+              </div>
             </div>
           </AppCard>
         </form>

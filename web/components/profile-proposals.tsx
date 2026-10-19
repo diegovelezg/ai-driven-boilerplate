@@ -101,6 +101,7 @@ export function ProfileProposalsPanel({
 
   return (
     <AppCard
+      tone="emerald"
       title="Vigilante de perfil"
       description="Cada semana comparo tu perfil con tus datos reales. Si algo cambió, te propongo corregirlo aquí: nada se aplica sin tu decisión. La revisión tarda ~1 min en segundo plano: recarga la página para verla."
       action={proposal?.provisional ? <Badge variant="secondary">Provisional</Badge> : undefined}

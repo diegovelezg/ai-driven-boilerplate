@@ -1,7 +1,3 @@
-import { ProfileProposalsPanel } from "@/components/profile-proposals";
-import { EmailSettingsForm, SecretsAuditCard, SettingsForm } from "@/components/settings-form";
-import { TenantProfileForm } from "@/components/tenant-profile-form";
-import { AppCard } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { resolveStoreId } from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
@@ -9,7 +5,7 @@ import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { getPendingProposal } from "@/lib/profile-recalibrate/service";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { formatNumber } from "@/lib/format";
+import { SettingsTabs, type SettingsTab } from "./settings-tabs";
 
 export const instant = false;
 
@@ -41,20 +37,21 @@ function observedMedianGap(
   return Math.round(med);
 }
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ tab?: string }>;
+}) {
   const defaults = await readConnections();
   const storeId =
     isSupabaseConfigured() && defaults.medusaUrl
       ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
       : null;
-  const [profile, signals, proposal, secretAudits, secretsInDb] = storeId
+  const [profile, signals, proposal, secretsInDb] = storeId
     ? await Promise.all([
         getStoreProfile(storeId).catch(() => null),
         getProfileSignals(storeId).catch(() => null),
         getPendingProposal(storeId).catch(() => null),
-        import("@/lib/store-secrets")
-          .then((m) => m.getSecretAudits(storeId, 20))
-          .catch(() => []),
         import("@/lib/secrets-crypto")
           .then(async (c) => {
             if (!c.isEncryptionConfigured()) return false;
@@ -68,7 +65,7 @@ export default async function SettingsPage() {
           })
           .catch(() => false),
       ])
-    : [null, null, null, [], false];
+    : [null, null, null, false];
   const suggestion = suggestArchetype(signals);
   // Qué aprendió el motor (solo lectura de predicciones + órdenes, sin priors ni grillas).
   let motorCard: {
@@ -118,46 +115,28 @@ export default async function SettingsPage() {
       motorCard = null;
     }
   }
+  const sp = searchParams ? await searchParams : null;
+  const rawTab = sp?.tab;
+  const initialTab: SettingsTab =
+    rawTab === "email" || rawTab === "negocio" || rawTab === "motor" ? rawTab : "tienda";
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 p-6 md:p-8">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Configuración"
         title="Settings"
         description="Conecta tu tienda, calibra tu negocio y revisa lo que aprendió el motor."
       />
-      <div className="flex w-full max-w-2xl flex-col gap-6">
-        <SettingsForm defaults={defaults} secretsInDb={secretsInDb} />
-        <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} />
-        {storeId && secretAudits.length > 0 && (
-          <SecretsAuditCard audits={secretAudits} />
-        )}
-        <TenantProfileForm storeId={storeId} profile={profile} suggestion={suggestion} />
-        {motorCard && (
-          <AppCard
-            title="Qué aprendió el motor"
-            description={`Patrón ${motorCard.archetypeLabel} · ventana de decisión: ${formatNumber(motorCard.h)} días.`}
-          >
-            <div className="flex flex-col gap-1 text-[13px]">
-              <p className="tabular-nums">
-                {motorCard.declarado !== null
-                  ? `Declaraste ~${formatNumber(motorCard.declarado)}d`
-                  : "Sin ciclo declarado (auto del arquetipo)"}
-                {motorCard.observado !== null ? `; tus clientes vuelven cada ~${formatNumber(motorCard.observado)}d.` : "."}
-              </p>
-              {motorCard.total > 0 && (
-                <p className="text-muted-foreground tabular-nums">
-                  Estimaciones firmes en {formatNumber(motorCard.firmes)} de {formatNumber(motorCard.total)} clientes
-                  (el resto aún afina con más datos).
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Si cambias el ciclo arriba, las predicciones de mañana ya usan este ciclo.
-              </p>
-            </div>
-          </AppCard>
-        )}
-        {storeId && <ProfileProposalsPanel proposal={proposal} />}
-      </div>
+      <SettingsTabs
+        key={initialTab}
+        defaults={defaults}
+        secretsInDb={secretsInDb}
+        storeId={storeId}
+        profile={profile}
+        suggestion={suggestion}
+        motor={motorCard}
+        proposal={proposal}
+        initialTab={initialTab}
+      />
     </div>
   );
 }
