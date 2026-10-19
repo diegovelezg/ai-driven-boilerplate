@@ -8,6 +8,7 @@ import { cn } from "cn";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
+import { ChannelTag, KindTag, StatusTag } from "@/components/inbox-tag";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber } from "@/lib/format";
@@ -316,18 +317,9 @@ export function ReviewLists({
             }
             description={a.reason ? `Motivo: ${a.reason}` : undefined}
             action={
-              <span className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "rounded-full px-2 py-0.5 text-[11px] font-medium",
-                    a.channel === "whatsapp"
-                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-                  )}
-                >
-                  {a.channel}
-                </span>
-                {a.kind ? <span>{a.kind}</span> : null}
+              <span className="flex items-center gap-1.5">
+                <ChannelTag value={a.channel} />
+                <KindTag value={a.kind} />
               </span>
             }
             footer={
@@ -433,10 +425,12 @@ export function ReviewLists({
                   </span>
                 }
                 action={
-                  <span className="tabular-nums">
-                    {a.channel}
-                    {a.kind ? ` · ${a.kind}` : ""}
-                    {a.generator !== COPYWRITER_GEN ? " · ⚠ criterios anteriores" : ""}
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <ChannelTag value={a.channel} />
+                    <KindTag value={a.kind} />
+                    {a.generator !== COPYWRITER_GEN ? (
+                      <span className="text-[11px] text-muted-foreground">⚠ criterios anteriores</span>
+                    ) : null}
                   </span>
                 }
                 footer={
@@ -647,10 +641,13 @@ export function ReviewLists({
               </span>
             }
             description={
-              <span>
-                {s.status} · {s.kind}
-                {s.score != null ? ` · score ${formatNumber(s.score)}` : ""}
-                {s.reason ? ` · ${s.reason}` : ""}
+              <span className="flex flex-wrap items-center gap-1.5">
+                <StatusTag value={s.status} />
+                <KindTag value={s.kind} />
+                {s.score != null ? (
+                  <span className="tabular-nums">score {formatNumber(s.score)}</span>
+                ) : null}
+                {s.reason ? <span className="basis-full">{s.reason}</span> : null}
               </span>
             }
             action={<DismissButton id={s.id} onDismiss={dismissSignalAction} />}
