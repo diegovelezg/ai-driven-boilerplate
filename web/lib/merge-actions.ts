@@ -1,5 +1,6 @@
 "use server";
 
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
@@ -17,6 +18,34 @@ export interface MergeAllState extends MergeState {
   merged: number;
   failed: number;
   total: number;
+}
+
+/**
+ * Tras combinar fichas las sesiones/ritmos cambian (órdenes movidas):
+ * se re-ejecuta retention + scout + strategist en fondo para que el motor
+ * re-analice con el historial unificado. Best-effort: lo pesado (copywriter
+ * LLM) queda para la mañana; aquí solo se reabre lo accionable.
+ */
+function triggerPostMergeRefresh(storeId: string): void {
+  after(async () => {
+    try {
+      const { createLogger } = await import("@/lib/log");
+      const log = createLogger("merge");
+      const { runRetentionModel } = await import("@/lib/retention");
+      const r = await runRetentionModel(storeId, new Date());
+      log(`post-merge retention predicted=${r.predicted} actuar=${r.actuar}`);
+      const { startRun } = await import("@/lib/background");
+      const { runScout } = await import("@/lib/scout");
+      const { runStrategist } = await import("@/lib/strategist");
+      const scoutId = await startRun(storeId, "scout", "Scout", 0);
+      await runScout(scoutId, storeId);
+      const stratId = await startRun(storeId, "strategist", "Estratega", 0);
+      await runStrategist(stratId, storeId);
+      log("post-merge refresh done");
+    } catch {
+      // Best-effort: el error queda en el log del worker, no tumba el merge.
+    }
+  });
 }
 
 /** Combina todos los grupos de duplicados en una pasada. Sigue aunque un caso falle. */
@@ -60,6 +89,7 @@ export async function mergeAllDuplicatesAction(): Promise<MergeAllState> {
         total: groups.length,
       };
     const tail = failed > 0 ? ` · ${formatNumber(failed)} fallo${failed === 1 ? "" : "s"}: ${errors.join(" · ")}` : "";
+    triggerPostMergeRefresh(storeId);
     return {
       ok: failed === 0,
       message: `Combinados ${formatNumber(merged)}/${formatNumber(groups.length)} casos · ${formatNumber(removed)} ficha${removed === 1 ? "" : "s"} eliminada${removed === 1 ? "" : "s"} · ${formatNumber(movedOrders)} ${movedOrders === 1 ? "orden" : "órdenes"} movida${movedOrders === 1 ? "" : "s"}.${tail}`,
@@ -90,6 +120,7 @@ export async function mergeCustomersAction(dbIds: string[]): Promise<MergeState>
     const r = await mergeCustomers(storeId, dbIds);
     revalidatePath("/customers/duplicates");
     revalidatePath("/customers");
+    triggerPostMergeRefresh(storeId);
     return {
       ok: true,
       message: `Combinadas ${formatNumber(r.removed + 1)} fichas · ${formatNumber(r.movedOrders)} órdenes movidas.`,
