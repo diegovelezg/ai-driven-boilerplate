@@ -70,14 +70,11 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     log("morning omitido (sync en curso)");
     return;
   }
-  if (await morningAlreadyDone(storeId)) {
-    log("morning omitido (cadena de hoy ya done)");
-    return;
-  }
-  // 1. Enriquecimiento completo: mejora el brief del copywriter (empresa/
-  // industria). Sin tope: corre en `after()` en fondo (no alarga el login)
-  // y la cadena es 1 vez/día; los fallidos reintentan hasta su tope y luego
-  // quedan terminales (no se repiten eternamente).
+  // 1. Enriquecimiento completo: corre en CADA login si hay pendientes
+  // (la cadena-done no lo frena). Solo frena si ya hay uno en curso.
+  // Sin esto, los reintentos (intento 1/3) esperan al día siguiente aunque
+  // el dueño entre 5 veces. Mejora el brief del copywriter
+  // (empresa/industria). Corre en `after()` en fondo (no alarga el login).
   try {
     const { pendingDomains, runEnrichment, invalidatePendingCache } = await import("@/lib/enrich");
     const batch = await pendingDomains(storeId).catch(() => [] as string[]);
@@ -88,6 +85,10 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     }
   } catch (e) {
     log(`enrichment omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  if (await morningAlreadyDone(storeId)) {
+    log("morning omitido (cadena de hoy ya done)");
+    return;
   }
   // 2-5. scout (auto-retention dentro) → strategist → copywriter → prospect.
   const { runScout } = await import("@/lib/scout");
