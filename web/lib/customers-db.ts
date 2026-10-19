@@ -366,6 +366,7 @@ export async function getPredictionsMap(
       .select("customer_id,decision,model,valor_esperado_minor,p25_days,p75_days,evidence_json,as_of")
       .eq("store_id", storeId)
       .order("as_of", { ascending: false })
+      .order("id", { ascending: true })
       .range(off, off + 999);
     if (error) return map;
     const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -464,6 +465,7 @@ export async function getRitmoSummary(
       .select("customer_id,model,currency,valor_esperado_minor,p25_days,p75_days,ventana,evidence_json,as_of")
       .eq("store_id", storeId)
       .order("as_of", { ascending: false })
+      .order("id", { ascending: true })
       .range(off, off + 999)
       .then(
         (res) => res.data as Array<Record<string, unknown>> | null,
@@ -551,6 +553,7 @@ export async function getPredEnJuegoByMonth(
       .eq("store_id", storeId)
       .lte("as_of", new Date(maxEnd).toISOString())
       .order("as_of", { ascending: false })
+      .order("id", { ascending: true })
       .range(from, from + 4999);
     if (error) return out;
     for (const r of (data ?? []) as Array<Record<string, unknown>>) rows.push(r);
@@ -640,6 +643,7 @@ export async function queryStoreCustomers(
         .from("customers")
         .select("*")
         .eq("store_id", storeId)
+        .order("id", { ascending: true })
         .range(off, off + 999);
       if (error) throw new Error(`DB read: ${error.message}`);
       all.push(...((data as Array<Record<string, unknown>>) ?? []));
@@ -740,7 +744,7 @@ export async function queryStoreCustomers(
   if (sort.key === "company") {
     const all: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
-      let bq = db.from("customers").select("*").eq("store_id", storeId);
+      let bq = db.from("customers").select("*").eq("store_id", storeId).order("id", { ascending: true });
       if (like && searchOr) bq = bq.or(searchOr);
       const { data, error } = await bq.range(off, off + 999);
       if (error) throw new Error(`DB read: ${error.message}`);
@@ -786,7 +790,10 @@ export async function queryStoreCustomers(
       break;
   }
   // Desempate estable para paginar sin filas duplicadas/ausentes.
+  // Email no es único (hay duplicados por email): el tie-breaker final es
+  // siempre la PK `id` (toda cadena con .range la lleva).
   if (sort.key !== "email") query = query.order("email", { ascending: true });
+  query = query.order("id", { ascending: true });
   if (like && searchOr) query = query.or(searchOr);
   const { data, count, error } = await query.range(from, from + pageSize - 1);
   if (error) throw new Error(`DB read: ${error.message}`);

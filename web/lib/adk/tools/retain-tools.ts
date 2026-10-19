@@ -5,7 +5,7 @@ import { getSupabase } from "@/lib/supabase";
 import { isRealDbOrder } from "@/lib/medusa";
 import { rankItems } from "@/lib/finance";
 import { domainFromEmail } from "@/lib/domains";
-import { applyScopeFilter, type MarketScope } from "@/lib/markets";
+import { applyScopeFilter, chunkIds, effectiveScopeFilter, isLargeIdScope, type MarketScope } from "@/lib/markets";
 import { queryStoreCustomers } from "@/lib/customers-db";
 import { loadCustomerOrdersAndRfm, loadCustomerFirmographics } from "@/lib/customer-data";
 import { getIcp, runProspect } from "@/lib/prospect";
@@ -89,7 +89,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let b2cBuyers = 0;
       for (;;) {
         const pageQ = withMarket(
-          db.from("customers").select("orders_count,total_spent,currency,customer_type,manual_edits").eq("store_id", storeId),
+          db.from("customers").select("orders_count,total_spent,currency,customer_type,manual_edits").eq("store_id", storeId).order("id", { ascending: true }),
           "id",
         );
         const { data, error: pageErr } = await pageQ.range(offset, offset + PAGE - 1);
@@ -179,7 +179,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
             .from("proposed_actions")
             .select("revenue_attributed,dispatched_at,created_at")
             .eq("store_id", storeId)
-            .not("revenue_attributed", "is", null),
+            .not("revenue_attributed", "is", null)
+            .order("id", { ascending: true }),
         );
         const { data, error } = await rq.range(offset, offset + PAGE - 1);
         if (error) return { error: error.message };
@@ -232,6 +233,75 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const wanted = status ? [status] : ["open", "prioritized"];
       const n = limit ?? 10;
+      // Scope fallback grande (market sin países + miles de IDs): un solo
+      // `.in(miles de UUIDs)` revienta la URL. Rama null una vez + un
+      // top-N por chunk, merge en JS (dedupe por id, orden created_at desc).
+      if (isLargeIdScope(marketScope)) {
+        const { ids } = effectiveScopeFilter(marketScope);
+        const idList = ids ?? [];
+        try {
+          const db = getSupabase();
+          const baseSelect =
+            "id,customer_id,kind,score,reason,status,created_at,customers(email,first_name,last_name)";
+          const [nullCount, nullTop] = await Promise.all([
+            db
+              .from("churn_signals")
+              .select("id", { count: "exact", head: true })
+              .eq("store_id", storeId)
+              .in("status", wanted)
+              .is("country", null)
+              .then((r) => r.count ?? 0),
+            db
+              .from("churn_signals")
+              .select(baseSelect)
+              .eq("store_id", storeId)
+              .in("status", wanted)
+              .is("country", null)
+              .order("created_at", { ascending: false })
+              .order("id", { ascending: true })
+              .limit(n),
+          ]);
+          if (nullTop.error) return { error: nullTop.error.message };
+          let total = nullCount;
+          const merged = new Map<string, Record<string, unknown>>();
+          for (const r of ((nullTop.data ?? []) as Array<Record<string, unknown>>))
+            merged.set(String(r.id), r);
+          for (const c of chunkIds(idList)) {
+            const [{ count: cc }, { data: cd, error: ce }] = await Promise.all([
+              db
+                .from("churn_signals")
+                .select("id", { count: "exact", head: true })
+                .eq("store_id", storeId)
+                .in("status", wanted)
+                .in("customer_id", c),
+              db
+                .from("churn_signals")
+                .select(baseSelect)
+                .eq("store_id", storeId)
+                .in("status", wanted)
+                .in("customer_id", c)
+                .order("created_at", { ascending: false })
+                .order("id", { ascending: true })
+                .limit(n),
+            ]);
+            if (ce) return { error: ce.message };
+            total += cc ?? 0;
+            for (const r of ((cd ?? []) as Array<Record<string, unknown>>))
+              if (!merged.has(String(r.id))) merged.set(String(r.id), r);
+          }
+          const rows = [...merged.values()]
+            .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+            .slice(0, n);
+          return {
+            items: rows,
+            total_count: total,
+            returned_count: rows.length,
+            truncated: total > rows.length,
+          };
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) };
+        }
+      }
       const { count } = await withMarket(
         getSupabase().from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", wanted),
       );
@@ -244,6 +314,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       );
       const { data, error } = await sq
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(n);
       if (error) return { error: error.message };
       const rows = data ?? [];
@@ -268,6 +339,65 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     execute: async ({ status, limit, channel }: { status?: string; limit?: number; channel?: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const n = limit ?? 10;
+      const st = status ?? "pending_review";
+      if (isLargeIdScope(marketScope)) {
+        const { ids } = effectiveScopeFilter(marketScope);
+        const idList = ids ?? [];
+        try {
+          const db = getSupabase();
+          const baseSelect =
+            "id,customer_id,channel,subject,body,status,created_at,signal_id,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)";
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const nullQ = (q: any): any => {
+            let qq = q.eq("store_id", storeId).eq("status", st).is("country", null);
+            if (channel) qq = qq.eq("channel", channel);
+            return qq;
+          };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const chunkQ = (q: any, c: string[]): any => {
+            let qq = q.eq("store_id", storeId).eq("status", st).in("customer_id", c);
+            if (channel) qq = qq.eq("channel", channel);
+            return qq;
+          };
+          const nullCount = await nullQ(
+            db.from("proposed_actions").select("id", { count: "exact", head: true }),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ).then((r: any) => r.count ?? 0);
+          const nullTop = await nullQ(db.from("proposed_actions").select(baseSelect))
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(n);
+          if (nullTop.error) return { error: nullTop.error.message };
+          let total = nullCount;
+          const merged = new Map<string, Record<string, unknown>>();
+          for (const r of ((nullTop.data ?? []) as Array<Record<string, unknown>>))
+            merged.set(String(r.id), r);
+          for (const c of chunkIds(idList)) {
+            const [{ count: cc }, { data: cd, error: ce }] = await Promise.all([
+              chunkQ(db.from("proposed_actions").select("id", { count: "exact", head: true }), c),
+              chunkQ(db.from("proposed_actions").select(baseSelect), c)
+                .order("created_at", { ascending: false })
+                .order("id", { ascending: true })
+                .limit(n),
+            ]);
+            if (ce) return { error: ce.message };
+            total += cc ?? 0;
+            for (const r of ((cd ?? []) as Array<Record<string, unknown>>))
+              if (!merged.has(String(r.id))) merged.set(String(r.id), r);
+          }
+          const rows = [...merged.values()]
+            .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+            .slice(0, n);
+          return {
+            items: rows,
+            total_count: total,
+            returned_count: rows.length,
+            truncated: total > rows.length,
+          };
+        } catch (e) {
+          return { error: e instanceof Error ? e.message : String(e) };
+        }
+      }
       let countQ = withMarket(
         getSupabase()
           .from("proposed_actions")
@@ -287,6 +417,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (channel) aq = aq.eq("channel", channel);
       const { data, error } = await aq
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(n);
       if (error) return { error: error.message };
       const rows = data ?? [];
@@ -629,6 +760,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       );
       const { data, error } = await lq
         .order("icp_score", { ascending: false })
+        .order("id", { ascending: true })
         .limit(n);
       if (error) return { error: error.message };
       const rows = data ?? [];
@@ -695,7 +827,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
             .select("currency,items_json,status,payment_status,is_test,placed_at")
             .eq("store_id", storeId)
             .gte("placed_at", yearAgoIso)
-            .order("placed_at", { ascending: false }),
+            .order("placed_at", { ascending: false })
+            .order("id", { ascending: true }),
         );
         const { data, error } = await oq.range(offset, offset + PAGE - 1);
         if (error) return { error: error.message };

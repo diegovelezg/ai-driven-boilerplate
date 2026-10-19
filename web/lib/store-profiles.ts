@@ -151,6 +151,7 @@ export async function getProfileSignals(storeId: string): Promise<(ProfileSignal
       .from("customers")
       .select("email,company_name,orders_count")
       .eq("store_id", storeId)
+      .order("id", { ascending: true })
       .range(off, off + 999);
     if (error) throw new Error(`DB read: ${error.message}`);
     const page = (data ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;

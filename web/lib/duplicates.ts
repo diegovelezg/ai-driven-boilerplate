@@ -57,7 +57,7 @@ async function loadAll(
   const all: Array<Record<string, unknown>> = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await applyScopeFilter(
-      db.from("customers").select(SELECT).eq("store_id", storeId),
+      db.from("customers").select(SELECT).eq("store_id", storeId).order("id", { ascending: true }),
       scope,
       "id",
     ).range(from, from + 999);
@@ -98,7 +98,7 @@ export async function countDuplicateEmails(
   const dup = new Set<string>();
   for (let from = 0; ; from += 1000) {
     const { data, error } = await applyScopeFilter(
-      db.from("customers").select("email").eq("store_id", storeId),
+      db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }),
       scope,
       "id",
     ).range(from, from + 999);

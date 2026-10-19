@@ -48,6 +48,7 @@ export async function runAnalyst(
         .is("revenue_attributed", null)
         .not("dispatched_at", "is", null)
         .order("dispatched_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(off, off + 499);
       if (error) throw new Error(`Actions read: ${error.message}`);
       const page = (data ?? []) as Array<Record<string, unknown>>;
@@ -105,6 +106,8 @@ export async function runAnalyst(
           .eq("customer_id", cid)
           .gt("placed_at", new Date(sent0).toISOString())
           .lte("placed_at", new Date(latestEnd).toISOString())
+          .order("placed_at", { ascending: true })
+          .order("id", { ascending: true })
           .range(ooff, ooff + 499);
         if (oErr) throw new Error(`Orders read: ${oErr.message}`);
         const orows = (opage ?? []) as Array<Record<string, unknown>>;

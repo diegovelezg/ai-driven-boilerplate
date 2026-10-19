@@ -81,6 +81,7 @@ export async function runRetentionModel(
       .from("customers")
       .select("id,email,phone")
       .eq("store_id", storeId)
+      .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) throw new Error(`Customers read: ${error.message}`);
     for (const r of (data ?? []) as Array<Record<string, unknown>>) {
@@ -104,6 +105,7 @@ export async function runRetentionModel(
         .select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test")
         .eq("store_id", storeId)
         .order("placed_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(from, from + 999);
       if (error) throw new Error(`Orders read: ${error.message}`);
       const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -151,6 +153,8 @@ export async function runRetentionModel(
       .eq("store_id", storeId)
       .not("dispatched_at", "is", null)
       .gte("dispatched_at", contactSince)
+      .order("dispatched_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) {
       // Issue #11: fail-open auditado. Ante error BD se supone "no
@@ -175,6 +179,8 @@ export async function runRetentionModel(
       .eq("store_id", storeId)
       .eq("status", "dismissed")
       .gte("closed_at", dismissSince)
+      .order("closed_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) {
       const { createLogger } = await import("@/lib/log");

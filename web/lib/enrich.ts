@@ -184,7 +184,7 @@ export async function pendingDomains(
   const domains = new Set<string>();
   for (let from = 0; ; from += 1000) {
     const { data, error } = await applyScopeFilter(
-      db.from("customers").select("email").eq("store_id", storeId),
+      db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }),
       scope,
       "id",
     ).range(from, from + 999);

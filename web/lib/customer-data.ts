@@ -118,11 +118,13 @@ export async function loadCustomerOrdersAndRfm(
   if (custErr || !customer) return null;
 
   // Ventana display: trae de más por test/canceladas, pagina por offset real.
+  // Orden estable (placed_at + id): sin tie-breaker el offset duplica/omite.
   const { data: orders, error } = await db
     .from("orders")
     .select("total_amount,currency,placed_at,items_json,status,payment_status,is_test")
     .eq("customer_id", dbId)
     .order("placed_at", { ascending: false })
+    .order("id", { ascending: true })
     .range(offset, offset + Math.max(orderLimit * 3, 60) - 1);
   if (error) throw new Error(error.message);
 
@@ -177,6 +179,7 @@ export async function loadCustomerOrdersAndRfm(
       .select("placed_at,status,payment_status,is_test")
       .eq("customer_id", dbId)
       .order("placed_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(off, off + DPAGE - 1);
     if (dErr) throw new Error(dErr.message);
     const rows = (dpage ?? []) as Array<Record<string, unknown>>;

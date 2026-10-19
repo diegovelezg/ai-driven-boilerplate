@@ -27,6 +27,7 @@ export async function runClassify(runId: string, storeId: string, limit = 0): Pr
         .from("customers")
         .select("id,email,company_name,customer_type,manual_edits")
         .eq("store_id", storeId)
+        .order("id", { ascending: true })
         .range(from, from + 499);
       if (error) throw new Error(`Customers read: ${error.message}`);
       const rows = (data ?? []) as Array<Record<string, unknown>>;

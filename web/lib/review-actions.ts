@@ -9,6 +9,7 @@ import { advanceRun, busyMessage, finishRun, getLatestRun, hasConflict, startRun
 import { runSingleWithAudit, singleSignalScope, type SingleFinish } from "@/lib/single-audit";
 import { createLogger } from "@/lib/log";
 import { startCopywriterAction } from "@/lib/retention-actions";
+import { createServerSupabase } from "@/lib/supabase-server";
 
 export interface ReviewOp {
   ok: boolean;
@@ -18,11 +19,31 @@ export interface ReviewOp {
   run?: BackgroundRun | null;
 }
 
+/** Issue #19 Paso 1: identidad del aprobador = email de la sesión Supabase
+ *  (mismo identificador que muestra el header/UserMenu). Es solo auditoría,
+ *  sin roles ni permisos. Sin sesión resoluble (p. ej. dev sin login) queda
+ *  null y la UI muestra "aprobado (sin registro)": nunca un nombre inventado. */
+async function resolveApprover(): Promise<string | null> {
+  try {
+    const supabase = await createServerSupabase();
+    const { data } = await supabase.auth.getUser();
+    return data.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function setActionStatus(id: string, status: "approved" | "rejected"): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  // Al rechazar (o revocar vía status) se limpia el aprobador: una fila que
+  // vuelve a no-aprobada no debe mostrar un aprobador viejo.
+  const patch =
+    status === "approved"
+      ? { status, approved_by: await resolveApprover(), approved_at: new Date().toISOString() }
+      : { status, approved_by: null, approved_at: null };
   const { error } = await getSupabase()
     .from("proposed_actions")
-    .update({ status })
+    .update(patch)
     .eq("id", id)
     .eq("status", "pending_review");
   if (error) return { ok: false, message: error.message };
@@ -57,7 +78,9 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
   const { data, error } = await getSupabase()
     .from("proposed_actions")
-    .update({ status: "rejected" })
+    // Revocar limpia approved_by/at: la fila pasa a rejected y no debe
+    // seguir mostrando quién la había aprobado (issue #19 Paso 1).
+    .update({ status: "rejected", approved_by: null, approved_at: null })
     .eq("id", id)
     .eq("status", "approved")
     .is("dispatched_at", null)
@@ -70,10 +93,185 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   return { ok: true, message: "Aprobación revocada: no se enviará." };
 }
 
+/** Edita asunto/cuerpo de un pendiente (solo pending_review). Valida los mismos
+ *  topes del redactor (whatsapp ≤450 sin asunto, email con asunto + ≤800) y
+ *  deja auditoría `manual_edit` en evidence_json. */
+export async function updateDraftContentAction(
+  id: string,
+  subject: string | null,
+  body: string,
+): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const db = getSupabase();
+  const { data: row, error: rErr } = await db
+    .from("proposed_actions")
+    .select("id,channel,evidence_json")
+    .eq("id", id)
+    .eq("status", "pending_review")
+    .maybeSingle();
+  if (rErr) return { ok: false, message: rErr.message };
+  const r = (row ?? null) as Record<string, unknown> | null;
+  if (!r) return { ok: false, message: "Solo pendientes: lo aprobado/enviado no se edita." };
+  const channel = String(r.channel ?? "");
+  const cleanBody = body.trim().slice(0, 2000);
+  if (!cleanBody) return { ok: false, message: "El mensaje no puede quedar vacío." };
+  let cleanSubject: string | null = null;
+  if (channel === "whatsapp") {
+    if (cleanBody.length > 450) {
+      return { ok: false, message: `WhatsApp admite hasta 450 caracteres (van ${cleanBody.length}).` };
+    }
+  } else if (channel === "email") {
+    cleanSubject = (subject ?? "").trim().slice(0, 200) || null;
+    if (!cleanSubject) return { ok: false, message: "El email necesita asunto." };
+    if (cleanBody.length > 800) {
+      return { ok: false, message: `Email admite hasta 800 caracteres (van ${cleanBody.length}).` };
+    }
+  } else {
+    return { ok: false, message: `Canal desconocido: ${channel}.` };
+  }
+  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const { error } = await db
+    .from("proposed_actions")
+    .update({
+      subject: cleanSubject,
+      body: cleanBody,
+      evidence_json: {
+        ...prev,
+        manual_edit: { at: new Date().toISOString(), by: await resolveApprover() },
+      },
+    })
+    .eq("id", id)
+    .eq("status", "pending_review");
+  if (error) return { ok: false, message: error.message };
+  revalidatePath("/review");
+  return { ok: true, message: "Borrador actualizado." };
+}
+
+/** Trae un customer listo para el drawer (ficha completa desde Review).
+ *  Solo lectura, acotado a la tienda conectada. */
+export async function getDrawerCustomerAction(
+  customerDbId: string,
+): Promise<ReviewOp & { customer?: import("@/lib/customers-db").EditableCustomer | null }> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const conn = await readConnections();
+  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
+  const storeId = await resolveStoreId(conn.medusaUrl);
+  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  const { data, error } = await getSupabase()
+    .from("customers")
+    .select("*")
+    .eq("id", customerDbId)
+    .eq("store_id", storeId)
+    .maybeSingle();
+  if (error) return { ok: false, message: error.message };
+  if (!data) return { ok: false, message: "Cliente inexistente." };
+  const { toEditableCustomer } = await import("@/lib/customers-db");
+  return { ok: true, message: "ok", customer: toEditableCustomer(data as Record<string, unknown>) };
+}
+
+/** Marca un aprobado-WhatsApp como enviado manual (flujo wa.me: el humano
+ *  lo envió desde su número, sin API que lo confirme). approved → dispatched.
+ *  Solo whatsapp + dispatched_at null; el analyst mide igual que el email. */
+export async function markDispatchedAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const db = getSupabase();
+  const { data: row } = await db
+    .from("proposed_actions")
+    .select("id,channel,evidence_json")
+    .eq("id", id)
+    .maybeSingle();
+  const r = (row ?? null) as Record<string, unknown> | null;
+  if (!r) return { ok: false, message: "Borrador inexistente." };
+  if (String(r.channel ?? "") !== "whatsapp") {
+    return { ok: false, message: "Solo aplica a WhatsApp manual (el email lo envía el dispatcher)." };
+  }
+  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const { data, error } = await db
+    .from("proposed_actions")
+    .update({
+      status: "dispatched",
+      dispatched_at: new Date().toISOString(),
+      evidence_json: {
+        ...prev,
+        manual_send: { via: "wa.me", at: new Date().toISOString(), by: await resolveApprover() },
+      },
+    })
+    .eq("id", id)
+    .eq("status", "approved")
+    .is("dispatched_at", null)
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya enviada o sin aprobar: nada que marcar." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Marcada como enviada por WhatsApp." };
+}
+
+/** Cambia el canal de un pendiente al otro (solo si el cliente tiene ambos
+ *  contactos): borra el borrador, devuelve la señal a `prioritized` y
+ *  redacta de nuevo con canal forzado. Una sola fila viva por cliente:
+ *  imposible aprobar/enviar ambas (anti-spam por construcción). */
+export async function switchChannelAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const db = getSupabase();
+  const { data: row, error: rErr } = await db
+    .from("proposed_actions")
+    .select("id,channel,signal_id,customer_id,customers(email,phone,country)")
+    .eq("id", id)
+    .eq("status", "pending_review")
+    .maybeSingle();
+  if (rErr) return { ok: false, message: rErr.message };
+  const r = (row ?? null) as Record<string, unknown> | null;
+  if (!r) return { ok: false, message: "Solo pendientes: aprueba o rechaza primero." };
+  const signalId = String(r.signal_id ?? "");
+  if (!signalId) return { ok: false, message: "Sin señal atada: no se puede cambiar de canal." };
+  const current = String(r.channel ?? "");
+  if (current !== "email" && current !== "whatsapp") {
+    return { ok: false, message: `Canal desconocido: ${current}.` };
+  }
+  const c = ((r.customers as Record<string, unknown> | null) ?? {});
+  const { resolveContact } = await import("@/lib/comms/contact");
+  const caps = resolveContact({
+    email: typeof c.email === "string" ? c.email : null,
+    phone: typeof c.phone === "string" ? c.phone : null,
+    countryIso: typeof c.country === "string" ? c.country : null,
+  });
+  if (caps.capability !== "both") {
+    return {
+      ok: false,
+      message:
+        caps.capability === "email-only"
+          ? "Solo hay email de este cliente: no hay WhatsApp a dónde cambiar."
+          : caps.capability === "whatsapp-only"
+            ? "Solo hay teléfono de este cliente: no hay email a dónde cambiar."
+            : "Sin contacto válido para este cliente.",
+    };
+  }
+  const target = (current === "email" ? "whatsapp" : "email") as "email" | "whatsapp";
+  const conn = await readConnections();
+  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
+  const storeId = await resolveStoreId(conn.medusaUrl);
+  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  // Borra el pendiente y libera la señal; si algo falla después, la señal
+  // queda priorizada y el humano reintenta (nunca dos filas vivas).
+  const { error: dErr } = await db
+    .from("proposed_actions")
+    .delete()
+    .eq("id", id)
+    .eq("status", "pending_review");
+  if (dErr) return { ok: false, message: dErr.message };
+  await db.from("churn_signals").update({ status: "prioritized" }).eq("id", signalId);
+  const draft = await draftSingleSignal(storeId, signalId, { forceChannel: target });
+  revalidatePath("/review");
+  return draft.ok
+    ? { ok: true, message: `Ahora en ${target === "email" ? "Email" : "WhatsApp"}.` }
+    : { ok: false, message: `Se liberó la señal pero el borrador falló: ${draft.message}` };
+}
+
 export async function approveLeadAction(id: string): Promise<ReviewOp> {
   return setLeadStatus(id, "approved");
 }
-
 export async function rejectLeadAction(id: string): Promise<ReviewOp> {
   return setLeadStatus(id, "rejected");
 }
@@ -179,10 +377,13 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
   }
   let ok = 0;
   try {
+    // Un solo aprobador para todo el lote (la sesión no cambia a mitad).
+    const approvedBy = await resolveApprover();
+    const approvedAt = new Date().toISOString();
     for (const t of targets) {
       const { error: upErr } = await db
         .from("proposed_actions")
-        .update({ status: "approved" })
+        .update({ status: "approved", approved_by: approvedBy, approved_at: approvedAt })
         .eq("id", t.id)
         .eq("status", "pending_review");
       if (!upErr) ok += 1;
@@ -234,6 +435,7 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
       .select("id,signal_id,evidence_json")
       .eq("store_id", storeId)
       .eq("status", "pending_review")
+      .order("id", { ascending: true })
       .range(off, off + 499);
     if (error) return { ok: false, message: error.message };
     const page = (data ?? []) as Array<Record<string, unknown>>;

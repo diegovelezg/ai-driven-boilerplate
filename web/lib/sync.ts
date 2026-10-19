@@ -273,6 +273,7 @@ export async function syncStoreFromMedusa(
       .from("customers")
       .select("id,external_id")
       .eq("store_id", storeId)
+      .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) throw new Error(`Customers read: ${error.message}`);
     for (const c of batch ?? []) {

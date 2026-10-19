@@ -48,6 +48,7 @@ export async function tenantStats(storeId: string): Promise<TenantStats & { samp
       .from("customers")
       .select("email,company_name,orders_count")
       .eq("store_id", storeId)
+      .order("id", { ascending: true })
       .range(off, off + PAGE - 1);
     if (error) throw new Error(`tenantStats customers: ${error.message}`);
     const prows = (page ?? []) as Array<{ email: string; company_name: string | null; orders_count: number }>;
@@ -79,7 +80,7 @@ export async function tenantStats(storeId: string): Promise<TenantStats & { samp
   const orows: Array<{ customer_id: string; total_amount: number; currency: string; placed_at: string | null; status: string | null; payment_status: string | null; is_test: boolean }> = [];
   let ordersTruncated = false;
   for (let off = 0; ; off += PAGE) {
-    const { data: opage, error: oErr } = await db.from("orders").select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test").eq("store_id", storeId).range(off, off + PAGE - 1);
+    const { data: opage, error: oErr } = await db.from("orders").select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test").eq("store_id", storeId).order("id", { ascending: true }).range(off, off + PAGE - 1);
     if (oErr) throw new Error(`tenantStats orders: ${oErr.message}`);
     const prows = (opage ?? []) as Array<{ customer_id: string; total_amount: number; currency: string; placed_at: string | null; status: string | null; payment_status: string | null; is_test: boolean }>;
     orows.push(...prows);

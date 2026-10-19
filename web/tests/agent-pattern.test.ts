@@ -93,9 +93,13 @@ describe("scope de mercado corto + NULL-comodín (nunca .in(miles de UUIDs))", (
     assert.ok(scoped >= 8, `withMarket esperado ≥8, hay ${scoped}`);
   });
 
-  it("prohibido .in(customer_id, <ids>) directo en tools (solo vía effectiveScopeFilter)", () => {
+  it("prohibido .in(customer_id, <ids>) directo en tools (solo vía effectiveScopeFilter o chunkIds)", () => {
     const t = tools();
-    assert.doesNotMatch(t, /\.in\("customer_id"/);
+    // Rama chunkeada (chunkIds → .in("customer_id", c) con 200) sí está
+    // permitida: es el path seguro para scopes fallback grandes. Lo prohibido
+    // es meter la lista completa (ids/idList/miles de UUIDs) en una sola URL.
+    assert.doesNotMatch(t, /\.in\("customer_id",\s*(ids|idList)\b/);
+    assert.doesNotMatch(t, /customer_id,\s*<miles/);
   });
 });
 
@@ -151,5 +155,71 @@ describe("instrucción del agente declara el patrón", () => {
     assert.match(a, /get_top_products/);
     assert.match(a, /RECUPERAR ≠ VENDER/);
     assert.match(a, /Si una tool no devuelve un dato/);
+  });
+});
+
+describe("paginación estable (offset sin duplicados/ausentes)", () => {
+  it("todo .range() va con .order() + tie-breaker id", () => {
+    // Sin ORDER determinista, el offset de PostgREST duplica/omite filas
+    // cuando hay empates en placed_at/created_at/as_of. El tie-breaker es
+    // siempre la PK `id` (existe en todas las tablas del loop).
+    const files = [
+      "lib/adk/tools/retain-tools.ts",
+      "lib/retention.ts",
+      "lib/scout.ts",
+      "lib/analyst.ts",
+      "lib/mira.ts",
+      "lib/dispatcher.ts",
+      "lib/copywriter.ts",
+      "lib/prospect.ts",
+      "lib/customers-db.ts",
+      "lib/customer-data.ts",
+      "lib/duplicates.ts",
+      "lib/store-profiles.ts",
+      "lib/profiling/analyst.ts",
+      "lib/enrich.ts",
+      "lib/classify.ts",
+      "lib/review-actions.ts",
+      "lib/sync.ts",
+    ];
+    for (const f of files) {
+      const body = src(f).replace(/\/\/.*$/gm, "");
+      const ranges = (body.match(/\.range\(/g) ?? []).length;
+      assert.ok(ranges > 0, `${f}: sin .range, nada que chequear`);
+      // Cada cadena con .range debe contener .order("id" en los 800 chars previos.
+      const idxs: number[] = [];
+      let at = body.indexOf(".range(");
+      while (at >= 0) {
+        idxs.push(at);
+        at = body.indexOf(".range(", at + 1);
+      }
+      for (const i of idxs) {
+        const window = body.slice(Math.max(0, i - 1200), i);
+        assert.match(
+          window,
+          /\.order\(\s*"id"/,
+          `${f}: .range sin tie-breaker .order("id") en la cadena (offset inestable)`,
+        );
+      }
+    }
+  });
+});
+
+describe("scope fallback por IDs chunkeado (nunca URI too long)", () => {
+  it("markets expone chunkIds + isLargeIdScope + fetchIdChunks", () => {
+    const m = src("lib/markets.ts");
+    assert.match(m, /SCOPE_ID_CHUNK_SIZE\s*=\s*200/);
+    assert.match(m, /export function chunkIds/);
+    assert.match(m, /export function isLargeIdScope/);
+    assert.match(m, /export async function fetchIdChunks/);
+  });
+
+  it("list_signals/list_actions usan rama chunkeada + mira pagina por chunk", () => {
+    const t = tools();
+    assert.match(t, /isLargeIdScope\(marketScope\)/);
+    assert.match(t, /chunkIds\(/);
+    const mira = src("lib/mira.ts");
+    assert.match(mira, /isLargeIdScope\(scope\)/);
+    assert.match(mira, /chunkIds\(/);
   });
 });

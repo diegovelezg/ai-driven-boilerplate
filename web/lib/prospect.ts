@@ -141,6 +141,7 @@ export async function buildSimilarPool(storeId: string, limit = 15): Promise<Sim
       .from("customers")
       .select("email")
       .eq("store_id", storeId)
+      .order("id", { ascending: true })
       .range(off, off + 999);
     if (cErr) break;
     const rows = (cpage ?? []) as Array<Record<string, unknown>>;
@@ -376,7 +377,7 @@ export async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]
   const db = getSupabase();
   const seenUrls = new Set<string>();
   for (let off = 0; ; off += 1000) {
-    const { data: lpage } = await db.from("proposed_leads").select("url").eq("store_id", storeId).range(off, off + 999);
+    const { data: lpage } = await db.from("proposed_leads").select("url").eq("store_id", storeId).order("id", { ascending: true }).range(off, off + 999);
     const rows = (lpage ?? []) as Array<Record<string, unknown>>;
     for (const l of rows) seenUrls.add(String(l.url));
     if (rows.length < 1000) break;
@@ -384,7 +385,7 @@ export async function dedupe(storeId: string, cands: Scraped[], scored: Scored[]
   }
   const customerDomains = new Set<string>();
   for (let off = 0; ; off += 1000) {
-    const { data: cpage } = await db.from("customers").select("email").eq("store_id", storeId).range(off, off + 999);
+    const { data: cpage } = await db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }).range(off, off + 999);
     const rows = (cpage ?? []) as Array<Record<string, unknown>>;
     for (const c of rows) {
       const d = domainFromEmail(String(c.email ?? ""));

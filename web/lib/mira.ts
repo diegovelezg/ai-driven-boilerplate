@@ -5,7 +5,7 @@
 // Lo consumen Overview, Review, Copywriter y Strategist.
 import { getSupabase } from "@/lib/supabase";
 import { resolveShopCurrency } from "@/lib/store-profiles";
-import { applyScopeFilter } from "@/lib/markets";
+import { applyScopeFilter, chunkIds, effectiveScopeFilter, isLargeIdScope } from "@/lib/markets";
 
 export interface MiraRow {
   signalId: string;
@@ -111,6 +111,66 @@ export async function getRankedMira(
   const CAP = 10000;
   const sigs: Array<Record<string, unknown>> = [];
   let sigTruncated = false;
+  // Scope fallback grande: rama null una vez + paginado por chunk de IDs
+  // (un solo `.in(miles)` revienta la URL). Dedupe por id de señal.
+  if (isLargeIdScope(scope)) {
+    const { ids } = effectiveScopeFilter(scope);
+    const idList = ids ?? [];
+    const seenSig = new Set<string>();
+    const pushUniq = (rows: Array<Record<string, unknown>>) => {
+      for (const r of rows) {
+        const k = String(r.id ?? "");
+        if (!k || seenSig.has(k)) continue;
+        seenSig.add(k);
+        sigs.push(r);
+      }
+    };
+    for (let off = 0; ; off += PAGE) {
+      const { data: pageRows, error: pageErr } = await db
+        .from("churn_signals")
+        .select("id,customer_id,kind,objective,score,reason,status,evidence_json")
+        .eq("store_id", storeId)
+        .in("status", ["open", "prioritized"])
+        .is("country", null)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(off, off + PAGE - 1);
+      if (pageErr) throw new Error(`signals read: ${pageErr.message}`);
+      const rows = (pageRows ?? []) as Array<Record<string, unknown>>;
+      pushUniq(rows);
+      if (rows.length < PAGE) break;
+      if (sigs.length >= CAP) {
+        sigTruncated = true;
+        break;
+      }
+    }
+    if (!sigTruncated) {
+      for (const c of chunkIds(idList)) {
+        let chunkDone = false;
+        for (let off = 0; !chunkDone; off += PAGE) {
+          const { data: pageRows, error: pageErr } = await db
+            .from("churn_signals")
+            .select("id,customer_id,kind,objective,score,reason,status,evidence_json")
+            .eq("store_id", storeId)
+            .in("status", ["open", "prioritized"])
+            .in("customer_id", c)
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
+            .range(off, off + PAGE - 1);
+          if (pageErr) throw new Error(`signals read: ${pageErr.message}`);
+          const rows = (pageRows ?? []) as Array<Record<string, unknown>>;
+          pushUniq(rows);
+          if (rows.length < PAGE) chunkDone = true;
+          if (sigs.length >= CAP) {
+            sigTruncated = true;
+            chunkDone = true;
+            break;
+          }
+        }
+        if (sigTruncated) break;
+      }
+    }
+  } else {
   for (let off = 0; ; off += PAGE) {
     const pageQ = applyScopeFilter(
       db
@@ -122,6 +182,7 @@ export async function getRankedMira(
     );
     const { data: pageRows, error: pageErr } = await pageQ
       .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
       .range(off, off + PAGE - 1);
     if (pageErr) throw new Error(`signals read: ${pageErr.message}`);
     const rows = (pageRows ?? []) as Array<Record<string, unknown>>;
@@ -131,6 +192,7 @@ export async function getRankedMira(
       sigTruncated = true;
       break;
     }
+  }
   }
   if (sigs.length === 0) return { rows: [], foreign: [] };
   if (sigTruncated) {
@@ -171,6 +233,7 @@ export async function getRankedMira(
           .eq("store_id", storeId)
           .in("signal_id", c)
           .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
           .range(off, off + 499);
         if (error) throw new Error(`actions read: ${error.message}`);
         const page = (data ?? []) as Array<Record<string, unknown>>;
@@ -190,6 +253,7 @@ export async function getRankedMira(
           .eq("store_id", storeId)
           .in("customer_id", c)
           .order("as_of", { ascending: false })
+          .order("id", { ascending: true })
           .range(off, off + 499)
           .then(
             (res) => res,

@@ -93,6 +93,7 @@ export async function customerIdsInMarket(
       .select("customer_id")
       .eq("store_id", storeId)
       .eq("market_id", marketId)
+      .order("id", { ascending: true })
       .range(off, off + 999);
     if (error) throw new Error(`Orders read: ${error.message}`);
     for (const r of (data ?? []) as Array<Record<string, unknown>>)
@@ -156,6 +157,11 @@ export function effectiveScopeFilter(
  * `idCol` = columna de IDs para el fallback sin países (`id` en customers,
  * `customer_id` en el resto, `null` si la tabla no tiene vínculo —p.ej.
  * leads—: el fallback filtra solo sin país). Sin filtro, intacto.
+ *
+ * Límite URL: el fallback por IDs mete UUIDs en la query string. Para
+ * scopes chicos (< SCOPE_ID_CHUNK_SIZE) va en una sola query; para scopes
+ * grandes usa los helpers chunkIds/fetchIdChunks (ver abajo) en vez de
+ * esta función — un solo `.in(miles de UUIDs)` revienta con "URI too long".
  */
 export function applyScopeFilter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -167,9 +173,66 @@ export function applyScopeFilter(
   if (!scope) return q;
   const { countries, ids } = effectiveScopeFilter(scope);
   if (countries) return q.or(`country.in.(${countries.join(",")}),country.is.null`);
-  if (ids && idCol) return q.or(`${idCol}.in.(${ids.join(",")}),country.is.null`);
+  if (ids && idCol) {
+    if (ids.length > SCOPE_ID_CHUNK_SIZE) {
+      console.warn(
+        `[tenant] scope por IDs grande (${ids.length}): usa fetchIdChunks en vez de applyScopeFilter para no reventar la URL`,
+      );
+    }
+    return q.or(`${idCol}.in.(${ids.join(",")}),country.is.null`);
+  }
   if (isEmptyScope(scope) || (ids && !idCol)) return q.is("country", null);
   return q;
+}
+
+/**
+ * Chunk seguro para `.in()` por IDs (PostgREST revienta la URL con miles
+ * de UUIDs). Patrón: `for (const c of chunkIds(ids)) { ... .in(col, c) ... }`
+ * y mergear en JS (ver mira.ts). 200 UUIDs ≈ 7.2k chars en URL, bajo el
+ * límite típico de 8k.
+ */
+export const SCOPE_ID_CHUNK_SIZE = 200;
+
+export function chunkIds<T>(ids: T[], size: number = SCOPE_ID_CHUNK_SIZE): T[][] {
+  if (size <= 0) throw new Error("chunk size debe ser > 0");
+  const out: T[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+/** true si el scope fallback por IDs necesita lectura chunkeada. */
+export function isLargeIdScope(scope: MarketScopeLike | null): boolean {
+  const { ids } = effectiveScopeFilter(scope);
+  return !!ids && ids.length > SCOPE_ID_CHUNK_SIZE;
+}
+
+/**
+ * Ejecuta `fn` por chunk de IDs y concatena (con dedupe opcional por `key`).
+ * Para scopes fallback grandes: primero la rama `country IS NULL` una sola
+ * vez, luego un `.in(chunk)` por chunk SIN el OR-null (si no, los null se
+ * duplican y el count miente). El llamador ordena/limita al final.
+ */
+export async function fetchIdChunks<T>(
+  ids: string[],
+  fn: (chunk: string[]) => Promise<T[]>,
+  key?: (t: T) => string,
+): Promise<T[]> {
+  const out: T[] = [];
+  const seen = key ? new Set<string>() : null;
+  for (const c of chunkIds(ids)) {
+    const rows = await fn(c);
+    for (const r of rows) {
+      if (!seen) {
+        out.push(r);
+        continue;
+      }
+      const k = key!(r);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+    }
+  }
+  return out;
 }
 
 const ISO2_LOOSE = /^[A-Za-z]{2}$/;

@@ -64,13 +64,14 @@ Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 {"channel": "whatsapp"|"email", "subject": string|null, "body": string}
 Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradores: aperturas, orden y cierres distintos):
 - Usa los datos de respaldo solo si encajan natural en una frase sobre el negocio del cliente: PROHIBIDO recitar fecha+lugar como telegrama. Toda cifra o lugar debe aparecer dentro de una frase sobre su negocio (qué vende, a quién, en qué temporada). PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
+- El cuerpo lleva SUSTANCIA concreta (línea/marca/soporte del brief + ángulo útil: temporada de su rubro o continuidad de su línea). PROHIBIDO el comodín vago solo («una idea», «una propuesta», «algo», «opciones») sin decir para qué línea/soporte y para cuándo.
 - PROHIBIDAS las frases de plantilla y call center (hay control automático: si las usas el borrador se rechaza).
-- PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA propuesta accionable de máximo 15 palabras, con tu propia fórmula.
+- PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA invitación a accionar de máximo 15 palabras, siempre como pregunta reversible (¿te paso...? ¿te sirve...? ¿quieres que...?). PROHIBIDO declarar acciones cumplidas o comprometer inventario/disponibilidad como hecho: nunca bloqueo, reservo, aparto, separo, aseguro, avanzo o doy prioridad.
 - Nunca menciones score, media, ciclo, arquetipo ni cifras internas: solo lo que el cliente reconocería.
 - Tono por objetivo (viene en el brief): vip_care = leal, trato 1-a-1. nurture = hábito cortado, una lectura útil. winback = simple, baja fricción.
 - Empieza con "Hola {primer nombre}," (solo primer nombre, nunca apellido ni email).
 - Voz: primera persona singular + tuteo. PROHIBIDO "reservamos/preparamos" o el trato de usted.
-- whatsapp: máximo 400 caracteres, sin asunto (subject null). email: subject corto + body de máximo 1200 caracteres.
+- whatsapp: 250-400 caracteres, sin asunto (subject null). email: subject corto + body de máximo 750 caracteres.
 - Un solo mensaje, listo para enviar. Sin placeholders tipo [NOMBRE].`;
 
 /** Frases plantilla que delatan al redactor genérico: si el borrador las
@@ -91,6 +92,16 @@ const BANNED = [
   "muestran un patron claro",
   "tu última pauta fue",
   "tu ultima pauta fue",
+  "bloqueo prioridad",
+  "bloqueo",
+  "avanzo con",
+  "te reservo",
+  "te aparto",
+  "queda reservado",
+  "queda bloqueado",
+  "una idea para tu",
+  "una propuesta para tu",
+  "¿te la paso?",
 ];
 
 function hasBanned(body: string): boolean {
@@ -223,7 +234,7 @@ async function draftForSignal(
   storeId: string,
   system: string,
   s: Prioritized,
-  stamp: { runId: string | null; catalog: CatalogType | null },
+  stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
 ): Promise<{ channel: string; chars: number }> {
   const { data: orders } = await db
     .from("orders")
@@ -326,24 +337,24 @@ async function draftForSignal(
         ? "winback: 1-2 compras, simple y baja fricción"
         : "nurture: tenía hábito y se cortó, nombra el quiebre + 1 lectura útil";
 
-  // Menú de jugadas en lenguaje de invitación (disponibilidad, reserva,
-  // temporada del rubro). Coherencia jugada↔BANNED (issue #9): la jugada ya
-  // no ordena "repetir circuito con prioridad de espacios", así el BANNED
-  // puede prohibir las muletillas sin fabricar descartes (el modelo obedece
-  // al brief y el control lo rechaza → gasta el único reintento → failed++).
+  // Menú de jugadas en lenguaje de invitación reversible (preguntar/ofrecer
+  // pasar disponibilidad o una idea, sin comprometer inventario). Coherencia
+  // jugada↔BANNED (issue #9): la jugada ya no ordena "reservar con prioridad",
+  // así el BANNED puede prohibir las muletillas sin fabricar descartes.
   // Neutro por catálogo: solo servicio/digital hablan de espacios/zonas.
+  // El cierre SIEMPRE es pregunta reversible, nunca acción cumplida.
   const jugada =
     stamp.catalog === "servicio" || stamp.catalog === "digital"
       ? patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
-        ? "invitarle a reservar con prioridad según disponibilidad en su línea habitual, o avisarle de la temporada de su rubro"
+        ? "pasarle 2-3 opciones concretas de disponibilidad o un ángulo para su línea habitual en esta temporada, y preguntarle si quiere que se las pase con fechas"
         : patron.startsWith("EXPLORA")
-          ? "invitarle a apartar un espacio que aún no prueba según disponibilidad, o a asegurar su mejor ubicación para la temporada"
-          : "invitarle a retomar con una reserva simple según disponibilidad"
+          ? "mostrarle una opción concreta que aún no prueba, o cotizarle su mejor ubicación para la temporada, y preguntarle si quiere que se la pase con fechas"
+          : "pasarle una propuesta concreta y simple para retomar (línea + ventana de fechas), y preguntarle si le sirve"
       : patron.startsWith("CONTENIDO") || patron.startsWith("REPITE")
-        ? "invitarle a reservar su favorito habitual según disponibilidad, o a probar algo distinto de su línea en esta temporada"
+        ? "pasarle su favorito habitual o una opción distinta y concreta de su línea para esta temporada, y preguntarle si quiere que se la pase"
         : patron.startsWith("EXPLORA")
-          ? "invitarle a probar algo nuevo de su línea según disponibilidad, o a asegurar su favorito para la temporada"
-          : "invitarle a retomar con una propuesta simple según disponibilidad";
+          ? "mostrarle algo nuevo y concreto de su línea, o pasarle su favorito con ventana concreta para que lo mire sin compromiso"
+          : "pasarle una propuesta concreta y simple para retomar (producto + momento), y preguntarle si le sirve";
 
   // Dossier-first (issue #9): quién es + por-qué-ahora abren; fecha/lugares
   // van a datos de respaldo ("úsalos solo si encajan natural"). company_name
@@ -377,7 +388,15 @@ async function draftForSignal(
     `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.`,
     `Historial real (usa nombres tal cual, no inventes):`,
     hist,
-    s.phone ? "Canal: whatsapp (tiene teléfono)." : "Canal: email (sin teléfono).",
+    // Canal explícito del merchant (switch en Review) manda; si no, el
+    // indicio clásico: con teléfono → whatsapp, sin teléfono → email.
+    stamp.forceChannel === "whatsapp"
+      ? "Canal obligatorio: whatsapp. Responde con \"channel\": \"whatsapp\"."
+      : stamp.forceChannel === "email"
+        ? "Canal obligatorio: email. Responde con \"channel\": \"email\"."
+        : s.phone
+          ? "Canal: whatsapp (tiene teléfono)."
+          : "Canal: email (sin teléfono).",
   ].join("\n");
 
   const attempt = async (extraNudge: string | null): Promise<{ channel: string; body: string; subject: string | null }> => {
@@ -451,6 +470,13 @@ async function draftForSignal(
   }
 
   let { channel, body, subject } = await attempt(null);
+  // El canal explícito manda (email siempre seguro; whatsapp exige teléfono
+  // y el control de ≤450 de abajo lo valida). Sin él, vale lo del LLM.
+  if (stamp.forceChannel === "email") {
+    channel = "email";
+  } else if (stamp.forceChannel === "whatsapp" && s.phone) {
+    channel = "whatsapp";
+  }
   if (!body) throw new Error("El LLM devolvió body vacío.");
   if (hasBanned(body)) {
     const retry = await attempt("tu borrador anterior sonaba a plantilla genérica; reescribe con otra estructura y otras palabras, sin ninguna frase prohibida.");
@@ -477,7 +503,7 @@ async function draftForSignal(
     ({ channel, body, subject } = retry);
   }
   if (channel === "whatsapp" && body.length > 450) throw new Error("WhatsApp demasiado largo (>450).");
-  if (body.length > 1300) throw new Error("Body demasiado largo (>1300).");
+  if (body.length > 800) throw new Error("Body demasiado largo (>800).");
 
   const { error: insErr } = await db.from("proposed_actions").insert({
     store_id: storeId,
@@ -524,6 +550,7 @@ async function draftForSignal(
 export async function draftSingleSignal(
   storeId: string,
   signalId: string,
+  opts: { forceChannel?: "email" | "whatsapp" | null } = {},
 ): Promise<{ ok: boolean; message: string }> {
   const mira = await getRankedMira(storeId);
   const found = [...mira.rows, ...mira.foreign].find((r) => r.signalId === signalId);
@@ -568,7 +595,7 @@ export async function draftSingleSignal(
       country: found.country,
       decision: found.decision ?? null,
       pRecompraH: found.pRecompraH ?? null,
-    }, { runId: null, catalog });
+    }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null });
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
     if (e instanceof ContactabilitySkip) {
@@ -626,6 +653,7 @@ export async function runCopywriter(
         .select("signal_id,customer_id")
         .eq("store_id", storeId)
         .in("status", ["pending_review", "approved"])
+        .order("id", { ascending: true })
         .range(off, off + 999);
       if (eErr) throw new Error(`Existing read: ${eErr.message}`);
       const erows = (epage ?? []) as Array<Record<string, unknown>>;

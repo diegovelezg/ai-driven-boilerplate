@@ -77,6 +77,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         .select("customer_id,model,p_recompra_h,p25_days,p75_days,decision,evidence_json,as_of")
         .eq("store_id", storeId)
         .order("as_of", { ascending: false })
+        .order("id", { ascending: true })
         .range(from, from + 999);
       if (error) throw new Error(`Predictions read: ${error.message}`);
       const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -138,6 +139,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         .select("id,email,orders_count,country")
         .eq("store_id", storeId)
         .gte("orders_count", 1)
+        .order("id", { ascending: true })
         .range(from, from + 999);
       if (error) throw new Error(`Customers read: ${error.message}`);
       for (const r of (data ?? []) as Array<Record<string, unknown>>) {
@@ -312,6 +314,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           .select("id,customer_id")
           .eq("store_id", storeId)
           .in("status", ["open", "prioritized"])
+          .order("id", { ascending: true })
           .range(off, off + 999);
         if (oErr) throw new Error(`Orphans read: ${oErr.message}`);
         const rows = (opage ?? []) as Array<Record<string, unknown>>;
@@ -332,6 +335,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
             .eq("store_id", storeId)
             .in("status", ["pending_review", "approved"])
             .not("signal_id", "is", null)
+            .order("id", { ascending: true })
             .range(off, off + 999);
           const brows = (bpage ?? []) as Array<Record<string, unknown>>;
           for (const a of brows) busySet.add(String(a.signal_id ?? ""));
