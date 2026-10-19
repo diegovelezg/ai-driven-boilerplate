@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local store connections (secrets)
 /.data/
+
+# crawler runtime artifacts (local only)
+/storage/
