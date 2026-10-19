@@ -2,6 +2,9 @@
 # Node 20.19+ exigido por @google/adk.
 FROM node:20-bookworm-slim AS deps
 WORKDIR /app
+# better-sqlite3 (vía crawlee) compila nativo con node-gyp: necesita toolchain.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 
