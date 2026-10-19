@@ -41,6 +41,11 @@ function triggerPostMergeRefresh(storeId: string): void {
       await runScout(scoutId, storeId);
       const stratId = await startRun(storeId, "strategist", "Estratega", 0);
       await runStrategist(stratId, storeId);
+      // Copywriter acotado: sin esto la señal nueva amanece sin borrador
+      // hasta la mañana siguiente (hueco visto en Review: riesgo sin mensaje).
+      const { runCopywriter } = await import("@/lib/copywriter");
+      const copyId = await startRun(storeId, "copywriter", "Copywriter", 0);
+      await runCopywriter(copyId, storeId, { limit: 5 });
       log("post-merge refresh done");
     } catch {
       // Best-effort: el error queda en el log del worker, no tumba el merge.
