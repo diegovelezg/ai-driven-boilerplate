@@ -18,15 +18,17 @@ function today(): string {
 
 /**
  * Pill sutil de consumo LLM del tenant activo (issue #15).
- * A la izquierda del MarketSelector: solo total de hoy + llamadas en tooltip.
+ * A la izquierda del MarketSelector: total de hoy + total histórico en texto,
+ * detalle de llamadas en tooltip. Solo informativo, sin link.
  * Silencioso si no hay store, no hay datos o la API falla.
  */
 export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
   const sp = useSearchParams();
   const param = sp.get("store");
   const activeId = stores.some((s) => s.id === param) ? (param as string) : (stores[0]?.id ?? null);
-  const [text, setText] = useState<string | null>(null);
-  const [title, setTitle] = useState<string | null>(null);
+  const [todayTokens, setTodayTokens] = useState<number | null>(null);
+  const [allTokens, setAllTokens] = useState<number | null>(null);
+  const [todayCalls, setTodayCalls] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -34,16 +36,23 @@ export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
     let alive = true;
     const ctrl = new AbortController();
     const load = () => {
-      fetch(`/api/usage?store=${encodeURIComponent(activeId)}&from=${today()}`, { signal: ctrl.signal })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => {
+      const day = fetch(`/api/usage?store=${encodeURIComponent(activeId)}&from=${today()}`, {
+        signal: ctrl.signal,
+      }).then((r) => (r.ok ? r.json() : null));
+      const all = fetch(`/api/usage?store=${encodeURIComponent(activeId)}`, {
+        signal: ctrl.signal,
+      }).then((r) => (r.ok ? r.json() : null));
+      Promise.allSettled([day, all])
+        .then(([d, a]) => {
           if (!alive) return;
           setLoaded(true);
-          if (!j || typeof j.total_tokens !== "number") return;
-          const total = j.total_tokens as number;
-          const calls = typeof j.calls === "number" ? j.calls : 0;
-          setText(`● ${compact(total)} hoy`);
-          setTitle(`${formatNumber(total)} tokens hoy · ${formatNumber(calls)} llamadas`);
+          if (d.status === "fulfilled" && d.value && typeof d.value.total_tokens === "number") {
+            setTodayTokens(d.value.total_tokens as number);
+            setTodayCalls(typeof d.value.calls === "number" ? d.value.calls : 0);
+          }
+          if (a.status === "fulfilled" && a.value && typeof a.value.total_tokens === "number") {
+            setAllTokens(a.value.total_tokens as number);
+          }
         })
         .catch(() => {
           if (alive) setLoaded(true);
@@ -62,18 +71,24 @@ export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
   }, [activeId]);
 
   if (!activeId) return null;
-  // Siempre visible para probar: mientras carga "● … hoy", sin datos "● 0 hoy".
-  const label = text ?? (loaded ? "● 0 hoy" : "● … hoy");
+  // Siempre visible para probar: mientras carga "● … hoy · … total", sin datos "● 0 hoy · 0 total".
+  const day = todayTokens ?? (loaded ? 0 : null);
+  const all = allTokens ?? (loaded ? 0 : null);
+  const label = `● ${day === null ? "…" : compact(day)} hoy · ${all === null ? "…" : compact(all)} total`;
+  const title =
+    day !== null && all !== null
+      ? `${formatNumber(day)} tokens hoy · ${formatNumber(all)} tokens en total · ${formatNumber(todayCalls ?? 0)} llamadas hoy`
+      : null;
   return (
-    <AppTooltip tip={title ?? "Sin llamadas LLM hoy"}>
-      <a
-        href={`/settings?store=${encodeURIComponent(activeId)}`}
-        aria-label={title ?? "Uso de tokens de hoy"}
-        className="hidden items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
+    <AppTooltip tip={title ?? "Sin llamadas LLM registradas"}>
+      <span
+        role="status"
+        aria-label={title ?? "Uso de tokens: hoy e histórico"}
+        className="hidden cursor-default items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground md:inline-flex"
       >
         <span className="size-1.5 rounded-full bg-emerald-500/70" aria-hidden />
         {label}
-      </a>
+      </span>
     </AppTooltip>
   );
 }
