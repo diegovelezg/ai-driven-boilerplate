@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useChatDock } from "@/components/chat/chat-dock";
 
 /** Card clicable: abre el chat en dock a la izquierda con la tienda,
@@ -20,11 +21,11 @@ export function AgentCard({
   const active = dock?.storeId === storeId;
 
   return (
-    <Card
-      role="button"
-      tabIndex={0}
-      title="Click para preguntar a tu equipo"
-      onClick={() => openDock({ storeId, storeName })}
+    <AppTooltip tip="Click para preguntar a tu equipo">
+      <Card
+        role="button"
+        tabIndex={0}
+        onClick={() => openDock({ storeId, storeName })}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -32,9 +33,10 @@ export function AgentCard({
         }
       }}
       className={`cursor-pointer transition-colors hover:border-primary/40${active ? " border-primary/60 ring-1 ring-primary/30" : ""}`}
-    >
-      {children}
-    </Card>
+      >
+        {children}
+      </Card>
+    </AppTooltip>
   );
 }
 

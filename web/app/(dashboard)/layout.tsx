@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { BackgroundStatus } from "@/components/background-status";
 import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { AppTooltipProvider } from "@/components/ui/app-tooltip";
 import { displayStoreName, listStores, type TenantStore } from "@/lib/tenant";
 import { listStoreMarkets, type TenantMarket } from "@/lib/markets";
 
@@ -30,11 +31,13 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     <BackgroundStatus>
       <SidebarProvider defaultOpen={false}>
         <ChatDockProvider stores={stores.map((s) => ({ id: s.id, label: displayStoreName(s) }))}>
-          <AppSidebar />
-          <SidebarInset>
-            <AppHeader stores={stores} marketsByStore={marketsByStore} />
-            <DashboardShell>{children}</DashboardShell>
-          </SidebarInset>
+          <AppTooltipProvider>
+            <AppSidebar />
+            <SidebarInset>
+              <AppHeader stores={stores} marketsByStore={marketsByStore} />
+              <DashboardShell>{children}</DashboardShell>
+            </SidebarInset>
+          </AppTooltipProvider>
         </ChatDockProvider>
       </SidebarProvider>
     </BackgroundStatus>

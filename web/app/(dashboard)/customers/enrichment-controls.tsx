@@ -2,6 +2,7 @@
 
 import { Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startEnrichmentAction } from "@/lib/enrich-actions";
 
@@ -15,22 +16,27 @@ export function EnrichmentControls({ pending }: { pending: number }) {
   const blocker = blocked ? activeRuns[0]?.label ?? null : null;
 
   return (
-    <Button
-      size="sm"
-      variant="outline"
-      disabled={starting || running || blocked || pending === 0}
-      title={
+    <AppTooltip
+      tip={
         pending === 0
           ? "No hay dominios de negocio pendientes"
           : blocked && blocker
             ? `En curso: ${blocker}…`
             : "Enriquecer dominios con IA"
       }
-      className="border-transparent bg-accent text-accent-foreground hover:bg-accent/70"
-      onClick={() => start(startEnrichmentAction)}
     >
-      <Wand2 className="text-primary" aria-hidden />
-      {running ? `${done}/${total}` : blocked ? "En proceso…" : pending > 0 ? `Enriquecer (${pending})` : "Enriquecer"}
-    </Button>
+      <span className="inline-flex">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={starting || running || blocked || pending === 0}
+          className="border-transparent bg-accent text-accent-foreground hover:bg-accent/70"
+          onClick={() => start(startEnrichmentAction)}
+        >
+          <Wand2 className="text-primary" aria-hidden />
+          {running ? `${done}/${total}` : blocked ? "En proceso…" : pending > 0 ? `Enriquecer (${pending})` : "Enriquecer"}
+        </Button>
+      </span>
+    </AppTooltip>
   );
 }

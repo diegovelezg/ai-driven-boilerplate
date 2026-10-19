@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { syncCustomersAction } from "@/lib/sync-actions";
 
@@ -23,19 +24,22 @@ export function SyncButton() {
           {msg}
         </span>
       )}
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={starting || running || blocked}
-        title={blocked && blocker ? `En curso: ${blocker}…` : undefined}
-        onClick={async () => {
-          const r = await start(syncCustomersAction);
-          setOk(r.ok);
-          setMsg(r.ok ? null : r.message);
-        }}
-      >
-        {running ? "Sincronizando…" : blocked ? "En proceso…" : "Sincronizar"}
-      </Button>
+      <AppTooltip tip={blocked && blocker ? `En curso: ${blocker}…` : undefined}>
+        <span className="inline-flex">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={starting || running || blocked}
+            onClick={async () => {
+              const r = await start(syncCustomersAction);
+              setOk(r.ok);
+              setMsg(r.ok ? null : r.message);
+            }}
+          >
+            {running ? "Sincronizando…" : blocked ? "En proceso…" : "Sincronizar"}
+          </Button>
+        </span>
+      </AppTooltip>
     </span>
   );
 }

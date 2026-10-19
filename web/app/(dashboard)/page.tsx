@@ -17,7 +17,7 @@ import { AgentCard } from "./ask-agent";
 import { TeamPulse } from "./team-pulse";
 import { AttentionTable, AttentionEmptyState, type AttentionItem } from "./attention-table";
 import { HoyHeroActions } from "./hoy-hero-actions";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { avgTicket, getRankedMira } from "@/lib/mira";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { approverLabel, dispatchedOutcome } from "@/lib/action-trace";
@@ -839,9 +839,10 @@ export default async function DashboardPage({
             {(() => {
               // Funnel completo: empieza en el barrido del motor (el filtro
               // más importante es a quién NO tocar) y termina en recupero.
-              // Cada nombre lleva tooltip humano con ejemplo (title nativo:
-              // sin cursor ni subrayado). Anchos relativos a vigilados: la
-              // historia honesta es la selectividad (de 375 solo 1 llega).
+              // Cada nombre lleva tooltip humano con ejemplo (AppTooltip,
+              // SSOT shadcn: sin cursor ni subrayado). Anchos relativos a
+              // vigilados: la historia honesta es la selectividad (de 375
+              // solo 1 llega).
               const vigilados = hoyActuar + hoyVigilar + hoyAuto;
               const base = vigilados > 0 ? vigilados : atRisk;
               const ejemploActuar =
@@ -893,7 +894,6 @@ export default async function DashboardPage({
                 },
               ];
               return (
-                <TooltipProvider delay={300}>
                 <ol className="flex flex-col gap-2">
                   {etapas.map((e, i) => {
                     const pct = base > 0 ? Math.round((e.n / base) * 100) : 0;
@@ -903,12 +903,9 @@ export default async function DashboardPage({
                       <li key={e.key}>
                         <div className="flex items-baseline justify-between gap-2 text-[13px]">
                           <span>
-                            <Tooltip>
-                              <TooltipTrigger render={<span>{e.label}</span>} />
-                              <TooltipContent side="top" className="max-w-sm">
-                                {e.tip}
-                              </TooltipContent>
-                            </Tooltip>{" "}
+                            <AppTooltip tip={e.tip} contentClassName="max-w-sm">
+                              <span>{e.label}</span>
+                            </AppTooltip>{" "}
                             <strong className="tabular-nums">{e.n}</strong>
                             {e.minor !== null && (
                               <span className="text-muted-foreground tabular-nums"> · {money(e.minor)}</span>
@@ -934,7 +931,6 @@ export default async function DashboardPage({
                     );
                   })}
                 </ol>
-                </TooltipProvider>
               );
             })()}
             {foreignLines.map((fl) => (

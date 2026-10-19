@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startCopywriterAction } from "@/lib/retention-actions";
 
@@ -31,17 +32,20 @@ export function HoyHeroActions({
   const blocker = !running && isBusy("copywriter") ? activeRuns[0]?.label ?? null : null;
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
-      <Button
-        size="sm"
-        disabled={busy || actuarCount === 0}
-        title={blocker ? `En curso: ${blocker}…` : undefined}
-        onClick={async () => {
-          const r = await start(startCopywriterAction);
-          setMsg(r.message);
-        }}
-      >
-        {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${actuarCount}`}
-      </Button>
+      <AppTooltip tip={blocker ? `En curso: ${blocker}…` : undefined}>
+        <span className="inline-flex">
+          <Button
+            size="sm"
+            disabled={busy || actuarCount === 0}
+            onClick={async () => {
+              const r = await start(startCopywriterAction);
+              setMsg(r.message);
+            }}
+          >
+            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${actuarCount}`}
+          </Button>
+        </span>
+      </AppTooltip>
       {msg ? (
         <span className="text-xs text-muted-foreground">{msg}</span>
       ) : (

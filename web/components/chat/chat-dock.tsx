@@ -9,6 +9,7 @@ import {
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { X } from "lucide-react";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import type { ChatArtifact } from "./types";
 import { ChatPanel } from "./chat-panel";
 
@@ -183,15 +184,16 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
                 <p className="text-sm font-semibold tracking-tight">Pregunta a tu equipo de agentes</p>
               </div>
               <div className="flex shrink-0 items-center">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  title="Cerrar chat"
-                  aria-label="Cerrar chat"
-                  className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  <X className="size-4" aria-hidden />
-                </button>
+                <AppTooltip tip="Cerrar chat">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="Cerrar chat"
+                    className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <X className="size-4" aria-hidden />
+                  </button>
+                </AppTooltip>
               </div>
             </div>
             <div className="flex min-h-0 flex-1 flex-col">

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { ChatShell } from "@/components/chat/chat-shell";
 import type { ChatMessage } from "@/components/chat/types";
 import {
@@ -164,20 +165,25 @@ export function ProfileChat({
                 {proposal.cycleDays && <li>Recompra aprox. cada {proposal.cycleDays} días</li>}
                 {proposal.sourceUrl && <li>Investigué {proposal.sourceUrl}</li>}
               </ul>
-              <Button
-                type="button"
-                size="sm"
-                className="mt-2"
-                disabled={!canConfirm || deepBusy}
-                title={canConfirm ? "El set genera el perfil profundo (ciclo, buyer, arquetipo)" : `Falta: ${missing.map((m) => SLOT_LABEL[m] ?? m).join(", ")}`}
-                onClick={() => void confirm()}
+              <AppTooltip
+                tip={canConfirm ? "El set genera el perfil profundo (ciclo, buyer, arquetipo)" : `Falta: ${missing.map((m) => SLOT_LABEL[m] ?? m).join(", ")}`}
               >
-                {deepBusy
-                  ? "Generando perfil profundo…"
-                  : canConfirm
-                    ? "Generar perfil y continuar"
-                    : `Falta: ${missing.map((m) => SLOT_LABEL[m] ?? m).join(", ") || "…"}`}
-              </Button>
+                <span className="inline-flex">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="mt-2"
+                    disabled={!canConfirm || deepBusy}
+                    onClick={() => void confirm()}
+                  >
+                    {deepBusy
+                      ? "Generando perfil profundo…"
+                      : canConfirm
+                        ? "Generar perfil y continuar"
+                        : `Falta: ${missing.map((m) => SLOT_LABEL[m] ?? m).join(", ") || "…"}`}
+                  </Button>
+                </span>
+              </AppTooltip>
             </div>
           )
         }

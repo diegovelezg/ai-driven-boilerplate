@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ChevronsUpDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -97,43 +98,45 @@ function EditableCell({
 
   if (!editing) {
     return (
-      <button
-        type="button"
-        title="Click para editar"
-        onClick={(e) => {
-          e.stopPropagation();
-          setDraft(value);
-          setError(null);
-          setEditing(true);
-        }}
-        className="block w-full cursor-text rounded px-1 py-0.5 text-left hover:bg-accent"
-      >
-        {value || <span className="text-muted-foreground/60">—</span>}
-      </button>
+      <AppTooltip tip="Click para editar">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setDraft(value);
+            setError(null);
+            setEditing(true);
+          }}
+          className="block w-full cursor-text rounded px-1 py-0.5 text-left hover:bg-accent"
+        >
+          {value || <span className="text-muted-foreground/60">—</span>}
+        </button>
+      </AppTooltip>
     );
   }
   return (
     <span onClick={(e) => e.stopPropagation()} className="block">
-      <Input
-        autoFocus
-        value={draft}
-        disabled={saving}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          setError(null);
-        }}
-        onBlur={handleBlur}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-          else if (e.key === "Escape") {
-            cancelRef.current = true;
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
-        aria-invalid={error ? true : undefined}
-        title={error ?? "Enter guarda · Escape cancela · vacío = valor de Medusa"}
-        className={`h-7 px-1.5 ${error ? "border-destructive" : ""}`}
-      />
+      <AppTooltip tip={error ?? "Enter guarda · Escape cancela · vacío = valor de Medusa"}>
+        <Input
+          autoFocus
+          value={draft}
+          disabled={saving}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setError(null);
+          }}
+          onBlur={handleBlur}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            else if (e.key === "Escape") {
+              cancelRef.current = true;
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          aria-invalid={error ? true : undefined}
+          className={`h-7 px-1.5 ${error ? "border-destructive" : ""}`}
+        />
+      </AppTooltip>
     </span>
   );
 }
@@ -326,15 +329,18 @@ export function CustomersView({
             <SelectItem value="sin_canal">· sin canal</SelectItem>
           </SelectContent>
         </Select>
-        <Button
-          variant={filters.vista === "ventana7" ? "default" : "outline"}
-          size="sm"
-          disabled={isPending}
-          onClick={() => setFilter({ vista: filters.vista === "ventana7" ? null : "ventana7" })}
-          title="Vigilar que entra en ventana en 7 días"
-        >
-          Entran en ventana (7d)
-        </Button>
+        <AppTooltip tip="Vigilar que entra en ventana en 7 días">
+          <span className="inline-flex">
+            <Button
+              variant={filters.vista === "ventana7" ? "default" : "outline"}
+              size="sm"
+              disabled={isPending}
+              onClick={() => setFilter({ vista: filters.vista === "ventana7" ? null : "ventana7" })}
+            >
+              Entran en ventana (7d)
+            </Button>
+          </span>
+        </AppTooltip>
         <Select
           value={filters.ritmo ?? "all"}
           onValueChange={(v) => setFilter({ ritmo: v === "all" ? null : v })}

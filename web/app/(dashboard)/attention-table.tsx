@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { proposeSingleAction } from "@/lib/review-actions";
 import { useBackground } from "@/components/background-status";
 import { isJudgeVetoMessage } from "@/lib/single-audit";
@@ -200,19 +201,18 @@ export function AttentionTable({
                 ) : row.draftStatus === "dispatched" ? (
                   <span className="text-xs text-muted-foreground">Enviado ✓</span>
                 ) : row.contactability?.eligible === false ? (
-                  <span
-                    className="inline-flex flex-col items-end gap-1"
-                    title={row.contactability.reason ?? "Omitido por el juez"}
-                  >
-                    {/* El Button deshabilitado lleva `pointer-events-none`: el
-                        tooltip nativo va en el wrapper, no en el botón. */}
-                    <Button variant="outline" size="sm" disabled>
-                      Omitido por juez ⓘ
-                    </Button>
-                    <span className="max-w-44 text-xs text-muted-foreground" title={row.contactability.reason ?? undefined}>
-                      {row.contactability.reason ?? "Sin contenido vigente para invitarle hoy."}
+                  <AppTooltip tip={row.contactability.reason ?? "Omitido por el juez"}>
+                    <span className="inline-flex flex-col items-end gap-1">
+                      {/* El Button deshabilitado lleva `pointer-events-none`: el
+                          trigger es el wrapper, no el botón. */}
+                      <Button variant="outline" size="sm" disabled>
+                        Omitido por juez ⓘ
+                      </Button>
+                      <span className="max-w-44 text-xs text-muted-foreground">
+                        {row.contactability.reason ?? "Sin contenido vigente para invitarle hoy."}
+                      </span>
                     </span>
-                  </span>
+                  </AppTooltip>
                 ) : (
                   <span className="inline-flex flex-col items-end gap-1">
                     <Button
@@ -224,9 +224,11 @@ export function AttentionTable({
                       {busyIds.includes(row.signalId) ? "Redactando…" : "Redactar"}
                     </Button>
                     {draftError?.id === row.signalId && (
-                      <span className="max-w-44 text-xs text-destructive" title={draftError.message}>
-                        {draftError.message}
-                      </span>
+                      <AppTooltip tip={draftError.message}>
+                        <span className="max-w-44 text-xs text-destructive">
+                          {draftError.message}
+                        </span>
+                      </AppTooltip>
                     )}
                   </span>
                 )}

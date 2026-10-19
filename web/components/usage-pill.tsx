@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 
 /** Compacta 12345 -> "12.3k", 2000000 -> "2.0M". */
 function compact(n: number): string {
@@ -63,14 +64,15 @@ export function UsagePill({ stores }: { stores: Array<{ id: string }> }) {
   // Siempre visible para probar: mientras carga "● … hoy", sin datos "● 0 hoy".
   const label = text ?? (loaded ? "● 0 hoy" : "● … hoy");
   return (
-    <a
-      href={`/settings?store=${encodeURIComponent(activeId)}`}
-      title={title ?? "Sin llamadas LLM hoy"}
-      aria-label={title ?? "Uso de tokens de hoy"}
-      className="hidden items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
-    >
-      <span className="size-1.5 rounded-full bg-emerald-500/70" aria-hidden />
-      {label}
-    </a>
+    <AppTooltip tip={title ?? "Sin llamadas LLM hoy"}>
+      <a
+        href={`/settings?store=${encodeURIComponent(activeId)}`}
+        aria-label={title ?? "Uso de tokens de hoy"}
+        className="hidden items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
+      >
+        <span className="size-1.5 rounded-full bg-emerald-500/70" aria-hidden />
+        {label}
+      </a>
+    </AppTooltip>
   );
 }
