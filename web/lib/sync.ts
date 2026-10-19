@@ -47,6 +47,21 @@ export interface SyncOptions {
   onProgress?: (p: SyncProgress) => void | Promise<void>;
 }
 
+/** Caché corta de regions por shop (evita el doble fetch ensureStore → sync
+ *  en el primer sync; las regions casi no cambian). TTL 5 min. */
+const regionsCache = new Map<string, { at: number; regions: Record<string, { name: string; currency: string; countries: string[] }> }>();
+const REGIONS_TTL_MS = 5 * 60_000;
+
+function getCachedRegions(shopUrl: string): Record<string, { name: string; currency: string; countries: string[] }> | null {
+  const hit = regionsCache.get(shopUrl);
+  if (!hit) return null;
+  if (Date.now() - hit.at > REGIONS_TTL_MS) {
+    regionsCache.delete(shopUrl);
+    return null;
+  }
+  return hit.regions;
+}
+
 /** Upsert idempotente de la tienda. Devuelve su id. */
 async function upsertStore(shopUrl: string, shopCurrency: string): Promise<string> {
   const db = getSupabase();
@@ -67,22 +82,48 @@ async function upsertStore(shopUrl: string, shopCurrency: string): Promise<strin
  * background antes de que exista el sync (la primera vez aún no hay tienda).
  */
 export async function ensureStore(medusaUrl: string, token: string): Promise<string> {
+  const shopUrl = normalizeShopUrl(medusaUrl);
   const regions = await listMedusaRegions(medusaUrl, token);
+  regionsCache.set(shopUrl, { at: Date.now(), regions });
   const shopCurrency = Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
-  return upsertStore(normalizeShopUrl(medusaUrl), shopCurrency);
+  return upsertStore(shopUrl, shopCurrency);
 }
 
 async function fetchAll<T>(
   page: (offset: number, limit: number) => Promise<{ rows: T[]; count: number }>,
 ): Promise<T[]> {
   const limit = 100;
-  const out: T[] = [];
-  let offset = 0;
-  for (;;) {
-    const { rows, count } = await page(offset, limit);
-    out.push(...rows);
-    offset += rows.length;
-    if (rows.length < limit || out.length >= count) break;
+  // Reintento con backoff: 4 workers en paralelo pueden comerse un 429/5xx
+  // transitorio de Medusa; sin esto un throttle tumba todo el sync.
+  const fetchPage = async (offset: number): Promise<{ rows: T[]; count: number }> => {
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await page(offset, limit);
+      } catch (e) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  };
+  // Primera página para conocer el total; el resto en paralelo (4 workers).
+  // Antes eran 18 requests en serie (~300-600ms c/u = 99% del sync).
+  const first = await fetchPage(0);
+  const out: T[] = [...first.rows];
+  if (first.rows.length < limit || out.length >= first.count) return out;
+  const { mapPool } = await import("@/lib/parallel");
+  const offsets: number[] = [];
+  for (let off = first.rows.length; off < first.count; off += limit) offsets.push(off);
+  const pages = await mapPool(offsets, 4, (off) => fetchPage(off));
+  for (const p of pages) out.push(...p.rows);
+  // Cola por crecimiento durante el sync: el `count` es foto del primer page;
+  // si Medusa creó filas a mitad, se pesca la cola en serie (acotado).
+  for (let guard = 0; guard < 10; guard++) {
+    const tail = await fetchPage(out.length);
+    if (tail.rows.length === 0) break;
+    out.push(...tail.rows);
+    if (tail.rows.length < limit) break;
   }
   return out;
 }
@@ -103,9 +144,11 @@ export async function syncStoreFromMedusa(
   };
   log(`start shopUrl=${shopUrl}`);
 
-  // 1. Store (tenant) + regions → markets.
+  // 1. Store (tenant) + regions → markets. Reusa caché de ensureStore
+  // (mismo proceso): el primer sync ya no hace doble fetch.
   await report(0, "Tienda y mercados");
-  const regions = await listMedusaRegions(medusaUrl, token);
+  const regions = getCachedRegions(shopUrl) ?? await listMedusaRegions(medusaUrl, token);
+  if (!getCachedRegions(shopUrl)) regionsCache.set(shopUrl, { at: Date.now(), regions });
   const shopCurrency =
     Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
   const storeId = await upsertStore(shopUrl, shopCurrency);
@@ -145,20 +188,23 @@ export async function syncStoreFromMedusa(
   );
   const resolveExt = (ext: string): string => aliasMap.get(ext) ?? ext;
 
-  // 2. Todos los customers + todas las orders (paginado).
+  // 2. Todos los customers + todas las orders (paginado, en paralelo:
+  // son endpoints independientes; antes iban en serie).
   await report(1, "Descargando customers y orders");
-  const customers = await fetchAll((offset, limit) =>
-    listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
-      rows: r.customers,
-      count: r.count,
-    })),
-  );
-  const rawOrders = await fetchAll((offset, limit) =>
-    listMedusaOrdersRaw(medusaUrl, token, { offset, limit }).then((r) => ({
-      rows: r.orders,
-      count: r.count,
-    })),
-  );
+  const [customers, rawOrders] = await Promise.all([
+    fetchAll((offset, limit) =>
+      listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
+        rows: r.customers,
+        count: r.count,
+      })),
+    ),
+    fetchAll((offset, limit) =>
+      listMedusaOrdersRaw(medusaUrl, token, { offset, limit }).then((r) => ({
+        rows: r.orders,
+        count: r.count,
+      })),
+    ),
+  ]);
   const orders: CanonicalOrder[] = rawOrders
     .map((o) => medusaOrderToCanonical(o, regions))
     .filter((o): o is CanonicalOrder => o !== null);
@@ -261,25 +307,39 @@ export async function syncStoreFromMedusa(
         last_synced_at: now,
       };
     });
-  for (let i = 0; i < customerRows.length; i += 500) {
-    const { error } = await db
-      .from("customers")
-      .upsert(customerRows.slice(i, i + 500), { onConflict: "store_id,external_id" });
-    if (error) throw new Error(`Customers upsert: ${error.message}`);
-  }
   const customerIdByExternal = new Map<string, string>();
-  for (let from = 0; ; from += 1000) {
-    const { data: batch, error } = await db
+  for (let i = 0; i < customerRows.length; i += 500) {
+    // `returning` construye el mapa external→id sin el re-read full de toda
+    // la tabla que había antes (un scan paginado 1000 por sync).
+    const { data: upserted, error } = await db
       .from("customers")
-      .select("id,external_id")
-      .eq("store_id", storeId)
-      .order("id", { ascending: true })
-      .range(from, from + 999);
-    if (error) throw new Error(`Customers read: ${error.message}`);
-    for (const c of batch ?? []) {
-      if (c.external_id) customerIdByExternal.set(c.external_id as string, c.id as string);
+      .upsert(customerRows.slice(i, i + 500), { onConflict: "store_id,external_id" })
+      .select("id,external_id");
+    if (error) throw new Error(`Customers upsert: ${error.message}`);
+    for (const c of (upserted ?? []) as Array<Record<string, unknown>>) {
+      const ext = String(c.external_id ?? "");
+      if (ext) customerIdByExternal.set(ext, String(c.id));
     }
-    if (!batch || batch.length < 1000) break;
+  }
+  // Respaldo para aliases/canónicos que el upsert no devolvió (p. ej. filas
+  // omitidas por aliasMap): lecturas acotadas por external_id, nunca
+  // full-scan. Chunks de 200: 500 UUIDs ≈18k chars rompen la URL (414).
+  {
+    const missing = customerRows
+      .map((r) => String(r.external_id))
+      .filter((ext) => ext && !customerIdByExternal.has(ext));
+    for (let i = 0; i < missing.length; i += 200) {
+      const { data: batch, error } = await db
+        .from("customers")
+        .select("id,external_id")
+        .eq("store_id", storeId)
+        .in("external_id", missing.slice(i, i + 200));
+      if (error) throw new Error(`Customers read: ${error.message}`);
+      for (const c of (batch ?? []) as Array<Record<string, unknown>>) {
+        const ext = String(c.external_id ?? "");
+        if (ext) customerIdByExternal.set(ext, String(c.id));
+      }
+    }
   }
 
   // 6. Upsert orders (solo las de customers conocidos).
@@ -337,6 +397,10 @@ export async function syncStoreFromMedusa(
       `skipped=${skippedOrders} test=${excludedTestOrders} invalid=${excludedInvalidOrders} ` +
       `markets=${marketRows.length} channels=${channelRows.length}`,
   );
+  // Nuevos customers pueden traer dominios nuevos: invalida el pending de enrich.
+  await import("@/lib/enrich")
+    .then((m) => m.invalidatePendingCache(storeId))
+    .catch(() => {});
   return {
     storeName: shopUrl,
     customers: customerRows.length,

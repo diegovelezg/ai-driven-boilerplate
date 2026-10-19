@@ -5,7 +5,8 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { COPYWRITER_GEN, draftSingleSignal } from "@/lib/copywriter";
-import { advanceRun, busyMessage, finishRun, getLatestRun, hasConflict, startRun, type BackgroundRun } from "@/lib/background";
+import { isFreshGenerator, isV1SignalReason } from "@/lib/copywriter-gen";
+import { advanceRun, busyMessage, finishRun, getLatestRun, hasConflict, setRunTotal, startRun, type BackgroundRun } from "@/lib/background";
 import { runSingleWithAudit, singleSignalScope, type SingleFinish } from "@/lib/single-audit";
 import { createLogger } from "@/lib/log";
 import { startCopywriterAction } from "@/lib/retention-actions";
@@ -190,7 +191,14 @@ export async function updateDraftContentAction(
       body: cleanBody,
       evidence_json: {
         ...prev,
-        manual_edit: { at: new Date().toISOString(), by: await resolveApprover() },
+        // La edición humana valida el texto: sella criterios actuales para
+        // que no quede como stale eterno (botón Regenerar + puerta de envío).
+        generator: COPYWRITER_GEN,
+        manual_edit: {
+          at: new Date().toISOString(),
+          by: await resolveApprover(),
+          prev_generator: (prev.generator as string | null) ?? null,
+        },
       },
     })
     .eq("id", id)
@@ -326,11 +334,14 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
       body: preview.body.slice(0, 2000),
       evidence_json: {
         ...prev,
+        // Re-redactado con el copywriter actual: sella criterios actuales.
+        generator: COPYWRITER_GEN,
         channel_switch: {
           from: current,
           to: preview.channel,
           at: new Date().toISOString(),
           by: await resolveApprover(),
+          prev_generator: (prev.generator as string | null) ?? null,
         },
       },
     })
@@ -499,7 +510,7 @@ export async function approveBatchAction(ids: string[]): Promise<ReviewOp> {
 /** ¿Este borrador nació con criterios viejos? (sin sello = v1 implícita). */
 function isStaleDraft(evidence: Record<string, unknown> | null): boolean {
   if (!evidence) return true;
-  return String(evidence.generator ?? "") !== COPYWRITER_GEN;
+  return !isFreshGenerator(String(evidence.generator ?? ""));
 }
 
 /** Regenera pendientes con criterios viejos: los borra, devuelve sus señales
@@ -514,6 +525,39 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
   const regenConflict = await hasConflict(storeId, { kind: "regenerate" }).catch(() => null);
   if (regenConflict) return { ok: false, message: busyMessage(regenConflict), run: regenConflict };
+  const log = createLogger("review-actions");
+  // Corrida visible (MO único: toda mutación larga va a la cinta de toasts).
+  // El scan + borrado tarda segundos y antes era sincrónico e invisible: el
+  // botón quedaba en "Regenerando…" sin toast. Se cierra ANTES de arrancar el
+  // copywriter (la matriz los marca incompatibles: un regenerate running
+  // frenaría al copywriter con "En curso").
+  let regenRunId: string | null = null;
+  try {
+    regenRunId = await startRun(storeId, "regenerate", "Regenerando borradores", 0);
+  } catch (e) {
+    log(`regenerate startRun falló: ${e instanceof Error ? e.message : e}`);
+  }
+  const closeRegen = async (p: {
+    status: "done" | "error";
+    processed: number;
+    summary?: string | null;
+    error?: string | null;
+  }) => {
+    if (!regenRunId) return;
+    const id = regenRunId;
+    regenRunId = null;
+    await finishRun(id, {
+      status: p.status,
+      processed: p.processed,
+      failed: 0,
+      summary: p.summary ?? null,
+      error: p.error ?? null,
+    }).catch(() => {});
+  };
+  const failRegen = async (message: string): Promise<ReviewOp> => {
+    await closeRegen({ status: "error", processed: 0, error: message });
+    return { ok: false, message };
+  };
   const all: Array<Record<string, unknown>> = [];
   let scanTruncated = false;
   for (let off = 0; ; off += 500) {
@@ -524,9 +568,15 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
       .eq("status", "pending_review")
       .order("id", { ascending: true })
       .range(off, off + 499);
-    if (error) return { ok: false, message: error.message };
+    if (error) return failRegen(error.message);
     const page = (data ?? []) as Array<Record<string, unknown>>;
     all.push(...page);
+    if (regenRunId) {
+      await advanceRun(
+        regenRunId,
+        { processed: all.length, failed: 0, current: `revisando ${formatNumber(all.length)}` },
+      ).catch(() => {});
+    }
     if (page.length < 500) break;
     if (all.length >= 5000) {
       scanTruncated = true;
@@ -537,22 +587,29 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   const stale = (data ?? []).filter((r) =>
     isStaleDraft((r.evidence_json as Record<string, unknown> | null) ?? null),
   );
-  if (stale.length === 0) {
-    return scanTruncated
-      ? { ok: true, message: "Revisados 5000 pendientes sin stale en la ventana; puede haber más fuera del CAP." }
-      : { ok: true, message: "Nada que regenerar: todo con criterios actuales." };
+  if (regenRunId) {
+    await setRunTotal(regenRunId, Math.max(stale.length, 1)).catch(() => {});
   }
-  // Antirreinyección legacy (issue #9): solo se regenera lo atado a señales
-  // retention:v1 (reason "ciclo ~Nd"). Los pendientes de señales del motor
-  // viejo o sin señal se dejan intactos: los cubre refresh-retention-v1.ts,
-  // no este botón. Sin esto, regenerar reinyecta a la cola lo que el refresh
-  // purgó.
+  if (stale.length === 0) {
+    const message = scanTruncated
+      ? "Revisados 5000 pendientes sin stale en la ventana; puede haber más fuera del CAP."
+      : "Nada que regenerar: todo con criterios actuales.";
+    await closeRegen({ status: "done", processed: all.length, summary: message });
+    return { ok: true, message };
+  }
+  // División con refresh-retention-v1.ts: el refresh solo cierra señales
+  // legacy SIN borrador vivo (las vivas las salta a propósito); este botón
+  // cubre las CON borrador vivo (v1 + legacy con señal) y purga huérfanos
+  // sin señal (no se pueden redactar ni enviar: el dispatcher los bloquea).
+  // Solo se reabre lo `actioned`: lo ya cerrado/descartado no se reinicia,
+  // así no se reinyecta lo que el refresh purgó.
   const withSignal = stale.filter((r) => String(r.signal_id ?? ""));
-  const noSignal = stale.length - withSignal.length;
-  const v1Ids: string[] = [];
-  const legacyIds: string[] = [];
-  if (withSignal.length > 0) {
-    const sids = [...new Set(withSignal.map((r) => String(r.signal_id)))];
+  const noSignalRows = stale.filter((r) => !String(r.signal_id ?? ""));
+  const noSignalIds = noSignalRows.map((r) => String(r.id));
+  const sids = [...new Set(withSignal.map((r) => String(r.signal_id)))];
+  let v1Count = 0;
+  let legacyCount = 0;
+  if (sids.length > 0) {
     const sigRows: Array<Record<string, unknown>> = [];
     for (let i = 0; i < sids.length; i += 200) {
       const { data: spage } = await db
@@ -566,32 +623,55 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
     );
     for (const sid of sids) {
       const reason = reasonById.get(sid) ?? "";
-      if (/ciclo ~\d+d/i.test(reason)) v1Ids.push(sid);
-      else legacyIds.push(sid);
+      if (isV1SignalReason(reason)) v1Count += 1;
+      else legacyCount += 1;
     }
   }
-  const regenIds = new Set(v1Ids);
-  const ids = withSignal.filter((r) => regenIds.has(String(r.signal_id))).map((r) => String(r.id));
-  const skipped = stale.length - ids.length;
-  if (ids.length === 0) {
-    return {
-      ok: true,
-      message: `Nada que regenerar por aquí: ${formatNumber(legacyIds.length)} legacy + ${formatNumber(noSignal)} sin señal intactos (cúbrelos con scripts/refresh-retention-v1.ts).`,
-    };
+  const idsWithSignal = withSignal.map((r) => String(r.id));
+  const idsAll = [...idsWithSignal, ...noSignalIds];
+  if (idsAll.length === 0) {
+    const message = "Nada que regenerar: todo con criterios actuales.";
+    await closeRegen({ status: "done", processed: stale.length, summary: message });
+    return { ok: true, message };
   }
-  for (let i = 0; i < ids.length; i += 200) {
-    const { error: delErr } = await db.from("proposed_actions").delete().in("id", ids.slice(i, i + 200));
-    if (delErr) return { ok: false, message: delErr.message };
+  let deleted = 0;
+  for (let i = 0; i < idsAll.length; i += 200) {
+    const { error: delErr } = await db.from("proposed_actions").delete().in("id", idsAll.slice(i, i + 200));
+    if (delErr) return failRegen(delErr.message);
+    deleted += Math.min(200, idsAll.length - i);
+    if (regenRunId) {
+      await advanceRun(
+        regenRunId,
+        { processed: deleted, failed: 0, current: `borrando ${formatNumber(deleted)}/${formatNumber(idsAll.length)}` },
+      ).catch(() => {});
+    }
   }
-  for (let i = 0; i < v1Ids.length; i += 200) {
-    await db.from("churn_signals").update({ status: "prioritized" }).in("id", v1Ids.slice(i, i + 200)).eq("status", "actioned");
+  for (let i = 0; i < sids.length; i += 200) {
+    await db.from("churn_signals").update({ status: "prioritized" }).in("id", sids.slice(i, i + 200)).eq("status", "actioned");
   }
   revalidatePath("/review");
+  // Cierre del regenerate antes del copywriter (incompatibles en la matriz).
+  await closeRegen({
+    status: "done",
+    processed: idsAll.length,
+    summary: `${formatNumber(idsAll.length)} borrador(es) viejo(s) a regenerar`,
+  });
   const started = await startCopywriterAction();
-  const extra = skipped > 0 ? ` ${formatNumber(skipped)} intacto(s) legacy/sin señal (van por refresh).` : "";
+  const parts: string[] = [];
+  if (idsWithSignal.length > 0) {
+    const detail =
+      v1Count + legacyCount === idsWithSignal.length && (v1Count > 0 || legacyCount > 0)
+        ? ` (${formatNumber(v1Count)} v1 + ${formatNumber(legacyCount)} legacy)`
+        : "";
+    parts.push(`${formatNumber(idsWithSignal.length)} con señal a regenerar${detail}`);
+  }
+  if (noSignalIds.length > 0) {
+    parts.push(`${formatNumber(noSignalIds.length)} huérfano(s) sin señal purgados (no se podían redactar ni enviar)`);
+  }
+  const extra = parts.length > 0 ? ` ${parts.join(" · ")}.` : "";
   return {
     ok: started.ok,
-    message: `${formatNumber(ids.length)} borrador(es) viejo(s) a regenerar.${extra} ${started.message}`,
+    message: `${formatNumber(idsAll.length)} borrador(es) viejo(s) procesados.${extra} ${started.message}`,
     run: started.run,
   };
 }

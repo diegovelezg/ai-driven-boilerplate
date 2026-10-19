@@ -16,7 +16,9 @@ async function main() {
   const batch = pending.slice(0, limit);
   const runId = await startRun(storeId, "enrichment", "Enriquecimiento", batch.length);
   console.log(`run ${runId} · ${batch.length} dominios`);
-  await runEnrichment(runId, batch);
+  await runEnrichment(runId, batch, { storeId });
+  const { invalidatePendingCache } = await import("@/lib/enrich");
+  invalidatePendingCache(storeId);
   console.log("fin");
 }
 

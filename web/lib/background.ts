@@ -94,6 +94,24 @@ export async function getLatestRun(storeId: string): Promise<BackgroundRun | nul
   return data ? mapRun(data as Record<string, unknown>) : null;
 }
 
+/** ISO del último run terminado de un kind (para throttles). null si nunca. */
+export async function getLastFinishedAt(storeId: string, kind: string): Promise<string | null> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("background_runs")
+    .select("started_at,finished_at")
+    .eq("store_id", storeId)
+    .eq("kind", kind)
+    .neq("status", "running")
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return null;
+  const r = (data ?? null) as Record<string, unknown> | null;
+  if (!r) return null;
+  return (String(r.finished_at ?? r.started_at ?? "") || null) as string | null;
+}
+
 export async function hasRunningRun(
   storeId: string,
   filter?: { kinds?: string[]; scopeKind?: ScopeKind; scopeId?: string | null },

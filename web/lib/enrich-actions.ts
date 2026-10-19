@@ -7,6 +7,7 @@ import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import {
   enrichDomain,
+  invalidatePendingCache,
   pendingDomains,
   runEnrichment,
 } from "@/lib/enrich";
@@ -50,13 +51,21 @@ export async function startEnrichmentAction(): Promise<StartEnrichState> {
     if (pending.length === 0) {
       return { ok: true, message: "No hay dominios pendientes.", run: await getLatestRun(storeId) };
     }
-    const runId = await startRun(storeId, "enrichment", "Enriquecimiento", pending.length);
+    // Tope por corrida (como morning cap 20): el resto va en la siguiente.
+    // Sin esto, un catálogo B2B con cientos de dominios lanza cientos de
+    // LLMs + fetches de una.
+    const ENRICH_UI_CAP = 50;
+    const batch = pending.slice(0, ENRICH_UI_CAP);
+    const runId = await startRun(storeId, "enrichment", "Enriquecimiento", batch.length);
     // Background: arranca cuando la respuesta ya se envió; sobrevive la navegación.
-    after(() => runEnrichment(runId, pending));
+    after(() => runEnrichment(runId, batch, { storeId }).finally(() => invalidatePendingCache(storeId)));
     revalidatePath("/customers");
     return {
       ok: true,
-      message: `Enriquecimiento iniciado (${formatNumber(pending.length)} dominios).`,
+      message:
+        batch.length < pending.length
+          ? `Enriquecimiento iniciado (${formatNumber(batch.length)} de ${formatNumber(pending.length)} dominios; el resto en la próxima).`
+          : `Enriquecimiento iniciado (${formatNumber(batch.length)} dominios).`,
       run: await getLatestRun(storeId),
     };
   } catch (e) {

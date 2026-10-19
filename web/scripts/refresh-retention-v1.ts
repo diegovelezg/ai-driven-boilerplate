@@ -34,8 +34,9 @@ async function main() {
   const legacy = all.filter((s) => isLegacyReason((s.reason as string | null) ?? null));
   console.log(`abiertas+priorizadas=${all.length} legacy=${legacy.length} retention_v1=${all.length - legacy.length}`);
 
-  // Borradores vivos: esas señales no se tocan (sus pendientes se regeneran
-  // con regenerateStaleDraftsAction, nunca se huérfanan).
+  // Borradores vivos: esas señales no se tocan (sus pendientes los cubre
+  // regenerateStaleDraftsAction: v1 + legacy con señal se borran y el
+  // copywriter los rehace; huérfanos sin señal se purgan ahí).
   const { data: live } = await db
     .from("proposed_actions")
     .select("signal_id")

@@ -169,24 +169,60 @@ async function rescueDomain(
  * personal, o unreachable con failed_attempts >= MAX_DOMAIN_ATTEMPTS.
  * Los unreachable con intentos restantes siguen pendientes (reintentan en la
  * próxima automática). (Se calcula en JS: PostgREST no hace split_part.)
+ * TTL simple: un terminal con enriched_at >90d vuelve a pendiente una vez.
  */
+const PENDING_TTL_MS = 5 * 60_000;
+const REFRESH_AFTER_MS = 90 * 24 * 60 * 60_000;
+const pendingCache = new Map<string, { at: number; data: string[] }>();
+/** Users precargados en el mismo scan de pendingDomains (fusión: evita el
+ *  segundo full-scan de batchDomainUsers). */
+const usersCache = new Map<string, { at: number; users: Map<string, DomainUsers> }>();
+
+function isFreshTerminal(enrichedAt: unknown): boolean {
+  if (typeof enrichedAt !== "string" || !enrichedAt) return true;
+  const ms = Date.parse(enrichedAt);
+  if (Number.isNaN(ms)) return true;
+  return Date.now() - ms <= REFRESH_AFTER_MS;
+}
+
 export async function pendingDomains(
   storeId: string,
   scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
 ): Promise<string[]> {
+  const useCache = scope === null;
+  const cacheKey = useCache ? `pending:${storeId}` : null;
+  if (cacheKey) {
+    const hit = pendingCache.get(cacheKey);
+    if (hit && Date.now() - hit.at <= PENDING_TTL_MS) return hit.data;
+  }
   const db = getSupabase();
 
   const domains = new Set<string>();
+  // Acumulador de users en la misma pasada (fusión con batchDomainUsers).
+  const acc = new Map<string, { emails: string[]; companies: string[]; buyers: number; total: number }>();
   for (let from = 0; ; from += 1000) {
     const { data, error } = await applyScopeFilter(
-      db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }),
+      db.from("customers").select("email,company_name,orders_count").eq("store_id", storeId).order("id", { ascending: true }),
       scope,
       "id",
     ).range(from, from + 999);
     if (error) throw new Error(`Customers read: ${error.message}`);
-    for (const r of data ?? []) {
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
       const d = domainFromEmail(String(r.email ?? ""));
-      if (d && classifyDomain(d).enrichable) domains.add(d);
+      if (!d || !classifyDomain(d).enrichable) continue;
+      domains.add(d);
+      if (useCache) {
+        const e = acc.get(d) ?? { emails: [], companies: [], buyers: 0, total: 0 };
+        e.total += 1;
+        if (e.emails.length < 5) {
+          const co = String(r.company_name ?? "").trim();
+          e.emails.push(`- ${String(r.email ?? "")}${co ? ` (empresa: ${co})` : ""}`);
+        }
+        const co = String(r.company_name ?? "").trim();
+        if (co && !e.companies.includes(co)) e.companies.push(co);
+        if (Number(r.orders_count ?? 0) > 0) e.buyers += 1;
+        acc.set(d, e);
+      }
     }
     if (!data || data.length < 1000) break;
   }
@@ -200,7 +236,7 @@ export async function pendingDomains(
     let rows: Array<Record<string, unknown>> | null = null;
     const attempt = await db
       .from("domains")
-      .select("domain,domain_type,failed_attempts")
+      .select("domain,domain_type,failed_attempts,enriched_at")
       .in("domain", list.slice(i, i + 500));
     if (attempt.error) {
       const fallback = await db
@@ -215,6 +251,8 @@ export async function pendingDomains(
     for (const r of rows) {
       const t = String(r.domain_type ?? "");
       const n = Number(r.failed_attempts ?? 0);
+      // TTL: terminal viejo (>90d) se reabre una vez para refrescar ficha.
+      if (!isFreshTerminal(r.enriched_at)) continue;
       if (t === "business" || t === "institutional" || t === "personal") {
         terminal.add(String(r.domain));
       } else if (t === "unreachable") {
@@ -224,16 +262,116 @@ export async function pendingDomains(
       }
     }
   }
-  return list.filter((d) => !terminal.has(d));
+  const out = list.filter((d) => !terminal.has(d));
+  if (cacheKey) {
+    pendingCache.set(cacheKey, { at: Date.now(), data: out });
+    // Users fusionados: batchDomainUsers los consume sin segundo scan.
+    const users = new Map<string, DomainUsers>();
+    for (const d of out) {
+      const e = acc.get(d);
+      if (!e) {
+        users.set(d, { context: "", company: null, buyers: 0, full: true });
+        continue;
+      }
+      users.set(d, {
+        context: `Muestra de ${e.total} customer(s) con este dominio (${e.buyers} compradores):\n${e.emails.join("\n")}`,
+        company: e.companies[0] ?? null,
+        buyers: e.buyers,
+        full: true,
+      });
+    }
+    usersCache.set(cacheKey, { at: Date.now(), users });
+  }
+  return out;
 }
 
 export type EnrichDomainResult = "enriched" | "skipped" | "failed";
 
 /** Evidencia local para el gate: muestra de emails + empresas que usan el dominio. */
-interface DomainUsers {
+export interface DomainUsers {
   context: string;
   company: string | null;
   buyers: number;
+  /** true = conteo full (batch, un scan); false = ventana 20 (LIKE puntual). */
+  full: boolean;
+}
+
+/** Invalida la caché de pending (tras resolver/fallar un dominio o sincronizar). */
+export function invalidatePendingCache(storeId?: string): void {
+  if (storeId) {
+    pendingCache.delete(`pending:${storeId}`);
+    usersCache.delete(`pending:${storeId}`);
+    return;
+  }
+  pendingCache.clear();
+  usersCache.clear();
+}
+
+/** Una sola pasada sobre customers para N dominios: reemplaza los N `LIKE
+ *  '%@dom'` de `domainUsers` (sin índice de sufijo) por un scan paginado. */
+export async function batchDomainUsers(
+  storeId: string,
+  domains: string[],
+): Promise<Map<string, DomainUsers>> {
+  const wanted = new Set(domains.map((d) => d.trim().toLowerCase()).filter(Boolean));
+  // Fusión: si pendingDomains corrió hace <5 min, los users ya están.
+  const cached = usersCache.get(`pending:${storeId}`);
+  if (cached && Date.now() - cached.at <= PENDING_TTL_MS) {
+    let complete = true;
+    for (const d of wanted) {
+      if (!cached.users.has(d)) {
+        complete = false;
+        break;
+      }
+    }
+    if (complete) {
+      const out = new Map<string, DomainUsers>();
+      for (const d of wanted) out.set(d, cached.users.get(d)!);
+      return out;
+    }
+  }
+  const acc = new Map<string, { emails: string[]; companies: string[]; buyers: number; total: number }>();
+  if (wanted.size === 0) return new Map();
+  const db = getSupabase();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db
+      .from("customers")
+      .select("email,company_name,orders_count")
+      .eq("store_id", storeId)
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (error) throw new Error(`Customers read: ${error.message}`);
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const d = domainFromEmail(String(r.email ?? ""));
+      if (!d || !wanted.has(d)) continue;
+      const e = acc.get(d) ?? { emails: [], companies: [], buyers: 0, total: 0 };
+      e.total += 1;
+      if (e.emails.length < 5) {
+        const co = String(r.company_name ?? "").trim();
+        e.emails.push(`- ${String(r.email ?? "")}${co ? ` (empresa: ${co})` : ""}`);
+      }
+      const co = String(r.company_name ?? "").trim();
+      if (co && !e.companies.includes(co)) e.companies.push(co);
+      if (Number(r.orders_count ?? 0) > 0) e.buyers += 1;
+      acc.set(d, e);
+    }
+    if (!data || data.length < 1000) break;
+  }
+  const out = new Map<string, DomainUsers>();
+  for (const d of wanted) {
+    const e = acc.get(d);
+    if (!e) {
+      out.set(d, { context: "", company: null, buyers: 0, full: true });
+      continue;
+    }
+    out.set(d, {
+      context: `Muestra de ${e.total} customer(s) con este dominio (${e.buyers} compradores):\n${e.emails.join("\n")}`,
+      company: e.companies[0] ?? null,
+      buyers: e.buyers,
+      full: true,
+    });
+  }
+  return out;
 }
 
 async function domainUsers(domain: string): Promise<DomainUsers> {
@@ -243,7 +381,7 @@ async function domainUsers(domain: string): Promise<DomainUsers> {
     .select("email,company_name,orders_count", { count: "exact" })
     .like("email", `%@${esc}`)
     .limit(20);
-  if (error || !data || data.length === 0) return { context: "", company: null, buyers: 0 };
+  if (error || !data || data.length === 0) return { context: "", company: null, buyers: 0, full: false };
   const rows = data as Array<Record<string, unknown>>;
   const total = count ?? rows.length;
   const lines = rows.slice(0, 5).map((r) => {
@@ -253,9 +391,10 @@ async function domainUsers(domain: string): Promise<DomainUsers> {
   const companies = [...new Set(rows.map((r) => String(r.company_name ?? "").trim()).filter(Boolean))];
   const buyersWindow = rows.filter((r) => Number(r.orders_count ?? 0) > 0).length;
   return {
-    context: `Top-20 de ${total} customer(s) con este dominio (${buyersWindow} compradores en la muestra):\n${lines.join("\n")}`,
+    context: `Muestra de ${total} customer(s) con este dominio (${buyersWindow} compradores en la muestra):\n${lines.join("\n")}`,
     company: companies[0] ?? null,
     buyers: buyersWindow,
+    full: false,
   };
 }
 
@@ -304,18 +443,20 @@ async function recordFailure(domain: string, lastError: string): Promise<number>
 export async function enrichDomain(
   domain: string,
   force = false,
+  usersOverride?: DomainUsers | null,
 ): Promise<EnrichDomainResult> {
   const d = domain.trim().toLowerCase();
   const db = getSupabase();
 
   if (!force) {
     // Fila terminal (enriquecido/personal/unreachable agotado) → skipped.
-    // Unreachable con intentos restantes → se reintenta.
+    // Unreachable con intentos restantes → se reintenta. TTL: terminal viejo
+    // (>90d) se reabre (no se salta aquí; lo filtra pendingDomains).
     let row: Record<string, unknown> | null = null;
     try {
       const { data, error } = await db
         .from("domains")
-        .select("domain,domain_type,failed_attempts")
+        .select("domain,domain_type,failed_attempts,enriched_at")
         .eq("domain", d)
         .maybeSingle();
       if (error) throw new Error(`Domains read: ${error.message}`);
@@ -334,9 +475,11 @@ export async function enrichDomain(
     if (row) {
       const t = String(row.domain_type ?? "");
       const n = Number(row.failed_attempts ?? 0);
-      if (t === "business" || t === "institutional" || t === "personal") return "skipped";
-      if (t === "unreachable" && n >= MAX_DOMAIN_ATTEMPTS) return "skipped";
-      if (t !== "unreachable") return "skipped";
+      if (isFreshTerminal(row.enriched_at)) {
+        if (t === "business" || t === "institutional" || t === "personal") return "skipped";
+        if (t === "unreachable" && n >= MAX_DOMAIN_ATTEMPTS) return "skipped";
+        if (t !== "unreachable") return "skipped";
+      }
     }
   }
 
@@ -347,7 +490,9 @@ export async function enrichDomain(
   // Sin veredicto (rehúse/error/sin key) → se sigue con extracción y se loguea.
   const cls0 = classifyDomain(d);
   log(`${d} capa=regex type=${cls0.type} enrichable=${cls0.enrichable}`);
-  const users = await domainUsers(d);
+  // Una sola pasada batch (runEnrichment prefiere batchDomainUsers); el LIKE
+  // por dominio queda como respaldo para llamadas puntuales (drawer/script).
+  const users = usersOverride ?? await domainUsers(d);
   const tGate = now();
   try {
     const v = await judgeBusinessDomain(d, users.context);
@@ -378,6 +523,15 @@ export async function enrichDomain(
   let page = await fetchHomepage(d);
   if (!page) {
     log(`${d} capa=fetch resultado=fallo ms=${now() - tFetch}`);
+    // Sin compradores ni empresa declarada no se gasta rescue (searxng +
+    // fetches): se registra el fallo y reintenta en la próxima (máx 3).
+    // Solo con conteo full (batch): en ventana puntual un 0 no prueba nada.
+    if (users.full && users.buyers === 0 && !users.company) {
+      const attempts = await recordFailure(d, "fetch-directo sin éxito y sin compradores/empresa (rescue omitido)");
+      const terminal = attempts >= MAX_DOMAIN_ATTEMPTS;
+      log(`${d} → failed intento=${attempts}/${MAX_DOMAIN_ATTEMPTS} rescue-omitido ${terminal ? "terminal=unreachable" : "reintentable"}`);
+      return "failed";
+    }
     const rescued = await rescueDomain(d, users);
     if (!rescued) {
       const attempts = await recordFailure(d, "fetch-directo+rescue sin éxito (detalle en log)");
@@ -426,15 +580,26 @@ const ENRICH_CONCURRENCY = 5;
 export async function runEnrichment(
   runId: string,
   domains: string[],
+  opts: { storeId?: string | null } = {},
 ): Promise<void> {
   let processed = 0;
   let failed = 0;
   log(`run ${runId} start total=${domains.length} concurrency=${ENRICH_CONCURRENCY}`);
 
+  // Una sola pasada de users para todo el lote (evita N LIKE '%@dom').
+  let usersByDomain: Map<string, DomainUsers> | null = null;
+  if (opts.storeId) {
+    try {
+      usersByDomain = await batchDomainUsers(opts.storeId, domains);
+    } catch (e) {
+      log(`run ${runId} batch users falló (${e instanceof Error ? e.message : e}); respaldo por dominio`);
+    }
+  }
+
   await mapPool(domains, ENRICH_CONCURRENCY, async (d) => {
     await advanceRun(runId, { processed, failed, current: d });
     try {
-      const r = await enrichDomain(d);
+      const r = await enrichDomain(d, false, usersByDomain?.get(d.trim().toLowerCase()) ?? null);
       if (r === "failed") {
         failed += 1;
         log(`run ${runId} ${d} → failed`);

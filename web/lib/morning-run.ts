@@ -76,12 +76,12 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
   // 1. Enriquecimiento acotado: mejora el brief del copywriter (empresa/
   // industria). Cap 20 para no alargar el login; el resto va bajo demanda.
   try {
-    const { pendingDomains, runEnrichment } = await import("@/lib/enrich");
+    const { pendingDomains, runEnrichment, invalidatePendingCache } = await import("@/lib/enrich");
     const pending = await pendingDomains(storeId).catch(() => [] as string[]);
     const batch = pending.slice(0, 20);
     if (batch.length > 0) {
       await step(storeId, "enrichment", "Enriquecimiento", batch.length, (runId) =>
-        runEnrichment(runId, batch),
+        runEnrichment(runId, batch, { storeId }).finally(() => invalidatePendingCache(storeId)),
       );
     }
   } catch (e) {

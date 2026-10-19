@@ -105,7 +105,7 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
   if (count <= 0) return null;
   return (
     <span className="flex items-center gap-2">
-      <AppTooltip tip="Borra los pendientes con criterios viejos y los redacta de nuevo. No toca aprobados ni enviados.">
+      <AppTooltip tip="Borra los pendientes con criterios viejos y los redacta de nuevo con el copywriter actual (v1 + legacy con señal). Sin señal se purgan: no se pueden redactar ni enviar. No toca aprobados ni enviados.">
         <span className="inline-flex items-center">
           <Button
             size="sm"
@@ -118,7 +118,8 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
                 // suma su chip sin esperar al refresh.
                 const r = bg ? await bg.start(() => onRegenerate().then((x) => ({ ...x, run: x.run ?? null }))) : await onRegenerate();
                 setMsg(r.message);
-                router.refresh();
+                // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
+                if (!bg) router.refresh();
               } finally {
                 setBusy(false);
               }

@@ -48,4 +48,26 @@ describe("shouldSyncOnLogin", () => {
       { sync: false, reason: "run-en-curso" },
     );
   });
+
+  it("omite con sync done reciente (throttle 15 min)", () => {
+    assert.deepEqual(
+      shouldSyncOnLogin(MEDUSA_OK, {
+        supabaseConfigured: true,
+        hasRunningRun: false,
+        lastSyncDoneAt: new Date().toISOString(),
+      }),
+      { sync: false, reason: "sync-reciente" },
+    );
+  });
+
+  it("dispara con sync done viejo (>15 min)", () => {
+    assert.deepEqual(
+      shouldSyncOnLogin(MEDUSA_OK, {
+        supabaseConfigured: true,
+        hasRunningRun: false,
+        lastSyncDoneAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      }),
+      { sync: true, reason: "ok" },
+    );
+  });
 });

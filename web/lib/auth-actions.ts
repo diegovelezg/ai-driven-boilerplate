@@ -64,9 +64,15 @@ function scheduleSyncOnLogin(): void {
         : null;
       // hasRunningRun exige storeId; sin tienda aún no hay run en curso.
       const running = probeStoreId ? await hasRunningRun(probeStoreId) : false;
+      // Throttle: si hubo sync done hace <15 min, no se repite el full.
+      const { getLastFinishedAt } = await import("@/lib/background");
+      const lastSyncDoneAt = probeStoreId
+        ? await getLastFinishedAt(probeStoreId, "sync").catch(() => null)
+        : null;
       const decision = shouldSyncOnLogin(conn, {
         supabaseConfigured,
         hasRunningRun: running,
+        lastSyncDoneAt,
       });
       if (!decision.sync) {
         log(`login sync omitido (${decision.reason})`);

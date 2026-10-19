@@ -185,7 +185,12 @@ describe("paginación estable (offset sin duplicados/ausentes)", () => {
     for (const f of files) {
       const body = src(f).replace(/\/\/.*$/gm, "");
       const ranges = (body.match(/\.range\(/g) ?? []).length;
-      assert.ok(ranges > 0, `${f}: sin .range, nada que chequear`);
+      // Sin offset no hay inestabilidad que chequear (sync usa returning en
+      // vez del re-read paginado desde KISS): solo sync está exento.
+      if (ranges === 0) {
+        assert.equal(f, "lib/sync.ts", `${f}: sin .range, ¿offset sin tie-breaker o allowlist pendiente?`);
+        continue;
+      }
       // Cada cadena con .range debe contener .order("id" en los 800 chars previos.
       const idxs: number[] = [];
       let at = body.indexOf(".range(");
