@@ -39,7 +39,6 @@ Reglas:
 export function getCustomerAgent(ctx: AgentContext): LlmAgent {
   const cfg = getLlmConfig(CUSTOMER_AGENT_PROCESS);
   const model = resolveModelInstance(cfg);
-  const thinkingProvider = [cfg.primary.provider, cfg.fallback?.provider].find((p) => p === "gemini") ?? cfg.primary.provider;
   const focus = ctx.focusLabel?.trim() || (ctx.customerId ? `customer ${ctx.customerId}` : "la tienda");
   return new LlmAgent({
     name: CUSTOMER_AGENT_NAME,
@@ -54,7 +53,7 @@ export function getCustomerAgent(ctx: AgentContext): LlmAgent {
       // config.storeId/config.process para loguear usage en llm_usage.
       storeId: ctx.storeId ?? null,
       process: CUSTOMER_AGENT_PROCESS,
-      ...getGeminiThinkingConfig(thinkingProvider, cfg.reasoningEffort),
+      ...getGeminiThinkingConfig(),
     } as never,
   });
 }

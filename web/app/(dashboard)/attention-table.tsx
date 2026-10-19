@@ -19,8 +19,6 @@ import {
 import type { EditableCustomer } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber } from "@/lib/format";
-import { useBackgroundOrNull } from "@/components/background-status";
-import { SectionLoading } from "@/components/section-loading";
 import { CustomerDrawer } from "./customers/customer-drawer";
 
 export interface AttentionItem {
@@ -254,55 +252,5 @@ export function AttentionTable({
         />
       )}
     </>
-  );
-}
-
-/** Estado vacío de la mira (Fase 4): SSR inicial + vivo del contexto. Sin
- *  realtime, una corrida que arranca tras el primer render mostraría un
- *  vacío engañoso en vez del skeleton. */
-function AttentionEmptyState({
-  initialRunning,
-  pending,
-  masivos,
-  reviewHref,
-}: {
-  initialRunning: boolean;
-  pending: number;
-  masivos: number;
-  reviewHref: string;
-}) {
-  const bg = useBackgroundOrNull();
-  const liveRunning =
-    initialRunning || (bg?.activeRuns.some((r) => r.kind === "scout" || r.kind === "strategist") ?? false);
-  if (liveRunning) {
-    return (
-      <div className="p-4">
-        <SectionLoading label="clientes en la mira" rows={2} />
-      </div>
-    );
-  }
-  if (pending > 0) {
-    return (
-      <p className="p-4 text-[13px] text-muted-foreground">
-        Los de hoy ya están listos en{" "}
-        <Link href={reviewHref} className="underline">
-          Review
-        </Link>
-        .
-      </p>
-    );
-  }
-  if (masivos > 0) {
-    return (
-      <p className="p-4 text-[13px] text-muted-foreground">
-        Tu mira son solo inactivos antiguos: van con reactivación masiva,
-        no 1-a-1.
-      </p>
-    );
-  }
-  return (
-    <p className="p-4 text-[13px] text-muted-foreground">
-      Todo al día — ningún cliente vencido. Tu equipo IA sigue vigilando.
-    </p>
   );
 }

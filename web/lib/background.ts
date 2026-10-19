@@ -265,18 +265,6 @@ export async function advanceRun(
     .eq("id", runId);
 }
 
-/** Heartbeat explícito para tramos largos sin progreso (nunca lanza). */
-async function touchRun(runId: string): Promise<void> {
-  try {
-    await getSupabase()
-      .from("background_runs")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", runId);
-  } catch {
-    // Best-effort: el heartbeat nunca rompe el worker.
-  }
-}
-
 /** Cierra una corrida con su resultado final. */
 export async function finishRun(
   runId: string,

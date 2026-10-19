@@ -135,7 +135,10 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void refreshRuns();
+    // Diferido: evita setState sincrónico en el efecto (cascada de renders).
+    queueMicrotask(() => {
+      void refreshRuns();
+    });
   }, [refreshRuns]);
 
   const isStale = useCallback(

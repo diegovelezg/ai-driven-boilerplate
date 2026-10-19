@@ -113,9 +113,3 @@ export function displayStoreName(s: { name: string | null; shop_url: string }): 
   }
   return s.shop_url;
 }
-
-/** Añade/preserva ?store= en un href interno (para InsightStrip/CustomersView). */
-function withStoreParam(href: string, storeId: string): string {
-  const sep = href.includes("?") ? "&" : "?";
-  return `${href}${sep}store=${encodeURIComponent(storeId)}`;
-}

@@ -6,33 +6,14 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   decryptSecret,
   encryptSecret,
-  fingerprintSecret,
   getEncryptionKey,
   isEncryptionConfigured,
-  maskSecret,
 } from "@/lib/secrets-crypto";
 
 const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
 type SecretAction = "upsert" | "revoke" | "migrate";
-
-interface SecretStatus {
-  keyName: SecretKeyName;
-  configured: boolean;
-  masked: string;
-  updatedAt: string | null;
-}
-
-interface SecretAuditRow {
-  id: string;
-  storeId: string;
-  keyName: string;
-  action: SecretAction;
-  keyFingerprint: string | null;
-  actor: string | null;
-  createdAt: string;
-}
 
 function shaShort(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
@@ -105,32 +86,6 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
   }
 }
 
-/** Estado sin valores (para Settings): configurado + máscara + updated_at. */
-async function getStoreSecretStatus(storeId: string): Promise<SecretStatus[]> {
-  const secrets = await getStoreSecrets(storeId);
-  const updatedByKey = new Map<string, string>();
-  if (isSupabaseConfigured()) {
-    try {
-      const { data } = await getSupabase()
-        .from("store_secrets")
-        .select("key_name,updated_at")
-        .eq("store_id", storeId)
-        .in("key_name", [...SECRET_KEYS]);
-      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-        updatedByKey.set(String(r.key_name ?? ""), String(r.updated_at ?? ""));
-      }
-    } catch {
-      // sin updated_at: se muestra sin fecha
-    }
-  }
-  return SECRET_KEYS.map((k) => ({
-    keyName: k,
-    configured: !!secrets[k],
-    masked: maskSecret(secrets[k] || null),
-    updatedAt: updatedByKey.get(k) ?? null,
-  }));
-}
-
 /**
  * Guarda (o revoca con "" ) un secreto: cifra + upsert + auditoría.
  * Devuelve { migratedToDb: true } si quedó en DB; false si cayó a JSON
@@ -169,33 +124,5 @@ export async function setStoreSecret(
   if (error) return { persistedToDb: false };
   await logAudit(storeId, keyName, "upsert", value, actor);
   return { persistedToDb: true };
-}
-
-/** Últimas auditorías (sin valores, solo quién/cuándo/qué). */
-async function getSecretAudits(
-  storeId: string,
-  limit = 20,
-): Promise<SecretAuditRow[]> {
-  if (!isSupabaseConfigured()) return [];
-  try {
-    const { data, error } = await getSupabase()
-      .from("store_secret_audits")
-      .select("id,store_id,key_name,action,key_fingerprint,actor,created_at")
-      .eq("store_id", storeId)
-      .order("created_at", { ascending: false })
-      .limit(Math.min(Math.max(limit, 1), 100));
-    if (error) return [];
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-      id: String(r.id ?? ""),
-      storeId: String(r.store_id ?? ""),
-      keyName: String(r.key_name ?? ""),
-      action: String(r.action ?? "upsert") as SecretAction,
-      keyFingerprint: (r.key_fingerprint as string | null) ?? null,
-      actor: (r.actor as string | null) ?? null,
-      createdAt: String(r.created_at ?? ""),
-    }));
-  } catch {
-    return [];
-  }
 }
 

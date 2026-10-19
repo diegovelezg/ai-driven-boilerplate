@@ -165,48 +165,6 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
   );
 }
 
-/** Cambia un pendiente al otro canal (solo si el cliente tiene ambos
- *  contactos). Re-redacta la misma fila: nunca hay dos borradores vivos. */
-function SwitchChannelButton({
-  id,
-  toLabel,
-  onSwitch,
-}: {
-  id: string;
-  toLabel: string;
-  onSwitch: Op;
-}) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  return (
-    <span className="flex items-center gap-2">
-      <AppTooltip tip="Re-redacta este borrador para el otro canal. Solo una versión vive a la vez.">
-        <span className="inline-flex items-center">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                const r = await onSwitch(id);
-                setMsg(r.message);
-                router.refresh();
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "Cambiando…" : `Cambiar a ${toLabel}`}
-          </Button>
-        </span>
-      </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
-    </span>
-  );
-}
-
 /** Marca un aprobado-WhatsApp como enviado manual (flujo wa.me). */
 export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);

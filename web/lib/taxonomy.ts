@@ -9,8 +9,6 @@ export interface ShopifyVertical {
   name: string;
 }
 
-const TAXONOMY_VERSION: string = (snapshot as { version: string }).version;
-
 export const VERTICALS: ShopifyVertical[] = (
   snapshot as { verticals: ShopifyVertical[] }
 ).verticals;

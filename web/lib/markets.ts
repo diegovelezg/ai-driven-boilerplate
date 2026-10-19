@@ -224,7 +224,7 @@ export function isLargeIdScope(scope: MarketScopeLike | null): boolean {
  * vez, luego un `.in(chunk)` por chunk SIN el OR-null (si no, los null se
  * duplican y el count miente). El llamador ordena/limita al final.
  */
-async function fetchIdChunks<T>(
+export async function fetchIdChunks<T>(
   ids: string[],
   fn: (chunk: string[]) => Promise<T[]>,
   key?: (t: T) => string,

@@ -136,6 +136,17 @@ export function SettingsTabs({
               title="Lectura de tus datos"
               description="Ciclo declarado vs observado en tus pedidos reales."
               contentClassName="flex flex-col gap-4"
+              footer={
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {motor.observado !== null
+                    ? `Tus clientes vuelven cada ~${formatNumber(motor.observado)}d. `
+                    : "Aún sin suficiente historial para medir el ritmo real. "}
+                  {motor.total > 0
+                    ? `Estimaciones firmes en ${formatNumber(motor.firmes)} de ${formatNumber(motor.total)} clientes (el resto aún afina con más datos). `
+                    : ""}
+                  Si cambias el ciclo en Negocio, las predicciones de mañana ya usan este ciclo.
+                </p>
+              }
             >
               <dl className="grid grid-cols-3 gap-4">
                 <div className="flex min-w-0 flex-col gap-1">
@@ -165,15 +176,6 @@ export function SettingsTabs({
                   </dd>
                 </div>
               </dl>
-              <p className="border-t border-border/60 pt-4 text-xs leading-relaxed text-muted-foreground">
-                {motor.observado !== null
-                  ? `Tus clientes vuelven cada ~${formatNumber(motor.observado)}d. `
-                  : "Aún sin suficiente historial para medir el ritmo real. "}
-                {motor.total > 0
-                  ? `Estimaciones firmes en ${formatNumber(motor.firmes)} de ${formatNumber(motor.total)} clientes (el resto aún afina con más datos). `
-                  : ""}
-                Si cambias el ciclo en Negocio, las predicciones de mañana ya usan este ciclo.
-              </p>
             </AppCard>
           ) : (
             <AppCardState tone="emerald">

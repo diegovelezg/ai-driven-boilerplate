@@ -293,7 +293,8 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </label>
               </div>
 
-              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-4">
                 <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                   Qué vendes
                 </p>
@@ -322,7 +323,8 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-4">
                 <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                   Cada cuánto vuelven
                 </p>
@@ -359,7 +361,8 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1.5 border-t border-border/60 pt-6">
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-1.5">
                 <p className="text-xs text-muted-foreground">
                   Patrón que usará el motor: {ARCHETYPES[archetype].label}.
                 </p>

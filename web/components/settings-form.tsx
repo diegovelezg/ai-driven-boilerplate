@@ -133,7 +133,8 @@ export function SettingsForm({
   const locked = hasToken && !editing;
   useEffect(() => {
     if (state?.ok) {
-      setEditing(false);
+      // Diferido: evita setState sincrónico en el efecto (cascada de renders).
+      queueMicrotask(() => setEditing(false));
       router.refresh();
     }
   }, [state, router]);
@@ -219,7 +220,8 @@ export function SettingsForm({
 
           {platform === "medusa" ? (
             <>
-              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-4">
                 <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                   Servidor
                 </p>
@@ -251,7 +253,8 @@ export function SettingsForm({
                   </Select>
                 </div>
               </div>
-              <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-4">
                 <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                   Credenciales
                 </p>
@@ -291,12 +294,14 @@ export function SettingsForm({
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
-              <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                Credenciales
-              </p>
-              <div className="grid gap-2">
-                <Label htmlFor="shopifyStore">Store domain</Label>
+            <>
+              <hr className="border-border/60" />
+              <div className="flex flex-col gap-4">
+                <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                  Credenciales
+                </p>
+                <div className="grid gap-2">
+                  <Label htmlFor="shopifyStore">Store domain</Label>
                 <Input
                   id="shopifyStore"
                   name="shopifyStore"
@@ -318,6 +323,7 @@ export function SettingsForm({
                 />
               </div>
             </div>
+            </>
           )}
         </div>
       </AppCard>
@@ -346,7 +352,8 @@ export function EmailSettingsForm({
   const keyLocked = hasKey && !editingKey && provider !== "none";
   useEffect(() => {
     if (saveState?.ok) {
-      setEditingKey(false);
+      // Diferido: evita setState sincrónico en el efecto (cascada de renders).
+      queueMicrotask(() => setEditingKey(false));
       router.refresh();
     }
   }, [saveState, router]);
@@ -411,7 +418,8 @@ export function EmailSettingsForm({
                 </p>
               </div>
             </div>
-            <div className="flex flex-col gap-4 border-t border-border/60 pt-6">
+            <hr className="border-border/60" />
+            <div className="flex flex-col gap-4">
               <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                 Proveedor
               </p>
