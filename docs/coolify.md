@@ -83,9 +83,9 @@ internas de GoTrue): se recrea el usuario y se linkea.
 ## 6. Si algo falla
 
 - `migrator` → `MIGRATIONS_OK` en logs = DB al día. Si una migración falla, el deploy se detiene antes de levantar `web` (a propósito).
-- Deploy parado en `migrator ... Waiting` → el contenedor no terminó (compose espera su exit por el `service_completed_successfully`). Ya no puede quedarse colgado: el script acota la espera de `db` (180s), cada sentencia (`lock_timeout` 30s / `statement_timeout` 5min) y cada `psql` (10min). Revisa:
+- Deploy parado en `migrator ... Waiting` → el contenedor no terminó (compose espera su exit por el `service_completed_successfully`). **Causa típica en Coolify:** si un servicio one-shot no declara `restart`, Coolify le inyecta `restart: unless-stopped`; al salir con exit 0 Docker lo reinicia y el estado "completed" nunca llega. Por eso `migrator` lleva `restart: "no"` explícito — no lo quites. Como red de seguridad, el script además acota la espera de `db` (180s), cada sentencia (`lock_timeout` 30s / `statement_timeout` 5min) y cada `psql` (10min). Si igual se cuelga, revisa:
   ```bash
-  docker ps -a | grep migrator                      # ¿sigue Up o ya Exited?
+  docker ps -a | grep migrator                      # ¿Up/restarting o Exited?
   docker logs --tail=200 <nombre-migrator>          # dice el archivo y el ERROR
   docker exec <nombre-db> psql -U postgres -c \
     "select pid, state, wait_event_type, wait_event, now()-xact_start as age, left(query,120)

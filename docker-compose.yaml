@@ -161,7 +161,13 @@ services:
 
   migrator:
     image: postgres:17-alpine
-    # Contenedor one-shot: no determina la salud del deploy (doc oficial Coolify).
+    # OBLIGATORIO en servicios one-shot: Coolify inyecta
+    # `restart: unless-stopped` en todo servicio que no declare `restart`
+    # (bootstrap/helpers/shared.php). Al terminar con exit 0 Docker lo
+    # reinicia y `service_completed_successfully` nunca se cumple: el deploy
+    # se queda pegado en "migrator ... Waiting" para siempre.
+    restart: "no"
+    # Además, que no cuente para la salud global del stack (doc oficial Coolify).
     exclude_from_hc: true
     depends_on:
       db:
