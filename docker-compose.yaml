@@ -114,7 +114,11 @@ services:
     # (ufw allow from TU_IP to any port 3001) o usá 127.0.0.1:3001:3000 y
     # un túnel SSH. Ver docs/coolify.md.
     ports:
-      - "3001:3000"
+      # Solo loopback: Studio NO queda expuesto a internet. Se entra con
+      # túnel SSH desde tu máquina:
+      #   ssh -N -L 3001:127.0.0.1:3001 root@IP_DEL_VPS
+      #   http://localhost:3001
+      - "127.0.0.1:3001:3000"
     depends_on:
       meta:
         condition: service_started
