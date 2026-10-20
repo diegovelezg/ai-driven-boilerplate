@@ -114,6 +114,12 @@ services:
   studio:
     image: supabase/studio:2026.10.12-sha-3699278
     restart: unless-stopped
+    # Acceso directo por IP sin dominio: http://IP_DEL_VPS:3001
+    # OJO: Studio no tiene login propio. Restringí el puerto con firewall
+    # (ufw allow from TU_IP to any port 3001) o usá 127.0.0.1:3001:3000 y
+    # un túnel SSH. Ver docs/coolify.md.
+    ports:
+      - "3001:3000"
     depends_on:
       meta:
         condition: service_started
