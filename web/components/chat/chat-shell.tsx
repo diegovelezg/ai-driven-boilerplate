@@ -6,6 +6,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
+import { Spinner } from "@/components/ui/spinner";
 import type { ChatMessage } from "./types";
 
 /** Markdown único para todo chat: un solo lugar para ajustar estilos. */
@@ -17,23 +19,15 @@ function ChatMarkdown({ content }: { content: string }) {
   );
 }
 
-/** Tres puntos con bounce: indicador de typing único para todo chat. */
-function ChatTypingDots({ label }: { label?: string }) {
+/** Estado de espera del agente: Marker + Spinner + shimmer (patrón shadcn). */
+function ChatThinkingMarker({ label }: { label: string }) {
   return (
-    <span
-      className="inline-flex items-center gap-1 py-1.5"
-      role="status"
-      aria-label={label ?? "Escribiendo"}
-    >
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          aria-hidden
-          className="size-1.5 animate-bounce rounded-full bg-muted-foreground"
-          style={{ animationDelay: `${i * 150}ms` }}
-        />
-      ))}
-    </span>
+    <Marker role="status">
+      <MarkerIcon>
+        <Spinner />
+      </MarkerIcon>
+      <MarkerContent className="shimmer">{label}</MarkerContent>
+    </Marker>
   );
 }
 
@@ -165,14 +159,14 @@ export function ChatShell({
                     {m.content ? (
                       <ChatMarkdown content={m.content} />
                     ) : (
-                      <ChatTypingDots label={thinkingLabel} />
+                      <ChatThinkingMarker label={thinkingLabel} />
                     )}
                   </div>
                 </div>
               ),
             )}
             {pending && messages[messages.length - 1]?.role === "user" && (
-              <p className="text-[13px] text-muted-foreground">{thinkingLabel}</p>
+              <ChatThinkingMarker label={thinkingLabel} />
             )}
           </div>
         )}
