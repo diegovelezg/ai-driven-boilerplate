@@ -70,6 +70,21 @@ export default async function SettingsPage({
       ])
     : [null, null, null, false];
   const suggestion = suggestArchetype(signals);
+  // Contenido solo con conexión exitosa y datos: tienda resuelta + token +
+  // al menos 1 orden sincronizada (si no, el scan no tiene de dónde leer).
+  let contentReady = false;
+  if (storeId && defaults.medusaToken) {
+    try {
+      const { count } = await getSupabase()
+        .from("orders")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .limit(1);
+      contentReady = (count ?? 0) > 0;
+    } catch {
+      contentReady = false;
+    }
+  }
   // Qué aprendió el motor (solo lectura de predicciones + órdenes, sin priors ni grillas).
   let motorCard: {
     declarado: number | null;
@@ -129,7 +144,7 @@ export default async function SettingsPage({
   const sp = searchParams ? await searchParams : null;
   const rawTab = sp?.tab;
   const initialTab: SettingsTab =
-    rawTab === "email" || rawTab === "negocio" || rawTab === "motor" ? rawTab : "tienda";
+    rawTab === "email" || rawTab === "negocio" || rawTab === "motor" || rawTab === "tienda" ? rawTab : "negocio";
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
@@ -142,6 +157,7 @@ export default async function SettingsPage({
         defaults={safeDefaults}
         secretsInDb={secretsInDb}
         storeId={storeId}
+        contentReady={contentReady}
         profile={profile}
         suggestion={suggestion}
         motor={motorCard}

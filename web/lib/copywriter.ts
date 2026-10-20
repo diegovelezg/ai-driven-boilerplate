@@ -236,9 +236,10 @@ async function composeDraftCopy(
     }),
   )).slice(0, 5);
   // Historial legible: fecha corta + ubicaciones reales (sin "x0", sin moneda).
-  // Enriquecido con media-context (misma forma para cualquier tenant):
-  // contiene/categoría/pauta/clienteDijo/detalles solo si existen (sin nulls ruidosos).
-  const { enrichOrderItems } = await import("@/lib/media-context");
+  // Enriquecido con item-context (misma forma para cualquier negocio):
+  // contiene/categoría/ventana/clienteDijo/detalles solo si existen (sin nulls ruidosos).
+  const { enrichOrderItems } = await import("@/lib/item-context");
+  const { resolveItemKeys } = await import("@/lib/metadata-map");
   const rawPerOrder = real.map((o) =>
     ((o.items_json as Array<Record<string, unknown>>) ?? []).map((i) => ({
       title: String(i.title ?? "").trim(),
@@ -246,7 +247,8 @@ async function composeDraftCopy(
       metadata: (i.metadata as Record<string, unknown> | undefined) ?? undefined,
     })),
   );
-  const enrichedFlat = await enrichOrderItems(storeId, rawPerOrder.flat());
+  const itemKeys = await resolveItemKeys(storeId).catch(() => null);
+  const enrichedFlat = await enrichOrderItems(storeId, rawPerOrder.flat(), itemKeys ?? undefined);
   let cur = 0;
   const noun = briefNoun(stamp.catalog);
   const histLines = real.map((o, oi) => {
@@ -258,7 +260,7 @@ async function composeDraftCopy(
     const extras: string[] = [];
     for (const it of items.slice(0, 2)) {
       if (it.contiene) extras.push(`contiene "${it.contiene}"${it.categoria ? ` [${it.categoria}]` : ""}`);
-      if (it.pauta) extras.push(`periodo ${it.pauta}`);
+      if (it.ventana) extras.push(`periodo ${it.ventana}`);
       if (it.clienteDijo) extras.push(`cliente dijo: "${it.clienteDijo.slice(0, 120)}"`);
       const det = Object.entries(it.detalles ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ");
       if (det) extras.push(det);
@@ -336,27 +338,24 @@ async function composeDraftCopy(
   const quien = companyName ?? marcas[0] ?? categorias[0] ?? null;
 
   // Puerta de contactabilidad (#9, #23): el juez razona una vez sobre
-  // contenido + ventanas + hoy y devuelve reusable. El brief bifurca abajo:
-  // una sola noción temporal, dos consumidores. Sin listas en código.
-  const winOf = (md: unknown, key: "dateStart" | "dateEnd"): string | null => {
-    const m = (md as Record<string, unknown> | null) ?? null;
-    const v = m?.[key];
-    return typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v.trim()) ? v.trim().slice(0, 10) : null;
+  // contenido + ventanas + hoy y devuelve reusable. La ventana sale del
+  // enriquecido genérico ("A→B" | "A" | null), nunca de keys crudas.
+  const splitVentana = (v: string | null): { dateStart: string | null; dateEnd: string | null } => {
+    if (!v) return { dateStart: null, dateEnd: null };
+    const [a, b] = v.split("→");
+    return { dateStart: a?.trim() || null, dateEnd: (b?.trim() || a?.trim()) ?? null };
   };
-  const flatMeta: Array<{ dateStart: string | null; dateEnd: string | null }> = [];
-  rawPerOrder.forEach((arr) => {
-    for (const r of arr) {
-      flatMeta.push({ dateStart: winOf(r.metadata, "dateStart"), dateEnd: winOf(r.metadata, "dateEnd") });
-    }
+  const judgeItems: JudgeItem[] = enrichedFlat.map((en) => {
+    const w = splitVentana(en.ventana);
+    return {
+      title: en.title,
+      contiene: en.contiene,
+      categoria: en.categoria,
+      clienteDijo: en.clienteDijo,
+      dateStart: w.dateStart,
+      dateEnd: w.dateEnd,
+    };
   });
-  const judgeItems: JudgeItem[] = enrichedFlat.map((en, i) => ({
-    title: en.title,
-    contiene: en.contiene,
-    categoria: en.categoria,
-    clienteDijo: en.clienteDijo,
-    dateStart: flatMeta[i]?.dateStart ?? null,
-    dateEnd: flatMeta[i]?.dateEnd ?? null,
-  }));
   const verdict = await judgeContactability({
     firstName,
     companyName,

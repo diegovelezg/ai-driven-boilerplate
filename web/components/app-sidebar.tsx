@@ -9,6 +9,7 @@ import {
   Inbox,
   LayoutDashboard,
   MessagesSquare,
+  Package,
   Settings,
   TrendingUp,
   Users,
@@ -36,6 +37,7 @@ const nav = [
   { href: "/finanzas", label: "Finanzas", icon: TrendingUp },
   { href: "/review", label: "Review Inbox", icon: Inbox, badgeKey: "inbox" as const },
   { href: "/customers", label: "Customers", icon: Users },
+  { href: "/products", label: "Catálogo", icon: Package },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/ayuda", label: "Ayuda", icon: CircleHelp },
 ];

@@ -32,15 +32,18 @@ export function SettingsTabs({
   defaults,
   secretsInDb,
   storeId,
+  contentReady,
   profile,
   suggestion,
   motor,
   proposal,
-  initialTab = "tienda",
+  initialTab = "negocio",
 }: {
   defaults: SafeStoreConnections;
   secretsInDb?: boolean;
   storeId: string | null;
+  /** Conexión exitosa con datos: solo entonces se mapea el contenido. */
+  contentReady?: boolean;
   profile: StoreProfile | null;
   suggestion: Suggestion;
   motor: MotorSummary | null;
@@ -49,9 +52,9 @@ export function SettingsTabs({
 }) {
   const router = useRouter();
   const tabs: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
+    { id: "negocio", label: "Negocio", icon: Briefcase },
     { id: "tienda", label: "Tienda", icon: Store },
     { id: "email", label: "Email", icon: Mail },
-    { id: "negocio", label: "Negocio", icon: Briefcase },
     { id: "motor", label: "Motor", icon: Cpu },
   ];
   const [active, setActive] = useState<SettingsTab>(
@@ -97,7 +100,7 @@ export function SettingsTabs({
             hint="Medusa como origen de clientes y pedidos. Solo se guarda el token, nunca el password."
             tone="primary"
           />
-          <SettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+          <SettingsForm defaults={defaults} secretsInDb={secretsInDb} storeId={storeId} contentReady={contentReady} />
         </section>
       )}
 

@@ -32,8 +32,7 @@ export function MarketSelector({
   const pathname = usePathname();
   const sp = useSearchParams();
 
-  // Activa igual que lib/tenant en servidor (?store= válido > primera);
-  // el fallback legacy solo existe en servidor (tienda única: coincide).
+  // Activa igual que lib/tenant en servidor (?store= válido > primera).
   const param = sp.get("store");
   const activeId = stores.some((s) => s.id === param) ? (param as string) : (stores[0]?.id ?? null);
   const markets: TenantMarket[] = (activeId && marketsByStore[activeId]) || [];

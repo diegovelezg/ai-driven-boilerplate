@@ -48,7 +48,6 @@ const GREETING =
 export function ProfileChat({
   storeId,
   onConfirm,
-  onUseDataSignal,
   onBusyChange,
 }: {
   storeId: string | null;
@@ -57,10 +56,11 @@ export function ProfileChat({
     fullDescription: string,
     info?: { criticVerdict: "accept" | "reject"; criticReasons: string[] },
   ) => void;
-  onUseDataSignal: () => void;
   onBusyChange?: (busy: boolean) => void;
 }) {
-  const [msgs, setMsgs] = useState<ChatMsg[]>([{ role: "agent", content: GREETING }]);
+  // Vacío inicial a propósito: el empty state del shell (título + ejemplos
+  // tocables) es lo que invita a conversar; pre-sembrar el saludo lo mataba.
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [proposal, setProposal] = useState<Proposal | null>(null);
@@ -267,14 +267,6 @@ export function ProfileChat({
         }
       />
 
-      <button
-        type="button"
-        onClick={onUseDataSignal}
-        disabled={chatBusy}
-        className="self-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:no-underline disabled:opacity-50"
-      >
-        Omitir y usar datos de la tienda
-      </button>
     </div>
   );
 }

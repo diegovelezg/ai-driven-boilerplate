@@ -1,7 +1,7 @@
-// Args del worker dedicado (issue #24). Módulo puro (sin I/O ni imports
+// Args del worker cron (sin cola). Módulo puro (sin I/O ni imports
 // server): testeable con node:test vía tsx.
-// Formas aceptadas: `--once`, `--poll-ms=5000` o `--poll-ms 5000`,
-// `--kinds=sync,morning` o `--kinds sync,morning`.
+// Formas aceptadas: `--once`, `--kinds=sync,morning` o `--kinds sync,morning`,
+// `--store=<uuid>` o `--store <uuid>` (una tienda; sin él: todas las medusa).
 export interface WorkerArgs {
   once: boolean;
   pollMs: number;
@@ -10,18 +10,12 @@ export interface WorkerArgs {
   kinds: string[] | undefined;
   /** Values de `--kinds` que no son kinds conocidos (se ignoran con aviso). */
   unknownKinds: string[];
+  /** Tienda única (`undefined` = todas). */
+  store: string | undefined;
 }
 
-/** Kinds que el worker sabe ejecutar (`dispatch` en `worker.ts`). */
-export const KNOWN_JOB_KINDS: readonly string[] = [
-  "sync",
-  "morning",
-  "enrichment",
-  "scout",
-  "strategist",
-  "copywriter",
-  "prospect",
-];
+/** Kinds que el worker sabe ejecutar (etapas del pipeline por tienda). */
+export const KNOWN_JOB_KINDS: readonly string[] = ["sync", "morning"];
 
 function splitKinds(raw: string): { kinds: string[]; unknownKinds: string[] } {
   const kinds: string[] = [];
@@ -41,6 +35,7 @@ export function parseWorkerArgs(argv: string[], envPollMs?: string | undefined):
   let pollMs = Number(envPollMs ?? 5000);
   let kinds: string[] | undefined = undefined;
   let unknownKinds: string[] = [];
+  let store: string | undefined = undefined;
   const takeKinds = (raw: string): void => {
     const { kinds: ok, unknownKinds: bad } = splitKinds(raw);
     if (ok.length > 0 || bad.length > 0) {
@@ -68,8 +63,16 @@ export function parseWorkerArgs(argv: string[], envPollMs?: string | undefined):
         takeKinds(next);
         i += 1;
       }
+    } else if (a.startsWith("--store=")) {
+      store = a.split("=")[1]?.trim() || undefined;
+    } else if (a === "--store") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        store = next.trim() || undefined;
+        i += 1;
+      }
     }
   }
   if (!Number.isFinite(pollMs) || pollMs < 500) pollMs = 5000;
-  return { once, pollMs, kinds, unknownKinds };
+  return { once, pollMs, kinds, unknownKinds, store };
 }

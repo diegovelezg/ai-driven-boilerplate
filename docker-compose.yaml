@@ -1,7 +1,7 @@
 # Deploy único en Coolify: push al repo → redeploy → todo levanta junto.
 # Servicios: db (postgres supabase) + auth + rest + meta + studio + gateway (kong)
 #   + migrator (aplica supabase/migrations/*.sql una sola vez cada una)
-#   + web (Next.js) + worker (jobs, misma imagen, `npm run worker`) + searxng.
+#   + web (Next.js) + worker (cron una pasada, misma imagen, `npm run worker -- --once`) + searxng.
 # Dominios (se asignan en la UI de Coolify, no aquí):
 #   app.tudominio.com    -> web:3000
 #   api.tudominio.com    -> gateway:8000   (SUPABASE_URL pública)
@@ -212,22 +212,22 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
 
   worker:
-    # Worker dedicado (issue #24): misma imagen que web, distinto comando.
-    # Web nunca trabaja, solo encola; este servicio ejecuta `jobs` (sync,
-    # morning, enrich…​). SKIP LOCKED permite escalar a N réplicas sin duplicar.
+    # Pipeline por tienda sin cola: lo invoca el programador externo (cron
+    # Coolify) o a mano. Una pasada y termina (`restart: "no"`).
+    # Web nunca trabaja pesado: corre `runSyncOnce` directo en `after()`.
     build:
       context: ./web
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?SUPABASE_PUBLIC_URL requerido}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
-    restart: unless-stopped
+    restart: "no"
     depends_on:
       migrator:
         condition: service_completed_successfully
       gateway:
         condition: service_started
-    command: ["npm", "run", "worker"]
+    command: ["npm", "run", "worker", "--", "--once", "--kinds=sync,morning"]
     environment:
       SUPABASE_URL: http://gateway:8000
       SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}

@@ -427,5 +427,62 @@ export function medusaOrderToCanonical(
   };
 }
 
+/** Producto crudo de Medusa (v1: status draft/proposed/published/rejected). */
+export async function listMedusaProductsRaw(
+  url: string,
+  token: string,
+  opts: { offset?: number; limit?: number } = {},
+): Promise<{ products: Array<Record<string, unknown>>; count: number }> {
+  const params = new URLSearchParams({
+    limit: String(opts.limit ?? 100),
+    offset: String(opts.offset ?? 0),
+  });
+  const data = await adminGet(url, token, `/admin/products?${params.toString()}`);
+  const products = (data?.products as Array<Record<string, unknown>>) ?? [];
+  return { products, count: Number(data?.count ?? products.length) };
+}
+
+/** Producto canónico mínimo para `products` (el trigger SQL decide is_active). */
+export interface CanonicalProduct {
+  sourceId: string;
+  title: string;
+  handle: string | null;
+  platformStatus: string | null;
+  variants: Array<{
+    sku: string | null;
+    title: string;
+    quantity: number;
+    unit_price: number;
+  }>;
+  metadata: Record<string, unknown> | null;
+}
+
+export function medusaProductToCanonical(
+  p: Record<string, unknown>,
+): CanonicalProduct | null {
+  const id = p.id as string | undefined;
+  const title = (p.title as string | undefined)?.trim();
+  if (!id || !title) return null;
+  const variants = ((p.variants as Array<Record<string, unknown>> | undefined) ?? []).map((v) => ({
+    sku: (v.sku as string | undefined) ?? null,
+    title: String(v.title ?? ""),
+    quantity: Number(v.inventory_quantity ?? 0),
+    unit_price: Number(
+      (v.prices as Array<Record<string, unknown>> | undefined)?.[0]?.amount ?? 0,
+    ),
+  }));
+  return {
+    sourceId: String(id),
+    title,
+    handle: (p.handle as string | undefined) ?? null,
+    platformStatus: ((p.status as string | undefined) ?? null)?.toLowerCase() ?? null,
+    variants,
+    metadata: {
+      tags: p.tags ?? null,
+      collection: p.collection ?? null,
+    },
+  };
+}
+
 // El formato vive en un único módulo (`lib/format`): miles "." y decimales ",".
 export { formatMoney } from "@/lib/format";

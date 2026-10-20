@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { parseWorkerArgs } from "@/lib/worker-args";
 
 describe("parseWorkerArgs", () => {
-  it("defaults: continuo, 5000ms, todos los kinds", () => {
-    assert.deepEqual(parseWorkerArgs([]), { once: false, pollMs: 5000, kinds: undefined, unknownKinds: [] });
+  it("defaults: una pasada, 5000ms, todos los kinds, todas las tiendas", () => {
+    assert.deepEqual(parseWorkerArgs([]), { once: false, pollMs: 5000, kinds: undefined, unknownKinds: [], store: undefined });
   });
 
   it("acepta --once", () => {
@@ -39,5 +39,11 @@ describe("parseWorkerArgs", () => {
     assert.equal(parseWorkerArgs([], "7000").pollMs, 7000);
     assert.equal(parseWorkerArgs(["--poll-ms=100"]).pollMs, 5000);
     assert.equal(parseWorkerArgs(["--poll-ms=abc"]).pollMs, 5000);
+  });
+
+  it("acepta --store con = y separado", () => {
+    assert.equal(parseWorkerArgs(["--store=abc-123"]).store, "abc-123");
+    assert.equal(parseWorkerArgs(["--store", "abc-123"]).store, "abc-123");
+    assert.equal(parseWorkerArgs([]).store, undefined);
   });
 });

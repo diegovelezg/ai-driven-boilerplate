@@ -542,9 +542,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           }
         }
       }
-      // Contenido pautado (captions Nivel 1): marca/categoría/qué anuncia.
+      // Contenido Nivel 1: marca/categoría/qué.
       if (rows.length < 5) {
-        const { searchContentCustomerIds } = await import("@/lib/media-context");
+        const { searchContentCustomerIds } = await import("@/lib/item-context");
         const hits = await searchContentCustomerIds(storeId, q).catch(() => new Map());
         const known = new Set(rows.map((r) => String((r as Record<string, unknown>).id)));
         const ids = [...hits.keys()].filter((id) => !known.has(id)).slice(0, 5 - rows.length);

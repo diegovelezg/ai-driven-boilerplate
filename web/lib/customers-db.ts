@@ -1,6 +1,6 @@
 // Lecturas de customers desde Supabase (source of truth para la vista).
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { searchContentCustomerIds } from "@/lib/media-context";
+import { searchContentCustomerIds } from "@/lib/item-context";
 import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
@@ -609,7 +609,7 @@ export async function queryStoreCustomers(
   const enrichedEmailOr = enrichedDomains
     .map((d) => `email.ilike.%@${d}%`)
     .join(",");
-  // Contenido pautado (captions Nivel 1: marca/categoría/qué anuncia) → customer ids.
+  // Contenido Nivel 1 (marca/categoría/qué) → customer ids.
   const contentIds = like ? await searchContentCustomerIds(storeId, term).catch(() => new Map()) : new Map();
   const contentIdOr = contentIds.size > 0 ? `,id.in.(${[...contentIds.keys()].join(",")})` : "";
   const searchOr = like

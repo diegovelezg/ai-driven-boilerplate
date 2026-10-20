@@ -52,11 +52,10 @@ export async function signOutAction(): Promise<void> {
 }
 
 /**
- * Login liviano (issue #24): la web solo encola, el worker ejecuta.
+ * Login liviano: ejecución directa en `after()`, sin cola.
  * Best-effort: nunca rompe el login; omite si no hay conexión, si Supabase
- * no está configurado o si ya hay un run en curso. Sin sesión siempre
- * abierta no hay trabajo pesado síncrono: el pipeline diario lo programa
- * pg_cron + lo corre el worker aunque nadie haga login en 24h.
+ * no está configurado o si ya hay un run en curso. Throttle de 15 min +
+ * slot atómico de `runSyncOnce`: logins concurrentes no duplican fulls.
  */
 function scheduleSyncOnLogin(): void {
   after(async () => {
@@ -88,45 +87,26 @@ function scheduleSyncOnLogin(): void {
         log(`login sync omitido (${decision.reason})`);
         return;
       }
-      // Vía jobs (worker dedicado): <200ms, sin CPU pesada en la web.
+      // Sin cola: ejecución directa. `runSyncOnce` reclama slot atómico
+      // (null si el cron/manual lo cubre) y encadena la mañana.
       try {
-        const { enqueueJob, enqueueMorningDaily, loginSyncIdempotencyKey } = await import("@/lib/jobs");
         if (decision.sync && !running) {
-          // El sync del worker ya encadena la mañana (withMorning). Key por
-          // bucket de 15min: logins concurrentes dedupean en el enqueue en vez
-          // de duplicar full-downloads (el dispatch además reclama slot atómico).
-          await enqueueJob(storeId, "sync", {
-            payload: { withMorning: true, reason: "login" },
-            idempotencyKey: loginSyncIdempotencyKey(),
-          });
-          log("login jobs encolados (sync+morning)");
-        } else {
-          log(`login sync omitido (${decision.reason})`);
-          if (!running) {
-            await enqueueMorningDaily(storeId).catch(() => {});
-            log("login job morning encolado");
-          }
-        }
-        return;
-      } catch (e) {
-        // DB sin migrar (`jobs` aún no existe): fallback legacy acotado
-        // (sync+morning en `after()`, como antes) hasta que corra la migración.
-        log(`jobs no disponible, fallback legacy: ${e instanceof Error ? e.message : "error"}`);
-      }
-      try {
-        const { runSyncOnce } = await import("@/lib/sync-runner");
-        if (decision.sync && !running) {
+          const { runSyncOnce } = await import("@/lib/sync-runner");
           await runSyncOnce(storeId, conn.medusaUrl, {
             version: conn.medusaVersion || "v1",
             token: conn.medusaToken,
             withMorning: true,
           });
         } else if (!running) {
+          log(`login sync omitido (${decision.reason})`);
           const { runMorningPipeline } = await import("@/lib/morning-run");
           await runMorningPipeline(storeId);
+        } else {
+          log(`login sync omitido (${decision.reason})`);
         }
+        return;
       } catch (e) {
-        log(`morning omitido: ${e instanceof Error ? e.message : "error"}`);
+        log(`login pipeline omitido: ${e instanceof Error ? e.message : "error"}`);
       }
       return;
     } catch (e) {

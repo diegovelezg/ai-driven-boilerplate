@@ -76,54 +76,30 @@ Coolify → New → Application → Public Repository:
   ANON_KEY exige **rebuild sin caché** de la web.
 - No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
 
-## 3b. Application worker (mismo repo, sin dominio)
+## 3b. Worker cron (mismo repo, sin dominio)
 
-Coolify → New → Application → mismo repo/rama, Base Directory `/web`:
+Sin cola: la web corre `runSyncOnce` directo en `after()` (respuesta <200ms);
+esto es solo el programador externo + corridas manuales.
 
-- Build Pack: `Dockerfile` (misma imagen que web; el worker usa las fuentes
-  copiadas en el stage `runner`). Port: ninguno (no expone HTTP).
-- Command: `npm run worker` (override del `CMD`; alternativa: `WORKER_MODE=1`).
-- Sin dominio. Mismo Environment que la web (paso 3) + `WORKER_POLL_MS=5000`.
-- Motivación (issue #24): la web solo encola (`jobs`, respuesta <200ms);
-  el scheduler programa y este servicio ejecuta. Sin esto, con la sesión
-  siempre abierta (JWT 1h + refresh rotation) nunca hay sync ni morning.
-- Escalado: N réplicas seguras (claim `FOR UPDATE SKIP LOCKED` +
-  `idempotency_key` del día + slot atómico `start_run_if_free` que hace
-  check-de-matriz-#16+insert en una transacción: dos jobs distintos del mismo
-  kind no inician runs duplicados); redeploy a mitad de job → reintento, no
-  `running` eterno (SIGTERM llega al proceso por `exec` en el CMD, heartbeat
-  del job cada 60s durante dispatch largos, reap 30min en worker +
-  `background.ts`).
+Coolify → cron (o Scheduled Task) contra el servicio web... no: comando
+directo en un contenedor de la imagen web:
 
-## 3c. Scheduler diario (pg_cron, por tenant)
-
-Una vez aplicada la migración `20261029000000_jobs.sql` (paso 4), programar
-en la DB de prod (SQL editor de Studio, 1 vez):
-
-```sql
-create extension if not exists pg_cron with schema extensions;
-select cron.schedule(
-  'morning-daily',
-  '0 11 * * *',  -- 11:00 UTC = 06:00 America/Lima (sin DST)
-  $$select public.enqueue_daily_morning()$$
-);
+```
+npm run worker -- --once --kinds=sync,morning [--store=<uuid>]
 ```
 
-`enqueue_daily_morning()` inserta 1 `jobs(kind='morning')` por store con
-`idempotency_key=morning-YYYY-MM-DD`: el segundo insert del día es no-op,
-así que doble scheduler tampoco duplica ejecución. Sobrevive redeploys
-(la programación vive en la DB, no en `after()` ni en curl externo).
+Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot
+atómico por tienda: si el login/manual lo está corriendo, el cron lo omite
+(run null), no duplica. Exit 1 si alguna tienda falló (visible en el cron).
 
-Retención (las filas `done`/`dead` —96 buckets de login/día/tienda— se
-acumulan sin cota bajo el índice único): purga semanal de terminales de más
-de 30 días (no toca `queued`/`running`/`error`):
+## 3c. Scheduler diario (cron Coolify, por tenant)
 
-```sql
-select cron.schedule(
-  'jobs-purge',
-  '0 12 * * 0',  -- domingos 12:00 UTC (= 07:00 Lima)
-  $$select public.purge_old_jobs(30)$$
-);
+Tabla `jobs` (migración `20261029000000_jobs.sql`) en desuso: no borrar
+(artefacto histórico en DB), no programar nada sobre ella. Programar el
+comando de 3b a las 06:00 America/Lima:
+
+```
+11:00 UTC = 06:00 Lima (sin DST)
 ```
 
 ## 4. Esquema + datos (sin bind mounts)

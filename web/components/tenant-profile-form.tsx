@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Steps } from "@/components/steps";
 import { toast } from "@/components/ui/toast";
 import {
   Select,
@@ -48,10 +49,58 @@ const MODEL_DEFAULT_ARCHETYPE: Record<BusinessModel, ArchetypeId> = {
   hybrid: "hibrido",
 };
 
+/** Resumen del perfil guardado (reusado en resumen y como referencia en paso 1). */
+function ProfileRecap({ profile }: { profile: StoreProfile }) {
+  return (
+    <dl className="mt-2 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+      <div className="flex gap-2">
+        <dt className="shrink-0 text-muted-foreground">Modelo:</dt>
+        <dd className="font-medium">
+          {MODELS.find((m) => m.value === profile.businessModel)?.label ??
+            profile.businessModel}
+        </dd>
+      </div>
+      <div className="flex gap-2">
+        <dt className="shrink-0 text-muted-foreground">Rubro:</dt>
+        <dd className="font-medium">
+          {verticalName(profile.taxonomyId) ??
+            profile.industry ??
+            profile.verticalDetected ??
+            "—"}
+        </dd>
+      </div>
+      <div className="flex gap-2">
+        <dt className="shrink-0 text-muted-foreground">Compra:</dt>
+        <dd className="font-medium">
+          {[
+            profile.buyerType,
+            profile.companyRequired ? "empresas" : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "—"}
+        </dd>
+      </div>
+      <div className="flex gap-2">
+        <dt className="shrink-0 text-muted-foreground">Patrón:</dt>
+        <dd className="font-medium">
+          {ARCHETYPES[profile.archetype]?.label ?? profile.archetype}
+        </dd>
+      </div>
+      <div className="flex gap-2">
+        <dt className="shrink-0 text-muted-foreground">Recompra:</dt>
+        <dd className="font-medium">
+          {profile.repurchaseCycleDays != null
+            ? `cada ~${formatNumber(profile.repurchaseCycleDays)}d`
+            : `auto (~${formatNumber(ARCHETYPES[profile.archetype]?.defaultCycleDays ?? 0)}d)`}{" "}
+          · churn ×{profile.churnMultiplier}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
 export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
-  // Guardado instantáneo (sin corrida): el MO único pide el mismo canal de
-  // toasts para el resultado, no solo el texto inline.
-  const [state, setState] = useState<{ ok: boolean; message: string } | null>(null);
+  // Guardado instantáneo (sin corrida): el resultado va al toast (SSOT).
   const [pending, startSave] = useTransition();
   const router = useRouter();
   const [step, setStep] = useState<1 | 2>(profile ? 2 : 1);
@@ -171,30 +220,6 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     setStep(2);
   };
 
-  const useDataSignal = () => {
-    // La señal de datos solo aporta modelo+arquetipo: se limpian los slots
-    // que pudo haber interpretado el agente para no mezclar evidencias.
-    setModel(suggestion.businessModel);
-    setArchetype(suggestion.archetype);
-    setCompanyRequired(ARCHETYPES[suggestion.archetype].companyRequired);
-    setMult(String(ARCHETYPES[suggestion.archetype].defaultMultiplier));
-    setIndustry(null);
-    setVerticalDetected(null);
-    setTaxonomyId(null);
-    setBuyerType(null);
-    setCatalog(null);
-    setCycle("");
-    setConfidence(null);
-    setReading(null);
-    setCriticInfo(null);
-    // La descripción es evidencia del chat: en la vía de datos no hay chat,
-    // así que se limpia para no guardarla como "sugerida por datos".
-    setDescription("");
-    setSource("sugerido");
-    setEditing(true);
-    setStep(2);
-  };
-
   const onTaxonomyChange = (v: string | null) => {
     setTaxonomyId(v || null);
     setIndustry(verticalName(v || null));
@@ -223,7 +248,6 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     startSave(async () => {
       try {
         const r = await saveTenantProfileAction(null, fd);
-        setState(r);
         if (r.ok) {
           toast.add({ title: "Perfil guardado", description: r.message, type: "success" });
           queueMicrotask(() => setEditing(false));
@@ -233,9 +257,8 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
         }
       } catch (err) {
         // El action no debería lanzar (devuelve estado), pero si lo hace
-        // no queda en silencio: mensaje inline + toast.
+        // no queda en silencio: toast de error.
         const message = err instanceof Error ? err.message : "Error al guardar";
-        setState({ ok: false, message });
         toast.add({ title: "No se pudo guardar", description: message, type: "error" });
       }
     });
@@ -262,16 +285,51 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
           )}
         </>
       )}
-      {state && (
-        <span className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
-          {state.message}
-        </span>
-      )}
     </span>
   );
 
+  // Resumen cuando ya está guardado (estándar: completo → estado, no paso 2).
+  if (locked && profile) {
+    return (
+      <div className="flex w-full flex-col gap-4">
+        <Steps steps={["Descríbelo", "Confirma"]} current={2} />
+        <AppCard
+          tone="violet"
+          title="Perfil del negocio"
+          description="Tu perfil está guardado."
+          action={<Badge variant="success">Perfil configurado</Badge>}
+          footer={
+            <span className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={chatBusy}
+                onClick={() => {
+                  setEditing(true);
+                  setStep(2);
+                }}
+              >
+                Editar
+              </Button>
+            </span>
+          }
+        >
+          <ProfileRecap profile={profile} />
+          <div className="mt-4">
+            <ProfileChat
+              storeId={storeId}
+              onConfirm={handleChatConfirm}
+              onBusyChange={setChatBusy}
+            />
+          </div>
+        </AppCard>
+      </div>
+    );
+  }
+
   return (
     <div className="flex w-full flex-col gap-4">
+      <Steps steps={["Descríbelo", "Confirma"]} current={step - 1} />
       {step === 1 ? (
         <AppCard
           tone="violet"
@@ -307,56 +365,14 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
               <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
                 Tu perfil actual
               </p>
-              <dl className="mt-2 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted-foreground">Modelo:</dt>
-                  <dd className="font-medium">
-                    {MODELS.find((m) => m.value === profile.businessModel)?.label ??
-                      profile.businessModel}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted-foreground">Rubro:</dt>
-                  <dd className="font-medium">
-                    {verticalName(profile.taxonomyId) ??
-                      profile.industry ??
-                      profile.verticalDetected ??
-                      "—"}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted-foreground">Compra:</dt>
-                  <dd className="font-medium">
-                    {[
-                      profile.buyerType,
-                      profile.companyRequired ? "empresas" : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || "—"}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted-foreground">Patrón:</dt>
-                  <dd className="font-medium">
-                    {ARCHETYPES[profile.archetype]?.label ?? profile.archetype}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="shrink-0 text-muted-foreground">Recompra:</dt>
-                  <dd className="font-medium">
-                    {profile.repurchaseCycleDays != null
-                      ? `cada ~${formatNumber(profile.repurchaseCycleDays)}d`
-                      : `auto (~${formatNumber(ARCHETYPES[profile.archetype]?.defaultCycleDays ?? 0)}d)`}{" "}
-                    · churn ×{profile.churnMultiplier}
-                  </dd>
-                </div>
-              </dl>
+              <ProfileRecap profile={profile} />
             </div>
           )}
+          {/* Sin vía sin-chat por diseño: el perfil nace conversando (con o sin
+              web). Ante fallo del chat, sus errores reintentan; no hay callejón. */}
           <ProfileChat
             storeId={storeId}
             onConfirm={handleChatConfirm}
-            onUseDataSignal={useDataSignal}
             onBusyChange={setChatBusy}
           />
         </AppCard>

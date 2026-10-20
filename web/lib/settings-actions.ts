@@ -8,17 +8,13 @@ import { readConnections, writeConnections } from "@/lib/store";
 import type { DefaultChannel, EmailProvider, Platform } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
-import { ensureStore, normalizeShopUrl, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
+import { ensureStore, normalizeShopUrl } from "@/lib/sync";
 import {
-  advanceRun,
-  finishRun,
   getLatestRun,
   hasConflict,
-  startRun,
   type BackgroundRun,
 } from "@/lib/background";
 import { busyMessage } from "@/lib/operations";
-import { formatNumber } from "@/lib/format";
 
 export interface SaveState {
   ok: boolean;
@@ -173,56 +169,15 @@ export async function saveConnectionsAction(
         run: syncConflict,
       };
     }
-    // Vía jobs (issue #24): la web solo encola, el worker ejecuta.
-    try {
-      const { enqueueJob } = await import("@/lib/jobs");
-      await enqueueJob(storeId, "sync", {
-        payload: { withMorning: false, reason: "settings-connect" },
-      });
-      return {
-        ok: true,
-        message: `Medusa ${version} conectado: ${result.store} · sync encolado (lo ejecuta el worker).`,
-        run: await getLatestRun(storeId).catch(() => null),
-      };
-    } catch (e) {
-      // DB sin migrar: fallback legacy (`after()`, como antes). Se loguea
-      // (cualquier otro fallo también cae aquí: mudo rompería la meta <200ms
-      // sin rastro).
-      console.error("[settings] jobs enqueue falló, fallback legacy:", e instanceof Error ? e.message : e);
-    }
-    let syncRunId: string | null = null;
-    try {
-      syncRunId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);
-    } catch (e) {
-      return { ok: true, message: `Medusa ${version} conectado: ${result.store} · sync no registrado: ${e instanceof Error ? e.message : "error"}` };
-    }
-    const runId = syncRunId;
-    const syncUrl = medusaUrl;
-    const syncToken = token;
-    const syncVersion = version;
-    after(async () => {
-      try {
-        const s = await syncStoreFromMedusa(syncUrl, syncVersion, syncToken, {
-          onProgress: (p) => {
-            advanceRun(runId, { processed: p.processed, failed: 0, current: p.current }).catch(() => {});
-          },
-        });
-        await finishRun(runId, {
-          status: "done",
-          processed: SYNC_TOTAL,
-          failed: 0,
-          summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders`,
-        });
-      } catch (e) {
-        await finishRun(runId, {
-          status: "error",
-          processed: 0,
-          failed: 0,
-          error: e instanceof Error ? e.message : "error",
-        }).catch(() => undefined);
-      }
-      revalidatePath("/settings");
-      revalidatePath("/customers");
+    // Sin cola: ejecución directa en `after()` (la respuesta no espera).
+    // `runSyncOnce` reclama slot atómico y escribe la cinta visible.
+    const { runSyncOnce } = await import("@/lib/sync-runner");
+    after(() => {
+      runSyncOnce(storeId, medusaUrl, {
+        version,
+        token,
+        withMorning: false,
+      }).catch((e) => console.error("[settings] sync error:", e instanceof Error ? e.message : e));
     });
     return {
       ok: true,

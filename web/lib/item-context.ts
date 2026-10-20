@@ -1,101 +1,108 @@
-// Contexto de metadata por línea de compra, en forma tenant-agnóstica.
-// Une metadata crudo (Medusa, cualquier key) + captions Nivel 1 (media_captions)
-// para agentes y GUI. Nunca expone URLs de S3 ni tokens (solo lo interpretado).
-// Clave: la GUI/agentes se atan a este schema estable, no a las keys de cada tenant.
+// Contexto por línea de compra, en forma agnóstica al tipo de negocio.
+// Une metadata crudo (cualquier key según el tipo de negocio) + contenido
+// Nivel 1 (tabla item_content) para agentes y GUI. Nunca expone URLs de
+// archivos ni tokens (solo lo interpretado).
+// Clave: la GUI/agentes se atan a este schema estable, no a las keys de cada negocio.
 import { createHash } from "node:crypto";
 import { getSupabase } from "@/lib/supabase";
+import { EMPTY_KEYS, type ResolvedItemKeys } from "@/lib/metadata-map";
 
-/** sha256 hex de la URL: misma clave que el backfill (dedup por creativo). */
-function mediaUrlHash(url: string): string {
+/** sha256 hex de la URL: misma clave que el backfill (dedup por contenido). */
+function contentUrlHash(url: string): string {
   return createHash("sha256").update(url).digest("hex");
 }
 
-/** Keys con semántica conocida: se extraen a campos propios, no a `detalles`. */
-const KNOWN_KEYS = new Set([
-  "media_file",
-  "media_comments",
-  "dateStart",
-  "dateEnd",
-  "media_file_approved",
-]);
-
-/** Nunca al prompt/GUI: secretos y tokens internos (ej. media_file_approval_token). */
-const SECRET_KEY_RE = /token|secret|password|signature/i;
+/** Nunca al prompt/GUI: secretos y tokens internos. */
+const SECRET_KEY_RE = /token|secret|password|signature|api[-_]?key|access[-_]?key|private[-_]?key/i;
 
 export interface EnrichedOrderItem {
   title: string;
   quantity: number;
-  /** Rango de pauta "2026-07-10→2026-07-11" (dateStart/dateEnd) o null. */
-  pauta: string | null;
-  /** Lo que tecleó el cliente (media_comments) o null. Fuente humana: citar, no mezclar. */
+  /** Ventana "2026-07-10→2026-07-11" (start/end) o null: pauta, turno, reserva… */
+  ventana: string | null;
+  /** Lo que escribió el cliente (comentario/nota) o null. Fuente humana: citar, no mezclar. */
   clienteDijo: string | null;
-  /** Lo que contiene la pieza (caption IA, "marca: qué anuncia") o null. */
+  /** Sobre qué es la línea (contenido IA o catálogo, "marca: qué") o null. */
   contiene: string | null;
   categoria: string | null;
-  /** Resto de metadata escalar (talla, color, aroma, expediente…), sanitizado. */
-  detalles: Record<string, string | number | boolean>;
+  /** Resto de metadata (texto corto/número con su key: talla, color…), sanitizado. */
+  detalles: Record<string, string | number>;
 }
 
-function shortDate(v: unknown): string | null {
-  const s = String(v ?? "").trim().slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
-}
+/** Texto con pinta de prosa humana (vs código corto): va citado, no a detalles.
+ *  Decisión KISS conocida: el umbral puede dejar fuera citado corto y cualquier
+ *  fecha con forma AAAA-MM-DD arma ventana. Válvula: "No mandar" por campo. */
+const PROSE_MIN = 24;
 
-/** Parte determinista (sin DB): pauta + clienteDijo + detalles desde metadata crudo. */
+/** Parte determinista (sin DB): ventana + citado + detalles desde metadata crudo.
+ *  Sin preguntas: las fechas (forma AAAA-MM-DD) arman la ventana, la prosa
+ *  humana se cita, el resto (texto corto/número, sin URLs ni secretos) cae a
+ *  detalles con su key. Los booleanos no son prosa: se omiten. */
 function rawItemContext(
   metadata: Record<string, unknown> | null | undefined,
-): Pick<EnrichedOrderItem, "pauta" | "clienteDijo" | "detalles"> {
+  keys: ResolvedItemKeys,
+): Pick<EnrichedOrderItem, "ventana" | "clienteDijo" | "detalles"> {
   const md = metadata ?? {};
-  const start = shortDate(md.dateStart);
-  const end = shortDate(md.dateEnd);
-  const comments = String(md.media_comments ?? "").trim();
-  const detalles: Record<string, string | number | boolean> = {};
+  const skip = new Set(keys.exclude ?? []);
+  const dates: string[] = [];
+  const prose: string[] = [];
+  const detalles: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(md)) {
-    if (KNOWN_KEYS.has(k) || SECRET_KEY_RE.test(k)) continue;
-    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
+    if (skip.has(k) || SECRET_KEY_RE.test(k)) continue;
+    if (typeof v === "boolean") continue;
+    if (typeof v !== "string" && typeof v !== "number") continue;
     const s = String(v).trim();
     if (!s || s.length > 200 || /^https?:\/\//i.test(s)) continue;
-    detalles[k] = typeof v === "string" ? s : v;
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(s)) {
+      dates.push(s.slice(0, 10));
+      continue;
+    }
+    if (typeof v === "string" && s.length >= PROSE_MIN) prose.push(s);
+    else detalles[k] = typeof v === "string" ? s : v;
   }
+  dates.sort();
+  const ventana =
+    dates.length === 0 ? null : dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]}→${dates[dates.length - 1]}`;
   return {
-    pauta: start && end ? (start === end ? start : `${start}→${end}`) : (start ?? end),
-    clienteDijo: comments || null,
+    ventana,
+    clienteDijo: prose.length > 0 ? prose.join(" / ").slice(0, 400) : null,
     detalles,
   };
 }
 
 /**
- * Enriquece líneas con captions (1 sola query a media_captions por todas).
- * Sin caption (sin media o aún no procesada) → contiene/categoria null, sin fallar.
+ * Enriquece líneas con contenido Nivel 1 (1 sola query a item_content por todas).
+ * Sin contenido (sin archivo o aún no procesado) → contiene/categoria null, sin fallar.
  */
 export async function enrichOrderItems(
   storeId: string,
   raw: Array<{ title: string; quantity: number; metadata?: unknown }>,
+  keys: ResolvedItemKeys = EMPTY_KEYS,
 ): Promise<EnrichedOrderItem[]> {
   const urls = new Map<string, string>();
   for (const r of raw) {
     const md = (r.metadata as Record<string, unknown> | null) ?? null;
-    const u = md && typeof md.media_file === "string" ? md.media_file : null;
-    if (u && !urls.has(u)) urls.set(u, mediaUrlHash(u));
+    const u = md && typeof md[keys.file] === "string" ? md[keys.file] as string : null;
+    if (u && !urls.has(u)) urls.set(u, contentUrlHash(u));
   }
-  let captions = new Map<string, Record<string, unknown>>();
+  let contents = new Map<string, Record<string, unknown>>();
   if (urls.size > 0) {
     const { data } = await getSupabase()
-      .from("media_captions")
-      .select("media_hash,caption_json")
+      .from("item_content")
+      .select("content_hash,content_json")
       .eq("store_id", storeId)
-      .in("media_hash", [...urls.values()]);
-    captions = new Map(
-      ((data as Array<{ media_hash: string; caption_json: unknown }> | null) ?? [])
-        .filter((r) => r.caption_json && typeof r.caption_json === "object")
-        .map((r) => [r.media_hash as string, r.caption_json as Record<string, unknown>]),
+      .in("content_hash", [...urls.values()]);
+    contents = new Map(
+      ((data as Array<{ content_hash: string; content_json: unknown }> | null) ?? [])
+        .filter((r) => r.content_json && typeof r.content_json === "object")
+        .map((r) => [r.content_hash as string, r.content_json as Record<string, unknown>]),
     );
   }
   return raw.map((r) => {
     const md = (r.metadata as Record<string, unknown> | null) ?? null;
-    const base = rawItemContext(md);
-    const u = md && typeof md.media_file === "string" ? md.media_file : null;
-    const cap = (u && captions.get(urls.get(u) as string)) || null;
+    const base = rawItemContext(md, keys);
+    const u = md && typeof md[keys.file] === "string" ? md[keys.file] as string : null;
+    const cap = (u && contents.get(urls.get(u) as string)) || null;
     const marca = cap && typeof cap.marca === "string" ? cap.marca.trim() : "";
     const que = cap && typeof cap.que_anuncia === "string" ? cap.que_anuncia.trim() : "";
     const cat = cap && typeof cap.categoria === "string" ? cap.categoria.trim() : "";
@@ -110,7 +117,7 @@ export async function enrichOrderItems(
   });
 }
 
-/** Coincidencia de contenido pautado (caption Nivel 1) para búsqueda. */
+/** Coincidencia de contenido (Nivel 1) para búsqueda. */
 export interface ContentHit {
   marca: string | null;
   que: string;
@@ -118,7 +125,7 @@ export interface ContentHit {
 }
 
 /**
- * Customers cuyo contenido pautado matchea `term` (marca/categoría/qué/texto).
+ * Customers cuyo contenido matchea `term` (marca/categoría/qué/texto).
  * Devuelve customerId → mejor hit. Para el buscador GUI y find_customer.
  * Mecanismo único: función SQL `search_content_customers` (pg_trgm: fuzzy
  * ante apóstrofes/plurales/typos, sin reglas ad-hoc en la app).
@@ -131,10 +138,15 @@ export async function searchContentCustomerIds(
   const out = new Map<string, ContentHit>();
   if (term.trim().length < 2) return out;
   const db = getSupabase();
+  // La key del archivo varía por tenant (settings → metadata_map): sin ella
+  // el join SQL no matchea (file "" = sin lookup, honesto).
+  const { resolveItemKeys } = await import("@/lib/metadata-map");
+  const keys = await resolveItemKeys(storeId).catch(() => null);
   const { data, error } = await db.rpc("search_content_customers", {
     p_store: storeId,
     p_term: term.trim(),
     p_limit: maxUrls,
+    p_file_key: keys?.file ?? "",
   });
   if (error) throw new Error(`Content search: ${error.message}`);
   for (const r of ((data as Array<Record<string, unknown>> | null) ?? [])) {

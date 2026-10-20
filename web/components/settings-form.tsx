@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { KeyRound } from "lucide-react";
+import { KeyRound, CheckIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
@@ -10,6 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBackgroundOrNull } from "@/components/background-status";
 import { toast } from "@/components/ui/toast";
+import { Steps } from "@/components/steps";
+import { MetadataMapForm } from "@/components/metadata-map-form";
+import { AppCardState } from "@/components/app-card";
 import {
   Select,
   SelectContent,
@@ -30,7 +33,6 @@ function SecretRevokeButton({
 }) {
   const [pending, start] = useTransition();
   const [confirming, setConfirming] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const router = useRouter();
   if (!confirming) {
     return (
@@ -39,7 +41,6 @@ function SecretRevokeButton({
         variant="destructive"
         size="sm"
         onClick={() => {
-          setMsg(null);
           setConfirming(true);
         }}
       >
@@ -58,7 +59,6 @@ function SecretRevokeButton({
         onClick={() =>
           start(async () => {
             const r = await revokeSecretAction(secret);
-            setMsg(r.message);
             if (r.ok) {
               toast.add({ title: "Secreto revocado", description: r.message, type: "success" });
               setConfirming(false);
@@ -80,7 +80,6 @@ function SecretRevokeButton({
       >
         Cancelar
       </Button>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -123,18 +122,26 @@ function LockedSecret({
 export function SettingsForm({
   defaults,
   secretsInDb,
+  storeId,
+  contentReady,
 }: {
   defaults: SafeStoreConnections;
   secretsInDb?: boolean;
+  storeId: string | null;
+  contentReady?: boolean;
 }) {
+  // Wizard: 1 Plataforma → 2 Conexión → 3 Conectar → 4 Contenido.
+  // tstep 0 = resumen (ya conectado). Un solo <form>: los paneles inactivos
+  // viajan ocultos para que el submit del paso 3 lleve todos los campos.
+  const STEPS = ["Plataforma", "Conexión", "Conectar", "Contenido"];
   // MO único: el connect (login + sync) va a la cinta global vía `bg.start`
   // (el server devuelve el run `sync` y el toast muestra el progreso); el
-  // resultado también deja toast de éxito/error en el mismo canal.
-  const [state, setState] = useState<{ ok: boolean; message: string } | null>(null);
+  // resultado también deja toast de éxito/error en el mismo canal (SSOT).
   const [pending, startSave] = useTransition();
   const [platform, setPlatform] = useState<Platform>(defaults.platform);
   const router = useRouter();
   const bg = useBackgroundOrNull();
+  const formRef = useRef<HTMLFormElement>(null);
   // Medusa exige password en cada guardado (no hay "conservar token"):
   // con token, todo el bloque se bloquea hasta "Cambiar credenciales".
   // `defaults` solo trae booleanos has* (los secretos nunca viajan al cliente).
@@ -146,6 +153,38 @@ export function SettingsForm({
   const hasAnyToken = defaults.hasMedusaToken || defaults.hasShopifyToken;
   const [editing, setEditing] = useState(false);
   const locked = hasToken && !editing;
+  const [tstep, setTstep] = useState<number>(hasToken ? 0 : hasAnyToken ? 2 : 1);
+  // Tras revocar el último token (refresh de props), el resumen ya no aplica.
+  useEffect(() => {
+    if (!hasAnyToken) setTstep((s) => (s === 0 ? 1 : s));
+  }, [hasAnyToken]);
+  const goSummary = () => {
+    setEditing(false);
+    setTstep(0);
+  };
+  const canContinue = (): boolean => {
+    if (platform !== "medusa") {
+      toast.add({
+        title: "Shopify aún no disponible",
+        description: "La sincronización solo funciona con Medusa por ahora.",
+        type: "warning",
+      });
+      return false;
+    }
+    const fd = formRef.current ? new FormData(formRef.current) : null;
+    const missing = ["medusaUrl", "medusaEmail", "medusaPassword"].filter(
+      (k) => !String(fd?.get(k) ?? "").trim(),
+    );
+    if (missing.length > 0) {
+      toast.add({
+        title: "Falta un dato",
+        description: "Completa servidor, email y password para continuar.",
+        type: "warning",
+      });
+      return false;
+    }
+    return true;
+  };
   const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -156,10 +195,12 @@ export function SettingsForm({
             return { ok: x.ok, message: x.message, run: x.run ?? null };
           })
         : await saveConnectionsAction(null, fd);
-      setState({ ok: r.ok, message: r.message });
       if (r.ok) {
         toast.add({ title: "Tienda conectada", description: r.message, type: "success" });
-        queueMicrotask(() => setEditing(false));
+        queueMicrotask(() => {
+          setEditing(false);
+          setTstep(4);
+        });
         // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
         if (!bg) router.refresh();
       } else {
@@ -168,8 +209,115 @@ export function SettingsForm({
     });
   };
 
+  if (tstep === 0) {
+    const rows: Array<{ label: string; detail: string; step: number; done: boolean }> = [
+      {
+        label: "Plataforma",
+        detail: platform === "medusa" ? `Medusa ${defaults.medusaVersion || ""}`.trim() : "Shopify",
+        step: 1,
+        done: true,
+      },
+      {
+        label: "Conexión",
+        detail: hasToken ? "Token guardado" : "Sin token",
+        step: 2,
+        done: hasToken,
+      },
+      {
+        label: "Sincronización",
+        detail: contentReady ? "Pedidos leídos" : "Pendiente",
+        step: 3,
+        done: !!contentReady,
+      },
+      {
+        label: "Contenido",
+        detail: contentReady ? "Listo para mapear" : "Espera al sync",
+        step: 4,
+        done: false,
+      },
+    ];
+    return (
+      <div className="flex w-full flex-col gap-4">
+        <Steps steps={STEPS} current={STEPS.length} />
+        <AppCard
+          tone="primary"
+          title="Ecommerce"
+          description="Tu tienda está conectada. Toca una fila para editar ese paso."
+          action={
+            platform === "medusa" ? (
+              <Badge variant={defaults.hasMedusaToken ? "success" : "secondary"}>
+                {defaults.hasMedusaToken
+                  ? `Medusa ${defaults.medusaVersion || ""} conectado`.trim()
+                  : "Medusa sin conectar"}
+              </Badge>
+            ) : (
+              <Badge variant="outline">Shopify · próximamente</Badge>
+            )
+          }
+          footer={
+            <span className="flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditing(true);
+                  setTstep(2);
+                }}
+              >
+                Editar conexión
+              </Button>
+              {platform === "medusa" && defaults.hasMedusaToken && (
+                <SecretRevokeButton secret="medusa_token" />
+              )}
+              {platform === "shopify" && defaults.hasShopifyToken && (
+                <SecretRevokeButton secret="shopify_token" />
+              )}
+            </span>
+          }
+        >
+          <ul className="flex flex-col divide-y divide-border/60">
+            {rows.map((r) => (
+              <li key={r.label} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+                {r.done ? (
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <CheckIcon className="size-3" aria-hidden />
+                  </span>
+                ) : (
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border" aria-hidden />
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">{r.label}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{r.detail}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    if (r.step === 4 && !(contentReady && storeId)) return;
+                    if (r.step !== 4) setEditing(true);
+                    setTstep(r.step);
+                  }}
+                  disabled={r.step === 4 && !(contentReady && storeId)}
+                >
+                  Editar
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </AppCard>
+      </div>
+    );
+  }
+
   return (
-    <form onSubmit={onSubmit} className="flex w-full flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
+      <Steps
+        steps={STEPS}
+        current={tstep - 1}
+        onGo={!locked ? (i) => setTstep(i + 1) : undefined}
+      />
+      <form ref={formRef} onSubmit={onSubmit} className="flex w-full flex-col gap-4">
       <AppCard
         tone="primary"
         title="Ecommerce"
@@ -193,38 +341,60 @@ export function SettingsForm({
         }
         footer={
           <span className="flex flex-wrap items-center gap-3">
-            {locked ? (
-              <Button type="button" variant="outline" onClick={() => setEditing(true)}>
-                Cambiar credenciales
-              </Button>
-            ) : (
+            {tstep === 1 && (
               <>
-                <Button type="submit" disabled={pending}>
-                  {pending ? "Conectando…" : "Guardar y conectar"}
+                <Button type="button" onClick={() => setTstep(2)}>
+                  Continuar
                 </Button>
                 {hasToken && (
-                  <Button type="button" variant="ghost" onClick={() => setEditing(false)}>
+                  <Button type="button" variant="ghost" onClick={goSummary}>
+                    Volver al resumen
+                  </Button>
+                )}
+              </>
+            )}
+            {tstep === 2 && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    if (hasAnyToken) goSummary();
+                    else setTstep(1);
+                  }}
+                >
+                  Atrás
+                </Button>
+                <Button type="button" onClick={() => canContinue() && setTstep(3)}>
+                  Continuar
+                </Button>
+                {hasToken && (
+                  <Button type="button" variant="ghost" onClick={goSummary}>
                     Cancelar
                   </Button>
                 )}
               </>
             )}
-            {platform === "medusa" && defaults.hasMedusaToken && (
-              <SecretRevokeButton secret="medusa_token" />
+            {tstep === 3 && (
+              <>
+                <Button type="button" variant="outline" onClick={() => setTstep(2)}>
+                  Atrás
+                </Button>
+                <Button type="submit" disabled={pending}>
+                  {pending ? "Conectando…" : "Guardar y conectar"}
+                </Button>
+              </>
             )}
-            {platform === "shopify" && defaults.hasShopifyToken && (
-              <SecretRevokeButton secret="shopify_token" />
-            )}
-            {state && (
-              <span className={state.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
-                {state.message}
-              </span>
+            {tstep === 4 && (
+              <Button type="button" variant="outline" onClick={goSummary}>
+                Volver al resumen
+              </Button>
             )}
           </span>
         }
         contentClassName="flex flex-col gap-4"
       >
-        <div className="flex flex-col gap-6">
+        <div hidden={tstep !== 1} className="flex flex-col gap-4">
           <div className="flex flex-col gap-4">
             <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               Plataforma
@@ -255,7 +425,9 @@ export function SettingsForm({
               )}
             </div>
           </div>
+        </div>
 
+        <div hidden={tstep !== 2} className="flex flex-col gap-6">
           {platform === "medusa" ? (
             <>
               <hr className="border-border/60" />
@@ -371,8 +543,38 @@ export function SettingsForm({
             </>
           )}
         </div>
+
+        <div hidden={tstep !== 3} className="flex flex-col gap-4">
+          <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+            Revisa y conecta
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {platform === "medusa"
+              ? "Vamos a entrar a Medusa, guardar solo el token y lanzar la primera sincronización (clientes, pedidos y catálogo)."
+              : "Shopify aún no sincroniza: este paso queda pendiente."}
+          </p>
+        </div>
+
+        <div hidden={tstep !== 4} className="flex flex-col gap-4">
+          {contentReady && storeId ? (
+            <MetadataMapForm storeId={storeId} />
+          ) : (
+            <AppCardState>
+              Terminando la sincronización…{" "}
+              <button
+                type="button"
+                className="underline underline-offset-4"
+                onClick={() => router.refresh()}
+              >
+                recargar
+              </button>{" "}
+              para mapear el contenido.
+            </AppCardState>
+          )}
+        </div>
       </AppCard>
-    </form>
+      </form>
+    </div>
   );
 }
 
@@ -384,10 +586,8 @@ export function EmailSettingsForm({
   secretsInDb?: boolean;
 }) {
   const router = useRouter();
-  // Guardado y prueba son instantáneos (sin corrida): el MO único pide el
-  // mismo canal de toasts para el resultado, no solo el texto inline.
-  const [saveState, setSaveState] = useState<{ ok: boolean; message: string } | null>(null);
-  const [testState, setTestState] = useState<{ ok: boolean; message: string } | null>(null);
+  // Guardado y prueba son instantáneos (sin corrida): el resultado va al
+  // toast (SSOT), sin texto inline duplicado.
   const [savePending, startSave] = useTransition();
   const [testPending, startTest] = useTransition();
   const [provider, setProvider] = useState<EmailProvider>(defaults.emailProvider || "sendgrid");
@@ -406,7 +606,6 @@ export function EmailSettingsForm({
     const fd = new FormData(e.currentTarget);
     startSave(async () => {
       const r = await saveEmailAction(null, fd);
-      setSaveState(r);
       if (r.ok) {
         toast.add({ title: "Email guardado", description: r.message, type: "success" });
         queueMicrotask(() => setEditingKey(false));
@@ -421,7 +620,6 @@ export function EmailSettingsForm({
     const fd = new FormData(e.currentTarget);
     startTest(async () => {
       const r = await testEmailAction(null, fd);
-      setTestState(r);
       toast.add({
         title: r.ok ? "Prueba enviada" : "La prueba falló",
         description: r.message,
@@ -477,11 +675,6 @@ export function EmailSettingsForm({
                 </>
               )}
               {defaults.hasEmailApiKey && <SecretRevokeButton secret="email_api_key" />}
-              {saveState && (
-                <span className={saveState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
-                  {saveState.message}
-                </span>
-              )}
             </span>
           }
           contentClassName="flex flex-col gap-4"
@@ -593,11 +786,6 @@ export function EmailSettingsForm({
                 {testPending ? "Enviando…" : "Probar envío"}
               </Button>
             </div>
-            {testState && (
-              <p className={testState.ok ? "text-xs text-green-600" : "text-xs text-destructive"}>
-                {testState.message}
-              </p>
-            )}
           </form>
         </AppCard>
       )}

@@ -2,11 +2,12 @@
 
 // Vigilante de perfil (#6): propuesta de corrección con decisión por delta.
 // Nada se aplica solo: cada fila se acepta o se rechaza por separado.
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
+import { toast } from "@/components/ui/toast";
 import { useBackgroundOrNull } from "@/components/background-status";
 import {
   decideProfileDeltaAction,
@@ -21,7 +22,7 @@ import { verticalName } from "@/lib/taxonomy";
 const SLOT_LABEL: Record<ProfileSlot, string> = {
   archetype: "Patrón de recompra",
   repurchase_cycle_days: "Recompra cada",
-  taxonomy_id: "Rubro (Shopify)",
+  taxonomy_id: "Rubro",
   buyer_type: "Quién te compra",
 };
 
@@ -38,17 +39,19 @@ function formatValue(slot: ProfileSlot, v: string | null): string {
 function DeltaRow({
   proposalId,
   delta,
-  onDecided,
 }: {
   proposalId: string;
   delta: ProfileDelta;
-  onDecided: (msg: string) => void;
 }) {
   const [pending, start] = useTransition();
   const decide = (accept: boolean) =>
     start(async () => {
       const r = await decideProfileDeltaAction(proposalId, delta.slot, accept);
-      onDecided(r.message);
+      toast.add({
+        title: r.ok ? (accept ? "Propuesta aplicada" : "Propuesta descartada") : "No se pudo decidir",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
     });
   return (
     <div className="flex flex-col gap-1 rounded-lg border border-input p-3">
@@ -93,7 +96,6 @@ export function ProfileProposalsPanel({
 }: {
   proposal: ProfileProposal | null;
 }) {
-  const [message, setMessage] = useState<string | null>(null);
   const [reviewing, startReview] = useTransition();
   const bg = useBackgroundOrNull();
   const router = useRouter();
@@ -106,7 +108,11 @@ export function ProfileProposalsPanel({
             return { ok: x.ok, message: x.message, run: x.run ?? null };
           })
         : await runRecalibrationAction();
-      setMessage(r.message);
+      toast.add({
+        title: r.ok ? "Revisión lanzada" : "No se pudo revisar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
       // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
       if (!bg) router.refresh();
     });
@@ -122,7 +128,6 @@ export function ProfileProposalsPanel({
           <Button type="button" variant="outline" disabled={reviewing} onClick={runReview}>
             {reviewing ? "Revisando…" : "Revisar mi perfil"}
           </Button>
-          {message && <span className="text-xs text-muted-foreground">{message}</span>}
         </span>
       }
     >
@@ -136,15 +141,7 @@ export function ProfileProposalsPanel({
               rechaces no se vuelve a proponer en 60 días.
             </p>
             {proposal.deltas.map((d) => (
-              <DeltaRow
-                key={d.slot}
-                proposalId={proposal.id}
-                delta={d}
-                onDecided={(msg) => {
-                  setMessage(msg);
-                  router.refresh();
-                }}
-              />
+              <DeltaRow key={d.slot} proposalId={proposal.id} delta={d} />
             ))}
           </>
         ) : (

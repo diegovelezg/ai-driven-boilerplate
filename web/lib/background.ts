@@ -257,8 +257,7 @@ export async function startRun(
  * matriz #16 + insert en UNA transacción (`start_run_if_free`, advisory lock
  * por store). Devuelve el run id, o `null` si hay ocupación (el caller
  * omite en vez de duplicar: el trabajo ya lo cubre la corrida en curso).
- * Sin el RPC (DB sin migración 20261029000000/1): fallback legacy
- * hasConflict+startRun (best-effort, con la misma firma).
+ * Sin RPC = error fuerte (corte sin-cola: DB sin migrar no se tolera).
  */
 export async function claimRunSlot(
   storeId: string,
@@ -268,26 +267,14 @@ export async function claimRunSlot(
 ): Promise<string | null> {
   await reapStaleRuns(storeId).catch(() => {});
   const db = getSupabase();
-  try {
-    const { data, error } = await db.rpc("start_run_if_free", {
-      p_store_id: storeId,
-      p_kind: kind,
-      p_label: label,
-      p_total: total,
-    });
-    if (!error) return (data as string | null) ?? null;
-    // Sin RPC (migración pendiente): cae al fallback legacy.
-  } catch {
-    // Sin RPC (migración pendiente): cae al fallback legacy.
-  }
-  const conflict = await hasConflict(storeId, { kind }).catch(() => null);
-  if (conflict) return null;
-  try {
-    return await startRun(storeId, kind, label, total);
-  } catch {
-    // Carrera residual en el fallback: el otro ganó el slot.
-    return null;
-  }
+  const { data, error } = await db.rpc("start_run_if_free", {
+    p_store_id: storeId,
+    p_kind: kind,
+    p_label: label,
+    p_total: total,
+  });
+  if (error) throw new Error(`Run slot: ${error.message}`);
+  return (data as string | null) ?? null;
 }
 
 /** Actualiza el total de una corrida en curso (para progreso honesto 0/0 → N). */

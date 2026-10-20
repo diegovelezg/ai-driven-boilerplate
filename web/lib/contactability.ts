@@ -31,7 +31,7 @@ export interface JudgeItem {
   contiene: string | null;
   categoria: string | null;
   clienteDijo: string | null;
-  /** Ventana del vuelo (metadata.dateStart/dateEnd) o null. */
+  /** Ventana ya resuelta ("A→B" partida en inicio/fin) o nulls. */
   dateStart: string | null;
   dateEnd: string | null;
 }

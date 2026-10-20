@@ -34,7 +34,7 @@ export async function runSyncOnce(storeId: string, medusaUrl: string, opts: Sync
       status: "done",
       processed: SYNC_TOTAL,
       failed: 0,
-      summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders (test excl: ${formatNumber(s.excludedTestOrders)}, inválidas excl: ${formatNumber(s.excludedInvalidOrders)})`,
+      summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders, ${formatNumber(s.products)} productos (test excl: ${formatNumber(s.excludedTestOrders)}, inválidas excl: ${formatNumber(s.excludedInvalidOrders)})`,
     });
     log(`run ${runId} done`);
     try {

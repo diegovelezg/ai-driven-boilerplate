@@ -6,8 +6,10 @@ import {
   isRealOrder,
   listMedusaCustomers,
   listMedusaOrdersRaw,
+  listMedusaProductsRaw,
   listMedusaRegions,
   medusaOrderToCanonical,
+  medusaProductToCanonical,
   modeCountry,
   type CanonicalOrder,
   type MedusaVersion,
@@ -36,10 +38,12 @@ export interface SyncSummary {
   excludedInvalidOrders: number;
   channels: number;
   markets: number;
+  products: number;
+  productStats: number;
 }
 
 /** Fases del sync (para el progreso en la cinta de background). */
-export const SYNC_TOTAL = 5;
+export const SYNC_TOTAL = 6;
 
 export interface SyncProgress {
   processed: number;
@@ -192,10 +196,15 @@ export async function syncStoreFromMedusa(
   );
   const resolveExt = (ext: string): string => aliasMap.get(ext) ?? ext;
 
-  // 2. Todos los customers + todas las orders (paginado, en paralelo:
+  // 2. Todos los customers + todas las orders + productos (paginado, en paralelo:
   // son endpoints independientes; antes iban en serie).
-  await report(1, "Descargando customers y orders");
-  const [customers, rawOrders] = await Promise.all([
+  // Products no rompe el sync: si el endpoint falla (permiso/versión), se sigue con 0.
+  // productsOk distingue "feed vacío real" de "endpoint caído": solo con feed OK
+  // se tombstonea lo ausente (archived); con endpoint caído tocar sería borrar
+  // el catálogo por un 401.
+  let productsOk = true;
+  await report(1, "Descargando customers, orders y productos");
+  const [customers, rawOrders, rawProducts] = await Promise.all([
     fetchAll((offset, limit) =>
       listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
         rows: r.customers,
@@ -208,6 +217,16 @@ export async function syncStoreFromMedusa(
         count: r.count,
       })),
     ),
+    fetchAll((offset, limit) =>
+      listMedusaProductsRaw(medusaUrl, token, { offset, limit }).then((r) => ({
+        rows: r.products,
+        count: r.count,
+      })),
+    ).catch((e) => {
+      productsOk = false;
+      log(`products omitidos: ${e instanceof Error ? e.message : e}`);
+      return [] as Array<Record<string, unknown>>;
+    }),
   ]);
   const orders: CanonicalOrder[] = rawOrders
     .map((o) => medusaOrderToCanonical(o, regions))
@@ -355,8 +374,8 @@ export async function syncStoreFromMedusa(
         title: String(i.title ?? ""),
         quantity: Number(i.quantity ?? 0),
         unit_price: Number(i.unit_price ?? 0),
-        // Captura tonta: metadata crudo del line_item (ej. media_comments,
-        // media_file del upload custom). Null si no hay. La interpretación
+        // Captura tonta: metadata crudo del line_item (cualquier key según
+        // el tipo de negocio). Null si no hay. La interpretación
         // (LLM) va en enrich, no aquí.
         metadata: (i.metadata as Record<string, unknown> | null) ?? null,
       })),
@@ -396,11 +415,92 @@ export async function syncStoreFromMedusa(
     if (error) throw new Error(`Orders upsert: ${error.message}`);
   }
 
+  // 7. Upsert productos (upsert-only, nunca borra). Solo escribe platform_status +
+  // variants_json: is_active lo decide el trigger (override manual ?? plataforma),
+  // así el sync jamás pisa lo definido en UI.
+  await report(5, "Guardando productos");
+  const productRows = rawProducts
+    .map((p) => medusaProductToCanonical(p))
+    .filter((p): p is NonNullable<typeof p> => p !== null)
+    .map((p) => ({
+      store_id: storeId,
+      source: "medusa_product",
+      source_id: p.sourceId,
+      title: p.title,
+      handle: p.handle,
+      platform_status: p.platformStatus,
+      variants_json: p.variants,
+      metadata: p.metadata,
+      last_synced_at: now,
+    }));
+  // Tolerante: si la migración products aún no se aplicó (o el endpoint
+  // falla), el sync sigue y reporta 0 en vez de tumbar customers/orders.
+  let productCount = 0;
+  let productsPersisted = false;
+  try {
+    for (let i = 0; i < productRows.length; i += 500) {
+      const { error } = await db
+        .from("products")
+        .upsert(productRows.slice(i, i + 500), { onConflict: "store_id,source,source_id" });
+      if (error) throw new Error(`Products upsert: ${error.message}`);
+    }
+    productCount = productRows.length;
+    productsPersisted = true;
+  } catch (e) {
+    log(`products upsert omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  // Tombstones: lo que el feed ya no trae se marca archived (el trigger lo
+  // apaga salvo override manual). SOLO con feed OK + upsert OK: con endpoint
+  // caído esto borraría el catálogo por un 401.
+  let tombstoned = 0;
+  if (productsOk && productsPersisted) {
+    try {
+      const seen = new Set(productRows.map((p) => String(p.source_id)));
+      // Se pagina por la tabla (nunca NOT IN gigante en URL).
+      for (let off = 0; ; off += 1000) {
+        const { data: page, error } = await db
+          .from("products")
+          .select("id,source_id")
+          .eq("store_id", storeId)
+          .eq("source", "medusa_product")
+          .order("id", { ascending: true })
+          .range(off, off + 999);
+        if (error) throw new Error(`Products tombstone read: ${error.message}`);
+        const gone = ((page ?? []) as Array<Record<string, unknown>>)
+          .filter((r) => !seen.has(String(r.source_id ?? "")))
+          .map((r) => String(r.id));
+        if (gone.length > 0) {
+          const { error: upErr } = await db
+            .from("products")
+            .update({ platform_status: "archived", last_synced_at: now })
+            .in("id", gone);
+          if (upErr) throw new Error(`Products tombstone write: ${upErr.message}`);
+          tombstoned += gone.length;
+        }
+        if ((page ?? []).length < 1000) break;
+      }
+      if (tombstoned > 0) log(`tombstones products=${tombstoned} (archived)`);
+    } catch (e) {
+      log(`tombstones omitidos: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   log(
     `done customers=${customerRows.length} orders=${orderRows.length} ` +
       `skipped=${skippedOrders} test=${excludedTestOrders} invalid=${excludedInvalidOrders} ` +
-      `markets=${marketRows.length} channels=${channelRows.length}`,
+      `markets=${marketRows.length} channels=${channelRows.length} products=${productCount}`,
   );
+  // Stats deterministas por (producto, moneda) para la UI y el sub-engine.
+  // Tolerante como products: si la migración aún no se aplicó, se sigue.
+  let productStatRows = 0;
+  try {
+    const { computeProductStats } = await import("@/lib/product-stats");
+    const st = await computeProductStats(storeId);
+    productStatRows = st.rows;
+    log(`stats rows=${st.rows} matched=${st.matchedProducts} unmatched=${st.unmatchedTitles} top=${st.topUnmatched.map((u) => u.title).join(" | ").slice(0, 160)}`);
+  } catch (e) {
+    log(`product_stats omitido: ${e instanceof Error ? e.message : e}`);
+  }
   // Nuevos customers pueden traer dominios nuevos: invalida el pending de enrich.
   await import("@/lib/enrich")
     .then((m) => m.invalidatePendingCache(storeId))
@@ -414,5 +514,7 @@ export async function syncStoreFromMedusa(
     excludedInvalidOrders,
     channels: channelRows.length,
     markets: marketRows.length,
+    products: productCount,
+    productStats: productStatRows,
   };
 }
