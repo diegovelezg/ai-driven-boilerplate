@@ -83,6 +83,15 @@ internas de GoTrue): se recrea el usuario y se linkea.
 ## 6. Si algo falla
 
 - `migrator` → `MIGRATIONS_OK` en logs = DB al día. Si una migración falla, el deploy se detiene antes de levantar `web` (a propósito).
+- Deploy parado en `migrator ... Waiting` → el contenedor no terminó (compose espera su exit por el `service_completed_successfully`). Ya no puede quedarse colgado: el script acota la espera de `db` (180s), cada sentencia (`lock_timeout` 30s / `statement_timeout` 5min) y cada `psql` (10min). Revisa:
+  ```bash
+  docker ps -a | grep migrator                      # ¿sigue Up o ya Exited?
+  docker logs --tail=200 <nombre-migrator>          # dice el archivo y el ERROR
+  docker exec <nombre-db> psql -U postgres -c \
+    "select pid, state, wait_event_type, wait_event, now()-xact_start as age, left(query,120)
+       from pg_stat_activity where datname='postgres' order by xact_start"
+  ```
+  Si aparece `wait_event_type=lock`, hay una sesión con una transacción abierta (Studio/SQL editor, un `psql` olvidado, etc.): ciérrala o `select pg_terminate_backend(<pid>)`. Cada archivo corre en una sola transacción: si falla, se revierte completo y el próximo deploy lo reintenta desde cero.
 - `web` en blanco / `Falta NEXT_PUBLIC_...` → revisa Build Args en Coolify (deben ser = `SUPABASE_PUBLIC_URL` y `ANON_KEY`).
 - Login redirige en loop → `SITE_URL`, `API_EXTERNAL_URL` y `ADDITIONAL_REDIRECT_URLS` deben ser los dominios públicos reales con `https`.
 - SearXNG 403 → `SEARXNG_SECRET_KEY` distinto al `secret_key` de dev de `infra/searxng/settings.yml` (prod manda el env).
