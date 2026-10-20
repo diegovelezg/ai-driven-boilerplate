@@ -1,0 +1,48 @@
+# BACKUP — Service SearXNG one-click Coolify (tal cual exportado).
+# No editar: foto para reconstruir. Secretos via ${VAR} — valores solo en Coolify + vault.
+services:
+  searxng:
+    image: searxng/searxng
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - SERVICE_URL_SEARXNG_8080
+      - 'INSTANCE_NAME=${INSTANCE_NAME:-coolify}'
+      - 'BASE_URL=${SERVICE_URL_SEARXNG_8080}'
+      - 'SEARXNG_URL=${SERVICE_URL_SEARXNG_8080}'
+      - 'SEARXNG_BIND_ADDRESS=${SEARXNG_BIND_ADDRESS:-0.0.0.0}'
+      - 'SEARXNG_SECRET=${SERVICE_PASSWORD_SEARXNGSECRET}'
+      - 'SEARXNG_REDIS_URL=redis://redis:6379/0'
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - '-q'
+        - '--spider'
+        - 'http://127.0.0.1:8080/healthz'
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    volumes:
+      -
+        type: bind
+        source: ./settings.yml
+        target: /etc/searxng/settings.yml
+      -
+        type: bind
+        source: ./limiter.toml
+        target: /etc/searxng/limiter.toml
+  redis:
+    image: 'redis:7'
+    restart: always
+    volumes:
+      - 'redis-data:/data'
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 5s
+      retries: 3

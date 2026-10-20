@@ -1,0 +1,149 @@
+# Slim piloto — solo lo que usa la web (Postgres + PostgREST + Auth via Kong).
+# Derivado del backup full. Ahorro ~1GB RAM: sin analytics/vector/realtime/storage/minio/imgproxy/edge/studio.
+# Studio/Meta: descomentar solo para admin dev.
+services:
+  supabase-db:
+    image: 'supabase/postgres:15.8.1.085'
+    healthcheck:
+      test: 'pg_isready -U postgres -h 127.0.0.1'
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - postgres
+      - '-c'
+      - config_file=/etc/postgresql/postgresql.conf
+      - '-c'
+      - log_min_messages=fatal
+    environment:
+      - POSTGRES_HOST=/var/run/postgresql
+      - 'PGPORT=${POSTGRES_PORT:-5432}'
+      - 'POSTGRES_PORT=${POSTGRES_PORT:-5432}'
+      - 'PGPASSWORD=${SERVICE_PASSWORD_POSTGRES}'
+      - 'POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}'
+      - 'PGDATABASE=${POSTGRES_DB:-postgres}'
+      - 'POSTGRES_DB=${POSTGRES_DB:-postgres}'
+      - 'JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - 'JWT_EXP=${JWT_EXPIRY:-3600}'
+    volumes:
+      - 'supabase-db-data:/var/lib/postgresql/data'
+      - 'supabase-db-config:/etc/postgresql-custom'
+
+  supabase-rest:
+    image: 'postgrest/postgrest:v14.6'
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      - 'PGRST_DB_URI=postgres://authenticator:${SERVICE_PASSWORD_POSTGRES}@${POSTGRES_HOSTNAME:-supabase-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}'
+      - 'PGRST_DB_SCHEMAS=${PGRST_DB_SCHEMAS:-public,storage,graphql_public}'
+      - 'PGRST_DB_MAX_ROWS=${PGRST_DB_MAX_ROWS:-1000}'
+      - 'PGRST_DB_EXTRA_SEARCH_PATH=${PGRST_DB_EXTRA_SEARCH_PATH:-public}'
+      - PGRST_DB_ANON_ROLE=anon
+      - 'PGRST_JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - PGRST_DB_USE_LEGACY_GUCS=false
+      - 'PGRST_APP_SETTINGS_JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - 'PGRST_APP_SETTINGS_JWT_EXP=${JWT_EXPIRY:-3600}'
+    command: postgrest
+    exclude_from_hc: true
+
+  supabase-auth:
+    image: 'supabase/gotrue:v2.186.0'
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - '--no-verbose'
+        - '--tries=1'
+        - '--spider'
+        - 'http://127.0.0.1:9999/health'
+      timeout: 5s
+      interval: 5s
+      retries: 3
+    environment:
+      - GOTRUE_API_HOST=0.0.0.0
+      - GOTRUE_API_PORT=9999
+      - 'API_EXTERNAL_URL=${API_EXTERNAL_URL:-http://supabase-kong:8000}'
+      - GOTRUE_DB_DRIVER=postgres
+      - 'GOTRUE_DB_DATABASE_URL=postgres://supabase_auth_admin:${SERVICE_PASSWORD_POSTGRES}@${POSTGRES_HOSTNAME:-supabase-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}'
+      - 'GOTRUE_SITE_URL=${GOTRUE_SITE_URL:-${SERVICE_URL_SUPABASEKONG}}'
+      - 'GOTRUE_URI_ALLOW_LIST=${ADDITIONAL_REDIRECT_URLS}'
+      - 'GOTRUE_DISABLE_SIGNUP=${DISABLE_SIGNUP:-false}'
+      - GOTRUE_JWT_ADMIN_ROLES=service_role
+      - GOTRUE_JWT_AUD=authenticated
+      - GOTRUE_JWT_DEFAULT_GROUP_NAME=authenticated
+      - 'GOTRUE_JWT_EXP=${JWT_EXPIRY:-3600}'
+      - 'GOTRUE_JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - 'GOTRUE_EXTERNAL_EMAIL_ENABLED=${ENABLE_EMAIL_SIGNUP:-true}'
+      - 'GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED=${ENABLE_ANONYMOUS_USERS:-false}'
+      - 'GOTRUE_MAILER_AUTOCONFIRM=${ENABLE_EMAIL_AUTOCONFIRM:-false}'
+
+  supabase-kong:
+    image: 'kong/kong:3.9.1'
+    entrypoint: /home/kong/kong-entrypoint.sh
+    healthcheck:
+      test:
+        - CMD
+        - kong
+        - health
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      - SERVICE_URL_SUPABASEKONG_8000
+      - 'KONG_PORT_MAPS=443:8000'
+      - 'JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/usr/local/kong/kong.yml
+      - 'KONG_DNS_ORDER=LAST,A,CNAME'
+      - KONG_DNS_NOT_FOUND_TTL=1
+      - 'KONG_PLUGINS=request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction,post-function'
+      - 'SUPABASE_ANON_KEY=${SERVICE_SUPABASEANON_KEY}'
+      - 'SUPABASE_SERVICE_KEY=${SERVICE_SUPABASESERVICE_KEY}'
+    volumes:
+      -
+        type: bind
+        source: ./volumes/api/kong-entrypoint.sh
+        target: /home/kong/kong-entrypoint.sh
+      -
+        type: bind
+        source: ./volumes/api/kong.yml
+        target: /home/kong/temp.yml
+
+  supabase-supavisor:
+    image: 'supabase/supavisor:2.7.4'
+    profiles: ['pooler'] # activar solo si >1 replica web: docker compose --profile pooler up -d
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      - 'POOLER_TENANT_ID=${POOLER_TENANT_ID:-dev_tenant}'
+      - POOLER_POOL_MODE=transaction
+      - 'POOLER_DEFAULT_POOL_SIZE=${POOLER_DEFAULT_POOL_SIZE:-20}'
+      - 'POOLER_MAX_CLIENT_CONN=${POOLER_MAX_CLIENT_CONN:-100}'
+      - PORT=4000
+      - 'POSTGRES_PORT=${POSTGRES_PORT:-5432}'
+      - 'POSTGRES_HOSTNAME=${POSTGRES_HOSTNAME:-supabase-db}'
+      - 'POSTGRES_DB=${POSTGRES_DB:-postgres}'
+      - 'POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}'
+      - 'DATABASE_URL=ecto://supabase_admin:${SERVICE_PASSWORD_POSTGRES}@${POSTGRES_HOSTNAME:-supabase-db}:${POSTGRES_PORT:-5432}/_supabase'
+      - CLUSTER_POSTGRES=true
+      - 'SECRET_KEY_BASE=${SERVICE_PASSWORD_SUPAVISORSECRET}'
+      - 'VAULT_ENC_KEY=${SERVICE_PASSWORD_VAULTENC}'
+      - 'API_JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - 'METRICS_JWT_SECRET=${SERVICE_PASSWORD_JWT}'
+      - REGION=local
+    volumes:
+      -
+        type: bind
+        source: ./volumes/pooler/pooler.exs
+        target: /etc/pooler/pooler.exs
+
+  # supabase-studio + supabase-meta: solo dev/admin. Descomentar si necesitas UI.
+  # supabase-studio:
+  #   image: 'supabase/studio:2026.03.16-sha-5528817'
+  # supabase-meta:
+  #   image: 'supabase/postgres-meta:v0.95.2'
