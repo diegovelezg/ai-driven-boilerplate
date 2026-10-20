@@ -1,4 +1,9 @@
-# Deploy en Coolify v4: 4 recursos separados (Supabase + SearXNG + web + worker)
+# Deploy en Coolify v4: 3 recursos separados (Supabase + SearXNG + web) + 1 Scheduled Task
+#
+# Sin recurso worker: el cron corre one-shot dentro del contenedor web
+# (la imagen ya trae `worker.ts` + `lib/` + `node_modules`, ver `web/Dockerfile`).
+# El daemon interno (`WORKER_SCHEDULE=1`) queda como modo alterno en código,
+# apagado por default; prod usa cron externo.
 
 Modelo "by the book". Nada de compose monolítico: cada pieza es un recurso
 Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
@@ -10,7 +15,7 @@ Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
 | Supabase | mismo service | Studio: `https://studio.papelitosdecolor.com` | 3000 (+ Basic Auth del dominio) |
 | SearXNG | Service (plantilla one-click `searxng`) | autogenerado `https://<id>.papelitosdecolor.com` (wildcard, sin pedir DNS) | 8080 |
 | web | Application (repo git, build pack Dockerfile) | `https://retention.papelitosdecolor.com` | 3000 |
-| worker | Application (mismo repo, `command: npm run worker`) | sin dominio (no expone puerto) | — |
+| cron diario | Scheduled Task sobre `web` (ver 3b) | — | — |
 
 Postgres NO expone puerto público (la plantilla no publica 5432).
 
@@ -76,44 +81,44 @@ Coolify → New → Application → Public Repository:
   ANON_KEY exige **rebuild sin caché** de la web.
 - No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
 
-## 3b. Worker cron (mismo repo, sin dominio)
+## 3b. Cron diario (Scheduled Task sobre `web`, sin recurso worker)
 
+Coolify → Scheduled Task contra el recurso `web`, todos los días 11:00 UTC
+(= 06:00 Lima, sin DST):
+
+```
+npm run worker -- --once --kinds=sync,morning
+```
+
+Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot atómico
+por tienda: si el login/manual lo está corriendo, el cron lo omite (run null),
+no duplica. Exit 1 si alguna tienda falló (visible en la tarea).
 Sin cola: la web corre `runSyncOnce` directo en `after()` (respuesta <200ms);
-esto es solo el programador externo + corridas manuales.
+el cron es solo el programador diario + las corridas manuales usan el mismo
+comando con `--store=<uuid>` opcional.
 
-Coolify → cron (o Scheduled Task) contra el servicio web... no: comando
-directo en un contenedor de la imagen web:
-
-```
-npm run worker -- --once --kinds=sync,morning [--store=<uuid>]
-```
-
-Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot
-atómico por tienda: si el login/manual lo está corriendo, el cron lo omite
-(run null), no duplica. Exit 1 si alguna tienda falló (visible en el cron).
-
-## 3c. Scheduler diario (cron Coolify, por tenant)
+## 3c. Scheduler (notas)
 
 Tabla `jobs` (migración `20261029000000_jobs.sql`) en desuso: no borrar
-(artefacto histórico en DB), no programar nada sobre ella. Programar el
-comando de 3b a las 06:00 America/Lima:
+(artefacto histórico en DB), no programar nada sobre ella.
 
-```
-11:00 UTC = 06:00 Lima (sin DST)
-```
+Modo alterno en código (no usado en prod): daemon interno con
+`WORKER_SCHEDULE=1` (`WORKER_CRON_HOUR`/`WORKER_CRON_MINUTE`, default `6:00`
+Lima, offset fijo −5). Solo para dev/local; en Coolify no se setea
+(default apagado = one-shot).
 
 ## 4. Esquema + datos (sin bind mounts)
 
 La plantilla no corre `supabase/migrations/*.sql`: se aplican por stdin contra
 el contenedor `supabase-db-<uuid>` (`docker exec -i -u postgres … psql`,
-peer-auth, sin password y sin copiar archivos al VPS). Script local:
-`/tmp/opencode/retain-apply.sh` (fuente versionada de esta sección):
+peer-auth, sin password y sin copiar archivos al VPS). Script versionado:
+`scripts/retain-apply.sh` (testeado con stub de `docker`; ver su cabecera):
 
 ```bash
 export SSHPASS='<root VPS>' VPS_IP=46.225.73.40
-DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh schema  # 42 migraciones en orden + tracking public.schema_migrations
-DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh data    # public data-only (sin schema_migrations) + auth.users + auth.identities
-DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh verify  # esperado: stores=1 customers=952 orders=699 merchant_users=0 auth.users=1 auth.identities=1
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh schema  # 52 migraciones en orden + tracking public.schema_migrations
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh data <public-data.sql> [auth.sql]  # data-only (sin tracking)
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify  # esperado: stores=1 customers=952 orders=699 merchant_users=0 auth.users=1 auth.identities=1
 ```
 
 Notas:

@@ -76,3 +76,54 @@ export function parseWorkerArgs(argv: string[], envPollMs?: string | undefined):
   if (!Number.isFinite(pollMs) || pollMs < 500) pollMs = 5000;
   return { once, pollMs, kinds, unknownKinds, store };
 }
+
+// Scheduler interno (daemon) vía env: evita el cron externo de Coolify.
+// Lima = UTC-5 fijo (Perú sin DST): las 06:00 Lima son las 11:00 UTC.
+export const LIMA_OFFSET_MS = -5 * 3_600_000;
+export const WORKER_SCHEDULE_DEFAULT_HOUR = 6;
+export const WORKER_SCHEDULE_DEFAULT_MINUTE = 0;
+
+export interface WorkerSchedule {
+  enabled: boolean;
+  hour: number;
+  minute: number;
+}
+
+function parseHour(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 23) return fallback;
+  return n;
+}
+
+function parseMinute(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 59) return fallback;
+  return n;
+}
+
+export function parseWorkerSchedule(env: {
+  WORKER_SCHEDULE?: string | undefined;
+  WORKER_CRON_HOUR?: string | undefined;
+  WORKER_CRON_MINUTE?: string | undefined;
+  [key: string]: string | undefined;
+}): WorkerSchedule {
+  const v = (env.WORKER_SCHEDULE ?? "").trim().toLowerCase();
+  return {
+    enabled: v === "1" || v === "true" || v === "on" || v === "yes",
+    hour: parseHour(env.WORKER_CRON_HOUR, WORKER_SCHEDULE_DEFAULT_HOUR),
+    minute: parseMinute(env.WORKER_CRON_MINUTE, WORKER_SCHEDULE_DEFAULT_MINUTE),
+  };
+}
+
+/** ms hasta las próximas HH:MM Lima (hora local de Lima). Puro, testeable. */
+export function msUntilNextLimaRun(nowMs: number, hour: number, minute: number): number {
+  const limaNow = new Date(nowMs + LIMA_OFFSET_MS);
+  const y = limaNow.getUTCFullYear();
+  const mo = limaNow.getUTCMonth();
+  const d = limaNow.getUTCDate();
+  let target = Date.UTC(y, mo, d, hour, minute) - LIMA_OFFSET_MS;
+  if (target < nowMs) target += 24 * 3_600_000;
+  return target - nowMs;
+}

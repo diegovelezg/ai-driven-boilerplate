@@ -42,9 +42,9 @@ USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-# WORKER_MODE=1 → `npm run worker` (servicio aparte); si no, web Next.js.
-# En compose/Coolify el worker se corre con `command: ["npm", "run", "worker"]`
-# (override explícito, no depende de esta variable).
+# El cron de prod (Scheduled Task Coolify, docs/coolify.md 3b) corre one-shot
+# dentro de esta misma imagen: `npm run worker -- --once --kinds=sync,morning`.
+# WORKER_MODE=1 → `npm run worker` (solo dev/daemon local); si no, web Next.js.
 # `exec`: PID1 es el proceso real y recibe el SIGTERM de compose/Coolify (sin
 # exec, PID1 queda `sh`, los handlers del worker nunca se disparan y cada
 # redeploy deja el job en `running` hasta el reap).
