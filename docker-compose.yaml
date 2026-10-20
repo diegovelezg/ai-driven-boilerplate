@@ -14,9 +14,6 @@ services:
     # ese combo está probado con nuestras migraciones.
     image: public.ecr.aws/supabase/postgres:17.11.0.004
     restart: unless-stopped
-    ports:
-      # TEMPORAL para la migración inicial de datos (luego se quita).
-      - "5432:5432"
     volumes:
       # pgdata2: el volumen pgdata original nació sin passwords de roles y no
       # tiene arreglo in-place (la imagen le quita superuser a postgres).
