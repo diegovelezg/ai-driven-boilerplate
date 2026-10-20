@@ -9,6 +9,8 @@ import { listProductsWithStats, type ProductWithStats } from "@/lib/product-stat
 import { ProductsList } from "./products-list";
 import { SyncButton } from "../customers/sync-button";
 
+export const instant = false;
+
 export default async function ProductsPage({
   searchParams,
 }: {
