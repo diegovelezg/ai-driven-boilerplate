@@ -32,7 +32,11 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
     return { ok: false, message: e instanceof Error ? e.message : "Supabase no configurado." };
   }
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) return { ok: false, message: "Credenciales inválidas." };
+  if (error) {
+    // Diagnóstico: el mensaje genérico ocultaba la causa (API key, URL, red).
+    console.error("[login] signInWithPassword:", error.status, error.message);
+    return { ok: false, message: `Credenciales inválidas. (${error.message})` };
+  }
   // Cada inicio de sesión dispara sync ecommerce → BD en background
   // (no bloquea el login si falla; se omite si hay run en curso).
   scheduleSyncOnLogin();
