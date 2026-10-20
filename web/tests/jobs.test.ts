@@ -2,7 +2,12 @@
 // Corre con: npm test (node:test stdlib vía tsx, sin BD ni red).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { loginSyncIdempotencyKey, morningIdempotencyKey, nextRetryDelayMs } from "@/lib/jobs";
+import {
+  dedupeReuseAction,
+  loginSyncIdempotencyKey,
+  morningIdempotencyKey,
+  nextRetryDelayMs,
+} from "@/lib/jobs";
 
 describe("morningIdempotencyKey", () => {
   it("1 por día (Lima): mismo día = misma key", () => {
@@ -38,6 +43,19 @@ describe("loginSyncIdempotencyKey", () => {
     const b = loginSyncIdempotencyKey(new Date("2026-10-20T10:16:00Z")); // 05:16 Lima
     assert.notEqual(a, b);
     assert.equal(b, "sync-login-2026-10-20-0515");
+  });
+});
+
+describe("dedupeReuseAction", () => {
+  it("reutiliza queued/running/error/done (done = trabajo ya hecho, no-op correcto)", () => {
+    assert.equal(dedupeReuseAction("queued"), "reuse");
+    assert.equal(dedupeReuseAction("running"), "reuse");
+    assert.equal(dedupeReuseAction("error"), "reuse");
+    assert.equal(dedupeReuseAction("done"), "reuse");
+  });
+
+  it("re-encola dead (intentos agotados: el request nuevo sí debe correr)", () => {
+    assert.equal(dedupeReuseAction("dead"), "requeue");
   });
 });
 

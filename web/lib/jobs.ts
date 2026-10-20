@@ -101,9 +101,21 @@ export interface EnqueueOpts {
 }
 
 /**
+ * Dedupe consciente del estado (puro, testeable): la fila existente por
+ * `idempotency_key` solo se reutiliza si aún puede producir trabajo
+ * (`queued`/`running`/`error`) o si el trabajo ya se hizo (`done` = no-op
+ * correcto: re-encolar duplicaría). Un `dead` (intentos agotados) NUNCA se
+ * devuelve como éxito: el request nuevo lo re-encola con intentos frescos,
+ * si no los logins siguientes reportarían "encolado" sin que nada corra.
+ */
+export function dedupeReuseAction(status: JobStatus): "reuse" | "requeue" {
+  return status === "dead" ? "requeue" : "reuse";
+}
+
+/**
  * Encola un job (respuesta <200ms, sin trabajo pesado). Con idempotency_key
- * el duplicado es no-op y devuelve la fila existente. Si la tabla aún no
- * existe (DB sin migrar), lanza y el caller hace fallback legacy.
+ * el duplicado reutiliza la fila existente (ver `dedupeReuseAction`). Si la
+ * tabla aún no existe (DB sin migrar), lanza y el caller hace fallback legacy.
  */
 export async function enqueueJob(storeId: string, kind: JobKind, opts: EnqueueOpts = {}): Promise<Job> {
   const db = getSupabase();
@@ -118,7 +130,7 @@ export async function enqueueJob(storeId: string, kind: JobKind, opts: EnqueueOp
   const q = db.from("jobs").insert(row).select("*").single();
   const { data, error } = await q;
   if (!error && data) return mapJob(data as Record<string, unknown>);
-  // Dedupe: la key ya existe → devuelve la fila original (no duplica ejecución).
+  // Dedupe: la key ya existe → reutiliza, o re-encola si murió (`dead`).
   const msg = error?.message ?? "";
   if (opts.idempotencyKey && /duplicate|conflict|unique/i.test(msg)) {
     const existing = await db
@@ -127,7 +139,29 @@ export async function enqueueJob(storeId: string, kind: JobKind, opts: EnqueueOp
       .eq("store_id", storeId)
       .eq("idempotency_key", opts.idempotencyKey)
       .maybeSingle();
-    if (!existing.error && existing.data) return mapJob(existing.data as Record<string, unknown>);
+    if (!existing.error && existing.data) {
+      const found = mapJob(existing.data as Record<string, unknown>);
+      if (dedupeReuseAction(found.status) === "requeue") {
+        const now = new Date().toISOString();
+        const { data: rq, error: rqErr } = await db
+          .from("jobs")
+          .update({
+            status: "queued",
+            attempts: 0,
+            available_at: now,
+            updated_at: now,
+            started_at: null,
+            finished_at: null,
+            last_error: null,
+            payload: opts.payload ?? found.payload,
+          })
+          .eq("id", found.id)
+          .select("*")
+          .single();
+        if (!rqErr && rq) return mapJob(rq as Record<string, unknown>);
+      }
+      return found;
+    }
   }
   throw new Error(`Jobs enqueue: ${msg || "insert failed"}`);
 }

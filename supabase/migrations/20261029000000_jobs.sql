@@ -115,3 +115,32 @@ $$;
 -- RLS), así que no debe ser ejecutable por authenticated/anon.
 revoke all on function public.enqueue_daily_morning() from public, anon, authenticated;
 grant execute on function public.enqueue_daily_morning() to service_role, postgres;
+
+-- Retención de la queue: cada bucket de login (`sync-login-*`, 96/día/tienda)
+-- y cada `morning-*` dejan una fila permanente amparada por el índice único
+-- parcial (bloat de tabla + índice sin cota). Purga solo estados terminales
+-- (`done`/`dead` con más de N días; `queued`/`running`/`error` nunca se tocan).
+-- Programarlo semanal en pg_cron junto al diario (ver docs/coolify.md §3c):
+--   select cron.schedule('jobs-purge', '0 12 * * 0', $$select public.purge_old_jobs(30)$$);
+create or replace function public.purge_old_jobs(p_retention_days int default 30)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  n int := 0;
+begin
+  with del as (
+    delete from jobs
+    where status in ('done', 'dead')
+      and coalesce(finished_at, created_at) < now() - make_interval(days => p_retention_days)
+    returning 1
+  )
+  select count(*) into n from del;
+  return n;
+end;
+$$;
+
+revoke all on function public.purge_old_jobs(int) from public, anon, authenticated;
+grant execute on function public.purge_old_jobs(int) to service_role, postgres;

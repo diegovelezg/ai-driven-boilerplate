@@ -114,6 +114,18 @@ select cron.schedule(
 así que doble scheduler tampoco duplica ejecución. Sobrevive redeploys
 (la programación vive en la DB, no en `after()` ni en curl externo).
 
+Retención (las filas `done`/`dead` —96 buckets de login/día/tienda— se
+acumulan sin cota bajo el índice único): purga semanal de terminales de más
+de 30 días (no toca `queued`/`running`/`error`):
+
+```sql
+select cron.schedule(
+  'jobs-purge',
+  '0 12 * * 0',  -- domingos 12:00 UTC (= 07:00 Lima)
+  $$select public.purge_old_jobs(30)$$
+);
+```
+
 ## 4. Esquema + datos (sin bind mounts)
 
 La plantilla no corre `supabase/migrations/*.sql`: se aplican por stdin contra

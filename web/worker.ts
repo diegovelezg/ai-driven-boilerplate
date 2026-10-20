@@ -115,7 +115,14 @@ async function handleOne(kinds?: string[]): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const { once, pollMs, kinds } = parseWorkerArgs(process.argv.slice(2), process.env.WORKER_POLL_MS);
+  const { once, pollMs, kinds, unknownKinds } = parseWorkerArgs(process.argv.slice(2), process.env.WORKER_POLL_MS);
+  if (unknownKinds.length > 0) {
+    log(`kinds desconocidos ignorados: ${unknownKinds.join(",")} (válidos: sync,morning,enrichment,scout,strategist,copywriter,prospect)`);
+  }
+  if (kinds !== undefined && kinds.length === 0) {
+    console.error("[worker] --kinds sin ningún kind válido: no se reclamaría nada. Revisa el flag.");
+    process.exit(1);
+  }
   const { isSupabaseConfigured } = await import("@/lib/supabase");
   if (!isSupabaseConfigured()) {
     console.error("[worker] Falta SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");

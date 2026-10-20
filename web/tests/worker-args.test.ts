@@ -6,7 +6,7 @@ import { parseWorkerArgs } from "@/lib/worker-args";
 
 describe("parseWorkerArgs", () => {
   it("defaults: continuo, 5000ms, todos los kinds", () => {
-    assert.deepEqual(parseWorkerArgs([]), { once: false, pollMs: 5000, kinds: undefined });
+    assert.deepEqual(parseWorkerArgs([]), { once: false, pollMs: 5000, kinds: undefined, unknownKinds: [] });
   });
 
   it("acepta --once", () => {
@@ -21,6 +21,18 @@ describe("parseWorkerArgs", () => {
   it("acepta --kinds con = y separado", () => {
     assert.deepEqual(parseWorkerArgs(["--kinds=sync,morning"]).kinds, ["sync", "morning"]);
     assert.deepEqual(parseWorkerArgs(["--kinds", "sync,morning"]).kinds, ["sync", "morning"]);
+  });
+
+  it("filtra kinds desconocidos y los reporta (no idle silencioso)", () => {
+    const r = parseWorkerArgs(["--kinds=sync,foo"]);
+    assert.deepEqual(r.kinds, ["sync"]);
+    assert.deepEqual(r.unknownKinds, ["foo"]);
+  });
+
+  it("solo desconocidos → kinds vacío (el worker falla en vez de idle)", () => {
+    const r = parseWorkerArgs(["--kinds=foo"]);
+    assert.deepEqual(r.kinds, []);
+    assert.deepEqual(r.unknownKinds, ["foo"]);
   });
 
   it("respeta WORKER_POLL_MS y sanea inválidos (<500 → 5000)", () => {
