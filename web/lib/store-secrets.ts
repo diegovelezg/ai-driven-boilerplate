@@ -13,6 +13,12 @@ import {
 const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
+// Campos de conexión no-secretos que TAMBIÉN viven cifrados en DB en prod
+// (el JSON local es efímero en contenedores: se pierde en cada redeploy y el
+// usuario nextjs no siempre puede escribirlo → EACCES).
+const CONN_FIELD_KEYS = ["medusa_url", "medusa_email"] as const;
+export type ConnFieldName = (typeof CONN_FIELD_KEYS)[number];
+
 type SecretAction = "upsert" | "revoke";
 
 // Huella para auditoría: reutiliza `fingerprintSecret` (única definición).
@@ -85,6 +91,35 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
   }
 }
 
+/** Lee y descifra medusa_url / medusa_email de una tienda. Sin DB/key → "" (fallback JSON). */
+export async function getStoreConnFields(storeId: string): Promise<Record<ConnFieldName, string>> {
+  const empty = { medusa_url: "", medusa_email: "" };
+  if (!isSecretsDbReady()) return { ...empty };
+  try {
+    const db = getSupabase();
+    const { data, error } = await db
+      .from("store_secrets")
+      .select("key_name,encrypted_value")
+      .eq("store_id", storeId)
+      .in("key_name", [...CONN_FIELD_KEYS]);
+    if (error) return { ...empty };
+    const key = getEncryptionKey();
+    const out = { ...empty };
+    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+      const name = String(r.key_name ?? "") as ConnFieldName;
+      if (!CONN_FIELD_KEYS.includes(name)) continue;
+      try {
+        out[name] = decryptSecret(String(r.encrypted_value ?? ""), key);
+      } catch {
+        out[name] = "";
+      }
+    }
+    return out;
+  } catch {
+    return { ...empty };
+  }
+}
+
 /**
  * Guarda (o revoca con "" ) un secreto: cifra + upsert + auditoría.
  * Devuelve { migratedToDb: true } si quedó en DB; false si cayó a JSON
@@ -92,7 +127,7 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
  */
 export async function setStoreSecret(
   storeId: string,
-  keyName: SecretKeyName,
+  keyName: SecretKeyName | ConnFieldName,
   plaintext: string,
   actor?: string | null,
 ): Promise<{ persistedToDb: boolean }> {

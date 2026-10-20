@@ -34,6 +34,10 @@ const CONFIG_FILE = join(DATA_DIR, "connections.json");
 
 const SECRET_JSON_KEYS = ["medusaToken", "shopifyToken", "emailApiKey"] as const;
 
+// Keys del JSON que también viven en DB cifrada en prod (se scraban del JSON
+// cuando la DB las persiste, y el write al JSON se omite del todo en prod).
+const DB_BACKED_JSON_KEYS = [...SECRET_JSON_KEYS, "medusaUrl", "medusaEmail"] as const;
+
 const EMPTY: StoreConnections = {
   platform: "medusa",
   medusaUrl: "",
@@ -126,14 +130,20 @@ export async function readConnections(storeId?: string | null): Promise<StoreCon
     if (!sid) return json;
     const { getStoreSecrets } = await import("@/lib/store-secrets");
     const db = await getStoreSecrets(sid).catch(() => null);
-    if (!db) return json;
+    const { getStoreConnFields } = await import("@/lib/store-secrets");
+    const fields = await getStoreConnFields(sid).catch(() => null);
+    if (!db && !fields) return json;
     // Overlay: el secreto DB manda SOLO si no es vacío; si la tienda existe
     // en DB pero aún sin fila (migración pendiente), se conserva el JSON.
+    // medusa_url/email también viven cifrados en DB en prod (el JSON local
+    // es efímero en contenedores); el JSON queda como fallback dev.
     return {
       ...json,
-      medusaToken: overlaySecret(json.medusaToken, db.medusa_token),
-      shopifyToken: overlaySecret(json.shopifyToken, db.shopify_token),
-      emailApiKey: overlaySecret(json.emailApiKey, db.email_api_key),
+      medusaUrl: fields?.medusa_url || json.medusaUrl,
+      medusaEmail: fields?.medusa_email || json.medusaEmail,
+      medusaToken: overlaySecret(json.medusaToken, db?.medusa_token ?? ""),
+      shopifyToken: overlaySecret(json.shopifyToken, db?.shopify_token ?? ""),
+      emailApiKey: overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
     };
   } catch {
     return json;
@@ -146,9 +156,10 @@ export interface WriteConnectionsOpts {
 }
 
 /**
- * Escribe conexiones: lo no-secreto siempre al JSON; los secretos van a DB
- * cifrada cuando hay tienda + Supabase + key, y se BORRAN del JSON
- * (no queda plaintext en disco). Sin DB/key, JSON como antes (dev).
+ * Escribe conexiones: en prod (Supabase + key + tienda resuelta) TODO va a DB
+ * cifrada —incluidos medusa_url/email— y NO se toca el JSON (en contenedores
+ * es efímero y puede no ser escribible → EACCES). El JSON queda solo como
+ * fallback dev (sin DB/key) o temporal hasta el primer guardado con DB.
  *
  * Si la DB era el destino esperado pero el upsert falla (caída transitoria),
  * NO se escribe el secreto nuevo en plaintext al JSON: se conserva el valor
@@ -162,6 +173,7 @@ export async function writeConnections(
   const scrub = new Set<string>();
   const prevJson = await readConnectionsJson().catch(() => null);
   const dbFailed: string[] = [];
+  let dbExpected = false;
   try {
     const { isSupabaseConfigured } = await import("@/lib/supabase");
     const { isEncryptionConfigured } = await import("@/lib/secrets-crypto");
@@ -176,11 +188,14 @@ export async function writeConnections(
         }
       }
       if (sid) {
+        dbExpected = true;
         const { setStoreSecret } = await import("@/lib/store-secrets");
-        const pairs: Array<[string, "medusa_token" | "shopify_token" | "email_api_key", string]> = [
+        const pairs: Array<[string, "medusa_token" | "shopify_token" | "email_api_key" | "medusa_url" | "medusa_email", string]> = [
           ["medusaToken", "medusa_token", next.medusaToken],
           ["shopifyToken", "shopify_token", next.shopifyToken],
           ["emailApiKey", "email_api_key", next.emailApiKey],
+          ["medusaUrl", "medusa_url", next.medusaUrl],
+          ["medusaEmail", "medusa_email", next.medusaEmail],
         ];
         for (const [jsonKey, dbKey, val] of pairs) {
           // Solo toca la key que el caller trae non-empty o que ya existe en
@@ -209,7 +224,7 @@ export async function writeConnections(
     // Persiste lo no-secreto + los scrubbed igualmente (sin los fallidos).
     const scrubbed = { ...reverted };
     for (const k of scrub) {
-      if ((SECRET_JSON_KEYS as readonly string[]).includes(k)) {
+      if ((DB_BACKED_JSON_KEYS as readonly string[]).includes(k)) {
         (scrubbed as Record<string, string>)[k] = "";
       }
     }
@@ -218,10 +233,15 @@ export async function writeConnections(
       `No se pudo cifrar en DB (${dbFailed.join(", ")}); no se guardó en disco. Reintenta.`,
     );
   }
+  if (dbExpected) {
+    // Todo lo intended quedó en DB cifrada: no tocar el JSON (en prod puede
+    // no existir o no ser escribible; además es efímero entre redeploys).
+    return;
+  }
   if (scrub.size > 0) {
     const scrubbed = { ...next };
     for (const k of scrub) {
-      if ((SECRET_JSON_KEYS as readonly string[]).includes(k)) {
+      if ((DB_BACKED_JSON_KEYS as readonly string[]).includes(k)) {
         (scrubbed as Record<string, string>)[k] = "";
       }
     }

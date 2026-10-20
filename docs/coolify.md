@@ -1,97 +1,152 @@
-# Deploy único en Coolify (todo junto)
+# Deploy en Coolify v4: 3 recursos separados (Supabase + SearXNG + web)
 
-Push al repo → redeploy en Coolify → levantan `web + db + auth + rest + studio + searxng`.
+Modelo "by the book". Nada de compose monolítico: cada pieza es un recurso
+Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
+(environment `production`, servidor localhost, DNS `*.papelitosdecolor.com` → VPS).
 
-## 1. Preparar secretos (una vez, local)
+| Recurso | Tipo Coolify | Dominio | Puerto interno |
+|---|---|---|---|
+| Supabase | Service (plantilla one-click `supabase`) | API: `https://retention-api.papelitosdecolor.com` (Kong) | 8000 |
+| Supabase | mismo service | Studio: `https://studio.papelitosdecolor.com` | 3000 (+ Basic Auth del dominio) |
+| SearXNG | Service (plantilla one-click `searxng`) | autogenerado `https://<id>.papelitosdecolor.com` (wildcard, sin pedir DNS) | 8080 |
+| web | Application (repo git, build pack Dockerfile) | `https://retention.papelitosdecolor.com` | 3000 |
+
+Postgres NO expone puerto público (la plantilla no publica 5432).
+
+## 1. Service Supabase (one-click)
+
+Coolify → proyecto `retention-ai-engine` → New → Service → `Supabase` → Deploy.
+
+1. Sub-app `supabase-kong`, puerto 8000 → dominio
+   `https://retention-api.papelitosdecolor.com`.
+2. Sub-app `supabase-studio`, puerto 3000 → dominio
+   `https://studio.papelitosdecolor.com` + **Basic Auth del dominio**
+   (Domains → tu dominio → protección por contraseña). El Studio self-hosted
+   no tiene login propio: sin esto queda abierto a internet.
+3. Environment del service (valores con esquema `https://` incluido):
+   - `API_EXTERNAL_URL=https://retention-api.papelitosdecolor.com`
+   - `SUPABASE_PUBLIC_URL=https://retention-api.papelitosdecolor.com`
+     (sin esquema, Studio devuelve 500 "You do not have access to this project")
+   - `SITE_URL=https://retention.papelitosdecolor.com`
+   - `GOTRUE_SITE_URL=https://retention.papelitosdecolor.com`
+   - `ADDITIONAL_REDIRECT_URLS=https://retention.papelitosdecolor.com/**`
+   - `DISABLE_SIGNUP=false`, `ENABLE_EMAIL_AUTOCONFIRM=true`
+   - `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` (credencial del Basic Auth de Studio)
+   - El resto (POSTGRES_PASSWORD, JWT_SECRET, ANON/SERVICE keys…) lo autogenera
+     la plantilla. Redeploy para aplicar.
+4. Anotar del environment del service (se usan en la web, paso 3):
+   `SUPABASE_ANON_KEY` (o `SERVICE_SUPABASEANON_KEY`), `SUPABASE_SERVICE_KEY` /
+   `SUPABASE_SERVICE_ROLE_KEY` y `JWT_SECRET`.
+
+## 2. Service SearXNG (one-click)
+
+Coolify → New → Service → `SearXNG` → Deploy. Verificar `/healthz` (la plantilla
+ya trae `json` habilitado en `formats`).
+
+La web lo consume por **URL HTTPS pública** (dominio autogenerado del service,
+resuelve por wildcard sin pedir DNS):
+
+- `SEARXNG_URL=https://<id>.papelitosdecolor.com` (sin `/` final; ver `web/lib/retrieval.ts`)
+- Los services de Coolify viven en redes Docker distintas, así que no se asume
+  resolución por hostname interno entre recursos.
+
+## 3. Application web (Git + Dockerfile)
+
+Coolify → New → Application → Public Repository:
+`https://github.com/diegovelezg/retention-ai-engine`, rama `main`.
+
+- Build Pack: `Dockerfile`. Base Directory: `/web`. Dockerfile Location: `/Dockerfile`. Port: `3000`.
+- Dominio: `https://retention.papelitosdecolor.com`.
+- Environment (runtime):
+
+  ```
+  SUPABASE_URL=https://retention-api.papelitosdecolor.com
+  SUPABASE_ANON_KEY=<ANON del service, paso 1.4>
+  SUPABASE_SERVICE_ROLE_KEY=<SERVICE_ROLE del service>
+  NEXT_PUBLIC_SUPABASE_URL=https://retention-api.papelitosdecolor.com
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=<ANON del service>
+  SECRETS_ENCRYPTION_KEY=<base64 32B: openssl rand -base64 32>
+  SEARXNG_URL=<dominio https del service, paso 2>
+  DEEPSEEK_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY (opcionales)
+  ```
+
+- `NEXT_PUBLIC_*` van **también como build-time** (Coolify: "Available at build
+  time"): se inlinan en el bundle en `npm run build`. Todo cambio de URL o de
+  ANON_KEY exige **rebuild sin caché** de la web.
+- No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
+
+## 4. Esquema + datos (sin bind mounts)
+
+La plantilla no corre `supabase/migrations/*.sql`: se aplican por stdin contra
+el contenedor `supabase-db-<uuid>` (`docker exec -i -u postgres … psql`,
+peer-auth, sin password y sin copiar archivos al VPS). Script local:
+`/tmp/opencode/retain-apply.sh` (fuente versionada de esta sección):
 
 ```bash
-openssl rand -hex 32   # JWT_SECRET
-openssl rand -hex 32   # POSTGRES_PASSWORD
-openssl rand -hex 32   # PG_META_CRYPTO_KEY
-openssl rand -base64 32 # SECRETS_ENCRYPTION_KEY
-openssl rand -hex 32   # SEARXNG_SECRET_KEY
-
-python3 infra/supabase/gen-keys.py '<JWT_SECRET>'
-# -> pega salida en ANON_KEY / SERVICE_ROLE_KEY
+export SSHPASS='<root VPS>' VPS_IP=46.225.73.40
+DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh schema  # 42 migraciones en orden + tracking public.schema_migrations
+DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh data    # public data-only (sin schema_migrations) + auth.users + auth.identities
+DB_CONTAINER=supabase-db-<uuid> ./retain-apply.sh verify  # esperado: stores=1 customers=952 orders=699 merchant_users=0 auth.users=1 auth.identities=1
 ```
 
-Ver plantilla completa en `.env.deploy.example`.
+Notas:
 
-## 2. Crear el servicio en Coolify
+- Cada migración corre con `SET search_path = public, extensions;` antepuesto
+  (pgcrypto vive en `extensions`; el trigger de customers ya fija su search_path
+  en `20261028000000_fix_input_hash_search_path.sql`).
+- `--single-transaction -v ON_ERROR_STOP=1`: si una migración falla, rollback
+  completo y se reintenta en la próxima pasada (tracking en `public.schema_migrations`).
+- `public` no tiene secuencias (PKs UUID): no hace falta `setval`.
+- No se migran sesiones (`auth.refresh_tokens`): solo users + identities.
+- Dumps fuente (generados del CLI local, puerto 54322):
+  `pg_dump --data-only --schema=public --exclude-table-data=public.schema_migrations`
+  (1.2 MB, 24 tablas) + `--schema=auth --table=auth.users --table=auth.identities`.
 
-1. Coolify → New Project → New Service → Docker Compose → conecta el repo GH (`main`).
-2. Compose file: `./docker-compose.yaml` (raíz, default de Coolify).
-3. Pega las envs del paso 1 en Environment.
-4. Asigna 3 dominios (en cada servicio del compose):
-   - `web:3000` → `https://app.tudominio.com`
-   - `gateway:8000` → `https://api.tudominio.com`
-   - `studio:3000` → `https://studio.tudominio.com`
-5. Protege Studio (obligatorio): el Studio self-hosted oficial **no pide usuario/contraseña**.
-  Sin protección, cualquiera con la URL `studio.tudominio.com` ve tu base de datos.
-  En Coolify abre el servicio `studio` → Domains → tu dominio → activa la opción de
-  contraseña (según tu versión se llama "Password Protection", "Basic Auth" o
-  "Protect with password") y define usuario + contraseña. Desde entonces el navegador
-  pide esa contraseña ANTES de mostrar Studio. Si tu Coolify no muestra ese interruptor,
-  no expongas Studio a internet: accede por SSH tunnel (`ssh -L 3000:localhost:3000 tu-vps`)
-  o dime y cableo basic-auth en el compose.
-6. Deploy.
+## 5. Usuario login
 
-## 3. Entrar a Supabase Studio
+`merchant_users` local está vacío: recrear el usuario y linkearlo.
 
-Con todo desplegado, Studio **es un servicio más del compose**:
+Opción A (UI): Studio → Authentication → Users → Create user
+(`diegovelezg@gmail.com` + clave), luego SQL editor:
 
-- URL: `https://studio.tudominio.com`
-- Pide antes la protección de acceso de Coolify que configuraste.
-- Dentro verás la DB (`public.*`: `stores`, `customers`, `orders`, …), Auth → Users y el SQL editor.
-- Primer usuario merchant: Studio → Authentication → Users → Create user (email+password con tu dominio), luego en SQL editor:
-  ```sql
-  insert into merchant_users (store_id, user_id)
-  values ('<store_id>', '<auth_user_id>');
-  ```
-- La app (`https://app.tudominio.com/login`) usa ese mismo usuario (GoTrue `auth:9999` vía `gateway:8000/auth/v1`).
+```sql
+insert into merchant_users (store_id, user_id)
+values ('<store_id de public.stores>', '<auth_user_id>');
+```
+
+Opción B (reset de clave del usuario migrado, sin dejarla en git):
+
+```sql
+SET search_path = public, extensions;
+UPDATE auth.users
+   SET encrypted_password = crypt('<clave>', gen_salt('bf')), updated_at = now()
+ WHERE email = 'diegovelezg@gmail.com';
+```
+
+## 6. Verificación (criterios de aceptación)
+
+```bash
+curl -sk -o /dev/null -w '%{http_code}\n' https://retention.papelitosdecolor.com/login   # 200
+curl -sk https://retention-api.papelitosdecolor.com/auth/v1/health                       # GoTrue {"version":...}
+curl -sk -o /dev/null -w '%{http_code}\n' https://studio.papelitosdecolor.com/           # 401 sin credencial, 200 con ella
+curl -sk https://<searxng>/healthz
+docker ps --format '{{.Names}} {{.Ports}}' | grep -i 5432   # Postgres sin puerto público
+```
+
+En la app: login con `diegovelezg@gmail.com` → `/customers` muestra **952**.
+Probar una acción de enriquecimiento (usa `SEARXNG_URL`, `web/lib/retrieval.ts`).
 
 Local sigue igual: `npx supabase start` → `http://127.0.0.1:54323`.
 
-## 4. Actualizar con cada push
+## 7. Si algo falla
 
-`git push` → Coolify → Redeploy (o auto-deploy si lo activas). El servicio `migrator` aplica solo las migraciones nuevas de `supabase/migrations/*.sql` (tabla `public.schema_migrations`); `web` se rebuildea con los `NEXT_PUBLIC_*` como Build Args (ya cableados en el compose).
-
-## 5. Migrar los datos locales a Coolify
-
-El esquema lo crea solo el servicio `migrator` en el primer deploy; los datos se mueven aparte (tu local tiene ~1 store, ~950 customers, ~700 orders, <2 MB):
-
-```bash
-# 1. Primer deploy en Coolify SIN datos (migrator crea el esquema vacío).
-# 2. Dump + restore (el script verifica esquema y compara conteos):
-./infra/supabase/migrate-data.sh '<TARGET_URL>'
-# TARGET_URL = connection string del Postgres de Coolify
-# (desde tu máquina con el puerto expuesto, o corriendo el script en el VPS).
-```
-
-3. Recrea tu usuario login: Studio de Coolify → Authentication → Users → Create user.
-   Luego linkéalo a tu tienda (el `store_id` se preservó del dump):
-   ```sql
-   insert into merchant_users (store_id, user_id)
-   values ('<store_id>', '<auth_user_id>');
-   ```
-4. Verifica en la app: `/customers` debe mostrar tus ~950 customers.
-
-Notas: `merchant_users` local está vacío (0 filas), así que no arrastra FKs viejas;
-`auth.users` NO se migra (con 1 solo usuario es más limpio recrearlo que copiar tablas
-internas de GoTrue): se recrea el usuario y se linkea.
-
-## 6. Si algo falla
-
-- `migrator` → `MIGRATIONS_OK` en logs = DB al día. Si una migración falla, el deploy se detiene antes de levantar `web` (a propósito).
-- Deploy parado en `migrator ... Waiting` → el contenedor no terminó (compose espera su exit por el `service_completed_successfully`). **Causa típica en Coolify:** si un servicio one-shot no declara `restart`, Coolify le inyecta `restart: unless-stopped`; al salir con exit 0 Docker lo reinicia y el estado "completed" nunca llega. Por eso `migrator` lleva `restart: "no"` explícito — no lo quites. Como red de seguridad, el script además acota la espera de `db` (180s), cada sentencia (`lock_timeout` 30s / `statement_timeout` 5min) y cada `psql` (10min). Si igual se cuelga, revisa:
-  ```bash
-  docker ps -a | grep migrator                      # ¿Up/restarting o Exited?
-  docker logs --tail=200 <nombre-migrator>          # dice el archivo y el ERROR
-  docker exec <nombre-db> psql -U postgres -c \
-    "select pid, state, wait_event_type, wait_event, now()-xact_start as age, left(query,120)
-       from pg_stat_activity where datname='postgres' order by xact_start"
-  ```
-  Si aparece `wait_event_type=lock`, hay una sesión con una transacción abierta (Studio/SQL editor, un `psql` olvidado, etc.): ciérrala o `select pg_terminate_backend(<pid>)`. Cada archivo corre en una sola transacción: si falla, se revierte completo y el próximo deploy lo reintenta desde cero.
-- `web` en blanco / `Falta NEXT_PUBLIC_...` → revisa Build Args en Coolify (deben ser = `SUPABASE_PUBLIC_URL` y `ANON_KEY`).
-- Login redirige en loop → `SITE_URL`, `API_EXTERNAL_URL` y `ADDITIONAL_REDIRECT_URLS` deben ser los dominios públicos reales con `https`.
-- SearXNG 403 → `SEARXNG_SECRET_KEY` distinto al `secret_key` de dev de `infra/searxng/settings.yml` (prod manda el env).
+- Login "Credenciales inválidas (…)" con detalle: el mensaje incluye el error
+  real de GoTrue (`web/lib/auth-actions.ts`). Causas típicas: `NEXT_PUBLIC_*`
+  horneadas con valores viejos (rebuild sin caché), `SUPABASE_PUBLIC_URL` sin
+  `https://`, o usuario inexistente en la DB nueva (paso 5).
+- Login redirige en loop: `SITE_URL` / `API_EXTERNAL_URL` /
+  `ADDITIONAL_REDIRECT_URLS` deben ser los dominios públicos con `https`.
+- `/customers` vacío: verificar conteos (paso 4 `verify`) y `merchant_users` linkeado.
+- SearXNG 403/5xx: revisar `SEARXNG_SECRET` del service y `SEARXNG_URL` de la web.
+- No tocar contenedores, volúmenes, redes ni proxy de otros proyectos; no correr
+  `docker builder prune` global.
