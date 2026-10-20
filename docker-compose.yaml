@@ -10,22 +10,17 @@
 
 services:
   db:
-    # Misma imagen que el CLI local (public.ecr.aws/...:17.11.0.004):
-    # ese combo está probado con nuestras migraciones.
-    image: public.ecr.aws/supabase/postgres:17.11.0.004
+    # Deriva de la misma imagen que el CLI local (17.11.0.004) y hornea
+    # roles.sql/jwt.sql (ver infra/supabase/db/Dockerfile): no se usan bind
+    # mounts de archivos porque Coolify los monta como directorios y los
+    # scripts de init nunca corrían (roles sin password).
+    build:
+      context: ./infra/supabase/db
+      dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
-      # pgdata2: el volumen pgdata original nació sin passwords de roles y no
-      # tiene arreglo in-place (la imagen le quita superuser a postgres).
-      # Al cambiar el nombre, el próximo deploy inicializa fresco (con
-      # roles.sql) y el migrator aplica las 40 migraciones. Nada que perder:
-      # los datos aún no se migraron. El viejo pgdata queda huérfano.
+      # Único volumen persistente. Solo se inicializa si está vacío.
       - pgdata2:/var/lib/postgresql/data
-      # Init oficial Supabase (solo primera vez del volumen): passwords de roles
-      # internos (authenticator, supabase_auth_admin...) + jwt_exp. Sin esto,
-      # postgrest/gotrue mueren con "password authentication failed".
-      - ./infra/supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
-      - ./infra/supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 5s
@@ -145,15 +140,16 @@ services:
       AUTH_JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requerido}
 
   gateway:
-    image: kong:2.8.1
+    # kong.yml horneado en la imagen (ver infra/supabase/gateway/Dockerfile).
+    build:
+      context: ./infra/supabase
+      dockerfile: gateway/Dockerfile
     restart: unless-stopped
     depends_on:
       auth:
         condition: service_started
       rest:
         condition: service_started
-    volumes:
-      - ./infra/supabase/kong.yml:/etc/kong/kong.yml:ro
     healthcheck:
       test: ["CMD-SHELL", "kong health || exit 1"]
       interval: 10s
@@ -166,7 +162,11 @@ services:
       KONG_ADMIN_LISTEN: "off"
 
   migrator:
-    image: postgres:17-alpine
+    # Script y migraciones dentro de la imagen (ver
+    # infra/supabase/migrator/Dockerfile): sin bind mounts.
+    build:
+      context: .
+      dockerfile: infra/supabase/migrator/Dockerfile
     # OBLIGATORIO en servicios one-shot: Coolify inyecta
     # `restart: unless-stopped` en todo servicio que no declare `restart`
     # (bootstrap/helpers/shared.php). Al terminar con exit 0 Docker lo
@@ -178,9 +178,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./supabase/migrations:/migrations:ro
-      - ./infra/supabase/migrate.sh:/scripts/migrate.sh:ro
     environment:
       PGHOST: db
       PGPORT: 5432
@@ -219,10 +216,11 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
 
   searxng:
-    image: searxng/searxng:latest
+    # settings.yml horneado en la imagen (ver infra/searxng/Dockerfile).
+    build:
+      context: ./infra/searxng
+      dockerfile: Dockerfile
     restart: unless-stopped
-    volumes:
-      - ./infra/searxng/settings.yml:/etc/searxng/settings.yml:ro
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1"]
       interval: 15s
