@@ -127,6 +127,32 @@ export async function readConnections(storeId?: string | null): Promise<StoreCon
         sid = null;
       }
     }
+    if (!sid) {
+      // JSON vacío en prod (efímero entre redeploys): si hay UNA sola tienda
+      // medusa en DB, se usa su URL para resolver (multi-tienda sigue
+      // explícita vía JSON/DB). Sin esto, el read retorna vacío aunque la DB
+      // tenga todo, y los guardados fallan con "tienda no encontrada".
+      try {
+        const { isSupabaseConfigured } = await import("@/lib/supabase");
+        if (isSupabaseConfigured()) {
+          const { getSupabase } = await import("@/lib/supabase");
+          const { data } = await getSupabase()
+            .from("stores")
+            .select("id,shop_url")
+            .eq("platform", "medusa")
+            .limit(2);
+          const rows = (data ?? []) as Array<{ id: string; shop_url: string }>;
+          if (rows.length === 1) {
+            sid = rows[0].id;
+            if (!json.medusaUrl && rows[0].shop_url) {
+              json = { ...json, medusaUrl: rows[0].shop_url };
+            }
+          }
+        }
+      } catch {
+        // Cae al JSON como antes.
+      }
+    }
     if (!sid) return json;
     const { getStoreSecrets } = await import("@/lib/store-secrets");
     const db = await getStoreSecrets(sid).catch(() => null);
