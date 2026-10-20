@@ -113,7 +113,7 @@ export async function writeConnectionsJson(next: StoreConnections): Promise<void
  * Nunca lanza: ante cualquier fallo devuelve el JSON.
  */
 export async function readConnections(storeId?: string | null): Promise<StoreConnections> {
-  const json = await readConnectionsJson();
+  let json = await readConnectionsJson();
   try {
     const { isSupabaseConfigured } = await import("@/lib/supabase");
     const { isEncryptionConfigured, overlaySecret } = await import("@/lib/secrets-crypto");
