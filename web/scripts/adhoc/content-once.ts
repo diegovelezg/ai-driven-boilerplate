@@ -24,10 +24,33 @@ const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
 /** Respaldo plano antes de cada upsert: si la DB se pierde, el dato sobrevive aquí. */
 const BACKUP_PATH = ".data/content-backup.jsonl";
 
+/** Pares hash:alive ya respaldados (se carga una vez: evita duplicados entre runs). */
+let backedUp: Set<string> | null = null;
+
 async function backupRow(row: Record<string, unknown>): Promise<void> {
-  const { mkdir } = await import("node:fs/promises");
+  const { mkdir, readFile } = await import("node:fs/promises");
   await mkdir(".data", { recursive: true });
+  if (!backedUp) {
+    backedUp = new Set();
+    try {
+      const prev = await readFile(BACKUP_PATH, "utf-8");
+      for (const line of prev.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const r = JSON.parse(line) as Record<string, unknown>;
+          backedUp.add(`${String(r.content_hash)}:${String((r as Record<string, unknown>).alive)}`);
+        } catch {
+          // línea corrupta: se ignora, no rompe el respaldo
+        }
+      }
+    } catch {
+      // sin archivo previo: parte vacío
+    }
+  }
+  const key = `${String(row.content_hash)}:${String(row.alive)}`;
+  if (backedUp.has(key)) return;
   await appendFile(BACKUP_PATH, JSON.stringify(row) + "\n");
+  backedUp.add(key);
 }
 
 /** URL sin query para logs (las presigned llevan firma). */
@@ -135,6 +158,10 @@ async function framesFor(url: string, kind: "video" | "image", dir: string): Pro
   const src = join(dir, `src.${kind === "video" ? "mp4" : "img"}`);
   const dl = await fetch(url, { signal: AbortSignal.timeout(120_000) });
   if (!dl.ok || !dl.body) throw new Error(`Descarga ${dl.status}`);
+  const declared = Number(dl.headers.get("content-length") ?? 0);
+  if (Number.isFinite(declared) && declared > 250_000_000) {
+    throw new Error(`Descarga declarada de ${(declared / 1_000_000).toFixed(0)}MB: excede el cap`);
+  }
   const buf = Buffer.from(await dl.arrayBuffer());
   if (buf.length < 1_000) throw new Error("Descarga vacía (probable XML de S3)");
   if (buf.length > 250_000_000) throw new Error(`Descarga de ${(buf.length / 1_000_000).toFixed(0)}MB: excede el cap`);
@@ -182,7 +209,9 @@ async function main() {
         `Gate item_content: ${probeErr.message} — aplica las migraciones hasta 20261030000006 antes de correr.`,
       );
     }
-    await db.from("item_content").delete().eq("store_id", storeId).eq("content_hash", probeHash);
+    await db.from("item_content").delete().eq("store_id", storeId).eq("content_hash", probeHash).then(({ error: delErr }) => {
+      if (delErr) throw new Error(`Gate cleanup: ${delErr.message}`);
+    });
   }
 
   // Key de archivo desde el mapa del tenant (settings → metadata_map).
