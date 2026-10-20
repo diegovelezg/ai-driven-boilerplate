@@ -1,11 +1,12 @@
-// Backfill Nivel 1: captions de visión (deepseek-chat) para media_file de órdenes REALES.
-// Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/captions-once.ts
+// Backfill Nivel 1: contenido de visión (deepseek-chat) para archivos de órdenes REALES.
+// AD-HOC (un solo uso contra prod para rescatar data, no parte del pipeline).
+// Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/adhoc/content-once.ts
 // Universo: órdenes reales (no test/canceladas/pago fallido) + URL viva (HEAD) + dedup por sha256(url).
-// Resume-safe: salta hashes ya presentes en media_captions. Guarda crudo (caption_json) + vivas/muertas.
-// NUNCA toca metadata.media_comments (fuente humana de Medusa).
+// Resume-safe: salta hashes ya presentes en item_content. Guarda crudo (content_json) + vivas/muertas.
+// NUNCA toca el comentario humano del metadata (fuente de Medusa).
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -20,10 +21,18 @@ const IMAGE_EXT = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 const EXCLUDED_ORDER_STATUSES = new Set(["canceled", "cancelled", "archived", "requires_action"]);
 const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
 
-const PROMPT =
+/** Respaldo plano antes de cada upsert: si la DB se pierde, el dato sobrevive aquí. */
+const BACKUP_PATH = ".data/content-backup.jsonl";
+
+async function backupRow(row: Record<string, unknown>): Promise<void> {
+  await appendFile(BACKUP_PATH, JSON.stringify(row) + "\n");
+}
+
+/** Extractor del tipo de negocio DOOH (pantallas): cada tipo registra el suyo. */
+const DOOH_PROMPT =
   "Pieza publicitaria de pantalla exterior en Perú. Responde SOLO JSON: " +
   '{"marca": string|null, "que_anuncia": string, "categoria": string, "texto_visible": string, "confianza": "alta"|"media"|"baja"}. ' +
-  "Si son 2 frames del mismo video, intégralos. NO inventes.";
+  "Si son 3 frames del mismo video, intégralos. NO inventes.";
 
 function sha(url: string): string {
   return createHash("sha256").update(url).digest("hex");
@@ -49,7 +58,7 @@ async function visionCaption(imagePaths: string[]): Promise<Record<string, unkno
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("Falta DEEPSEEK_API_KEY");
   const { readFile } = await import("node:fs/promises");
-  const content: unknown[] = [{ type: "text", text: PROMPT }];
+  const content: unknown[] = [{ type: "text", text: DOOH_PROMPT }];
   for (const p of imagePaths) {
     const b64 = (await readFile(p)).toString("base64");
     content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } });
@@ -115,7 +124,7 @@ async function framesFor(url: string, kind: "video" | "image", dir: string): Pro
   ]);
   const dur = Math.max(4, Number(probe.stdout.trim()) || 7);
   const outs: string[] = [];
-  for (const [i, t] of [dur * 0.25, dur * 0.75].entries()) {
+  for (const [i, t] of [dur * 0.2, dur * 0.5, dur * 0.8].entries()) {
     const out = join(dir, `frame${i}.jpg`);
     await execFileAsync("ffmpeg", ["-y", "-v", "error", "-ss", String(t.toFixed(1)), "-i", src, "-frames:v", "1", out]);
     outs.push(out);
@@ -131,6 +140,12 @@ async function main() {
   if (!store) throw new Error("Tienda sin sincronizar en Supabase.");
   const storeId = store.id as string;
 
+  // Key de archivo desde el mapa del tenant (settings → metadata_map).
+  const { resolveItemKeys } = await import("@/lib/metadata-map");
+  const keys = await resolveItemKeys(storeId);
+  if (!keys.file) throw new Error("Sin key de contenido: define el mapa en settings (metadata_map).");
+  console.log(`Key de contenido: ${keys.file}`);
+
   const { data: orders, error } = await db.from("orders").select("status,payment_status,is_test,items_json").eq("store_id", storeId);
   if (error) throw error;
   const seen = new Map<string, "video" | "image">();
@@ -141,9 +156,8 @@ async function main() {
       !(o.payment_status && EXCLUDED_PAYMENT_STATUSES.has(String(o.payment_status).toLowerCase()));
     if (!real) continue;
     for (const it of ((o.items_json as Array<Record<string, unknown>>) ?? [])) {
-      const url = it.metadata && typeof (it.metadata as Record<string, unknown>).media_file === "string"
-        ? String((it.metadata as Record<string, unknown>).media_file)
-        : null;
+      const md = (it.metadata as Record<string, unknown> | null) ?? null;
+      const url = md && typeof md[keys.file] === "string" ? String(md[keys.file]) : null;
       if (!url || seen.has(url)) continue;
       const kind = kindOf(url);
       if (kind) seen.set(url, kind);
@@ -151,8 +165,8 @@ async function main() {
   }
   console.log(`URLs únicas (reales): ${seen.size}`);
 
-  const { data: existing } = await db.from("media_captions").select("media_hash").eq("store_id", storeId);
-  const done = new Set((existing ?? []).map((r) => r.media_hash as string));
+  const { data: existing } = await db.from("item_content").select("content_hash").eq("store_id", storeId);
+  const done = new Set((existing ?? []).map((r) => r.content_hash as string));
   const pending = [...seen.entries()].filter(([url]) => !done.has(sha(url)));
   console.log(`Ya captionadas: ${done.size}. Pendientes: ${pending.length}`);
   if (pending.length === 0) return;
@@ -162,24 +176,29 @@ async function main() {
     const dir = await mkdtemp(join(tmpdir(), "cap-"));
     try {
       if (!(await urlAlive(url))) {
-        await db.from("media_captions").upsert({
-          media_hash: sha(url), store_id: storeId, media_url: url,
-          media_kind: kind, caption_json: null, model: null, alive: false,
-        }, { onConflict: "media_hash" });
+        const row = {
+          content_hash: sha(url), store_id: storeId, content_url: url,
+          content_kind: kind, content_json: null, model: null, alive: false,
+        };
+        await backupRow(row);
+        await db.from("item_content").upsert(row, { onConflict: "store_id,content_hash" });
         dead++;
         return;
       }
       const frames = await framesFor(url, kind, dir);
       const caption = await visionCaption(frames);
-      const { error: upErr } = await db.from("media_captions").upsert({
-        media_hash: sha(url), store_id: storeId, media_url: url,
-        media_kind: kind, caption_json: caption, model: "deepseek-chat", alive: true,
-      }, { onConflict: "media_hash" });
+      const row = {
+        content_hash: sha(url), store_id: storeId, content_url: url,
+        content_kind: kind, content_json: caption, model: "deepseek-chat", alive: true,
+      };
+      await backupRow(row);
+      const { error: upErr } = await db.from("item_content").upsert(row, { onConflict: "store_id,content_hash" });
       if (upErr) throw upErr;
       ok++;
     } catch (e) {
       fail++;
-      console.log(`FAIL ${url.slice(0, 90)}…: ${e instanceof Error ? e.message : e}`);
+      const detail = e instanceof Error ? e.message : JSON.stringify(e)?.slice(0, 300);
+      console.log(`FAIL ${url.slice(0, 90)}…: ${detail}`);
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
       if ((ok + dead + fail) % 25 === 0) console.log(`progreso ok=${ok} muertas=${dead} fallos=${fail}`);
