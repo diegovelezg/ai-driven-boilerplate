@@ -120,7 +120,11 @@ export async function loadCustomerOrdersAndRfm(
     (((o.items_json as Array<Record<string, unknown>>) ?? []).slice(0, 5)).map((i) => ({
       title: String(i.title ?? "—"),
       quantity: Number(i.quantity ?? 0),
-      unitPrice: i.unit_price == null ? null : Number(i.unit_price),
+      unitPrice: (() => {
+        if (i.unit_price == null) return null;
+        const n = Number(i.unit_price);
+        return Number.isFinite(n) ? n : null;
+      })(),
       metadata: (i.metadata as Record<string, unknown> | undefined) ?? undefined,
     })),
   );

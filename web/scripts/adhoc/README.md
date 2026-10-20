@@ -1,4 +1,5 @@
 # scripts/adhoc — one-offs (no pipeline)
+<!-- 2026-10-20: creado para el rescate de captions de TuPantalla. -->
 
 Un solo uso contra prod para rescatar/arreglar data. No importarlos desde la app.
 

@@ -25,7 +25,14 @@ const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
 const BACKUP_PATH = ".data/content-backup.jsonl";
 
 async function backupRow(row: Record<string, unknown>): Promise<void> {
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(".data", { recursive: true });
   await appendFile(BACKUP_PATH, JSON.stringify(row) + "\n");
+}
+
+/** URL sin query para logs (las presigned llevan firma). */
+function maskUrl(url: string): string {
+  return url.split("?")[0].slice(0, 90);
 }
 
 /** Extractor del tipo de negocio DOOH (pantallas): cada tipo registra el suyo. */
@@ -39,7 +46,12 @@ function sha(url: string): string {
 }
 
 function kindOf(url: string): "video" | "image" | null {
-  const ext = decodeURIComponent(url).split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  let ext = "";
+  try {
+    ext = decodeURIComponent(url).split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  } catch {
+    return null;
+  }
   if (VIDEO_EXT.has(ext)) return "video";
   if (IMAGE_EXT.has(ext)) return "image";
   return null;
@@ -48,6 +60,16 @@ function kindOf(url: string): "video" | "image" | null {
 async function urlAlive(url: string): Promise<boolean> {
   try {
     const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(15_000) });
+    if (res.ok) return true;
+  } catch {
+    // cae al GET por rango (hay S3/CDN que bloquean HEAD)
+  }
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      signal: AbortSignal.timeout(15_000),
+    });
     return res.ok;
   } catch {
     return false;
@@ -63,43 +85,48 @@ async function visionCaption(imagePaths: string[]): Promise<Record<string, unkno
     const b64 = (await readFile(p)).toString("base64");
     content.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } });
   }
-  const res = await fetch("https://api.deepseek.com/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "deepseek-chat",
-      messages: [{ role: "user", content }],
-      response_format: { type: "json_object" },
-      max_tokens: 400,
-    }),
-  });
-  if (!res.ok) throw new Error(`DeepSeek ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content;
-  if (typeof text !== "string" || !text.trim()) throw new Error("DeepSeek: respuesta vacía");
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const callVision = async (msgs: unknown[], label: string): Promise<string> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: msgs,
+          response_format: { type: "json_object" },
+          max_tokens: 400,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (res.ok) {
+        const text = (await res.json())?.choices?.[0]?.message?.content;
+        if (typeof text === "string" && text.trim()) return text;
+        throw new Error(`DeepSeek ${label}: respuesta vacía`);
+      }
+      // 429/5xx: 1 reintento con espera; otro estado = error directo.
+      if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+        await sleep(5_000);
+        continue;
+      }
+      throw new Error(`DeepSeek ${label} ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    }
+    throw new Error(`DeepSeek ${label}: sin reintentos`);
+  };
+  const text = await callVision([{ role: "user", content }], "caption");
   // json_object a veces trae comillas sin escapar: 1 reintento antes de rendirse.
   try {
     return JSON.parse(text) as Record<string, unknown>;
   } catch {
     console.log(`JSON roto, reintentando: ${text.slice(0, 120)}…`);
-    const res2 = await fetch("https://api.deepseek.com/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          { role: "user", content },
-          { role: "assistant", content: text },
-          { role: "user", content: "Eso no era JSON válido. Repítelo como JSON válido, sin cambiar el contenido." },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 400,
-      }),
-    });
-    if (!res2.ok) throw new Error(`DeepSeek retry ${res2.status}`);
-    const data2 = await res2.json();
-    const text2 = data2?.choices?.[0]?.message?.content;
-    if (typeof text2 !== "string" || !text2.trim()) throw new Error("DeepSeek retry: vacía");
+    const text2 = await callVision(
+      [
+        { role: "user", content },
+        { role: "assistant", content: text },
+        { role: "user", content: "Eso no era JSON válido. Repítelo como JSON válido, sin cambiar el contenido." },
+      ],
+      "retry",
+    );
     return JSON.parse(text2) as Record<string, unknown>;
   }
 }
@@ -110,23 +137,24 @@ async function framesFor(url: string, kind: "video" | "image", dir: string): Pro
   if (!dl.ok || !dl.body) throw new Error(`Descarga ${dl.status}`);
   const buf = Buffer.from(await dl.arrayBuffer());
   if (buf.length < 1_000) throw new Error("Descarga vacía (probable XML de S3)");
+  if (buf.length > 250_000_000) throw new Error(`Descarga de ${(buf.length / 1_000_000).toFixed(0)}MB: excede el cap`);
   if (buf.slice(0, 5).toString().startsWith("<?xml")) throw new Error("S3 NoSuchKey");
   const { writeFile } = await import("node:fs/promises");
   await writeFile(src, buf);
   if (kind === "image") {
     const out = join(dir, "frame.jpg");
-    await execFileAsync("ffmpeg", ["-y", "-v", "error", "-i", src, "-vf", "scale=1024:-1", out]);
+    await execFileAsync("ffmpeg", ["-y", "-v", "error", "-i", src, "-vf", "scale=1024:-1", out], { timeout: 120_000 });
     return [out];
   }
   const probe = await execFileAsync("ffprobe", [
     "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", src,
-  ]);
+  ], { timeout: 60_000 });
   const dur = Math.max(4, Number(probe.stdout.trim()) || 7);
   const outs: string[] = [];
   for (const [i, t] of [dur * 0.2, dur * 0.5, dur * 0.8].entries()) {
     const out = join(dir, `frame${i}.jpg`);
-    await execFileAsync("ffmpeg", ["-y", "-v", "error", "-ss", String(t.toFixed(1)), "-i", src, "-frames:v", "1", out]);
+    await execFileAsync("ffmpeg", ["-y", "-v", "error", "-ss", String(t.toFixed(1)), "-i", src, "-frames:v", "1", out], { timeout: 120_000 });
     outs.push(out);
   }
   return outs;
@@ -136,9 +164,26 @@ async function main() {
   const conn = JSON.parse(readFileSync(".data/connections.json", "utf-8"));
   const shopUrl = String(conn.medusaUrl).trim().replace(/\/+$/, "").toLowerCase();
   const db = getSupabase();
-  const { data: store } = await db.from("stores").select("id").eq("platform", "medusa").eq("shop_url", shopUrl).maybeSingle();
+  const { data: store, error: storeErr } = await db.from("stores").select("id").eq("platform", "medusa").eq("shop_url", shopUrl).maybeSingle();
+  if (storeErr) throw new Error(`Stores read: ${storeErr.message}`);
   if (!store) throw new Error("Tienda sin sincronizar en Supabase.");
   const storeId = store.id as string;
+
+  // Gate de esquema (falla rápido, no 500 FAILs crípticos): la tabla existe y
+  // la PK compuesta (store_id, content_hash) de 20261030000006 está aplicada.
+  {
+    const probeHash = `probe-${storeId}`;
+    const { error: probeErr } = await db.from("item_content").upsert({
+      content_hash: probeHash, store_id: storeId, content_url: "probe://schema-gate",
+      content_kind: "image", content_json: null, model: null, alive: false,
+    }, { onConflict: "store_id,content_hash" });
+    if (probeErr) {
+      throw new Error(
+        `Gate item_content: ${probeErr.message} — aplica las migraciones hasta 20261030000006 antes de correr.`,
+      );
+    }
+    await db.from("item_content").delete().eq("store_id", storeId).eq("content_hash", probeHash);
+  }
 
   // Key de archivo desde el mapa del tenant (settings → metadata_map).
   const { resolveItemKeys } = await import("@/lib/metadata-map");
@@ -165,8 +210,20 @@ async function main() {
   }
   console.log(`URLs únicas (reales): ${seen.size}`);
 
-  const { data: existing } = await db.from("item_content").select("content_hash").eq("store_id", storeId);
-  const done = new Set((existing ?? []).map((r) => r.content_hash as string));
+  // done = solo vivas: las muertas se re-chequean cada run (un HEAD
+  // transitorio no debe fosilizarlas). Paginado: PostgREST corta en 1000.
+  const done = new Set<string>();
+  for (let off = 0; ; off += 1000) {
+    const { data: page, error: pageErr } = await db
+      .from("item_content")
+      .select("content_hash")
+      .eq("store_id", storeId)
+      .eq("alive", true)
+      .range(off, off + 999);
+    if (pageErr) throw new Error(`item_content read: ${pageErr.message}`);
+    for (const r of (page ?? []) as Array<{ content_hash: string }>) done.add(r.content_hash);
+    if (!page || page.length < 1000) break;
+  }
   const pending = [...seen.entries()].filter(([url]) => !done.has(sha(url)));
   console.log(`Ya captionadas: ${done.size}. Pendientes: ${pending.length}`);
   if (pending.length === 0) return;
@@ -197,8 +254,8 @@ async function main() {
       ok++;
     } catch (e) {
       fail++;
-      const detail = e instanceof Error ? e.message : JSON.stringify(e)?.slice(0, 300);
-      console.log(`FAIL ${url.slice(0, 90)}…: ${detail}`);
+      const detail = e instanceof Error ? e.message : (JSON.stringify(e) ?? "error sin forma").slice(0, 300);
+      console.log(`FAIL ${maskUrl(url)}…: ${detail}`);
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
       if ((ok + dead + fail) % 25 === 0) console.log(`progreso ok=${ok} muertas=${dead} fallos=${fail}`);

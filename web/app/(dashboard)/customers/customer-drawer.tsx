@@ -1203,7 +1203,7 @@ function ComprasTab({
                         <div key={j} className="min-w-0">
                           <div className="break-words">
                             {it.title} x{formatNumber(it.quantity)}
-                            {it.unitPrice != null && it.unitPrice > 0 && (
+                            {it.unitPrice != null && (
                               <span className="ml-1.5 text-[12px] text-muted-foreground">
                                 ({formatMoney(it.unitPrice, o.currency)}{it.quantity > 1 ? " c/u" : ""})
                               </span>
@@ -1240,6 +1240,9 @@ function ComprasTab({
                                 .slice(0, 4)
                                 .map(([k, v]) => `${k}: ${v}`)
                                 .join(" · ")}
+                              {Object.keys(it.detalles).length > 4 && (
+                                <span> (+{Object.keys(it.detalles).length - 4} más)</span>
+                              )}
                             </div>
                           )}
                         </div>
