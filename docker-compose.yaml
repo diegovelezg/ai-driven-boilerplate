@@ -109,7 +109,8 @@ services:
   studio:
     image: supabase/studio:2026.10.12-sha-3699278
     restart: unless-stopped
-    # Sin puerto publicado: solo se llega a través de studio-auth.
+    # Sin puerto publicado: se accede por el gateway (Kong) en la raíz
+    # del dominio HTTPS, protegido con Basic Auth (ver infra/supabase/kong.yml).
     depends_on:
       meta:
         condition: service_started
@@ -224,19 +225,6 @@ services:
     environment:
       SEARXNG_SECRET: ${SEARXNG_SECRET_KEY:?SEARXNG_SECRET_KEY requerido}
       BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080/}
-
-  studio-auth:
-    # Basic Auth delante de Studio (ver infra/studio-auth/).
-    # Acceso: http://IP_DEL_VPS:3001  (usuario admin + password del .htpasswd)
-    build:
-      context: ./infra/studio-auth
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "3001:80"
-    depends_on:
-      studio:
-        condition: service_started
 
 volumes:
   pgdata2:

@@ -1,8 +1,16 @@
 # Gateway mínimo Kong (declarativo, sin DB) para el deploy único en Coolify.
-# Mapea lo que supabase-js espera desde una sola SUPABASE_URL:
+# Un solo dominio público (SUPABASE_URL):
 #   <gateway>/auth/v1/* -> gotrue (auth:9999)
 #   <gateway>/rest/v1/* -> postgrest (rest:3000)
+#   <gateway>/*         -> Studio (studio:3000), protegido con Basic Auth
+# Las rutas /auth/v1 y /rest/v1 son más específicas y ganan sobre la raíz.
 _format_version: "1.1"
+
+consumers:
+  - username: admin
+    basicauth_credentials:
+      - username: admin
+        password: ZQbUmTNFmayHZePHinyl
 
 services:
   - name: auth
@@ -24,6 +32,18 @@ services:
         strip_path: true
     plugins:
       - name: cors
+
+  - name: studio
+    url: http://studio:3000
+    routes:
+      - name: studio
+        paths:
+          - /
+        strip_path: false
+        plugins:
+          - name: basic-auth
+            config:
+              hide_credentials: true
 
 plugins:
   - name: cors
