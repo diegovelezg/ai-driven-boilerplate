@@ -2,21 +2,23 @@
 // routes y las tools del agente ADK (misma fuente de verdad).
 import { getSupabase } from "@/lib/supabase";
 import { isRealOrder } from "@/lib/medusa";
-import { enrichOrderItems } from "@/lib/media-context";
+import { enrichOrderItems } from "@/lib/item-context";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
 
 export interface CustomerOrderItem {
   title: string;
   quantity: number;
-  /** Rango de pauta (dateStart/dateEnd) o null. Ver lib/media-context.ts. */
-  pauta?: string | null;
-  /** Lo que tecleó el cliente (media_comments) o null. */
+  /** Precio unitario pagado (minor units) o null. Tal cual en items_json. */
+  unitPrice?: number | null;
+  /** Ventana (start/end) o null: pauta, turno, reserva… Ver lib/item-context.ts. */
+  ventana?: string | null;
+  /** Lo que escribió el cliente (comentario/nota) o null. */
   clienteDijo?: string | null;
-  /** Lo que contiene la pieza (caption IA) o null. */
+  /** Sobre qué es la línea (contenido IA o catálogo) o null. */
   contiene?: string | null;
   categoria?: string | null;
-  /** Resto de metadata escalar (talla, color…), sanitizado. */
-  detalles?: Record<string, string | number | boolean>;
+  /** Resto de metadata (texto corto/número), sanitizado. */
+  detalles?: Record<string, string | number>;
 }
 
 export interface CustomerOrder {
@@ -118,14 +120,20 @@ export async function loadCustomerOrdersAndRfm(
     (((o.items_json as Array<Record<string, unknown>>) ?? []).slice(0, 5)).map((i) => ({
       title: String(i.title ?? "—"),
       quantity: Number(i.quantity ?? 0),
+      unitPrice: i.unit_price == null ? null : Number(i.unit_price),
       metadata: (i.metadata as Record<string, unknown> | undefined) ?? undefined,
     })),
   );
-  // 1 sola query de captions para todas las líneas (ver lib/media-context.ts).
-  const enrichedFlat = await enrichOrderItems(customer.store_id as string, rawPerOrder.flat());
+  // 1 sola query de contenido para todas las líneas (ver lib/item-context.ts).
+  // Keys del mapa del tenant (settings → metadata_map); sin mapa, todo a detalles.
+  const { resolveItemKeys } = await import("@/lib/metadata-map");
+  const itemKeys = await resolveItemKeys(customer.store_id as string).catch(() => null);
+  const enrichedFlat = await enrichOrderItems(customer.store_id as string, rawPerOrder.flat(), itemKeys ?? undefined);
   let cursor = 0;
   const orderRows: CustomerOrder[] = sliced.map((o, oi) => {
-    const items = enrichedFlat.slice(cursor, cursor + rawPerOrder[oi].length);
+    const items = enrichedFlat
+      .slice(cursor, cursor + rawPerOrder[oi].length)
+      .map((it, k) => ({ ...it, unitPrice: rawPerOrder[oi][k]?.unitPrice ?? null }));
     cursor += rawPerOrder[oi].length;
     return {
       date: (o.placed_at as string) ?? null,
