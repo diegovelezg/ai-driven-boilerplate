@@ -3,7 +3,19 @@
 # Lo corre el servicio `migrator` del compose en cada deploy; web espera a que termine OK.
 set -eu
 
-until pg_isready -h db -U postgres >/dev/null 2>&1; do sleep 2; done
+export PGCONNECT_TIMEOUT=10
+# Espera a db con LÍMITE: si el nombre no resuelve (red de Coolify), fallar
+# rápido con evidencia en vez de girar infinito y clavar el deploy.
+tries=0
+until pg_isready -h db -U postgres -t 5 >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 60 ]; then
+    echo "ERROR: db inaccesible tras 120s"
+    getent hosts db || echo "(db no resuelve por DNS)"
+    exit 1
+  fi
+  sleep 2
+done
 # La imagen supabase/postgres DEMOTEa a postgres (ya no es superuser): NO se
 # pueden tocar passwords de roles reservados desde aquí. Eso solo ocurre en
 # el init (infra/supabase/db/roles.sql). Este bloque solo arregla ownership
