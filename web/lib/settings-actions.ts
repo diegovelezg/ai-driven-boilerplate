@@ -8,7 +8,7 @@ import { readConnections, writeConnections } from "@/lib/store";
 import type { DefaultChannel, EmailProvider, Platform } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
-import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
+import { ensureStore, normalizeShopUrl, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
 import {
   advanceRun,
   finishRun,
@@ -116,7 +116,10 @@ export async function saveConnectionsAction(
     return { ok: true, message: "Preset Shopify guardado (aún sin backend)." };
   }
 
-  const medusaUrl = String(formData.get("medusaUrl") ?? "").trim();
+  const rawUrl = String(formData.get("medusaUrl") ?? "").trim();
+  // Normaliza esquema ("api.tienda.com" → https://...) antes de todo: login,
+  // match de tienda y guardado usan la misma forma canónica.
+  const medusaUrl = normalizeShopUrl(rawUrl);
   const email = String(formData.get("medusaEmail") ?? "").trim();
   const password = String(formData.get("medusaPassword") ?? "");
   const version = String(formData.get("medusaVersion") ?? "") as MedusaVersion;

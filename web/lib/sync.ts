@@ -18,7 +18,11 @@ const log = createLogger("sync");
 
 /** Clave canónica del tenant: URL normalizada. */
 export function normalizeShopUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase();
+  const t = url.trim().replace(/\/+$/, "").toLowerCase();
+  // Tolerante al input sin esquema ("api.tienda.com" → https://...): todo lo
+  // demás (match en DB, fetch a Medusa, cache keys) asume URL absoluta.
+  if (t && !t.includes("://")) return `https://${t}`;
+  return t;
 }
 
 export interface SyncSummary {

@@ -174,10 +174,13 @@ export async function writeConnections(
   const prevJson = await readConnectionsJson().catch(() => null);
   const dbFailed: string[] = [];
   let dbExpected = false;
+  let prodReady = false;
+  let sidResolved = false;
   try {
     const { isSupabaseConfigured } = await import("@/lib/supabase");
     const { isEncryptionConfigured } = await import("@/lib/secrets-crypto");
     if (isSupabaseConfigured() && isEncryptionConfigured()) {
+      prodReady = true;
       let sid = opts.storeId ?? null;
       if (!sid && next.medusaUrl) {
         try {
@@ -187,6 +190,7 @@ export async function writeConnections(
           sid = null;
         }
       }
+      sidResolved = Boolean(sid);
       if (sid) {
         dbExpected = true;
         const { setStoreSecret } = await import("@/lib/store-secrets");
@@ -237,6 +241,14 @@ export async function writeConnections(
     // Todo lo intended quedó en DB cifrada: no tocar el JSON (en prod puede
     // no existir o no ser escribible; además es efímero entre redeploys).
     return;
+  }
+  if (prodReady && !sidResolved) {
+    // En prod el JSON no es un destino válido: fallar con mensaje accionable
+    // en vez de reventar con EACCES en mkdir. Causa típica: la URL no matchea
+    // ninguna tienda (shop_url) en la DB.
+    throw new Error(
+      "No se encontró la tienda para esa URL en la DB; revisá el Servidor (URL completa con https://). Nada se guardó.",
+    );
   }
   if (scrub.size > 0) {
     const scrubbed = { ...next };
