@@ -27,7 +27,7 @@ export interface SyncState {
   run: BackgroundRun | null;
 }
 
-/** Crea una corrida de sync y la ejecuta en background (misma cinta que el resto). */
+/** Encola un sync (el worker lo ejecuta): respuesta <200ms, sin `after()`. */
 export async function syncCustomersAction(): Promise<SyncState> {
   const conn = await readConnections();
   if (!conn.medusaUrl || !conn.medusaToken) {
@@ -38,9 +38,8 @@ export async function syncCustomersAction(): Promise<SyncState> {
   }
   const medusaUrl = conn.medusaUrl;
   const token = conn.medusaToken;
-  const version = conn.medusaVersion || "v1";
   try {
-    // La primera sync crea la tienda; sin ella no hay run que registrar.
+    // La primera sync crea la tienda; sin ella no hay job que encolar.
     const storeId =
       (await resolveStoreId(medusaUrl)) ?? (await ensureStore(medusaUrl, token));
 
@@ -50,11 +49,25 @@ export async function syncCustomersAction(): Promise<SyncState> {
     if (conflict) {
       return { ok: false, message: busyMessage(conflict), run: conflict };
     }
+    // Vía jobs (worker dedicado): la cinta (`background_runs`) la escribe el
+    // worker al ejecutar; aquí solo se encola.
+    try {
+      const { enqueueJob } = await import("@/lib/jobs");
+      await enqueueJob(storeId, "sync", {
+        payload: { withMorning: false, reason: "manual" },
+      });
+      log(`sync encolado store=${storeId}`);
+      revalidatePath("/customers");
+      return { ok: true, message: "Sincronización encolada (la ejecuta el worker).", run: await getLatestRun(storeId) };
+    } catch (e) {
+      // DB sin migrar: fallback legacy (`after()`, como antes).
+      log(`jobs no disponible, fallback legacy: ${e instanceof Error ? e.message : "error"}`);
+    }
     const runId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);
     log(`run ${runId} start`);
     after(async () => {
       try {
-        const s = await syncStoreFromMedusa(medusaUrl, version, token, {
+        const s = await syncStoreFromMedusa(medusaUrl, conn.medusaVersion || "v1", token, {
           onProgress: (p) =>
             advanceRun(runId, { processed: p.processed, failed: 0, current: p.current }),
         });

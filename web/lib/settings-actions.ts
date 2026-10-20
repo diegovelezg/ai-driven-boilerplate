@@ -173,6 +173,23 @@ export async function saveConnectionsAction(
         run: syncConflict,
       };
     }
+    // Vía jobs (issue #24): la web solo encola, el worker ejecuta.
+    try {
+      const { enqueueJob } = await import("@/lib/jobs");
+      await enqueueJob(storeId, "sync", {
+        payload: { withMorning: false, reason: "settings-connect" },
+      });
+      return {
+        ok: true,
+        message: `Medusa ${version} conectado: ${result.store} · sync encolado (lo ejecuta el worker).`,
+        run: await getLatestRun(storeId).catch(() => null),
+      };
+    } catch (e) {
+      // DB sin migrar: fallback legacy (`after()`, como antes). Se loguea
+      // (cualquier otro fallo también cae aquí: mudo rompería la meta <200ms
+      // sin rastro).
+      console.error("[settings] jobs enqueue falló, fallback legacy:", e instanceof Error ? e.message : e);
+    }
     let syncRunId: string | null = null;
     try {
       syncRunId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);

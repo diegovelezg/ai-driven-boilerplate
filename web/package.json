@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "worker": "tsx worker.ts",
     "lint": "eslint",
     "test": "tsx --test \"tests/*.test.ts\"",
     "adk": "node --env-file=.env.local node_modules/.bin/adk web",

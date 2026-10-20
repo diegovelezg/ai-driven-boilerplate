@@ -9,7 +9,7 @@
 // busySignal/busyCustomer, prospect dedupe por URL). Best-effort: un paso
 // que falla no tumba los siguientes ni el login.
 import { getSupabase } from "@/lib/supabase";
-import { hasConflict, startRun } from "@/lib/background";
+import { hasConflict } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("morning");
@@ -44,15 +44,14 @@ async function step(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   work: (runId: string, sid: string) => Promise<any>,
 ): Promise<boolean> {
-  const db = getSupabase();
-  void db;
-  const { hasConflict: hc } = await import("@/lib/background");
-  const conflict = await hc(storeId, { kind });
-  if (conflict) {
-    log(`paso ${kind} omitido (en curso: ${conflict.label ?? conflict.kind})`);
+  // Slot atómico (issue #24): check+insert en una transacción; entre réplicas
+  // del worker el `hasConflict` → `startRun` clásico es TOCTOU y duplica runs.
+  const { claimRunSlot } = await import("@/lib/background");
+  const runId = await claimRunSlot(storeId, kind, label, total);
+  if (!runId) {
+    log(`paso ${kind} omitido (slot ocupado: el trabajo lo cubre la corrida en curso)`);
     return false;
   }
-  const runId = await startRun(storeId, kind, label, total);
   try {
     await work(runId, storeId);
     return true;

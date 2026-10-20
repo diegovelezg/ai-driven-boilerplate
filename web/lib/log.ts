@@ -1,4 +1,7 @@
-import "server-only";
+// Sin `import "server-only"`: lo importan el worker dedicado (`worker.ts`,
+// issue #24) y scripts tsx en node, donde `server-only` lanza. La protección
+// real es no importarlo desde Client Components (usa `node:fs`, que ya rompe
+// cualquier bundle de browser). Precedente: `lib/profiling/log.ts`.
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 

@@ -6,9 +6,8 @@ import { createServerSupabase } from "@/lib/supabase-server";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
-import { ensureStore, syncStoreFromMedusa, SYNC_TOTAL } from "@/lib/sync";
-import { formatNumber } from "@/lib/format";
-import { advanceRun, finishRun, hasRunningRun, startRun } from "@/lib/background";
+import { ensureStore } from "@/lib/sync";
+import { hasRunningRun } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { shouldSyncOnLogin } from "@/lib/login-sync";
 
@@ -53,9 +52,11 @@ export async function signOutAction(): Promise<void> {
 }
 
 /**
- * Dispara sync Medusa (futuro: Shopify) en background tras un login exitoso.
+ * Login liviano (issue #24): la web solo encola, el worker ejecuta.
  * Best-effort: nunca rompe el login; omite si no hay conexión, si Supabase
- * no está configurado o si ya hay un run en curso.
+ * no está configurado o si ya hay un run en curso. Sin sesión siempre
+ * abierta no hay trabajo pesado síncrono: el pipeline diario lo programa
+ * pg_cron + lo corre el worker aunque nadie haga login en 24h.
  */
 function scheduleSyncOnLogin(): void {
   after(async () => {
@@ -78,57 +79,52 @@ function scheduleSyncOnLogin(): void {
         hasRunningRun: running,
         lastSyncDoneAt,
       });
-      if (!decision.sync) {
+      const storeId =
+        probeStoreId ??
+        (decision.sync
+          ? await ensureStore(conn.medusaUrl, conn.medusaToken).catch(() => null)
+          : null);
+      if (!storeId) {
         log(`login sync omitido (${decision.reason})`);
-        // La mañana no depende del sync fresco: corre igual con la BD
-        // cacheada; su propio guard (cadena de hoy ya done) evita duplicados.
-        if (probeStoreId && !running) {
-          try {
-            const { runMorningPipeline } = await import("@/lib/morning-run");
-            await runMorningPipeline(probeStoreId);
-          } catch (e) {
-            log(`morning omitido: ${e instanceof Error ? e.message : "error"}`);
+        return;
+      }
+      // Vía jobs (worker dedicado): <200ms, sin CPU pesada en la web.
+      try {
+        const { enqueueJob, enqueueMorningDaily, loginSyncIdempotencyKey } = await import("@/lib/jobs");
+        if (decision.sync && !running) {
+          // El sync del worker ya encadena la mañana (withMorning). Key por
+          // bucket de 15min: logins concurrentes dedupean en el enqueue en vez
+          // de duplicar full-downloads (el dispatch además reclama slot atómico).
+          await enqueueJob(storeId, "sync", {
+            payload: { withMorning: true, reason: "login" },
+            idempotencyKey: loginSyncIdempotencyKey(),
+          });
+          log("login jobs encolados (sync+morning)");
+        } else {
+          log(`login sync omitido (${decision.reason})`);
+          if (!running) {
+            await enqueueMorningDaily(storeId).catch(() => {});
+            log("login job morning encolado");
           }
         }
         return;
-      }
-      const medusaUrl = conn.medusaUrl;
-      const token = conn.medusaToken;
-      const version = conn.medusaVersion || "v1";
-      const storeId =
-        (await resolveStoreId(medusaUrl).catch(() => null)) ??
-        (await ensureStore(medusaUrl, token));
-      if (await hasRunningRun(storeId)) {
-        log("login sync omitido (run-en-curso)");
-        return;
-      }
-      const runId = await startRun(storeId, "sync", "Sincronización", SYNC_TOTAL);
-      log(`login sync run ${runId} start`);
-      try {
-        const s = await syncStoreFromMedusa(medusaUrl, version, token, {
-          onProgress: (p) =>
-            advanceRun(runId, { processed: p.processed, failed: 0, current: p.current }),
-        });
-        await finishRun(runId, {
-          status: "done",
-          processed: SYNC_TOTAL,
-          failed: 0,
-          summary: `${formatNumber(s.customers)} customers, ${formatNumber(s.orders)} orders (test excl: ${formatNumber(s.excludedTestOrders)}, inválidas excl: ${formatNumber(s.excludedInvalidOrders)})`,
-        });
-        log(`login sync run ${runId} done`);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "error";
-        await finishRun(runId, { status: "error", processed: 0, failed: 0, error: msg });
-        log(`login sync run ${runId} error ${msg}`);
-        // El sync fallido (ej. Medusa 401 por token vencido) no bloquea la
-        // mañana: se trabaja con la BD cacheada (último sync ok).
+        // DB sin migrar (`jobs` aún no existe): fallback legacy acotado
+        // (sync+morning en `after()`, como antes) hasta que corra la migración.
+        log(`jobs no disponible, fallback legacy: ${e instanceof Error ? e.message : "error"}`);
       }
-      // Orquestador de mañana: enrichment → scout (auto-retention) →
-      // strategist → copywriter. Corre con o sin sync fresco; el héroe
-      // "actuar hoy" llega con borrador ya en Review.
       try {
-        const { runMorningPipeline } = await import("@/lib/morning-run");
-        await runMorningPipeline(storeId);
+        const { runSyncOnce } = await import("@/lib/sync-runner");
+        if (decision.sync && !running) {
+          await runSyncOnce(storeId, conn.medusaUrl, {
+            version: conn.medusaVersion || "v1",
+            token: conn.medusaToken,
+            withMorning: true,
+          });
+        } else if (!running) {
+          const { runMorningPipeline } = await import("@/lib/morning-run");
+          await runMorningPipeline(storeId);
+        }
       } catch (e) {
         log(`morning omitido: ${e instanceof Error ? e.message : "error"}`);
       }

@@ -199,7 +199,6 @@ export default async function DashboardPage({
   let enrichPending = 0;
   let recentOrders = 0;
   let miraValue = 0;
-  let masivos = 0;
   // Valor en juego por etapa del embudo (borrador/aprobados): Σ valor
   // esperado de sus clientes. Sin esto el funnel muestra plata solo en los
   // extremos y las etapas intermedias no se pueden comparar.
@@ -438,7 +437,6 @@ export default async function DashboardPage({
         };
       },
     );
-    masivos = pool.length - actionable.length;
     // Puerta de entrada del funnel: el #1 con el criterio único (sea insignia o no).
     topLead = attention[0] ?? null;
     miraValue = pool.reduce((acc, a) => acc + miraValorDe(a), 0);

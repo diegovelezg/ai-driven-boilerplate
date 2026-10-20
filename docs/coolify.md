@@ -1,4 +1,4 @@
-# Deploy en Coolify v4: 3 recursos separados (Supabase + SearXNG + web)
+# Deploy en Coolify v4: 4 recursos separados (Supabase + SearXNG + web + worker)
 
 Modelo "by the book". Nada de compose monolítico: cada pieza es un recurso
 Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
@@ -10,6 +10,7 @@ Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
 | Supabase | mismo service | Studio: `https://studio.papelitosdecolor.com` | 3000 (+ Basic Auth del dominio) |
 | SearXNG | Service (plantilla one-click `searxng`) | autogenerado `https://<id>.papelitosdecolor.com` (wildcard, sin pedir DNS) | 8080 |
 | web | Application (repo git, build pack Dockerfile) | `https://retention.papelitosdecolor.com` | 3000 |
+| worker | Application (mismo repo, `command: npm run worker`) | sin dominio (no expone puerto) | — |
 
 Postgres NO expone puerto público (la plantilla no publica 5432).
 
@@ -75,6 +76,44 @@ Coolify → New → Application → Public Repository:
   ANON_KEY exige **rebuild sin caché** de la web.
 - No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
 
+## 3b. Application worker (mismo repo, sin dominio)
+
+Coolify → New → Application → mismo repo/rama, Base Directory `/web`:
+
+- Build Pack: `Dockerfile` (misma imagen que web; el worker usa las fuentes
+  copiadas en el stage `runner`). Port: ninguno (no expone HTTP).
+- Command: `npm run worker` (override del `CMD`; alternativa: `WORKER_MODE=1`).
+- Sin dominio. Mismo Environment que la web (paso 3) + `WORKER_POLL_MS=5000`.
+- Motivación (issue #24): la web solo encola (`jobs`, respuesta <200ms);
+  el scheduler programa y este servicio ejecuta. Sin esto, con la sesión
+  siempre abierta (JWT 1h + refresh rotation) nunca hay sync ni morning.
+- Escalado: N réplicas seguras (claim `FOR UPDATE SKIP LOCKED` +
+  `idempotency_key` del día + slot atómico `start_run_if_free` que hace
+  check-de-matriz-#16+insert en una transacción: dos jobs distintos del mismo
+  kind no inician runs duplicados); redeploy a mitad de job → reintento, no
+  `running` eterno (SIGTERM llega al proceso por `exec` en el CMD, heartbeat
+  del job cada 60s durante dispatch largos, reap 30min en worker +
+  `background.ts`).
+
+## 3c. Scheduler diario (pg_cron, por tenant)
+
+Una vez aplicada la migración `20261029000000_jobs.sql` (paso 4), programar
+en la DB de prod (SQL editor de Studio, 1 vez):
+
+```sql
+create extension if not exists pg_cron with schema extensions;
+select cron.schedule(
+  'morning-daily',
+  '0 11 * * *',  -- 11:00 UTC = 06:00 America/Lima (sin DST)
+  $$select public.enqueue_daily_morning()$$
+);
+```
+
+`enqueue_daily_morning()` inserta 1 `jobs(kind='morning')` por store con
+`idempotency_key=morning-YYYY-MM-DD`: el segundo insert del día es no-op,
+así que doble scheduler tampoco duplica ejecución. Sobrevive redeploys
+(la programación vive en la DB, no en `after()` ni en curl externo).
+
 ## 4. Esquema + datos (sin bind mounts)
 
 La plantilla no corre `supabase/migrations/*.sql`: se aplican por stdin contra
@@ -136,7 +175,27 @@ docker ps --format '{{.Names}} {{.Ports}}' | grep -i 5432   # Postgres sin puert
 En la app: login con `diegovelezg@gmail.com` → `/customers` muestra **952**.
 Probar una acción de enriquecimiento (usa `SEARXNG_URL`, `web/lib/retrieval.ts`).
 
+### Pipeline sin login (issue #24)
+
+```sql
+-- Studio → SQL editor:
+select kind, status, attempts, idempotency_key, available_at
+  from jobs where created_at > now() - interval '1 day'
+  order by created_at desc limit 20;
+-- Esperado a las 06:05 Lima sin ningún login en 24h: 1 fila
+-- kind=morning status=done por store, idempotency_key=morning-YYYY-MM-DD.
+select kind, status, summary, started_at
+  from background_runs order by started_at desc limit 10;
+-- La cinta muestra scout+strategist+copywriter+prospect `done` de hoy.
+```
+
+Criterios: sin login en 24h el pipeline corre 1 vez por store; redeploy a
+mitad de job → el job se reintenta (`error` con `available_at` futuro, luego
+`done`; nunca `running` eterno); login con sesión siempre abierta no dispara
+trabajo pesado síncrono (solo `insert into jobs`, <200ms).
+
 Local sigue igual: `npx supabase start` → `http://127.0.0.1:54323`.
+Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
 
 ## 7. Si algo falla
 

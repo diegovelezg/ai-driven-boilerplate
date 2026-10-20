@@ -420,6 +420,7 @@ describe("retention-model decisiones", () => {
 
 describe("issue #21 Paso 3: motor por market (versionado)", () => {
   const strip = (p: Prediction) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- omisión intencional por rest
     const { decisionVersion: _v, marketId: _m, ...rest } = p;
     return rest;
   };
@@ -472,6 +473,7 @@ describe("issue #21 Paso 3: motor por market (versionado)", () => {
 
 describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
   const strip = (p: Prediction) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- omisión intencional por rest
     const { decisionVersion: _v, marketId: _m, ...rest } = p;
     return rest;
   };

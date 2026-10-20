@@ -1,6 +1,8 @@
-// Capa DB de secrets (issue #20). Solo server-side: usa service_role
-// (bypassa RLS). Nunca importar en client components.
-import "server-only";
+// Solo server-side: usa service_role (bypassa RLS). Nunca importar en client components.
+// (Sin `import "server-only"`: el worker dedicado `worker.ts` (issue #24) y los
+// tests `tsx --test` importan este módulo en node y `server-only` lanza fuera de
+// React Server Components. El `resolveActor` dinámico a `supabase-server` sigue
+// protegido por try/catch: en node cae a actor por defecto.)
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   decryptSecret,

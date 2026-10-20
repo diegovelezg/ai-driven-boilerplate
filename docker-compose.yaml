@@ -1,7 +1,7 @@
 # Deploy único en Coolify: push al repo → redeploy → todo levanta junto.
 # Servicios: db (postgres supabase) + auth + rest + meta + studio + gateway (kong)
 #   + migrator (aplica supabase/migrations/*.sql una sola vez cada una)
-#   + web (Next.js) + searxng.
+#   + web (Next.js) + worker (jobs, misma imagen, `npm run worker`) + searxng.
 # Dominios (se asignan en la UI de Coolify, no aquí):
 #   app.tudominio.com    -> web:3000
 #   api.tudominio.com    -> gateway:8000   (SUPABASE_URL pública)
@@ -206,6 +206,38 @@ services:
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?SECRETS_ENCRYPTION_KEY requerido}
       SEARXNG_URL: http://searxng:8080
       CRAWLEE_STORAGE_DIR: /tmp/crawlee
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+  worker:
+    # Worker dedicado (issue #24): misma imagen que web, distinto comando.
+    # Web nunca trabaja, solo encola; este servicio ejecuta `jobs` (sync,
+    # morning, enrich…​). SKIP LOCKED permite escalar a N réplicas sin duplicar.
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?SUPABASE_PUBLIC_URL requerido}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
+    restart: unless-stopped
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_started
+    command: ["npm", "run", "worker"]
+    environment:
+      SUPABASE_URL: http://gateway:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_ROLE_KEY:?SERVICE_ROLE_KEY requerido (o SUPABASE_SERVICE_ROLE_KEY)}}
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?SUPABASE_PUBLIC_URL requerido}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY:?ANON_KEY requerido}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?SECRETS_ENCRYPTION_KEY requerido}
+      SEARXNG_URL: http://searxng:8080
+      CRAWLEE_STORAGE_DIR: /tmp/crawlee
+      WORKER_POLL_MS: ${WORKER_POLL_MS:-5000}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

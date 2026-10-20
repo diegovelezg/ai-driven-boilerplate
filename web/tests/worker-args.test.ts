@@ -1,0 +1,31 @@
+// Args del worker dedicado (issue #24): parsing puro.
+// Corre con: npm test (node:test stdlib vía tsx, sin BD ni red).
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { parseWorkerArgs } from "@/lib/worker-args";
+
+describe("parseWorkerArgs", () => {
+  it("defaults: continuo, 5000ms, todos los kinds", () => {
+    assert.deepEqual(parseWorkerArgs([]), { once: false, pollMs: 5000, kinds: undefined });
+  });
+
+  it("acepta --once", () => {
+    assert.equal(parseWorkerArgs(["--once"]).once, true);
+  });
+
+  it("acepta --poll-ms con = y separado", () => {
+    assert.equal(parseWorkerArgs(["--poll-ms=2000"]).pollMs, 2000);
+    assert.equal(parseWorkerArgs(["--poll-ms", "2000"]).pollMs, 2000);
+  });
+
+  it("acepta --kinds con = y separado", () => {
+    assert.deepEqual(parseWorkerArgs(["--kinds=sync,morning"]).kinds, ["sync", "morning"]);
+    assert.deepEqual(parseWorkerArgs(["--kinds", "sync,morning"]).kinds, ["sync", "morning"]);
+  });
+
+  it("respeta WORKER_POLL_MS y sanea inválidos (<500 → 5000)", () => {
+    assert.equal(parseWorkerArgs([], "7000").pollMs, 7000);
+    assert.equal(parseWorkerArgs(["--poll-ms=100"]).pollMs, 5000);
+    assert.equal(parseWorkerArgs(["--poll-ms=abc"]).pollMs, 5000);
+  });
+});

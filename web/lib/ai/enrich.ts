@@ -1,4 +1,6 @@
-import "server-only";
+// Sin `import "server-only"`: lo importan el worker dedicado (`worker.ts`,
+// issue #24) y scripts tsx en node, donde `server-only` lanza. Nunca importar
+// en Client Components (maneja API keys de LLM en server).
 import { createLogger } from "../log";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "./llm-config";
 import { logLlmUsage, parseChatUsage } from "./usage";

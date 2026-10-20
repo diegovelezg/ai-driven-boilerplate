@@ -29,8 +29,23 @@ RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+# Worker dedicado (issue #24): misma imagen, distinto comando. El standalone
+# no trae fuentes; se copian para `tsx worker.ts` (solo las usa el worker).
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/worker.ts ./worker.ts
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/config ./config
+COPY --from=builder /app/agent.ts ./agent.ts
+COPY --from=deps /app/node_modules ./node_modules
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+# WORKER_MODE=1 → `npm run worker` (servicio aparte); si no, web Next.js.
+# En compose/Coolify el worker se corre con `command: ["npm", "run", "worker"]`
+# (override explícito, no depende de esta variable).
+# `exec`: PID1 es el proceso real y recibe el SIGTERM de compose/Coolify (sin
+# exec, PID1 queda `sh`, los handlers del worker nunca se disparan y cada
+# redeploy deja el job en `running` hasta el reap).
+CMD ["sh", "-c", "if [ \"$WORKER_MODE\" = \"1\" ]; then exec npm run worker; else exec node server.js; fi"]

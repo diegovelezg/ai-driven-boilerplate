@@ -1,6 +1,8 @@
-// Enriquecimiento de dominios (firmográficos). Server-only.
+// Enriquecimiento de dominios (firmográficos). Solo server-side.
+// (Sin `import "server-only"`: lo importa el worker dedicado `worker.ts`
+// (issue #24) en node, donde `server-only` lanza. Nunca importar en Client
+// Components: usa service_role y API keys de LLM.)
 // La clave es el dominio: si ya existe fila en `domains`, no se re-scrapea.
-import "server-only";
 import { getSupabase } from "@/lib/supabase";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
