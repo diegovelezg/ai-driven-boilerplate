@@ -3,6 +3,7 @@
 // node y `server-only` lanza fuera de React Server Components. La protección
 // real contra fugas al browser es no serializar secretos: ver `toSafeConnections`.)
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { WebSocket as WsPolyfill } from "ws";
 
 let cached: SupabaseClient | null = null;
 
@@ -17,6 +18,13 @@ export function getSupabase(): SupabaseClient {
     throw new Error("Falta SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY en .env.local");
   }
   if (!cached) {
+    // Node 20 (imagen prod `node:20-bookworm-slim`) no trae WebSocket
+    // global: realtime-js de supabase-js LANZA en `createClient` y tumba
+    // el worker/scheduled-task en silencio (exit 0 sin `start`). Next y
+    // browsers ya lo tienen: solo se polifilea cuando falta.
+    if (typeof globalThis.WebSocket === "undefined") {
+      globalThis.WebSocket = WsPolyfill as unknown as typeof WebSocket;
+    }
     cached = createClient(url, key, { auth: { persistSession: false } });
   }
   return cached;
