@@ -267,9 +267,14 @@ export function CustomersView({
   );
 
   // El sort ordena en servidor (Supabase) sobre todos los datos, no solo la página.
+  // Como Catálogo: texto ASC primero; números DESC primero (lo más valioso).
   const toggleSort = (key: CustomersSortKey) => {
-    const nextDir: CustomersSortDir =
-      sortKey === key && sortDir === "asc" ? "desc" : "asc";
+    let nextDir: CustomersSortDir;
+    if (key === sortKey) {
+      nextDir = sortDir === "asc" ? "desc" : "asc";
+    } else {
+      nextDir = key === "email" || key === "name" || key === "phone" || key === "company" ? "asc" : "desc";
+    }
     startTransition(() => {
       router.replace(`/customers?${buildParams({ page: 1, sort: key, dir: nextDir })}`);
     });

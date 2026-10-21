@@ -172,12 +172,20 @@ const SORT_KEYS: readonly CustomersSortKey[] = [
   "valor",
 ];
 
-/** Valida sort/dir de searchParams; default estable email/asc (orden previo). */
+/** Dirección inicial por columna (como Catálogo: texto ASC primero, números DESC primero). */
+export function customersDefaultDir(key: CustomersSortKey): CustomersSortDir {
+  return key === "email" || key === "name" || key === "phone" || key === "company"
+    ? "asc"
+    : "desc";
+}
+
+/** Valida sort/dir de searchParams; default Total DESC (como Catálogo: Monto DESC). */
 export function parseCustomersSort(sp: { sort?: string; dir?: string }): CustomersSort {
   const key = SORT_KEYS.includes(sp.sort as CustomersSortKey)
     ? (sp.sort as CustomersSortKey)
-    : "email";
-  const dir = sp.dir === "desc" ? "desc" : "asc";
+    : "total";
+  const dir =
+    sp.dir === "asc" || sp.dir === "desc" ? (sp.dir as CustomersSortDir) : customersDefaultDir(key);
   return { key, dir };
 }
 
@@ -598,7 +606,7 @@ export async function queryStoreCustomers(
   q: string,
   page: number,
   pageSize: number,
-  sort: CustomersSort = { key: "email", dir: "asc" },
+  sort: CustomersSort = { key: "total", dir: "desc" },
   filters: CustomerFilters = NO_CUSTOMER_FILTERS,
   // Filtro global por mercado (null = todos). Por ISO2 (corto); IDs solo en
   // el fallback sin países (ver resolveMarketScope en lib/markets).
@@ -715,42 +723,83 @@ export async function queryStoreCustomers(
       matched.push(toEditableCustomer(r, enriched));
     });
     const dir = ascending ? 1 : -1;
+    // Criterios default como Catálogo (fijos, no siguen a `dir`):
+    // Total DESC, Compras DESC, Nombre ASC, Email ASC.
+    const cmpTotalDesc = (a: EditableCustomer, b: EditableCustomer) => b.totalSpent - a.totalSpent;
+    const cmpOrdersDesc = (a: EditableCustomer, b: EditableCustomer) => b.ordersCount - a.ordersCount;
+    const cmpNameAsc = (a: EditableCustomer, b: EditableCustomer) => {
+      const an = `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim();
+      const bn = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
+      return an.localeCompare(bn, "es", { sensitivity: "base" });
+    };
+    const cmpEmailAsc = (a: EditableCustomer, b: EditableCustomer) =>
+      a.email.localeCompare(b.email, "es", { sensitivity: "base" });
     matched.sort((a, b) => {
-      // Desempate estable por email asc (igual que en SQL).
-      const emailTie = a.email.localeCompare(b.email, "es", { sensitivity: "base" });
       switch (sort.key) {
         case "name": {
           const an = `${a.firstName ?? ""} ${a.lastName ?? ""}`.trim();
           const bn = `${b.firstName ?? ""} ${b.lastName ?? ""}`.trim();
-          return dir * an.localeCompare(bn, "es", { sensitivity: "base" }) || emailTie;
+          return (
+            dir * an.localeCompare(bn, "es", { sensitivity: "base" }) ||
+            cmpTotalDesc(a, b) ||
+            cmpOrdersDesc(a, b) ||
+            cmpEmailAsc(a, b)
+          );
         }
         case "phone":
           return (
             dir * (a.phone ?? "").localeCompare(b.phone ?? "", "es", { sensitivity: "base" }) ||
-            emailTie
+            cmpTotalDesc(a, b) ||
+            cmpOrdersDesc(a, b) ||
+            cmpNameAsc(a, b) ||
+            cmpEmailAsc(a, b)
           );
         case "company": {
           const av = (a.companyName ?? "").trim();
           const bv = (b.companyName ?? "").trim();
-          if (!av && !bv) return emailTie;
+          if (!av && !bv) return cmpTotalDesc(a, b) || cmpOrdersDesc(a, b) || cmpNameAsc(a, b) || cmpEmailAsc(a, b);
           if (!av) return 1; // vacíos al final
           if (!bv) return -1;
-          return dir * av.localeCompare(bv, "es", { sensitivity: "base" }) || emailTie;
+          return (
+            dir * av.localeCompare(bv, "es", { sensitivity: "base" }) ||
+            cmpTotalDesc(a, b) ||
+            cmpOrdersDesc(a, b) ||
+            cmpNameAsc(a, b) ||
+            cmpEmailAsc(a, b)
+          );
         }
         case "orders":
-          return dir * (a.ordersCount - b.ordersCount) || emailTie;
+          return (
+            dir * (a.ordersCount - b.ordersCount) ||
+            cmpTotalDesc(a, b) ||
+            cmpNameAsc(a, b) ||
+            cmpEmailAsc(a, b)
+          );
         case "total":
-          return dir * (a.totalSpent - b.totalSpent) || emailTie;
+          return (
+            dir * (a.totalSpent - b.totalSpent) ||
+            cmpOrdersDesc(a, b) ||
+            cmpNameAsc(a, b) ||
+            cmpEmailAsc(a, b)
+          );
         case "valor": {
           const av = predMap.get(a.dbId)?.valorEsperadoMinor ?? null;
           const bv = predMap.get(b.dbId)?.valorEsperadoMinor ?? null;
-          if (av === null && bv === null) return emailTie;
+          if (av === null && bv === null)
+            return cmpTotalDesc(a, b) || cmpOrdersDesc(a, b) || cmpNameAsc(a, b) || cmpEmailAsc(a, b);
           if (av === null) return 1;
           if (bv === null) return -1;
-          return dir * (av - bv) || emailTie;
+          const primary = dir * (av - bv);
+          if (primary !== 0) return primary;
+          return cmpTotalDesc(a, b) || cmpOrdersDesc(a, b) || cmpNameAsc(a, b) || cmpEmailAsc(a, b);
         }
         default:
-          return dir * emailTie;
+          return (
+            dir * cmpEmailAsc(a, b) ||
+            cmpTotalDesc(a, b) ||
+            cmpOrdersDesc(a, b) ||
+            cmpNameAsc(a, b)
+          );
       }
     });
     return { rows: matched.slice(from, from + pageSize), totalCount: matched.length };
@@ -770,14 +819,28 @@ export async function queryStoreCustomers(
     }
     const enriched = await loadEnrichedByDomain(db, all);
     const rows = all.filter(inMarket).map((r) => toEditableCustomer(r, enriched));
+    const cDir = ascending ? 1 : -1;
+    const cmpTotalDesc = (a: EditableCustomer, b: EditableCustomer) => b.totalSpent - a.totalSpent;
+    const cmpOrdersDesc = (a: EditableCustomer, b: EditableCustomer) => b.ordersCount - a.ordersCount;
+    const cmpNameAsc = (a: EditableCustomer, b: EditableCustomer) =>
+      `${a.firstName ?? ""} ${a.lastName ?? ""}`
+        .trim()
+        .localeCompare(`${b.firstName ?? ""} ${b.lastName ?? ""}`.trim(), "es", { sensitivity: "base" });
+    const cmpEmailAsc = (a: EditableCustomer, b: EditableCustomer) =>
+      a.email.localeCompare(b.email, "es", { sensitivity: "base" });
     rows.sort((a, b) => {
       const av = (a.companyName ?? "").trim();
       const bv = (b.companyName ?? "").trim();
-      if (!av && !bv) return 0;
+      if (!av && !bv) return cmpTotalDesc(a, b) || cmpOrdersDesc(a, b) || cmpNameAsc(a, b) || cmpEmailAsc(a, b);
       if (!av) return 1; // vacíos al final
       if (!bv) return -1;
-      const c = av.localeCompare(bv, "es", { sensitivity: "base" });
-      return ascending ? c : -c;
+      return (
+        cDir * av.localeCompare(bv, "es", { sensitivity: "base" }) ||
+        cmpTotalDesc(a, b) ||
+        cmpOrdersDesc(a, b) ||
+        cmpNameAsc(a, b) ||
+        cmpEmailAsc(a, b)
+      );
     });
     return { rows: rows.slice(from, from + pageSize), totalCount: rows.length };
   }
@@ -787,29 +850,52 @@ export async function queryStoreCustomers(
     market,
     "id",
   );
+  // Criterios default como Catálogo (fijos, no siguen a `dir`):
+  // Total DESC, Compras DESC, Nombre ASC, Email ASC. El tie-breaker final
+  // es siempre la PK `id` (email no es único: hay duplicados).
   switch (sort.key) {
     case "email":
-      query = query.order("email", { ascending });
+      query = query
+        .order("email", { ascending })
+        .order("total_spent", { ascending: false })
+        .order("orders_count", { ascending: false })
+        .order("first_name", { ascending: true })
+        .order("last_name", { ascending: true });
       break;
     case "name":
       query = query
         .order("first_name", { ascending })
-        .order("last_name", { ascending });
+        .order("last_name", { ascending })
+        .order("total_spent", { ascending: false })
+        .order("orders_count", { ascending: false })
+        .order("email", { ascending: true });
       break;
     case "phone":
-      query = query.order("phone", { ascending });
+      query = query
+        .order("phone", { ascending })
+        .order("total_spent", { ascending: false })
+        .order("orders_count", { ascending: false })
+        .order("first_name", { ascending: true })
+        .order("last_name", { ascending: true })
+        .order("email", { ascending: true });
       break;
     case "orders":
-      query = query.order("orders_count", { ascending });
+      query = query
+        .order("orders_count", { ascending })
+        .order("total_spent", { ascending: false })
+        .order("first_name", { ascending: true })
+        .order("last_name", { ascending: true })
+        .order("email", { ascending: true });
       break;
-    case "total":
-      query = query.order("total_spent", { ascending });
+    default:
+      query = query
+        .order("total_spent", { ascending })
+        .order("orders_count", { ascending: false })
+        .order("first_name", { ascending: true })
+        .order("last_name", { ascending: true })
+        .order("email", { ascending: true });
       break;
   }
-  // Desempate estable para paginar sin filas duplicadas/ausentes.
-  // Email no es único (hay duplicados por email): el tie-breaker final es
-  // siempre la PK `id` (toda cadena con .range la lleva).
-  if (sort.key !== "email") query = query.order("email", { ascending: true });
   query = query.order("id", { ascending: true });
   if (like && searchOr) query = query.or(searchOr);
   const { data, count, error } = await query.range(from, from + pageSize - 1);
