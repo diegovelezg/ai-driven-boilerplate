@@ -22,7 +22,7 @@ const agent = () => src("lib/adk/agents/customer-agent.ts");
 describe("envelope obligatorio {items,total_count,returned_count,truncated}", () => {
   it("todas las tools de lista devuelven envelope", () => {
     const t = tools();
-    for (const name of ["list_signals", "list_actions", "find_customer", "list_leads", "get_top_products"]) {
+    for (const name of ["list_signals", "list_actions", "find_customer", "list_leads", "get_top_products", "get_product_movements", "get_product_buyers"]) {
       assert.match(t, new RegExp(`name:\\s*"${name}"`), `${name} existe`);
     }
     // Cada return con items debe llevar los 3 campos del envelope.
@@ -45,13 +45,30 @@ describe("envelope obligatorio {items,total_count,returned_count,truncated}", ()
     assert.match(block, /count:/);
     assert.doesNotMatch(block, /items:/);
   });
+
+  it("get_product_movements declara total_count null (historial abierto, no total inventado)", () => {
+    const t = tools();
+    const i = t.indexOf('"get_product_movements"');
+    assert.ok(i >= 0);
+    const block = t.slice(i, i + 12000);
+    assert.match(block, /total_count:\s*null/);
+  });
+
+  it("get_product_buyers totaliza desde variable, no desde items.length", () => {
+    const t = tools();
+    const i = t.indexOf('"get_product_buyers"');
+    assert.ok(i >= 0);
+    const block = t.slice(i, i + 12000);
+    assert.match(block, /total_count:\s*total[^.]/);
+    assert.doesNotMatch(block, /total_count:\s*items\.length/);
+  });
 });
 
 describe("límites acotados (el LLM nunca pide miles)", () => {
   it("todo limit de lista está acotado a máx 20 (ficha permite 30)", () => {
     const t = tools();
     // Ficha (get_customer_orders) pagina historial: cap 30 legítimo, fuera de la regla de listas.
-    const listSchemas = [...t.matchAll(/name:\s*"(list_signals|list_actions|list_leads|get_top_products)"[\s\S]{0,800}?limit:\s*z\.number\(\)\.int\(\)\.min\(1\)\.max\((\d+)\)/g)];
+    const listSchemas = [...t.matchAll(/name:\s*"(list_signals|list_actions|list_leads|get_top_products|get_product_movements|get_product_buyers)"[\s\S]{0,800}?limit:\s*z\.number\(\)\.int\(\)\.min\(1\)\.max\((\d+)\)/g)];
     assert.ok(listSchemas.length >= 4, `listas con limit esperadas ≥4, hay ${listSchemas.length}`);
     for (const m of listSchemas) assert.ok(Number(m[2]) <= 20, `limit max ${m[2]} > 20 en ${m[1]}`);
   });
@@ -73,7 +90,7 @@ describe("agregados paginados con CAP + flag (nunca .length de ventana)", () => 
 
   it("cada agregado pagina en lotes 1000 con CAP y truncated", () => {
     const t = tools();
-    for (const name of ["get_store_summary", "get_recovery_stats", "get_top_products"]) {
+    for (const name of ["get_store_summary", "get_recovery_stats", "get_top_products", "get_product_movements", "get_product_buyers"]) {
       const i = t.indexOf(`"${name}"`);
       assert.ok(i >= 0, `${name} existe`);
       const block = t.slice(i, i + 6000);
@@ -165,6 +182,7 @@ describe("paginación estable (offset sin duplicados/ausentes)", () => {
     // siempre la PK `id` (existe en todas las tablas del loop).
     const files = [
       "lib/adk/tools/retain-tools.ts",
+      "lib/product-detail.ts",
       "lib/retention.ts",
       "lib/scout.ts",
       "lib/analyst.ts",

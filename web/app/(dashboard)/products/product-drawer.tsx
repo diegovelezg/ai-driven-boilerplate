@@ -112,35 +112,6 @@ function ResumenTab({ summary, detail }: { summary: ProductWithStats; detail: Pr
         )}
       </section>
 
-      {detail && (
-        <section aria-label="Variantes">
-          <SectionHeading title="Variantes" hint={`${formatNumber(detail.product.variants.length)} en plataforma`} tone="violet" />
-          {detail.product.variants.length === 0 ? (
-            <p className="mt-2 text-[13px] text-muted-foreground">Sin variantes.</p>
-          ) : (
-            <div className="mt-2">
-              <DrawerTable>
-                <DrawerTableHeader>
-                  <DrawerTableTh>Variante</DrawerTableTh>
-                  <DrawerTableTh>SKU</DrawerTableTh>
-                  <DrawerTableTh numeric>Precio</DrawerTableTh>
-                  <DrawerTableTh numeric>Stock</DrawerTableTh>
-                </DrawerTableHeader>
-                <DrawerTableBody>
-                  {detail.product.variants.map((v, i) => (
-                    <DrawerTableRow key={`${v.sku ?? v.title}-${i}`}>
-                      <DrawerTableTd>{v.title || "—"}</DrawerTableTd>
-                      <DrawerTableTd className="text-muted-foreground">{v.sku ?? "—"}</DrawerTableTd>
-                      <DrawerTableTd numeric>{detail.currency || summary.currency ? formatMoney(v.unitPrice, (detail.currency ?? summary.currency) as string) : formatNumber(v.unitPrice)}</DrawerTableTd>
-                      <DrawerTableTd numeric>{formatNumber(v.quantity)}</DrawerTableTd>
-                    </DrawerTableRow>
-                  ))}
-                </DrawerTableBody>
-              </DrawerTable>
-            </div>
-          )}
-        </section>
-      )}
       {!detail && (
         <p className="text-[13px] text-muted-foreground">Cargando detalle…</p>
       )}
@@ -452,7 +423,7 @@ export function ProductDrawer({
       fill={tab === "agentes"}
     >
       {tab === "agentes" ? (
-        <ProductChat productId={summary.id} productTitle={summary.title} />
+        <ProductChat productId={summary.id} productTitle={summary.title} market={market} />
       ) : (
         <>
           {error && (

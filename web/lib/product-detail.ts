@@ -1,4 +1,4 @@
-// Detalle por producto para el drawer: variantes + metadata del tenant +
+// Detalle por producto para el drawer: metadata del tenant +
 // últimos movimientos. Las cifras globales por moneda salen de product_stats
 // (autoritativo); los movimientos se acotan al market (?market=) cuando se pide.
 import { getSupabase } from "@/lib/supabase";
@@ -7,13 +7,6 @@ import { normProductTitle } from "@/lib/product-stats";
 import { EMPTY_KEYS, resolveItemKeys } from "@/lib/metadata-map";
 import { enrichOrderItems } from "@/lib/item-context";
 import { displayMarket, resolveMarketScope } from "@/lib/markets";
-
-export interface ProductDetailVariant {
-  sku: string | null;
-  title: string;
-  quantity: number;
-  unitPrice: number;
-}
 
 export interface ProductDetailStats {
   currency: string;
@@ -62,7 +55,6 @@ export interface ProductDetailDTO {
     isActive: boolean;
     source: string | null;
     metadata: Record<string, unknown> | null;
-    variants: ProductDetailVariant[];
   };
   statsByCurrency: ProductDetailStats[];
   movements: ProductDetailMovement[];
@@ -83,7 +75,7 @@ export async function loadProductDetail(
   const db = getSupabase();
   const { data: p } = await db
     .from("products")
-    .select("id,store_id,source,title,handle,platform_status,is_active,variants_json,metadata")
+    .select("id,store_id,source,title,handle,platform_status,is_active,metadata")
     .eq("id", productId)
     .maybeSingle();
   if (!p) return null;
@@ -115,6 +107,7 @@ export async function loadProductDetail(
       .select("currency,items_json,placed_at,customer_id,status,payment_status,is_test")
       .eq("store_id", storeId)
       .order("placed_at", { ascending: false })
+      .order("id", { ascending: true })
       .range(off, off + MOVEMENT_PAGE - 1);
     if (scope?.market) oq = oq.or(`market_id.eq.${scope.market.id},country.is.null`);
     const { data, error } = await oq;
@@ -250,13 +243,6 @@ export async function loadProductDetail(
     }
   }
 
-  const variants = (Array.isArray(pr.variants_json) ? (pr.variants_json as Array<Record<string, unknown>>) : []).map((v) => ({
-    sku: (v.sku as string | null) ?? null,
-    title: String(v.title ?? ""),
-    quantity: Number(v.quantity ?? 0),
-    unitPrice: Number(v.unit_price ?? 0),
-  }));
-
   return {
     storeId,
     dto: {
@@ -268,7 +254,6 @@ export async function loadProductDetail(
         isActive: pr.is_active === true,
         source: (pr.source as string | null) ?? null,
         metadata: (pr.metadata as Record<string, unknown> | null) ?? null,
-        variants,
       },
       statsByCurrency: ((stats ?? []) as Array<Record<string, unknown>>).map((s) => ({
         currency: String(s.currency ?? ""),

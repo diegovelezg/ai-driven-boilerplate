@@ -3,8 +3,8 @@ import { getSupabase } from "@/lib/supabase";
 import { requireApiUser, requireStoreMember, resolveRouteCustomerId } from "@/lib/api/guard";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
+import { displayMarket, resolveMarketScope } from "@/lib/markets";
 import { createLogger } from "@/lib/log";
-import { formatMoney, formatNumber } from "@/lib/format";
 
 const log = createLogger("adk");
 
@@ -33,7 +33,7 @@ export async function POST(
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
 
-  let body: { messages?: IncomingMessage[] };
+  let body: { messages?: IncomingMessage[]; marketId?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -51,7 +51,7 @@ export async function POST(
   const db = getSupabase();
   const { data: p } = await db
     .from("products")
-    .select("id,store_id,title,platform_status,is_active,variants_json")
+    .select("id,store_id,title,platform_status,is_active")
     .eq("id", id)
     .maybeSingle();
   if (!p) return Response.json({ error: "Producto no encontrado." }, { status: 404 });
@@ -62,18 +62,16 @@ export async function POST(
   const denied = await requireStoreMember(storeId, auth);
   if (denied) return denied;
 
-  const { data: stats } = await db
-    .from("product_stats")
-    .select("currency,qty_all,revenue_all,qty_30d,buyers_all")
-    .eq("store_id", storeId)
-    .eq("product_id", id)
-    .limit(10);
+  // Mismo filtro global que el drawer (?market= del header): el agente
+  // responde sobre el mismo universo que la GUI muestra.
+  const marketScope = typeof body.marketId === "string" && body.marketId
+    ? await resolveMarketScope(storeId, body.marketId).catch(() => null)
+    : null;
+  const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
   const title = String(pr.title ?? "");
-  const totals = ((stats ?? []) as Array<Record<string, unknown>>)
-    .map((s) => `${formatNumber(Number(s.qty_all ?? 0))} uds · ${formatMoney(Number(s.revenue_all ?? 0), (s.currency as string | null) ?? null)} (30d: ${formatNumber(Number(s.qty_30d ?? 0))}, compradores: ${formatNumber(Number(s.buyers_all ?? 0))})`)
-    .join(" | ") || "sin ventas registradas";
-  const variants = (Array.isArray(pr.variants_json) ? (pr.variants_json as Array<Record<string, unknown>>) : []).length;
-  const focusCtx = `Producto en foco: "${title}" (${(pr.platform_status as string | null) ?? "sin estado"}, ${pr.is_active ? "activo" : "inactivo"}). Ventas: ${totals}. Variantes: ${variants}. Responde sobre ESTE producto; para comparar con el resto del catálogo usa get_top_products.`;
+  // Solo identidad en el prompt: las cifras salen de get_product_summary
+  // (regla "usa SIEMPRE las tools"; el texto fijo se desactualiza y miente).
+  const focusCtx = `Producto en foco: "${title}" (${(pr.platform_status as string | null) ?? "sin estado"}, ${pr.is_active ? "activo" : "inactivo"})${marketSuffix}. Responde sobre ESTE producto (get_product_summary/movements/buyers); para comparar con el resto del catálogo usa get_top_products.`;
 
   const clientPrior = history
     .slice(0, -1)
@@ -86,8 +84,12 @@ export async function POST(
   try {
     agent = getCustomerAgent({
       storeId,
+      productId: id,
       view: "product_drawer",
-      focusLabel: `producto "${title}"`,
+      focusLabel: `producto "${title}"${marketSuffix}`,
+      marketCountries: marketScope?.countries ?? null,
+      marketCustomerIds: marketScope?.customerIds ?? null,
+      marketCurrency: marketScope?.market ? marketScope.market.currency.toUpperCase() : null,
     });
   } catch (e) {
     return Response.json(

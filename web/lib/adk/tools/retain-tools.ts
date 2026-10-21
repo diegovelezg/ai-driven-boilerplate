@@ -23,11 +23,23 @@ export interface AgentContext {
   /** Etiqueta legible del foco (p.ej. "Alonso Javier Carrillo Vega <email>"): orienta mensajes ambiguos. */
   focusLabel?: string | null;
   /**
+   * Producto en foco (ficha/drawer de catálogo): habilita las tools
+   * get_product_summary/movements/buyers. Sin productId esas tools lo piden.
+   */
+  productId?: string | null;
+  /**
    * Filtro global por mercado (null = todos). Por ISO2 (corto); IDs solo en
    * el fallback sin países (ver resolveMarketScope en lib/markets).
    */
   marketCountries?: string[] | null;
   marketCustomerIds?: string[] | null;
+  /**
+   * Moneda de la vista (market activo ?? shop default), en mayúsculas.
+   * Las tools de producto la usan igual que el drawer: filtran movimientos
+   * por ella solo cuando viene de un market; sin market se muestran todas
+   * las monedas con su rótulo por fila (igual que la GUI).
+   */
+  marketCurrency?: string | null;
 }
 
 function needStore(ctx: AgentContext): string | null {
@@ -65,6 +77,9 @@ function finishMergedPage(merged: Map<string, Record<string, unknown>>, total: n
 export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const storeId = needStore(ctx);
   const customerId = ctx.customerId ?? null;
+  const productId = ctx.productId ?? null;
+  /** Moneda de la vista cuando hay market activo (null = todas, como el drawer). */
+  const marketCurrency = ctx.marketCurrency ?? null;
   const marketScope = {
     countries: ctx.marketCountries ?? null,
     customerIds: ctx.marketCustomerIds ?? null,
@@ -549,11 +564,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const known = new Set(rows.map((r) => String((r as Record<string, unknown>).id)));
         const ids = [...hits.keys()].filter((id) => !known.has(id)).slice(0, 5 - rows.length);
         if (ids.length > 0) {
-          const { data: cc } = await db
-            .from("customers")
-            .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
-            .eq("store_id", storeId)
-            .in("id", ids);
+          const ccq = withMarket(
+            db
+              .from("customers")
+              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+              .eq("store_id", storeId)
+              .in("id", ids),
+            "id",
+          );
+          const { data: cc } = await ccq;
           for (const c of ((cc ?? []) as Array<Record<string, unknown>>)) {
             const hit = hits.get(String(c.id));
             known.add(String(c.id));
@@ -1008,5 +1027,373 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       }),
   );
 
-  return [summary, recovery, signals, actions, approveActions, rejectActions, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...loopTools];
+  /** Guarda defensiva (hoy inalcanzable: las tools de producto solo se
+   *  registran con productId en contexto; sin foco no existen). */
+  const noProduct = { error: "Sin producto en contexto: abre su ficha en catálogo." };
+
+  /** Ficha del ítem en foco: identidad + ventas autoritativas por moneda
+   *  (product_stats, lo mismo que el tab Resumen del drawer). Sin scan de
+   *  órdenes: barato, úsala antes de afirmar cualquier cifra del producto. */
+  const productSummary = new FunctionTool({
+    name: "get_product_summary",
+    description:
+      "Ficha del producto en foco: identidad (título, estado, handle) y ventas por moneda desde product_stats (cantidades, montos, 30d/90d, compradores, última venta). Úsala antes de afirmar cualquier cifra de ESTE ítem; para comparar con el resto usa get_top_products.",
+    parameters: z.object({}),
+    execute: async () => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      if (!productId) return noProduct;
+      const db = getSupabase();
+      const { data: p, error: pErr } = await db
+        .from("products")
+        .select("id,title,handle,platform_status,is_active")
+        .eq("store_id", storeId)
+        .eq("id", productId)
+        .maybeSingle();
+      if (pErr) return { error: pErr.message };
+      if (!p) return { error: "Producto no encontrado en esta tienda." };
+      const pr = p as Record<string, unknown>;
+      const { data: stats, error: sErr } = await db
+        .from("product_stats")
+        .select("currency,qty_all,revenue_all,qty_30d,qty_90d,revenue_30d,buyers_all,last_sold_at")
+        .eq("store_id", storeId)
+        .eq("product_id", productId)
+        .limit(10);
+      if (sErr) return { error: sErr.message };
+      const { resolveShopCurrency } = await import("@/lib/store-profiles");
+      const shopCurrency = (await resolveShopCurrency(storeId).catch(() => null)) ?? null;
+      return {
+        product: {
+          id: String(pr.id ?? ""),
+          title: String(pr.title ?? ""),
+          handle: (pr.handle as string | null) ?? null,
+          platform_status: (pr.platform_status as string | null) ?? null,
+          is_active: pr.is_active === true,
+        },
+        stats_by_currency: ((stats ?? []) as Array<Record<string, unknown>>).map((s) => ({
+          currency: String(s.currency ?? ""),
+          qty_all: Number(s.qty_all ?? 0),
+          revenue_all: Number(s.revenue_all ?? 0),
+          qty_30d: Number(s.qty_30d ?? 0),
+          qty_90d: Number(s.qty_90d ?? 0),
+          revenue_30d: Number(s.revenue_30d ?? 0),
+          buyers_all: Number(s.buyers_all ?? 0),
+          last_sold_at: (s.last_sold_at as string | null) ?? null,
+        })),
+        view_currency: marketCurrency ?? (shopCurrency ? shopCurrency.toUpperCase() : null),
+        note: "Montos en minor units (céntimos): dividir /100. Sin product_stats = sin ventas registradas.",
+      };
+    },
+  });
+
+  /** Últimas ventas del ítem en foco con metadata de ESA compra (lo mismo
+   *  que el tab Movimientos del drawer). Paginado con envelope: pide SOLO
+   *  lo pedido (limit/offset). El total exacto no se conoce sin escanear
+   *  todo el historial: total_count=null y truncated avisa si hay más. */
+  const productMovements = new FunctionTool({
+    name: "get_product_movements",
+    description:
+      "Últimos movimientos del producto en foco (más reciente primero): fecha, cantidad, precio, monto y metadata de ESA compra (ventana, lo que dijo el cliente, detalles, contiene, categoría). Pasa limit (1-15, default 5) y offset para paginar. Devuelve envelope {items, total_count, returned_count, truncated}: total_count=null (historial abierto); si truncated, dilo ('te muestro N, hay más').",
+    parameters: z.object({
+      limit: z.number().int().min(1).max(15).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
+    }),
+    execute: async ({ limit, offset }: { limit?: number; offset?: number }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      if (!productId) return noProduct;
+      const n = limit ?? 5;
+      const off = offset ?? 0;
+      const db = getSupabase();
+      const { data: p, error: pErr } = await db
+        .from("products")
+        .select("title")
+        .eq("store_id", storeId)
+        .eq("id", productId)
+        .maybeSingle();
+      if (pErr) return { error: pErr.message };
+      if (!p) return { error: "Producto no encontrado en esta tienda." };
+      const { normProductTitle } = await import("@/lib/product-stats");
+      const normTitle = normProductTitle(String((p as Record<string, unknown>).title ?? ""));
+      const { resolveShopCurrency } = await import("@/lib/store-profiles");
+      const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
+      const viewCurrency = marketCurrency ?? shopCurrency;
+      // Agregado paginado con CAP + flag: lotes 1000, nunca .length de ventana.
+      const PAGE = 1000;
+      const CAP = 20000;
+      const META_CAP = 45;
+      const want = off + n + 1; // +1 para saber si hay más (truncated real)
+      const items: Array<Record<string, unknown>> = [];
+      const metaLines: Array<{ title: string; quantity: number; metadata?: unknown; oi: number }> = [];
+      let scanned = 0;
+      let hitCap = false;
+      for (let at = 0; ; at += PAGE) {
+        const oq = withMarket(
+          db
+            .from("orders")
+            .select("currency,items_json,placed_at,status,payment_status,is_test")
+            .eq("store_id", storeId)
+            .order("placed_at", { ascending: false })
+            .order("id", { ascending: true }),
+        );
+        const { data, error } = await oq.range(at, at + PAGE - 1);
+        if (error) return { error: error.message };
+        const orows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const o of orows) {
+          scanned += 1;
+          if (!isRealDbOrder({
+            status: typeof o.status === "string" ? o.status : null,
+            payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
+            is_test: o.is_test === true,
+          })) continue;
+          const cur = (o.currency as string | null) ?? null;
+          // Misma moneda que el drawer: con market activo se filtra a su
+          // moneda; sin market se muestran todas con rótulo por fila.
+          if (marketCurrency && cur && cur.toUpperCase() !== marketCurrency) continue;
+          const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
+          let qty = 0;
+          let revenue = 0;
+          let unitPrice: number | null = null;
+          const matched: Array<{ title: string; quantity: number; metadata?: unknown }> = [];
+          for (const it of oitems) {
+            if (normTitle !== normProductTitle(String(it.title ?? ""))) continue;
+            const q = Number(it.quantity ?? 0);
+            if (!(q > 0)) continue;
+            const up = Number(it.unit_price ?? 0);
+            qty += q;
+            revenue += q * up;
+            if (unitPrice === null) unitPrice = up;
+            matched.push({ title: String(it.title ?? ""), quantity: q, metadata: it.metadata });
+          }
+          if (qty > 0 && items.length < want) {
+            const oi = items.length;
+            items.push({
+              placed_at: (o.placed_at as string | null) ?? null,
+              qty,
+              unit_price: unitPrice ?? 0,
+              revenue,
+              currency: cur,
+              meta: null,
+            });
+            for (const m of matched) {
+              if (metaLines.length >= META_CAP) break;
+              metaLines.push({ ...m, oi });
+            }
+          }
+          if (items.length >= want) break;
+        }
+        if (orows.length < PAGE) break;
+        if (scanned >= CAP) {
+          hitCap = true;
+          break;
+        }
+        if (items.length >= want) break;
+      }
+      const hasMore = items.length > off + n;
+      const window = items.slice(off, off + n);
+      // Metadata POR COMPRA (misma fusión que el drawer: first-wins + uniones).
+      if (metaLines.length > 0 && window.length > 0) {
+        const { EMPTY_KEYS, resolveItemKeys } = await import("@/lib/metadata-map");
+        const { enrichOrderItems } = await import("@/lib/item-context");
+        const keys = await resolveItemKeys(storeId).catch(() => EMPTY_KEYS);
+        const enriched = await enrichOrderItems(storeId, metaLines, keys).catch(() => []);
+        const byOi = new Map<number, typeof enriched>();
+        enriched.forEach((e, i) => {
+          const oi = metaLines[i]?.oi;
+          if (oi === undefined) return;
+          const arr = byOi.get(oi) ?? [];
+          arr.push(e);
+          byOi.set(oi, arr);
+        });
+        for (const [oi, list] of byOi) {
+          if (oi < off || oi >= off + window.length) continue;
+          const mv = window[oi - off] as Record<string, unknown>;
+          if (!mv) continue;
+          const detalles: Record<string, string> = {};
+          const ventanas = new Set<string>();
+          const dijo: string[] = [];
+          let contiene: string | null = null;
+          let categoria: string | null = null;
+          let aprobado: boolean | null = null;
+          for (const e of list) {
+            for (const [k, v] of Object.entries(e.detalles)) {
+              if (!(k in detalles)) detalles[k] = String(v);
+            }
+            if (e.ventana) ventanas.add(e.ventana);
+            if (e.clienteDijo && !dijo.includes(e.clienteDijo)) dijo.push(e.clienteDijo);
+            if (!contiene && e.contiene) contiene = e.contiene;
+            if (!categoria && e.categoria) categoria = e.categoria;
+            if (aprobado === null && e.aprobado !== null) aprobado = e.aprobado;
+          }
+          // Mismas claves que el drawer (clienteDijo + aprobado): el agente
+          // cita lo mismo que la GUI muestra.
+          const hasAny = Object.keys(detalles).length > 0 || ventanas.size > 0 || dijo.length > 0 || !!contiene || !!categoria || aprobado !== null;
+          mv.meta = hasAny
+            ? {
+                ventana: [...ventanas].join(" · ") || null,
+                clienteDijo: dijo.join(" / ").slice(0, 400) || null,
+                detalles,
+                contiene,
+                categoria,
+                aprobado,
+              }
+            : null;
+        }
+      }
+      const truncated = hasMore || hitCap;
+      return {
+        items: window,
+        total_count: null,
+        returned_count: window.length,
+        truncated,
+        scanned_orders: scanned,
+        view_currency: viewCurrency,
+        note_truncated: truncated ? "Ventana escaneada: puede haber más historial; no afirmes el total." : null,
+        note: "Montos en minor units (céntimos): dividir /100. Meta = metadata DE ESA COMPRA, no del ítem.",
+      };
+    },
+  });
+
+  /** Quiénes compran el ítem en foco (top por monto, lo mismo que el tab
+   *  Clientes del drawer). El total exacto sale de product_stats (buyers_all
+   *  por moneda): la lista es parcial y truncated lo declara (N de M). */
+  const productBuyers = new FunctionTool({
+    name: "get_product_buyers",
+    description:
+      "Top compradores del producto en foco (nombre, email, empresa, cantidad y monto). Pasa limit (1-20, default 5). Devuelve envelope {items, total_count, returned_count, truncated}: total_count = compradores distintos (product_stats); si truncated=true dilo ('te muestro N de M') y nunca afirmes que viste a todos.",
+    parameters: z.object({
+      limit: z.number().int().min(1).max(20).optional(),
+    }),
+    execute: async ({ limit }: { limit?: number }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      if (!productId) return noProduct;
+      const n = limit ?? 5;
+      const db = getSupabase();
+      const [{ data: p }, { data: stats }] = await Promise.all([
+        db
+          .from("products")
+          .select("title")
+          .eq("store_id", storeId)
+          .eq("id", productId)
+          .maybeSingle(),
+        db
+          .from("product_stats")
+          .select("buyers_all")
+          .eq("store_id", storeId)
+          .eq("product_id", productId)
+          .limit(10),
+      ]);
+      if (!p) return { error: "Producto no encontrado en esta tienda." };
+      const { normProductTitle } = await import("@/lib/product-stats");
+      const normTitle = normProductTitle(String((p as Record<string, unknown>).title ?? ""));
+      const totalBuyers = ((stats ?? []) as Array<Record<string, unknown>>)
+        .reduce((acc, s) => acc + Number(s.buyers_all ?? 0), 0);
+      const { resolveShopCurrency } = await import("@/lib/store-profiles");
+      const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
+      const viewCurrency = marketCurrency ?? shopCurrency;
+      // Agregado paginado con CAP + flag: lotes 1000 sobre órdenes reales.
+      const PAGE = 1000;
+      const CAP = 20000;
+      const buyerAgg = new Map<string, Map<string, { qty: number; revenue: number }>>();
+      let scanned = 0;
+      let hitCap = false;
+      for (let at = 0; ; at += PAGE) {
+        const oq = withMarket(
+          db
+            .from("orders")
+            .select("currency,items_json,customer_id,status,payment_status,is_test")
+            .eq("store_id", storeId)
+            .order("placed_at", { ascending: false })
+            .order("id", { ascending: true }),
+        );
+        const { data, error } = await oq.range(at, at + PAGE - 1);
+        if (error) return { error: error.message };
+        const orows = (data ?? []) as Array<Record<string, unknown>>;
+        for (const o of orows) {
+          scanned += 1;
+          if (!isRealDbOrder({
+            status: typeof o.status === "string" ? o.status : null,
+            payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
+            is_test: o.is_test === true,
+          })) continue;
+          const cur = (o.currency as string | null) ?? null;
+          const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
+          let qty = 0;
+          let revenue = 0;
+          for (const it of oitems) {
+            if (normTitle !== normProductTitle(String(it.title ?? ""))) continue;
+            const q = Number(it.quantity ?? 0);
+            if (!(q > 0)) continue;
+            qty += q;
+            revenue += q * Number(it.unit_price ?? 0);
+          }
+          if (qty > 0) {
+            const cid = typeof o.customer_id === "string" ? o.customer_id : null;
+            if (cid) {
+              let perCur = buyerAgg.get(cid);
+              if (!perCur) { perCur = new Map(); buyerAgg.set(cid, perCur); }
+              const curKey = (cur ?? "").toUpperCase();
+              const b = perCur.get(curKey) ?? { qty: 0, revenue: 0 };
+              b.qty += qty;
+              b.revenue += revenue;
+              perCur.set(curKey, b);
+            }
+          }
+        }
+        if (orows.length < PAGE) break;
+        if (scanned >= CAP) {
+          hitCap = true;
+          break;
+        }
+      }
+      const ranked = [...buyerAgg.entries()].map(([cid, perCur]) => {
+        const [currency, b] = [...perCur.entries()].sort((a, b2) => b2[1].revenue - a[1].revenue)[0]!;
+        return { customer_id: cid, qty: b.qty, revenue: b.revenue, currency };
+      }).sort((a, b) => b.revenue - a.revenue).slice(0, n);
+      let items: Array<Record<string, unknown>> = ranked.map((r) => ({ ...r, email: "", name: "Sin nombre", company: null }));
+      if (ranked.length > 0) {
+        const cq = withMarket(
+          db
+            .from("customers")
+            .select("id,email,first_name,last_name,company_name")
+            .eq("store_id", storeId)
+            .in("id", ranked.map((r) => r.customer_id)),
+          "id",
+        );
+        const { data: custs, error: cErr } = await cq;
+        if (cErr) return { error: cErr.message };
+        const byId = new Map(
+          ((custs ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id ?? ""), c]),
+        );
+        items = ranked.map((r) => {
+          const c = byId.get(r.customer_id);
+          const name = c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
+          return {
+            ...r,
+            email: c ? String(c.email ?? "") : "",
+            name: name || "Sin nombre",
+            company: c && c.company_name ? String(c.company_name) : null,
+          };
+        });
+      }
+      // N de M honesto: product_stats es global (sin scope); con market
+      // activo el ranking sale de órdenes filtradas, así que el total es el
+      // de la ventana escaneada (exacto salvo hitCap, que marca truncated).
+      // Sin scope, buyers_all por moneda; quien compró en 2 monedas cuenta
+      // 1× aquí (agg por customer) aunque el total global lo duplique.
+      const scoped = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
+      const total = scoped ? buyerAgg.size : totalBuyers > 0 ? totalBuyers : buyerAgg.size;
+      const truncated = total > items.length || hitCap;
+      return {
+        items,
+        total_count: total,
+        returned_count: items.length,
+        truncated,
+        scanned_orders: scanned,
+        view_currency: viewCurrency,
+        note_truncated: hitCap ? "Muestra parcial: universo mayor al CAP escaneado." : null,
+        note: "Montos en minor units (céntimos): dividir /100.",
+      };
+    },
+  });
+
+  return [summary, recovery, signals, actions, approveActions, rejectActions, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...(productId ? [productSummary, productMovements, productBuyers] : []), ...loopTools];
 }

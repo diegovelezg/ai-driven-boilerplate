@@ -26,7 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FilterSelect } from "@/components/filter-select";
 import {
   DrawerShell,
   type DrawerTabDef,
@@ -41,12 +40,7 @@ import {
 } from "@/components/drawer-table";
 import { updateCustomerAction } from "@/lib/customer-actions";
 import { toast } from "@/components/ui/toast";
-import {
-  dismissSignalAction,
-  getCustomerSignalAction,
-  proposeSingleAction,
-  reopenCustomerSignalAction,
-} from "@/lib/review-actions";
+import { reopenCustomerSignalAction } from "@/lib/review-actions";
 import { reenrichDomainAction } from "@/lib/enrich-actions";
 import { useBackground } from "@/components/background-status";
 import type { EditableCustomer, ManualField } from "@/lib/customers-db";
@@ -1071,7 +1065,6 @@ function ComprasTab({
             .filter((t) => !Number.isNaN(t))}
           onPrediction={setMpred}
         />
-        <FichaActions dbId={dbId} />
       </div>
 
       <SectionHeading
@@ -1136,9 +1129,11 @@ function ComprasTab({
       </div>
 
       {orders.length > 0 && (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid items-stretch gap-3 md:grid-cols-2">
           <AppCard
             title="Ticket en el tiempo"
+            className="h-full"
+            footerClassName="mt-auto"
             description={
               <>
                 {firstDate ?? "—"} → {lastDate ?? "—"}
@@ -1156,6 +1151,9 @@ function ComprasTab({
           </AppCard>
           <AppCard
             title="Trayectoria acumulada"
+            className="h-full"
+            contentClassName="flex flex-1 flex-col justify-center"
+            footerClassName="mt-auto"
             description={
               <>
                 {formatMoney(summary.monetary, summary.currency)} en {formatNumber(summary.frequency)} compras
@@ -1313,126 +1311,6 @@ function ContactarIgual({ dbId }: { dbId: string }) {
         </span>
       </AppTooltip>
     </span>
-  );
-}
-
-/** Motivos cerrados para [Descartar 30d] (issue #8 Paso 2). */
-const FICHA_DISMISS_REASONS = [
-  { value: "contactado_fuera", label: "ya lo contacté por fuera" },
-  { value: "no_cliente_real", label: "no es cliente real" },
-  { value: "dato_incorrecto", label: "dato incorrecto" },
-  { value: "otro", label: "otro" },
-] as const;
-
-/** Issue #8 Paso 2: acciones en la ficha. [Redactar mensaje] reutiliza el
- *  flujo señal→borrador (`proposeSingleAction`, con cinta); [Descartar 30d]
- *  usa `dismissSignalAction` con motivo cerrado (la esconde de Hoy 30d,
- *  reversible en Review → Descartadas). Sin señal abierta, ambos
- *  deshabilitados con tooltip honesto. */
-function FichaActions({ dbId }: { dbId: string }) {
-  const bg = useBackground();
-  const [signalId, setSignalId] = useState<string | null | undefined>(undefined);
-  const [signalError, setSignalError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "redact" | "dismiss">(null);
-  const [reason, setReason] = useState<string>("contactado_fuera");
-  useEffect(() => {
-    let alive = true;
-    getCustomerSignalAction(dbId)
-      .then((r) => {
-        if (alive) setSignalId(r.signalId);
-      })
-      .catch((e: unknown) => {
-        if (!alive) return;
-        setSignalId(null);
-        const message = e instanceof Error ? e.message : "Error inesperado.";
-        setSignalError(message);
-        toast.add({ title: "No se pudo cargar la señal", description: message, type: "error" });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [dbId]);
-  const loading = signalId === undefined;
-  const redact = async () => {
-    if (!signalId || busy) return;
-    setBusy("redact");
-    try {
-      // Va por la cinta (`bg.start`): ella ya avisa del resultado.
-      // Sin run (veto/duplicado rápido) la cinta no vio nada: avisar aquí.
-      const r = await bg.start(async () => {
-        const x = await proposeSingleAction(signalId);
-        return { ok: x.ok, message: x.message, run: x.run ?? null };
-      });
-      if (!r.run) {
-        toast.add({
-          title: r.ok ? "Borrador redactado" : "No se pudo redactar",
-          description: r.message,
-          type: r.ok ? "success" : "error",
-        });
-      }
-      if (r.ok) setSignalId(null);
-    } catch (e) {
-      toast.add({
-        title: "No se pudo redactar",
-        description: e instanceof Error ? e.message : "Error inesperado.",
-        type: "error",
-      });
-    } finally {
-      setBusy(null);
-    }
-  };
-  const dismiss = async () => {
-    if (!signalId || busy) return;
-    setBusy("dismiss");
-    try {
-      const r = await dismissSignalAction(signalId, reason);
-      toast.add({
-        title: r.ok ? "Señal descartada" : "No se pudo descartar",
-        description: r.message,
-        type: r.ok ? "success" : "error",
-      });
-      if (r.ok) setSignalId(null);
-    } catch (e) {
-      toast.add({
-        title: "No se pudo descartar",
-        description: e instanceof Error ? e.message : "Error inesperado.",
-        type: "error",
-      });
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <AppTooltip tip={signalError ?? (signalId ? "Redacta un borrador para este cliente (va a Review)" : "Este cliente no está en Hoy: sin señal abierta no hay qué redactar")}>
-        <span className="inline-flex items-center">
-          <Button size="sm" disabled={loading || busy !== null || !signalId} onClick={() => void redact()}>
-            {busy === "redact" ? "Redactando…" : "Redactar mensaje"}
-          </Button>
-        </span>
-      </AppTooltip>
-      <FilterSelect
-        value={reason}
-        onChange={(v) => { setReason(v); }}
-        ariaLabel="Motivo del descarte"
-        widthClass="w-52"
-        placeholder="Motivo"
-        disabled={loading || busy !== null || !signalId}
-      >
-        {FICHA_DISMISS_REASONS.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </FilterSelect>
-      <AppTooltip tip={signalError ?? (signalId ? "La esconde de Hoy 30 días (reversible en Review → Descartadas)" : "Sin señal abierta no hay qué descartar")}>
-        <span className="inline-flex items-center">
-          <Button size="sm" variant="outline" disabled={loading || busy !== null || !signalId} onClick={() => void dismiss()}>
-            {busy === "dismiss" ? "Descartando…" : "Descartar 30d"}
-          </Button>
-        </span>
-      </AppTooltip>
-    </div>
   );
 }
 

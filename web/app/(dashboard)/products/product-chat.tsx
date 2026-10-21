@@ -15,11 +15,13 @@ const SUGGESTED = [
 export function ProductChat({
   productId,
   productTitle,
+  market,
 }: {
   productId: string;
   productTitle: string;
+  market: string | null;
 }) {
-  const buildBody = useCallback((messages: ChatMessage[]) => ({ messages }), []);
+  const buildBody = useCallback((messages: ChatMessage[]) => ({ messages, marketId: market }), [market]);
   const { messages, input, setInput, pending, error, ask } = useStreamChat({
     url: `/api/products/${productId}/chat`,
     buildBody,
