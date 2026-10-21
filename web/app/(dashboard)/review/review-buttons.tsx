@@ -4,80 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Mail, MessageCircle } from "lucide-react";
+import { Binoculars, Mail, MessageCircle } from "lucide-react";
 import { useBackgroundOrNull } from "@/components/background-status";
 import { toast } from "@/components/ui/toast";
 import type { ReviewOp } from "@/lib/review-actions";
 import { formatNumber } from "@/lib/format";
 
 type Op = (id: string) => Promise<{ ok: boolean; message: string }>;
-
-/** Par Aprobar/Rechazar genérico (acciones y leads).
- *  `openOnApproveUrl`: solo WhatsApp manual — al aprobar se abre el chat en
- *  el mismo gesto del clic (después el popup-blocker lo frena). Si la
- *  aprobación falla, la pestaña se cierra. El lote no abre nada. */
-export function ApprovePair({
-  id,
-  onApprove,
-  onReject,
-  openOnApproveUrl = null,
-  channel = null,
-}: {
-  id: string;
-  onApprove: Op;
-  onReject: Op;
-  openOnApproveUrl?: string | null;
-  /** Muestra icono del canal en Aprobar (email = sobre, whatsapp = chat). */
-  channel?: string | null;
-}) {
-  const router = useRouter();
-  const [busy, setBusy] = useState<null | "approve" | "reject">(null);
-  const run = async (fn: Op, kind: "approve" | "reject") => {
-    if (busy) return;
-    let win: Window | null = null;
-    if (fn === onApprove && openOnApproveUrl) {
-      win = window.open("", "_blank", "noopener");
-    }
-    setBusy(kind);
-    try {
-      const r = await fn(id);
-      toast.add({
-        title: kind === "approve" ? (r.ok ? "Aprobado" : "No se pudo aprobar") : r.ok ? "Rechazado" : "No se pudo rechazar",
-        description: r.message,
-        type: r.ok ? "success" : "error",
-      });
-      if (win) {
-        if (r.ok && openOnApproveUrl) win.location.href = openOnApproveUrl;
-        else win.close();
-      }
-      router.refresh();
-    } catch (e) {
-      win?.close();
-      toast.add({
-        title: kind === "approve" ? "No se pudo aprobar" : "No se pudo rechazar",
-        description: e instanceof Error ? e.message : "Error inesperado.",
-        type: "error",
-      });
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <span className="flex items-center gap-2">
-      <Button size="sm" disabled={busy !== null} onClick={() => run(onApprove, "approve")}>
-        {channel === "whatsapp" ? (
-          <MessageCircle className="size-4" aria-label="WhatsApp" />
-        ) : channel === "email" ? (
-          <Mail className="size-4" aria-label="Email" />
-        ) : null}
-        {busy === "approve" ? "Aprobando…" : "Aprobar"}
-      </Button>
-      <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run(onReject, "reject")}>
-        {busy === "reject" ? "Rechazando…" : "Rechazar"}
-      </Button>
-    </span>
-  );
-}
 
 export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -253,6 +186,124 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
             }}
           >
             {busy ? "Regenerando…" : `Regenerar ${formatNumber(count)} con criterios actuales`}
+          </Button>
+        </span>
+      </AppTooltip>
+    </span>
+  );
+}
+
+/** Lanza una prospección manual (botón del inbox). Mismo tratamiento SSOT
+ *  que Sync/Enriquecer: `bg.start()` y la cinta avisa; solo se toastea el
+ *  error sin run. Pasa el tope del auto: el tope solo frena la mañana. */
+export function ProspectButton({
+  onProspect,
+}: {
+  onProspect: () => Promise<ReviewOp>;
+}) {
+  const router = useRouter();
+  const bg = useBackgroundOrNull();
+  const prospectRun = bg?.activeRuns.find((r) => r.kind === "prospect") ?? null;
+  const running = prospectRun !== null;
+  const blocked = !running && (bg?.isBusy("prospect") ?? false);
+  const busy = (bg?.starting ?? false) || running || blocked;
+  if (!bg) {
+    return (
+      <span className="flex items-center gap-2">
+        <AppTooltip tip="Busca empresas parecidas a tu ideal ahora (tarda minutos). Vale aunque haya tope: el tope solo pausa el automático.">
+          <span className="inline-flex items-center">
+            <Button size="sm" onClick={async () => {
+              try {
+                const r = await onProspect();
+                toast.add({
+                  title: r.ok ? "Prospección iniciada" : "No se pudo prospectar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
+                router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo prospectar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
+              }
+            }}>
+              <Binoculars aria-hidden />
+              Buscar más empresas
+            </Button>
+          </span>
+        </AppTooltip>
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2">
+      <AppTooltip tip="Busca empresas parecidas a tu ideal ahora (tarda minutos). Vale aunque haya tope: el tope solo pausa el automático.">
+        <span className="inline-flex items-center">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              try {
+                const r = await bg.start(() => onProspect().then((x) => ({ ...x, run: x.run ?? null })));
+                // Con run la cinta ya avisa; sin run avisar aquí.
+                if (!r.ok && !r.run) toast.add({
+                  title: "No se pudo prospectar",
+                  description: r.message,
+                  type: "error",
+                });
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo prospectar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
+              }
+            }}
+          >
+            <Binoculars aria-hidden />
+            {running ? "Buscando…" : "Buscar más empresas"}
+          </Button>
+        </span>
+      </AppTooltip>
+    </span>
+  );
+}
+
+/** Marca un lead como contactado (lo contactaste por tu cuenta). */
+export function MarkContactedButton({ id, onMarkContacted }: { id: string; onMarkContacted: Op }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  return (
+    <span className="flex items-center gap-2">
+      <AppTooltip tip="Ya lo contactaste por email, teléfono o RRSS. Cierra el loop: no vuelve a pendientes.">
+        <span className="inline-flex items-center">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await onMarkContacted(id);
+                toast.add({
+                  title: r.ok ? "Marcado como contactado" : "No se pudo marcar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
+                router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo marcar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Marcando…" : "Contactado"}
           </Button>
         </span>
       </AppTooltip>

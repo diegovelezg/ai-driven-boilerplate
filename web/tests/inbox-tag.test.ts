@@ -61,4 +61,14 @@ describe("inbox tags: color por criterio + tooltip humano", () => {
     assert.ok(hoyUses >= 5, `TodayTag debe usarse en mensajes, aprobadas, leads, señales y descartadas (hay ${hoyUses})`);
     assert.ok(ui.includes("<TodayTag value={l.created_at}"), "falta Hoy en empresas por contactar");
   });
+
+  it("score del prospector usa badge 0-100 con semáforo propio", async () => {
+    const mod = await import("../components/inbox-tag");
+    assert.equal(typeof mod.ScoreTag, "function", "falta componente ScoreTag");
+    assert.equal(typeof mod.getScoreMeta, "function", "falta helper getScoreMeta");
+    assert.equal(mod.getScoreMeta(0.95)?.label, "95", "0.95 debe mostrar 95");
+    assert.equal(mod.getScoreMeta(0.72)?.label, "72", "0.72 debe mostrar 72");
+    assert.equal(mod.getScoreMeta(null), null, "nulo sin badge");
+    assert.ok((mod.getScoreMeta(0.95)?.tip ?? "").includes("100"), "el tooltip debe anclar la escala");
+  });
 });

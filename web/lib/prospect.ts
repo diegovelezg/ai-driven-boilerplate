@@ -24,7 +24,84 @@ import { createLogger } from "@/lib/log";
 const log = createLogger("prospect");
 
 /** Versión del criterio prospector. Sube cuando cambia scoring/retrieval. */
-const PROSPECT_GEN = "prospect:v4:contacts";
+const PROSPECT_GEN = "prospect:v6:market-scores";
+
+/** Scope de mercado para segmentar la prospección (SSOT markets):
+ *  países ISO2 y/o IDs (fallback sin países). null = todos (legacy). */
+export interface ProspectScope {
+  countries: string[] | null;
+  customerIds: string[] | null;
+}
+
+/** Nombre legible para geo en queries (PE→Perú). */
+function countryName(iso: string): string {
+  const m: Record<string, string> = { PE: "Perú", MX: "México", EC: "Ecuador", CO: "Colombia", CL: "Chile", AR: "Argentina", ES: "España", US: "Estados Unidos" };
+  return m[iso.toUpperCase()] ?? iso.toUpperCase();
+}
+
+/** ¿El row de top-compradores pertenece al scope? NULL-comodín: sin país pasa. */
+function inScope(
+  r: { country?: unknown; id?: unknown },
+  scope: ProspectScope | null | undefined,
+): boolean {
+  if (!scope) return true;
+  if (scope.countries && scope.countries.length > 0) {
+    const c = String(r.country ?? "").trim().toUpperCase();
+    if (!c) return true;
+    return scope.countries.map((x) => x.toUpperCase()).includes(c);
+  }
+  if (scope.customerIds && scope.customerIds.length > 0) {
+    return scope.customerIds.includes(String(r.id ?? ""));
+  }
+  return true;
+}
+
+export interface ProspectEligibility {
+  eligible: boolean;
+  reason: string | null;
+}
+
+/**
+ * Gate B2B del prospector (feature solo-B2B, multitenant): en B2C los
+ * compradores son personas y buscar "empresas parecidas" devuelve
+ * competidores o ruido. Elegible si el arquetipo es B2B, o si es
+ * híbrido/sin calibrar con densidad B2B real (>=6/20 top) y base
+ * enriquecible (>=3 dominios). B2C explícito nunca pasa.
+ */
+export async function prospectEligibility(storeId: string): Promise<ProspectEligibility> {
+  const db = getSupabase();
+  let archetype: string | null = null;
+  try {
+    const { data } = await db.from("store_profiles").select("archetype").eq("store_id", storeId).maybeSingle();
+    archetype = ((data as Record<string, unknown> | null)?.archetype as string | null) ?? null;
+  } catch {
+    archetype = null;
+  }
+  if (archetype && archetype.startsWith("b2c")) {
+    return { eligible: false, reason: "b2c" };
+  }
+  try {
+    const { data } = await db
+      .from("customers")
+      .select("email,customer_type")
+      .eq("store_id", storeId)
+      .gt("orders_count", 0)
+      .order("total_spent", { ascending: false })
+      .limit(60);
+    const rows = ((data ?? []) as Array<Record<string, unknown>>).slice(0, 20);
+    const b2b = rows.filter((r) => String(r.customer_type ?? "") === "B2B").length;
+    const doms = new Set(
+      rows.map((r) => domainFromEmail(String(r.email ?? ""))).filter((d) => d && classifyDomain(d).enrichable),
+    );
+    if (archetype && (archetype === "b2b_recurrente" || archetype === "b2b_proyecto")) {
+      return doms.size >= 3 ? { eligible: true, reason: null } : { eligible: false, reason: "sin-base" };
+    }
+    if (b2b >= 6 && doms.size >= 3) return { eligible: true, reason: null };
+    return { eligible: false, reason: "sin-base" };
+  } catch {
+    return { eligible: false, reason: "sin-base" };
+  }
+}
 
 export interface Icp {
   text: string;
@@ -34,8 +111,8 @@ export interface Icp {
 /** ICP V1 manual + auto-derivado: si no hay icp_description, se construye desde
  *  los mejores compradores (top gasto) + firmográficos + perfil + brain (#25:
  *  top_productos/categorías del TenantBrain, 1 query). Así el prospector deja
- *  de dar 0 sin intervención manual. */
-export async function getIcp(storeId: string): Promise<Icp> {
+ *  de dar 0 sin intervención manual. Con scope, el top se filtra al mercado. */
+export async function getIcp(storeId: string, scope?: ProspectScope | null): Promise<Icp> {
   const { data, error } = await getSupabase()
     .from("store_profiles")
     .select("business_model,industry,description,icp_description,vertical_detected,buyer_type")
@@ -48,7 +125,7 @@ export async function getIcp(storeId: string): Promise<Icp> {
   }
   // Auto-ICP desde evidencia: no exige nada manual.
   try {
-    const auto = await buildAutoIcp(storeId, p);
+    const auto = await buildAutoIcp(storeId, p, scope);
     if (auto) return { text: auto, manual: false };
   } catch {
     // cae al perfil plano
@@ -64,23 +141,41 @@ export async function getIcp(storeId: string): Promise<Icp> {
   return { text: parts.join("\n"), manual: false };
 }
 
-/** Top compradores → industrias/tipos dominantes → texto ICP. null si sin base. */
-async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>): Promise<string | null> {
+/** Top compradores → industrias/tipos dominantes → texto ICP. null si sin base.
+ *  V2 (TX rico): suma marcas/categorías que anuncian, vocabulario del cliente,
+ *  lo que más repite, ticket p50/p80, país moda y ejemplos aprobados/rechazados.
+ *  Con scope, el top se filtra al mercado activo (segmentación). */
+async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>, scope?: ProspectScope | null): Promise<string | null> {
   const db = getSupabase();
   const { data: top, error } = await db
     .from("customers")
-    .select("email,customer_type,orders_count,total_spent")
+    .select("id,email,customer_type,orders_count,total_spent,country")
     .eq("store_id", storeId)
     .gt("orders_count", 0)
     .order("total_spent", { ascending: false })
-    .limit(20);
-  if (error || !top || top.length < 3) return null;
-  const rows = top as Array<Record<string, unknown>>;
+    .limit(60);
+  if (error || !top) return null;
+  const allRows = top as Array<Record<string, unknown>>;
+  const rows = allRows.filter((r) => inScope({ country: r.country, id: r.id }, scope)).slice(0, 20);
+  if (rows.length < 3) return null;
   const b2b = rows.filter((r) => String(r.customer_type ?? "") === "B2B").length;
   const tickets = rows
     .map((r) => Number(r.total_spent ?? 0) / Math.max(1, Number(r.orders_count ?? 1)))
     .sort((a, b) => a - b);
   const median = Math.round(tickets[Math.floor(tickets.length / 2)] / 100);
+  // País moda de los top (el lead hereda geografía, no TLD).
+  const countryVotes = new Map<string, number>();
+  for (const r of rows) {
+    const c = String(r.country ?? "").trim().toUpperCase();
+    if (c) countryVotes.set(c, (countryVotes.get(c) ?? 0) + 1);
+  }
+  const topCountry = [...countryVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  // Segmentación: con mercado activo de un solo país, el geo manda (no la moda).
+  const forcedGeo =
+    scope?.countries && scope.countries.length === 1 ? scope.countries[0].toUpperCase() : null;
+  const geoLine = forcedGeo
+    ? `Mercado activo: ${countryName(forcedGeo)} (solo negocios de ${countryName(forcedGeo)}; excluye otros países con 0)`
+    : null;
   // Firmográficos de esos top (si hay cobertura; si no, se omite sin romper).
   const doms = [...new Set(rows.map((r) => domainFromEmail(String(r.email ?? ""))).filter((d) => d && classifyDomain(d).enrichable))].slice(0, 20);
   let industries: string[] = [];
@@ -92,29 +187,56 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>):
       .slice(0, 5);
   }
   const p = profile ?? {};
-  // Hito 1 (#25.3): el brain (top activos/categorías) afina el ICP sin N+1.
-  let brainLine: string | null = null;
+  // Brain TX rico (sin N+1): activos + marcas que anuncian + vocabulario +
+  // lo que repite + ticket p50/p80. Antes solo iban títulos/categorías.
+  let txLines: string[] = [];
   try {
     const { getTenantBrain } = await import("@/lib/brain");
     const brain = await getTenantBrain(storeId).catch(() => null);
     const tops = (brain?.topProductos ?? []).slice(0, 3).map((t) => t.title).filter(Boolean);
     const cats = (brain?.topCategorias ?? []).slice(0, 3).map((c) => c.categoria).filter(Boolean);
+    const marcas = (brain?.topMarcas ?? []).slice(0, 5).map((m) => m.marca).filter(Boolean);
+    const voz = (brain?.vozCliente ?? []).filter((w) => w.length >= 5 && !/^(desde|hasta|entre)$/.test(w)).slice(0, 6);
+    const repite = (brain?.patronesRepite?.topRepeatTitles ?? []).slice(0, 3).map((t) => t.title).filter(Boolean);
+    const p80 = brain?.ticketP80 != null ? ` · p80 S/ ${formatNumber(Math.round(brain.ticketP80 / 100))}` : "";
     if (tops.length > 0 || cats.length > 0) {
-      brainLine = `Lo que más se vende (activos): ${tops.join(" · ") || "—"}${cats.length > 0 ? ` · líneas ${cats.join(", ")}` : ""}`;
+      txLines.push(`Lo que más se vende (activos): ${tops.join(" · ") || "—"}${cats.length > 0 ? ` · líneas ${cats.join(", ")}` : ""}`);
     }
+    if (marcas.length > 0) txLines.push(`Marcas que ya anuncian contigo: ${marcas.join(", ")} (busca pares: distribuidores, competencia, complementos)`);
+    if (voz.length > 0) txLines.push(`Vocabulario de tus anuncios: ${voz.join(", ")}`);
+    if (repite.length > 0) txLines.push(`Pantallas que más repiten compra: ${repite.join(" · ")}`);
+    if (brain?.ticketP50 != null || brain?.ticketP80 != null) txLines.push(`Ticket tienda p50 ~S/ ${formatNumber(Math.round((brain.ticketP50 ?? 0) / 100))}${p80}`);
   } catch {
-    brainLine = null;
+    txLines = [];
+  }
+  // Feedback humano (si existe): aprobados como "más como estos", rechazados como "evita".
+  let goodLine: string | null = null;
+  let badLine: string | null = null;
+  try {
+    const [{ data: appr }, { data: rej }] = await Promise.all([
+      db.from("proposed_leads").select("company,domain").eq("store_id", storeId).in("status", ["approved", "contacted"]).order("created_at", { ascending: false }).limit(5),
+      db.from("proposed_leads").select("company,domain").eq("store_id", storeId).eq("status", "rejected").order("created_at", { ascending: false }).limit(5),
+    ]);
+    const anames = ((appr ?? []) as Array<Record<string, unknown>>).map((r) => String(r.company ?? r.domain ?? "").trim()).filter(Boolean).slice(0, 5);
+    const rnames = ((rej ?? []) as Array<Record<string, unknown>>).map((r) => String(r.company ?? r.domain ?? "").trim()).filter(Boolean).slice(0, 5);
+    if (anames.length > 0) goodLine = `Aprobados antes (más como estos): ${anames.join(", ")}`;
+    if (rnames.length > 0) badLine = `Rechazados antes (evita este perfil): ${rnames.join(", ")}`;
+  } catch {
+    // sin feedback: se omite
   }
   const lines = [
     `Negocio: ${String(p.vertical_detected ?? p.description ?? "ecommerce").toString().slice(0, 200)}`,
     `Comprador ideal: ${String(p.buyer_type ?? "").toString().slice(0, 160) || "negocios que ya compraron y gastaron más"}`,
-    `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~S/ ${formatNumber(median)}`,
-    industries.length > 0 ? `Industrias top en tus mejores: ${[...new Set(industries)].slice(0, 5).join(", ")}` : null,
-    brainLine,
+    geoLine,
+    `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~S/ ${formatNumber(median)}${topCountry ? ` · país moda ${topCountry}` : ""}`,
+    industries.length > 0 ? `Industrias top en tus mejores (1 query por industria, no las mezcles): ${[...new Set(industries)].slice(0, 5).join(" | ")}` : null,
+    ...txLines,
+    goodLine,
+    badLine,
     `Ejemplos de dominios que sí te compran: ${doms.slice(0, 8).join(", ") || "—"}`,
-    "Buscar: negocios parecidos a esos (misma industria/tamaño, con web propia y contacto público). Excluir marketplaces y redes sociales.",
+    "Buscar: negocios parecidos a esos (misma industria/tamaño, con web propia y contacto público). 1 tema por query. Excluir marketplaces, redes sociales y documentos PDF.",
   ].filter(Boolean);
-  return lines.join("\n");
+  return (lines as string[]).join("\n");
 }
 
 async function prospectComplete(system: string, user: string, meter?: { storeId: string }): Promise<string> {
@@ -147,8 +269,9 @@ interface SimilarPoolEntry {
 }
 
 /** Pool determinista (query, sin LLM): top compradores con industria verificada.
- *  El MODELO elige los parecidos dentro de este pool al puntuar. */
-async function buildSimilarPool(storeId: string, limit = 15): Promise<SimilarPoolEntry[]> {
+ *  El MODELO elige los parecidos dentro de este pool al puntuar.
+ *  Con scope, el pool se filtra al mercado activo (segmentación). */
+async function buildSimilarPool(storeId: string, limit = 15, scope?: ProspectScope | null): Promise<SimilarPoolEntry[]> {
   const db = getSupabase();
   // Dominios de ESTA tienda (no tabla global cortada a 2000): paginado + .in chunkeado.
   const storeDomains = new Set<string>();
@@ -197,6 +320,15 @@ async function buildSimilarPool(storeId: string, limit = 15): Promise<SimilarPoo
   }
   const out: SimilarPoolEntry[] = [];
   for (const c of ((ce ?? []) as Array<Record<string, unknown>>)) {
+    if (scope && (scope.countries?.length || scope.customerIds?.length)) {
+      const cc = String(c.country ?? "").trim().toUpperCase();
+      if (scope.countries && scope.countries.length > 0) {
+        if (cc && !scope.countries.map((x) => x.toUpperCase()).includes(cc)) continue;
+      } else if (scope.customerIds && scope.customerIds.length > 0) {
+        // Fallback sin países: el top ya trae id solo si se pidió; aquí sin id
+        // no se puede filtrar: se conserva (el ICP ya segmentó).
+      }
+    }
     const d = domainFromEmail(String(c.email ?? ""));
     if (!d || !classifyDomain(d).enrichable) continue;
     const hit = indByDomain.get(d.toLowerCase());
@@ -220,14 +352,17 @@ interface SimilarPick {
 }
 
 /**
- * País del lead = moda del país de sus referencias verificadas (pool).
+ * País del lead = mercado activo si es de un solo país (segmentación);
+ * si no, moda del país de sus referencias verificadas (pool).
  * null = sin evidencia (comodín: se ve en todo filtro). Nunca por TLD de la
  * URL: un .com mal etiquetado ocultaría el lead del mercado correcto.
  */
 function leadCountry(
   s: Pick<Scored, "similar">,
   poolByDomain: Map<string, SimilarPoolEntry>,
+  forcedCountry?: string | null,
 ): string | null {
+  if (forcedCountry) return forcedCountry;
   const votes = new Map<string, number>();
   for (const ref of s.similar) {
     const c = poolByDomain.get(ref.domain.toLowerCase())?.country;
@@ -235,6 +370,11 @@ function leadCountry(
   }
   return modeCountry(votes);
 }
+
+/** Umbral de score: con retrieval enfocado, <0.5 es ruido. */
+const SCORE_MIN = 0.5;
+/** Máx leads por industria y corrida (anti-sesgo: no todo de 1 sector). */
+const MAX_PER_INDUSTRY = 2;
 
 interface Scored {
   index: number;
@@ -330,6 +470,7 @@ async function scoreLeads(
    *  null = sin retrieval (pool completo, conducta anterior). */
   topByIndex: Map<number, SimilarPoolEntry[]> | null = null,
   meter?: { storeId: string },
+  geoLabel?: string | null,
 ): Promise<Scored[]> {
   if (cands.length === 0) return [];
   // Lotes de 4: acota el prompt (los vaciados crecen con payloads grandes)
@@ -338,23 +479,29 @@ async function scoreLeads(
   for (let off = 0; off < cands.length; off += 4) {
     const chunk = cands.slice(off, off + 4);
     const subTop = topByIndex !== null ? new Map(chunk.map((_, k) => [k, topByIndex.get(off + k) ?? pool])) : null;
-    const scored = await scoreChunk(icp, chunk, focus, pool, subTop, meter);
+    const scored = await scoreChunk(icp, chunk, focus, pool, subTop, meter, geoLabel);
     for (const s of scored) {
       const globalIdx = off + s.index;
       const valid = new Set(((subTop?.get(s.index) ?? pool).map((p) => p.domain.toLowerCase())));
       if (!cands[globalIdx]) continue;
+      // Gate contacto: sin email/tel/RRSS públicos no es accionable → fuera.
+      // (Antes se guardaba "solo formulario"; la lista debe ser contactable.)
+      const cc = cands[globalIdx]?.contacts;
+      const hasAnyContact =
+        (cc?.emails?.length ?? 0) > 0 || (cc?.phones?.length ?? 0) > 0 || (cc?.socials?.length ?? 0) > 0;
       // Fallback determinista: si el LLM no devolvió email/tel válido (o
       // alucinó un nombre como "Luis Cueva"), se usa el primero del scrape.
-      const llmContact = sanitizeLeadContact(s.contact) ?? pickLeadContact(cands[globalIdx]?.contacts);
+      const llmContact = sanitizeLeadContact(s.contact) ?? pickLeadContact(cc);
+      if (!hasAnyContact && !llmContact) continue;
       out.push({
         ...s,
-        contact: llmContact ?? pickLeadContact(cands[globalIdx]?.contacts),
+        contact: llmContact ?? pickLeadContact(cc),
         index: globalIdx,
         similar: s.similar.filter((x) => valid.has(x.domain.toLowerCase())).slice(0, 2),
       });
     }
   }
-  return out.filter((l) => l && l.icp_score > 0.3);
+  return out.filter((l) => l && l.icp_score >= SCORE_MIN);
 }
 
 /** Contacto válido = SOLO email o teléfono (implementación pura en retrieval;
@@ -380,6 +527,7 @@ async function scoreChunk(
   pool: SimilarPoolEntry[],
   topByIndex: Map<number, SimilarPoolEntry[]> | null,
   meter?: { storeId: string },
+  geoLabel?: string | null,
 ): Promise<Scored[]> {
   const usePerCand = topByIndex !== null;
   const refBlock = (i: number): string => {
@@ -392,8 +540,16 @@ async function scoreChunk(
     : pool.length > 0
       ? `\nCLIENTES DE REFERENCIA (verificados, ya te compran):\n${pool.map((p) => `- ${p.domain} | ${p.label} | ${p.industry}`).join("\n")}\n`
       : "";
+  const geoGate = geoLabel
+    ? ` Mercado: ${geoLabel} — si el candidato es claramente de otro país (dominio .mx/.ec/.co/.cl/.ar, dirección o teléfono de otro país, sin mención a ${geoLabel}), icp_score 0 sin excepciones.`
+    : "";
+  const rubric =
+    "Rúbrica (pondera, no es checklist ciego): industria parecida 40 · tamaño/ticket coherente con el ICP 25 · geografía correcta 20 · contacto público claro 15." +
+    " Descarta con 0: marketplaces, redes sociales, documentos PDF, otro país (si hay mercado), o sin ningún parecido real con las referencias." +
+    " Sin CONTACTO_DETECTADO pon contact null (no inventes); el gate de contacto lo filtra después, pero castiga el score a ≤0.3." +
+    geoGate;
   const raw = await prospectComplete(
-    "Puntúas candidatos vs un ICP. Responde SOLO JSON: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. Descarta (icp_score 0) lo que no encaje. contact: SOLO email o teléfono del CONTACTO_DETECTADO (el mejor: email > teléfono); si no hay bloque, null salvo email/tel literal en el texto. PROHIBIDO nombres de personas, cargos, URLs o direcciones en contact (p.ej. nunca \"Luis Cueva\"). reason: 1 frase corta (máx 25 palabras). similar: hasta 2 clientes de REFERENCIA que más se parezcan al candidato, con why en español y corto anclado en sustantivo de industria (p.ej. \"ambos en bienestar animal\"). PROHIBIDO usar verbos genéricos en why (importación, distribución, fabricación, comercialización, ventas). Si ninguno se parece de verdad, similar=[].",
+    "Puntúas candidatos vs un ICP. Responde SOLO JSON: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. Descarta (icp_score 0) lo que no encaje. contact: SOLO email o teléfono del CONTACTO_DETECTADO (el mejor: email > teléfono); si no hay bloque, null salvo email/tel literal en el texto. PROHIBIDO nombres de personas, cargos, URLs o direcciones en contact (p.ej. nunca \"Luis Cueva\"). reason: 1 frase corta (máx 25 palabras) que diga industria + por qué encaja. similar: hasta 2 clientes de REFERENCIA que más se parezcan al candidato, con why en español y corto anclado en sustantivo de industria (p.ej. \"ambos en bienestar animal\"). PROHIBIDO usar verbos genéricos en why (importación, distribución, fabricación, comercialización, ventas). Si ninguno se parece de verdad, similar=[]. " + rubric,
     `ICP:\n${icp.slice(0, 1500)}\n${focus ? `\nEnfoque de ESTA corrida (excluye con 0 lo que lo contradiga): ${focus}\n` : ""}${poolBlock}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 1500)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
     meter,
   );
@@ -405,13 +561,13 @@ async function scoreChunk(
   } catch {
     log(`scoreChunk JSON cortado (lote ${cands.length}), reintento con muestra fresca`);
     const retry = await prospectComplete(
-      "Puntúas candidatos vs un ICP. Responde SOLO JSON compacto: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. contact: SOLO email o teléfono del CONTACTO_DETECTADO, si no hay, null. PROHIBIDO nombres de personas. reason: máx 15 palabras. similar: máx 1.",
+      "Puntúas candidatos vs un ICP. Responde SOLO JSON compacto: {\"leads\": [{\"index\": n, \"company\": string|null, \"domain\": string|null, \"contact\": string|null, \"icp_score\": 0..1, \"reason\": string, \"similar\": [{\"domain\": string, \"why\": string}]}]}. contact: SOLO email o teléfono del CONTACTO_DETECTADO, si no hay, null. PROHIBIDO nombres de personas. reason: máx 15 palabras con industria. similar: máx 1. " + rubric,
       `ICP:\n${icp.slice(0, 800)}\nCANDIDATOS:\n${cands.map((c, i) => `[${i}] ${c.url}\n${c.title}\n${contactBlock(c)}${c.text.slice(0, 800)}\n${usePerCand ? refBlock(i) : ""}`).join("\n\n")}`,
       meter,
     );
     parsed = JSON.parse(retry) as { leads?: Scored[] };
   }
-  // Normalización blanda; el filtro >0.3 y el remapeo global los hace scoreLeads.
+  // Normalización blanda; el filtro >=SCORE_MIN y el remapeo global los hace scoreLeads.
   return (Array.isArray(parsed.leads) ? parsed.leads : [])
     .filter((l) => l && cands[l.index])
     .map((l) => ({
@@ -460,19 +616,41 @@ export interface ProspectOpts {
   maxCands?: number;
   /** Enfoque de esta corrida (p.ej. "centros comerciales pequeños, excluir grandes malls"). */
   focus?: string | null;
+  /** Segmentación por mercado activo (SSOT markets). null = todos. */
+  scope?: ProspectScope | null;
+  /** Etiqueta del mercado para el summary (p.ej. "PE · PEN"). */
+  marketLabel?: string | null;
+}
+
+/** Pendientes de revisión (el tope del inbox se mide sobre esto). */
+export async function countPendingLeads(storeId: string): Promise<number> {
+  const { count, error } = await getSupabase()
+    .from("proposed_leads")
+    .select("id", { count: "exact", head: true })
+    .eq("store_id", storeId)
+    .eq("status", "pending_review");
+  if (error) throw new Error(`Leads count: ${error.message}`);
+  return count ?? 0;
 }
 
 /** Pipeline completo con progreso en vivo en background_runs. */
 export async function runProspect(runId: string, storeId: string, opts: ProspectOpts = {}): Promise<void> {
-  const { queries: nQ = 3, perQuery = 5, maxCands = 8, focus = null } = opts;
+  const { queries: nQ = 3, perQuery = 5, maxCands = 8, focus = null, scope = null, marketLabel = null } = opts;
   let processed = 0;
   let failed = 0;
   const step = (current: string | null) => advanceRun(runId, { processed, failed, current });
+  const forcedGeo =
+    scope?.countries && scope.countries.length === 1 ? scope.countries[0].toUpperCase() : null;
+  const geoLabel = forcedGeo ? countryName(forcedGeo) : null;
+  // El geo del mercado se inyecta como foco extra (manda como el focus).
+  const marketFocus = geoLabel
+    ? `Mercado activo ${geoLabel} (solo negocios de ${geoLabel}; excluye otros países con 0)${focus ? ` · ${focus}` : ""}`
+    : focus;
 
   try {
-    const icp = await getIcp(storeId);
+    const icp = await getIcp(storeId, scope);
     await step(null);
-    const queries = await buildQueries(icp.text, nQ, focus, { storeId });
+    const queries = await buildQueries(icp.text, nQ, marketFocus, { storeId });
 
     const hits: SearchHit[] = [];
     for (const q of queries) {
@@ -483,7 +661,8 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
         failed += 1;
       }
     }
-    const urls = [...new Set(hits.map((h) => h.url))].slice(0, maxCands * 2);
+    const { rankHits } = await import("@/lib/retrieval");
+    const urls = [...new Set(rankHits(hits).map((h) => h.url))].slice(0, maxCands * 2);
     if (urls.length === 0) throw new Error("Sin resultados esta vez, lo reintentamos solo.");
     const { ok: scrapableUrls } = scrapable(urls);
     const targets = scrapableUrls.slice(0, maxCands);
@@ -496,7 +675,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
 
     await step("score");
     const icpText = icp.text;
-    const pool = await buildSimilarPool(storeId).catch(() => [] as SimilarPoolEntry[]);
+    const pool = await buildSimilarPool(storeId, 15, scope).catch(() => [] as SimilarPoolEntry[]);
     // Retrieval runtime (sin BD): top-3 por candidato para achicar el prompt.
     // Si falla, null = pool completo (conducta anterior).
     let topByIndex: Map<number, SimilarPoolEntry[]> | null = null;
@@ -515,8 +694,24 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
         topByIndex = null;
       }
     }
-    const scored = await scoreLeads(icpText, scraped, focus, pool, topByIndex, { storeId });
-    const fresh = await dedupe(storeId, scraped, scored);
+    const scored = await scoreLeads(icpText, scraped, marketFocus, pool, topByIndex, { storeId }, geoLabel);
+    // Anti-sesgo: tope por industria y corrida (no terminar todo de 1 sector).
+    // Industria = la del primer similar (referencia verificada); sin similar va al final.
+    const poolIndByDomain = new Map(pool.map((p) => [p.domain.toLowerCase(), p.industry]));
+    const perInd = new Map<string, number>();
+    const diverse = [...scored]
+      .sort((a, b) => (b.icp_score ?? 0) - (a.icp_score ?? 0))
+      .filter((s) => {
+        const ind = (s.similar.length > 0 ? (poolIndByDomain.get(s.similar[0].domain.toLowerCase()) ?? s.similar[0].domain) : "sin-referencia").toLowerCase();
+        const n = perInd.get(ind) ?? 0;
+        if (n >= MAX_PER_INDUSTRY) return false;
+        perInd.set(ind, n + 1);
+        return true;
+      });
+    if (diverse.length < scored.length) {
+      log(`run ${runId} anti-sesgo: ${scored.length}→${diverse.length} (máx ${MAX_PER_INDUSTRY}/industria)`);
+    }
+    const fresh = await dedupe(storeId, scraped, diverse);
     const poolByDomain = new Map(pool.map((p) => [p.domain.toLowerCase(), p]));
 
     await step(`guardar (${fresh.length})`);
@@ -525,7 +720,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
         fresh.map((s) => ({
           store_id: storeId,
           source: "searxng",
-          country: leadCountry(s, poolByDomain),
+          country: leadCountry(s, poolByDomain, forcedGeo),
           company: s.company,
           domain: s.domain ?? (hostOf(scraped[s.index]?.url ?? "") || null),
           url: scraped[s.index]?.url ?? "",
@@ -554,10 +749,11 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
     // Filosofía TeamPulse: outcome humano. El foco es lenguaje del usuario,
     // se conserva; los fallidos van en su columna.
     const focusTag = focus ? ` · foco: ${focus.slice(0, 60)}` : "";
+    const marketTag = marketLabel ? ` · ${marketLabel}` : geoLabel ? ` · ${geoLabel}` : "";
     const summary =
       processed > 0
-        ? `${formatNumber(processed)} parecidos a tu ideal por revisar${focusTag}`
-        : `En pausa, primero recuperamos lo tuyo${focusTag}`;
+        ? `${formatNumber(processed)} parecidos a tu ideal por revisar${marketTag}${focusTag}`
+        : `En pausa, primero recuperamos lo tuyo${marketTag}${focusTag}`;
     await finishRun(runId, {
       status,
       processed,

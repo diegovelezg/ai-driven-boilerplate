@@ -65,7 +65,7 @@ async function setLeadStatus(id: string, status: "approved" | "rejected"): Promi
     .eq("status", "pending_review");
   if (error) return { ok: false, message: error.message };
   revalidatePath("/review");
-  return { ok: true, message: status === "approved" ? "Lead aprobado." : "Lead rechazado." };
+  return { ok: true, message: status === "approved" ? "Lead aprobado." : "Descartado." };
 }
 
 /** Envía un aprobado-email en el acto (aprobar = enviar). Solo sello vigente
@@ -515,11 +515,47 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
   return { ok: true, message: `Mensaje para ${preview.channel === "email" ? "Email" : "WhatsApp"} redactado de nuevo.` };
 }
 
-export async function approveLeadAction(id: string): Promise<ReviewOp> {
-  return setLeadStatus(id, "approved");
-}
+/** Descarta un lead (pending_review → rejected): no te interesa.
+ *  No desaparece: queda en "Descartados" y se puede reabrir. */
 export async function rejectLeadAction(id: string): Promise<ReviewOp> {
   return setLeadStatus(id, "rejected");
+}
+
+/** Marca un lead como contactado (pending_review/approved → contacted):
+ *  lo contactaste por tu cuenta (email/tel/RRSS de la tarjeta). Cierra el loop
+ *  sin reinyectar: no vuelve a pendientes ni se repropone (dedupe por URL). */
+export async function markLeadContactedAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const { data, error } = await getSupabase()
+    .from("proposed_leads")
+    .update({ status: "contacted" })
+    .eq("id", id)
+    .in("status", ["pending_review", "approved"])
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya contactado o inexistente: nada que marcar." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Marcado como contactado." };
+}
+
+/** Reabre un lead descartado (rejected/discarded → pending_review):
+ *  "contactar igual" — vuelve a pendientes sin duplicar (dedupe por URL). */
+export async function reopenLeadAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const { data, error } = await getSupabase()
+    .from("proposed_leads")
+    .update({ status: "pending_review" })
+    .eq("id", id)
+    .in("status", ["rejected", "discarded"])
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya reabierto o inexistente: nada que reabrir." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Reabierto: vuelve a pendientes." };
 }
 
 /** Descarta una señal abierta/priorizada sin acción (el humano la juzga irrelevante). */
@@ -922,4 +958,67 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
     message: `${formatNumber(idsAll.length)} borrador(es) viejo(s) procesados.${extra} ${started.message}`,
     run: started.run,
   };
+}
+
+/** Dispara una prospección manual desde el inbox (botón "Buscar más empresas").
+ *  A diferencia del auto de la mañana, sí puede pasar el tope de 10: es
+ *  intención explícita. Respeta el lock `prospect` (si ya corre, devuelve la
+ *  corrida en curso en vez de duplicar). Patrón SSOT sync/enrich/copywriter:
+ *  `startRun` + `after(work)`; la cinta avisa el progreso y el cierre.
+ *  Con `marketId` (?market= del inbox) segmenta al mercado activo. */
+export async function triggerProspectAction(marketId?: string | null): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local.", run: null };
+  const conn = await readConnections();
+  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings).", run: null };
+  const storeId = await resolveStoreId(conn.medusaUrl);
+  if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", run: null };
+  const { getIcp, prospectEligibility } = await import("@/lib/prospect");
+  let scope: { countries: string[] | null; customerIds: string[] | null } | null = null;
+  let marketLabel: string | null = null;
+  try {
+    const { resolveMarketScope, displayMarket } = await import("@/lib/markets");
+    const resolved = await resolveMarketScope(storeId, marketId ?? null).catch(() => null);
+    if (resolved?.market) {
+      scope = { countries: resolved.countries, customerIds: resolved.customerIds };
+      marketLabel = displayMarket(resolved.market);
+    } else if (resolved) {
+      scope = { countries: resolved.countries, customerIds: resolved.customerIds };
+    }
+  } catch {
+    // sin scope: global
+  }
+  try {
+    const elig = await prospectEligibility(storeId);
+    if (!elig.eligible) {
+      const { PROSPECT_B2B_ONLY_HINT } = await import("@/lib/prospect-cap");
+      return { ok: false, message: PROSPECT_B2B_ONLY_HINT, run: null };
+    }
+  } catch {
+    // sigue al ICP: si tampoco hay ICP, el error honesto sale abajo
+  }
+  try {
+    await getIcp(storeId, scope);
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : String(e), run: null };
+  }
+  const conflict = await hasConflict(storeId, { kind: "prospect" }).catch(() => null);
+  if (conflict) return { ok: false, message: busyMessage(conflict), run: conflict };
+  const log = createLogger("review-actions");
+  let runId: string | null = null;
+  try {
+    runId = await startRun(storeId, "prospect", "Prospección", 1);
+  } catch (e) {
+    log(`prospect manual startRun falló: ${e instanceof Error ? e.message : e}`);
+    return { ok: false, message: "No se pudo iniciar la prospección.", run: null };
+  }
+  const { after } = await import("next/server");
+  const { runProspect } = await import("@/lib/prospect");
+  after(() => {
+    runProspect(runId, storeId, { queries: 3, perQuery: 5, focus: null, scope, marketLabel }).catch((e) =>
+      log(`prospect manual run error ${e instanceof Error ? e.message : "error"}`),
+    );
+  });
+  revalidatePath("/review");
+  const run = await getLatestRun(storeId).catch(() => null);
+  return { ok: true, message: "Prospección iniciada.", run };
 }

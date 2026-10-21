@@ -25,6 +25,7 @@ const RUNNING = new Set([
   "saveConnectionsAction",
   "startEnrichmentAction",
   "reenrichDomainAction",
+  "triggerProspectAction",
   "runProfilerAction", // set con corrida `profile` (progreso por etapa) + síntesis síncrona
 ]);
 
@@ -32,8 +33,9 @@ const RUNNING = new Set([
 const INSTANT = new Set([
   "approveActionAction",
   "rejectActionAction",
-  "approveLeadAction",
   "rejectLeadAction",
+  "markLeadContactedAction",
+  "reopenLeadAction",
   "dismissSignalAction",
   "getCustomerSignalAction",
   "reopenSignalAction",

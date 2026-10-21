@@ -817,8 +817,19 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     }),
     execute: async ({ queries, perQuery, focus }: { queries?: number; perQuery?: number; focus?: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
+      const scope = { countries: marketScope.countries, customerIds: marketScope.customerIds };
       try {
-        await getIcp(storeId);
+        const { prospectEligibility } = await import("@/lib/prospect");
+        const elig = await prospectEligibility(storeId);
+        if (!elig.eligible) {
+          const { PROSPECT_B2B_ONLY_HINT } = await import("@/lib/prospect-cap");
+          return { error: PROSPECT_B2B_ONLY_HINT };
+        }
+      } catch {
+        // sigue al ICP
+      }
+      try {
+        await getIcp(storeId, scope);
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
@@ -826,7 +837,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const conflict = await hasConflict(storeId, { kind: "prospect" });
       if (conflict) return { run_id: conflict.id, already_running: true };
       const runId = await startRun(storeId, "prospect", "Prospección", 1);
-      void runProspect(runId, storeId, { queries: queries ?? 2, perQuery: perQuery ?? 5, focus: focus?.trim() || null }).catch(() => undefined);
+      const { after } = await import("next/server");
+      after(() => {
+        runProspect(runId, storeId, { queries: queries ?? 3, perQuery: perQuery ?? 5, focus: focus?.trim() || null, scope }).catch(() => undefined);
+      });
       return { run_id: runId, already_running: false, focus: focus?.trim() || null };
     },
   });

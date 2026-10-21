@@ -229,8 +229,8 @@ const SECTIONS: Section[] = [
       },
       {
         id: "prospector",
-        title: "Prospector (secundario)",
-        text: "Busca negocios parecidos a tu mejor cliente y los deja en Review con su sustento y contacto público. Es apoyo de adquisición: primero se recupera lo que ya tienes. Nunca contacta solo.",
+        title: "Prospector (secundario, solo B2B)",
+        text: "Busca negocios parecidos a tus mejores clientes y los deja en Review con su sustento y contacto público. Solo en tiendas B2B: si tus compradores son personas, no aplica. Es apoyo de adquisición: primero se recupera lo que ya tienes. Nunca contacta solo.",
         href: "/review?tab=leads",
         hrefLabel: "Ver empresas por contactar",
       },

@@ -14,7 +14,8 @@ import {
 
 process.env.CRAWLEE_STORAGE_DIR ??= join(process.cwd(), ".data", "crawlee");
 
-const SEARXNG_URL = (process.env.SEARXNG_URL ?? "http://localhost:8888").replace(/\/+$/, "");
+const SEARXNG_RAW = (process.env.SEARXNG_URL ?? "").trim();
+const SEARXNG_URL = (SEARXNG_RAW || "http://localhost:8888").replace(/\/+$/, "");
 
 /** Chat completion que devuelve JSON (lanza si la respuesta no es texto útil).
  *  Metering issue #15: con `meter.storeId` loguea usage en `llm_usage`
@@ -89,7 +90,7 @@ export async function completeJson(
 }
 
 const QUERIES_SYSTEM =
-  "Generas queries de búsqueda web para encontrar negocios parecidos al ICP. Responde SOLO JSON: {\"queries\": [string]}. Queries en español, variadas. Prefiere queries que devuelvan webs de empresas y directorios indexables; evita site:linkedin.com y redes sociales (muro de login, no scrapeables).";
+  "Generas queries de búsqueda web para encontrar negocios parecidos al ICP. Responde SOLO JSON: {\"queries\": [string]}. REGLAS: 1 tema por query (una industria O un producto top O una marca, nunca mezcles 3 industrias en una query); 6-12 palabras; incluye Perú o una ciudad (Lima/Arequipa/Cusco) cuando el ICP sea peruano; añade una señal de web oficial (\"sitio oficial\", \"contacto\", \"nosotros\"); evita operadores menos (-) y comillas excesivas (SearXNG los penaliza); prefiere queries que devuelvan webs de empresas y directorios indexables; evita site:linkedin.com y redes sociales (muro de login, no scrapeables).";
 
 /** Queries de búsqueda desde un ICP (3 intentos primario→fallback, como el prospector). */
 export async function buildQueries(icp: string, n = 3, focus?: string | null, meter?: { storeId?: string | null }): Promise<string[]> {
@@ -411,13 +412,38 @@ export function hostOf(url: string): string {
   }
 }
 
-/** Dominios no scrapeables (login/bot wall): se filtran antes de gastar requests. */
-const UNSCRAPABLE = ["linkedin.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com"];
+/** Dominios no scrapeables (login/bot wall + documentales que nunca son leads). */
+const UNSCRAPABLE = [
+  "linkedin.com", "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com",
+  "scribd.com", "studocu.com", "issuu.com", "slideshare.net", "docplayer.es", "vdocuments.mx",
+  "youtube.com", "youtu.be", "mercadolibre.com", "facebook.net",
+];
+
+/** ¿URL con pinta de documento (PDF/presentación), no web de empresa? */
+function looksLikeDoc(url: string): boolean {
+  const low = url.toLowerCase().split("?")[0];
+  return /\.(pdf|pptx?|xlsx?|docx?|csv)(\/|$)/.test(low) || /\/document\/|\/doc\/\d+|\/docs\//.test(low);
+}
 
 export function scrapable(urls: string[]): { ok: string[]; skipped: number } {
   const ok = urls.filter((u) => {
+    if (looksLikeDoc(u)) return false;
     const h = hostOf(u);
     return h && !UNSCRAPABLE.some((d) => h === d || h.endsWith(`.${d}`));
   });
   return { ok, skipped: urls.length - ok.length };
+}
+
+/** Preferencia de webs de empresa para ordenar hits antes del scrape:
+ *  .pe primero, luego dominios con pinta comercial, al final el resto. */
+export function rankHits<T extends { url: string }>(hits: T[]): T[] {
+  const score = (u: string): number => {
+    const h = hostOf(u).toLowerCase();
+    if (!h) return 0;
+    if (h.endsWith(".pe")) return 3;
+    if (h.endsWith(".com")) return 2;
+    if (looksLikeDoc(u)) return -1;
+    return 1;
+  };
+  return [...hits].sort((a, b) => score(b.url) - score(a.url));
 }

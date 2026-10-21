@@ -11,7 +11,7 @@
 // - scout: "Vigiló N · X listos para actuar" | "Vigiló N, nadie necesita mensaje · no quemamos descuentos"
 // - strategist: "X ordenados, empieza por {nombre}" | "Sin ordenar, nada urgente"
 // - copywriter: "X listos para tu visto bueno" | "Sin borradores nuevos, X ya tenían borrador · no duplico" | "Sin borradores, no había priorizados frescos"
-// - prospect: "X parecidos a tu ideal por revisar" | "En pausa, primero recuperamos lo tuyo"
+// - prospect: "X parecidos a tu ideal por revisar" | "En pausa, primero recuperamos lo tuyo" | tope 10: "Pausamos al Prospector..."
 // - dispatcher: "X listos, conecta WhatsApp/email para enviar" | "X enviadas, solo lo aprobado"
 // - analyst: "X volvieron · {monto} recuperado" | "Observando X enviados, mide en N días"
 // El `failed` va en su columna, no en el texto. `current` nunca lleva PII (emails).

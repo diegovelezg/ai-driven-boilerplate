@@ -145,9 +145,74 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
   await step(storeId, "copywriter", "Copywriter", 0, (runId, sid) =>
     runCopywriter(runId, sid, { limit: 10 }),
   );
-  const { runProspect } = await import("@/lib/prospect");
+  const { runProspect, countPendingLeads, prospectEligibility } = await import("@/lib/prospect");
+  const { PROSPECT_LEAD_CAP, PROSPECT_PAUSED_HINT, PROSPECT_B2B_ONLY_HINT } = await import("@/lib/prospect-cap");
+  const { finishRun: finishProspect } = await import("@/lib/background");
+  // Segmentación: el auto prospecta el mercado primario (nunca mezcla
+  // monedas/países en un mismo ICP/pool). Sin markets, scope global.
+  let prospectScope: { countries: string[] | null; customerIds: string[] | null } | null = null;
+  let prospectMarketLabel: string | null = null;
+  try {
+    const { listStoreMarkets, pickPrimaryMarket, resolveMarketScope, displayMarket } = await import("@/lib/markets");
+    const { getSupabase: getSb } = await import("@/lib/supabase");
+    let shopCur: string | null = null;
+    try {
+      const { data: srow } = await getSb().from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
+      shopCur = ((srow as Record<string, unknown> | null)?.shop_currency as string | null) ?? null;
+    } catch {
+      shopCur = null;
+    }
+    const markets = await listStoreMarkets(storeId).catch(() => []);
+    const primary = pickPrimaryMarket(markets, shopCur);
+    if (primary) {
+      const resolved = await resolveMarketScope(storeId, primary.id).catch(() => null);
+      if (resolved) {
+        prospectScope = { countries: resolved.countries, customerIds: resolved.customerIds };
+        prospectMarketLabel = displayMarket(resolved.market ?? primary);
+      }
+    }
+  } catch (e) {
+    log(`prospect scope omitido: ${e instanceof Error ? e.message : e}`);
+  }
   await step(storeId, "prospect", "Prospección", 0, (runId, sid) =>
-    runProspect(runId, sid, { queries: 2, perQuery: 5 }),
+    (async () => {
+      // Feature solo-B2B: en B2C no hay empresas que buscar.
+      try {
+        const elig = await prospectEligibility(sid);
+        if (!elig.eligible) {
+          await finishProspect(runId, {
+            status: "done",
+            processed: 0,
+            failed: 0,
+            summary: PROSPECT_B2B_ONLY_HINT,
+            pulseState: "paused",
+          });
+          log("prospect omitido (no B2B)");
+          return;
+        }
+      } catch (e) {
+        log(`prospect eligibility omitido: ${e instanceof Error ? e.message : e}`);
+      }
+      // Tope blando del inbox: el auto se pausa con 10 pendientes para no
+      // acumular sin revisar. El manual (chat/botón) sí puede pasar el tope.
+      try {
+        const pending = await countPendingLeads(sid);
+        if (pending >= PROSPECT_LEAD_CAP) {
+          await finishProspect(runId, {
+            status: "done",
+            processed: pending,
+            failed: 0,
+            summary: PROSPECT_PAUSED_HINT,
+            pulseState: "needs",
+          });
+          log(`prospect omitido (tope ${pending}/${PROSPECT_LEAD_CAP})`);
+          return;
+        }
+      } catch (e) {
+        log(`prospect count omitido: ${e instanceof Error ? e.message : e}`);
+      }
+      await runProspect(runId, sid, { queries: 3, perQuery: 5, scope: prospectScope, marketLabel: prospectMarketLabel });
+    })(),
   );
   log("morning done");
 }

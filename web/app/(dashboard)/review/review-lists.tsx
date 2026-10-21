@@ -13,7 +13,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChannelTag, KindTag, StatusTag, TodayTag } from "@/components/inbox-tag";
+import { ChannelTag, KindTag, ScoreTag, StatusTag, TodayTag } from "@/components/inbox-tag";
 import { toast } from "@/components/ui/toast";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
@@ -23,10 +23,11 @@ import { useBackgroundOrNull } from "@/components/background-status";
 import {
   approveActionAction,
   approveBatchAction,
-  approveLeadAction,
   dismissSignalAction,
   markDispatchedAction,
+  markLeadContactedAction,
   proposeSingleAction,
+  reopenLeadAction,
   reopenSignalAction,
   regenerateStaleDraftsAction,
   rejectActionAction,
@@ -34,9 +35,13 @@ import {
   revokeApprovalAction,
   getDrawerCustomerAction,
   switchChannelAction,
+  triggerProspectAction,
   updateDraftContentAction,
 } from "@/lib/review-actions";
-import { ApprovePair, DismissButton, DraftActions, EditableDraft, MarkSentButton, RedactButton, RegenerateButton, ReopenButton, RevokeButton } from "./review-buttons";
+import { DismissButton, DraftActions, EditableDraft, MarkContactedButton, MarkSentButton, ProspectButton, RedactButton, RegenerateButton, ReopenButton, RevokeButton } from "./review-buttons";
+import { PROSPECT_LEAD_CAP, PROSPECT_PAUSED_HINT, PROSPECT_B2B_ONLY_HINT } from "@/lib/prospect-cap";
+import { FilterSearch } from "@/components/filter-search";
+import { FilterToggleButton } from "@/components/filter-button";
 import { CustomerDrawer } from "../customers/customer-drawer";
 import type { EditableCustomer } from "@/lib/customers-db";
 import { approverLabel } from "@/lib/action-trace";
@@ -236,12 +241,19 @@ export function ReviewLists({
   actions,
   approvedActions = [],
   leads,
+  /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
+  approvedLeads = [],
+  /** Contactados y descartados: filtros visibles, nada desaparece para siempre. */
+  contactedLeads = [],
+  discardedLeads = [],
   signals,
   /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
   dismissedSignals = [],
   visible,
   runningKinds = [],
   marketLabel = null,
+  /** ?market= activo: el botón prospecta segmentado a ese mercado. */
+  marketId = null,
   customerDomains = null,
   shopCurrency = null,
   filtered = false,
@@ -249,17 +261,26 @@ export function ReviewLists({
   ultimaCompraLabel = "última compra",
   /** true = tenant B2B: sin barra de aprobación en lote. Default seguro. */
   isB2B = true,
+  /** Gate B2B del prospector: sin esto no hay botón (el backend veta igual). */
+  prospectEligible = true,
 }: {
   actions: ActionRow[];
   /** Aprobadas aún no enviadas: visibles para poder revocarlas. */
   approvedActions?: ActionRow[];
   leads: LeadRow[];
+  /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
+  approvedLeads?: LeadRow[];
+  /** Contactados y descartados: filtros visibles, nada desaparece para siempre. */
+  contactedLeads?: LeadRow[];
+  discardedLeads?: LeadRow[];
   signals: SignalRow[];
   /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
   dismissedSignals?: SignalRow[];
   visible: { actions: boolean; leads: boolean; signals: boolean };
   runningKinds?: string[];
   marketLabel?: string | null;
+  /** ?market= activo: el botón prospecta segmentado a ese mercado. */
+  marketId?: string | null;
   /** null = sin verificar (canvas): se omite el check de duplicado. */
   customerDomains?: string[] | null;
   shopCurrency?: string | null;
@@ -268,6 +289,8 @@ export function ReviewLists({
   initialTab?: ReviewTab;
   ultimaCompraLabel?: string;
   isB2B?: boolean;
+  /** Gate B2B del prospector: sin esto no hay botón (el backend veta igual). */
+  prospectEligible?: boolean;
 }) {
   const router = useRouter();
   const tabs: Array<{ id: ReviewTab; label: string; show: boolean; icon: LucideIcon }> = [
@@ -280,6 +303,22 @@ export function ReviewLists({
   const [active, setActive] = useState<ReviewTab>(
     tabs.some((t) => t.id === initialTab && t.show) ? initialTab : fallback,
   );
+  /** Sub-filtro de la pestaña leads: nada desaparece, se filtra arriba. */
+  const [leadFilter, setLeadFilter] = useState<"pending" | "contacted" | "discarded">("pending");
+  /** Búsqueda libre local (empresa/dominio/url/contacto/motivo). */
+  const [leadQuery, setLeadQuery] = useState("");
+  const q = leadQuery.trim().toLowerCase();
+  const matchLead = (l: LeadRow) =>
+    q === "" ||
+    [l.company, l.domain, l.url, l.contact, l.reason]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
+  const shownLeads = leads.filter(matchLead);
+  const shownApproved = approvedLeads.filter(matchLead);
+  const shownContacted = contactedLeads.filter(matchLead);
+  const shownDiscarded = discardedLeads.filter(matchLead);
   const selectTab = (id: ReviewTab) => {
     setActive(id);
     const params = new URLSearchParams(window.location.search);
@@ -617,23 +656,57 @@ export function ReviewLists({
       {visible.leads && active === "leads" && (
       <section className="flex flex-col gap-4" role="tabpanel">
         <SectionHeading
-          title={`Empresas por contactar (${formatNumber(leads.length)})`}
+          title={
+            filtered
+              ? `Empresas por contactar (${formatNumber(leads.length)})`
+              : `Empresas por contactar (${formatNumber(leads.length)}/${formatNumber(PROSPECT_LEAD_CAP)})`
+          }
           hint={
-            marketLabel
-              ? "Sin país atribuido: van todos."
-              : "Negocios parecidos a tu mejor cliente, con contacto público."
+            !prospectEligible
+              ? PROSPECT_B2B_ONLY_HINT
+              : !filtered && leads.length >= PROSPECT_LEAD_CAP
+                ? PROSPECT_PAUSED_HINT
+                : "Negocios parecidos a tus mejores clientes, con contacto público."
           }
           tone="sky"
         />
-        {leads.length === 0 &&
-          (liveKinds.has("prospect") ? (
+        {!filtered && (
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterSearch
+              initialValue=""
+              onSearch={setLeadQuery}
+              placeholder="Buscar empresa, dominio o contacto…"
+              ariaLabel="Buscar empresas"
+            />
+            <FilterToggleButton active={leadFilter === "pending"} onClick={() => setLeadFilter("pending")}>
+              Pendientes ({formatNumber(leads.length + approvedLeads.length)})
+            </FilterToggleButton>
+            <FilterToggleButton active={leadFilter === "contacted"} onClick={() => setLeadFilter("contacted")}>
+              Contactados ({formatNumber(contactedLeads.length)})
+            </FilterToggleButton>
+            <FilterToggleButton active={leadFilter === "discarded"} onClick={() => setLeadFilter("discarded")}>
+              Descartados ({formatNumber(discardedLeads.length)})
+            </FilterToggleButton>
+            {prospectEligible ? (
+              <span className="ml-auto">
+                <ProspectButton onProspect={() => triggerProspectAction(marketId ?? null)} />
+              </span>
+            ) : undefined}
+          </div>
+        )}
+        {(filtered || leadFilter === "pending") && (
+          <>
+        {shownLeads.length === 0 &&
+          (q ? (
+            <AppCardState>Sin resultados para esa búsqueda.</AppCardState>
+          ) : liveKinds.has("prospect") ? (
             <AppCardState>
               <SectionLoading label="leads" rows={2} />
             </AppCardState>
           ) : (
             <AppCardState>{emptyLeads}</AppCardState>
           ))}
-        {leads.map((l) => (
+        {shownLeads.map((l) => (
           <AppCard
             key={l.id}
             tone="sky"
@@ -643,13 +716,16 @@ export function ReviewLists({
               l.icp_score != null || l.created_at ? (
                 <span className="flex flex-wrap items-center gap-1.5">
                   <TodayTag value={l.created_at} />
-                  {l.icp_score != null ? (
-                    <span className="tabular-nums">score {formatNumber(l.icp_score)}</span>
-                  ) : null}
+                  <ScoreTag value={l.icp_score} />
                 </span>
               ) : undefined
             }
-            footer={<ApprovePair id={l.id} onApprove={approveLeadAction} onReject={rejectLeadAction} />}
+            footer={
+              <span className="flex items-center gap-2">
+                <MarkContactedButton id={l.id} onMarkContacted={markLeadContactedAction} />
+                <DismissButton id={l.id} onDismiss={rejectLeadAction} />
+              </span>
+            }
             contentClassName="flex flex-col gap-3"
           >
               <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
@@ -749,12 +825,169 @@ export function ReviewLists({
                         bits.push(`${formatNumber(nEmails)} email${nEmails === 1 ? "" : "s"} · ${formatNumber(nPhones)} tel${nPhones === 1 ? "" : "s"} · ${formatNumber(nSocials)} rrss`);
                       return bits.join(" · ");
                     })()} ·{" "}
-                    score {l.icp_score ?? "?"} · {l.source ?? "searxng"}
+                    afinidad {l.icp_score != null ? `${formatNumber(Math.round(l.icp_score * 100))}/100` : "?"} · {l.source ?? "searxng"}
                     {l.created_at ? ` · hallado ${l.created_at.slice(0, 10)}` : ""}
                   </span>
               </Sustento>
             </AppCard>
         ))}
+        {shownApproved.length > 0 && (
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Aprobadas por contactar (${formatNumber(shownApproved.length)})`}
+              hint="Ya les diste el visto bueno por fuera: márcalas cuando las contactes."
+              tone="emerald"
+            />
+            {shownApproved.map((l) => (
+              <AppCard
+                key={l.id}
+                tone="emerald"
+                title={l.company ?? l.domain ?? l.url}
+                description={l.reason ?? undefined}
+                action={
+                  l.icp_score != null ? (
+                    <ScoreTag value={l.icp_score} />
+                  ) : undefined
+                }
+                footer={<MarkContactedButton id={l.id} onMarkContacted={markLeadContactedAction} />}
+                contentClassName="flex flex-col gap-3"
+              >
+                <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
+                  {l.url}
+                </a>
+                {(() => {
+                  const emails = l.evidence?.contacts?.emails ?? [];
+                  const phones = l.evidence?.contacts?.phones ?? [];
+                  const socials = l.evidence?.contacts?.socials ?? [];
+                  if (emails.length === 0 && phones.length === 0 && socials.length === 0) {
+                    return l.contact ? (
+                      <span className="text-xs">✓ contacto público: {l.contact}</span>
+                    ) : null;
+                  }
+                  return (
+                    <div className="flex flex-col gap-1 text-xs">
+                      {emails.length > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <Mail className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                          <span>
+                            {emails.map((e, i) => (
+                              <span key={e}>
+                                {i > 0 && ", "}
+                                <a href={`mailto:${e}`} className="text-primary underline">{e}</a>
+                              </span>
+                            ))}
+                          </span>
+                        </span>
+                      )}
+                      {phones.length > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <Phone className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                          <span>
+                            {phones.map((p, i) => (
+                              <span key={p}>
+                                {i > 0 && ", "}
+                                <a href={`tel:${p.replace(/[^+\d]/g, "")}`} className="text-primary underline">{p}</a>
+                              </span>
+                            ))}
+                          </span>
+                        </span>
+                      )}
+                      {socials.length > 0 && (
+                        <span className="flex items-center gap-1.5 text-muted-foreground">
+                          <Share2 className="size-3.5 shrink-0" aria-hidden />
+                          <span>
+                            {socials.map((s, i) => (
+                              <span key={`${s.network}-${s.url}`}>
+                                {i > 0 && " · "}
+                                <a href={s.url} target="_blank" rel="noreferrer" className="text-primary underline">
+                                  {s.network}
+                                </a>
+                              </span>
+                            ))}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+              </AppCard>
+            ))}
+          </div>
+        )}
+          </>
+        )}
+        {!filtered && leadFilter === "contacted" && (
+          <>
+            {shownContacted.length === 0 ? (
+              <AppCardState>{q ? "Sin resultados para esa búsqueda." : "Sin contactados todavía: marca “Contactado” cuando escribas a una empresa."}</AppCardState>
+            ) : (
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Contactados (${formatNumber(shownContacted.length)})`}
+              hint="Ya los contactaste por tu cuenta. No se reproponen."
+              tone="emerald"
+            />
+            {shownContacted.map((l) => (
+              <AppCard
+                key={l.id}
+                tone="emerald"
+                title={l.company ?? l.domain ?? l.url}
+                description={l.reason ?? undefined}
+                action={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <TodayTag value={l.created_at} />
+                    <ScoreTag value={l.icp_score} />
+                  </span>
+                }
+                contentClassName="flex flex-col gap-3"
+              >
+                <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
+                  {l.url}
+                </a>
+                {l.contact ? (
+                  <span className="text-xs text-muted-foreground">✓ {l.contact}</span>
+                ) : null}
+              </AppCard>
+            ))}
+          </div>
+            )}
+          </>
+        )}
+        {!filtered && leadFilter === "discarded" && (
+          <>
+            {shownDiscarded.length === 0 ? (
+              <AppCardState>{q ? "Sin resultados para esa búsqueda." : "Sin descartados: lo que descartes aparece aquí y se puede reabrir."}</AppCardState>
+            ) : (
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Descartados (${formatNumber(shownDiscarded.length)})`}
+              hint="Nada se pierde: reabre el que quieras contactar igual."
+              tone="amber"
+            />
+            {shownDiscarded.map((l) => (
+              <AppCard
+                key={l.id}
+                tone="amber"
+                title={l.company ?? l.domain ?? l.url}
+                description={l.reason ?? undefined}
+                action={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <TodayTag value={l.created_at} />
+                    <ScoreTag value={l.icp_score} />
+                  </span>
+                }
+                footer={<ReopenButton id={l.id} onReopen={reopenLeadAction} />}
+                contentClassName="flex flex-col gap-3"
+              >
+                <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
+                  {l.url}
+                </a>
+              </AppCard>
+            ))}
+          </div>
+            )}
+          </>
+        )}
       </section>
       )}
 

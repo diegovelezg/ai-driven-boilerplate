@@ -165,3 +165,37 @@ export function TodayTag({ value, className }: { value: string | null | undefine
   if (!isToday(value)) return null;
   return <TagPill meta={TODAY_META} className={className} />;
 }
+
+/** Afinidad ICP 0..1 → 0-100 con semáforo propio (teal/cyan/orange: sin
+ *  colisionar con kinds ni canales, ver test de unicidad de colores).
+ *  Corte 50: por debajo no se guarda; 70+ alta, 85+ muy alta. */
+export function getScoreMeta(value: number | null | undefined): InboxTagMeta | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const pct = Math.round(value * 100);
+  if (pct >= 85) {
+    return {
+      label: `${pct}`,
+      className: "bg-teal-500/10 text-teal-700 tabular-nums dark:text-teal-400",
+      tip: `Afinidad muy alta (${pct}/100): encaja con tu cliente ideal en industria, tamaño y geografía.`,
+    };
+  }
+  if (pct >= 70) {
+    return {
+      label: `${pct}`,
+      className: "bg-cyan-500/10 text-cyan-700 tabular-nums dark:text-cyan-400",
+      tip: `Afinidad alta (${pct}/100): buen encaje con tu cliente ideal, revísalo.`,
+    };
+  }
+  return {
+    label: `${pct}`,
+    className: "bg-orange-500/10 text-orange-700 tabular-nums dark:text-orange-400",
+    tip: `Afinidad moderada (${pct}/100): supera el corte (50) pero míralo con lupa.`,
+  };
+}
+
+/** Tag de afinidad del prospector: número 0-100 con semáforo y tooltip. */
+export function ScoreTag({ value, className }: { value: number | null | undefined; className?: string }) {
+  const meta = getScoreMeta(value);
+  if (!meta) return null;
+  return <TagPill meta={meta} className={className} />;
+}

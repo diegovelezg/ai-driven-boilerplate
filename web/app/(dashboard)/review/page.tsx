@@ -44,6 +44,11 @@ export default async function ReviewPage({
   /** Aprobadas aún no enviadas (invisibles hasta hoy: solo se listaba pending). */
   let approvedActions: ActionRow[] = [];
   let leads: LeadRow[] = [];
+  /** Aprobados aún no contactados: "Ya lo contacté" los cierra. */
+  let approvedLeads: LeadRow[] = [];
+  /** Contactados y descartados: filtros visibles, nada desaparece para siempre. */
+  let contactedLeads: LeadRow[] = [];
+  let discardedLeads: LeadRow[] = [];
   let signals: SignalRow[] = [];
   /** Descartadas recientes (contactar igual): reabrir las devuelve a la cola. */
   let dismissedSignals: SignalRow[] = [];
@@ -55,6 +60,8 @@ export default async function ReviewPage({
   let marketLabel: string | null = null;
   let ultimaCompraLabel = "última compra";
   let isB2BReview = true;
+  /** Gate del botón prospectar: solo B2B (fail-open en error; el backend veta). */
+  let prospectEligible = true;
 
   if (connected && dbReady) {
     try {
@@ -67,7 +74,7 @@ export default async function ReviewPage({
         // señales filtran por sus customers; leads no tienen país (van todos).
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketLabel = scope?.market ? displayMarket(scope.market) : null;
-        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: l, error: lErr }, { data: br }] =
+        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { data: dl, error: dlErr }, { data: br }] =
           await Promise.all([
             (async () => {
               const aq = applyScopeFilter(
@@ -103,6 +110,41 @@ export default async function ReviewPage({
             )
               .order("icp_score", { ascending: false, nullsFirst: false })
               .limit(30),
+            // Aprobados aún no contactados: "Ya lo contacté" los cierra.
+            applyScopeFilter(
+              db
+                .from("proposed_leads")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .eq("store_id", storeId)
+                .eq("status", "approved"),
+              scope,
+              null,
+            )
+              .order("created_at", { ascending: true })
+              .limit(30),
+            // Contactados y descartados: visibles, reabribles, nada se pierde.
+            applyScopeFilter(
+              db
+                .from("proposed_leads")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .eq("store_id", storeId)
+                .eq("status", "contacted"),
+              scope,
+              null,
+            )
+              .order("created_at", { ascending: false })
+              .limit(30),
+            applyScopeFilter(
+              db
+                .from("proposed_leads")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .eq("store_id", storeId)
+                .in("status", ["rejected", "discarded"]),
+              scope,
+              null,
+            )
+              .order("created_at", { ascending: false })
+              .limit(20),
             // Corridas en curso: la sección vacía muestra skeleton, no un vacío engañoso.
             db
               .from("background_runs")
@@ -114,6 +156,9 @@ export default async function ReviewPage({
         if (aErr) throw new Error(`Actions read: ${aErr.message}`);
         if (apErr) throw new Error(`Approved read: ${apErr.message}`);
         if (lErr) throw new Error(`Leads read: ${lErr.message}`);
+        if (alErr) throw new Error(`Approved leads read: ${alErr.message}`);
+        if (clErr) throw new Error(`Contacted leads read: ${clErr.message}`);
+        if (dlErr) throw new Error(`Discarded leads read: ${dlErr.message}`);
         runningKinds = new Set(
           ((br ?? []) as Array<Record<string, unknown>>)
             .filter((r) => r.status === "running")
@@ -231,7 +276,7 @@ export default async function ReviewPage({
         } catch {
           // Sin predicciones: las tarjetas usan el texto de respaldo.
         }
-        leads = ((l ?? []) as Array<Record<string, unknown>>).map((r) => ({
+        const toLeadRow = (r: Record<string, unknown>): LeadRow => ({
           id: String(r.id),
           company: (r.company as string | null) ?? null,
           domain: (r.domain as string | null) ?? null,
@@ -242,7 +287,11 @@ export default async function ReviewPage({
           icp_score: r.icp_score == null ? null : Number(r.icp_score),
           reason: (r.reason as string | null) ?? null,
           evidence: (r.evidence_json as LeadRow["evidence"]) ?? null,
-        }));
+        });
+        leads = ((l ?? []) as Array<Record<string, unknown>>).map(toLeadRow);
+        approvedLeads = ((al ?? []) as Array<Record<string, unknown>>).map(toLeadRow);
+        contactedLeads = ((cl ?? []) as Array<Record<string, unknown>>).map(toLeadRow);
+        discardedLeads = ((dl ?? []) as Array<Record<string, unknown>>).map(toLeadRow);
         // Solo el check “ya es customer” se calcula en vivo (barato); el resto
         // viene guardado por el agente al crear el lead (evidence_json).
         try {
@@ -396,6 +445,16 @@ export default async function ReviewPage({
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
     }
+    // Gate B2B del botón (best-effort; el backend veta igual).
+    try {
+      const sid = conn.medusaUrl ? await resolveStoreId(conn.medusaUrl).catch(() => null) : null;
+      if (sid) {
+        const { prospectEligibility } = await import("@/lib/prospect");
+        prospectEligible = (await prospectEligibility(sid)).eligible;
+      }
+    } catch {
+      prospectEligible = true;
+    }
   }
 
   // Filtro del chat: IDs exactos ("muéstrame los 3"). Se aplica sobre lo ya
@@ -484,17 +543,22 @@ export default async function ReviewPage({
             actions={actions}
             approvedActions={approvedActions}
             leads={leads}
+            approvedLeads={approvedLeads}
+            contactedLeads={contactedLeads}
+            discardedLeads={discardedLeads}
             signals={signals}
             dismissedSignals={dismissedSignals}
             visible={{ actions: showActions, leads: showLeads, signals: showSignals }}
             runningKinds={[...runningKinds]}
             marketLabel={marketLabel}
+            marketId={sp.market ?? null}
             customerDomains={[...customerDomains]}
             shopCurrency={shopCurrency}
             filtered={Boolean(chatFiltered)}
             initialTab={initialTab as "actions" | "leads" | "signals"}
             ultimaCompraLabel={ultimaCompraLabel}
             isB2B={isB2BReview}
+            prospectEligible={prospectEligible}
           />
 
         </>
