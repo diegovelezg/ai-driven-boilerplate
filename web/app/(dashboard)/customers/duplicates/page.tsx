@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataTable,
+  DataTableBody,
+  DataTableHeader,
+  DataTableRow,
+  DataTableTd,
+  DataTableTh,
+} from "@/components/data-table";
 import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
 import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
@@ -96,38 +96,36 @@ export default async function DuplicatesPage({
             </span>
           }
         >
-          <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="px-4 text-[11px] tracking-wide uppercase">Nombre</TableHead>
-                  <TableHead className="px-4 text-[11px] tracking-wide uppercase">Teléfono</TableHead>
-                  <TableHead className="px-4 text-[11px] tracking-wide uppercase">Empresa</TableHead>
-                  <TableHead className="px-4 text-right text-[11px] tracking-wide uppercase">Compras</TableHead>
-                  <TableHead className="px-4 text-right text-[11px] tracking-wide uppercase">Total</TableHead>
-                  <TableHead className="px-4 text-[11px] tracking-wide uppercase">Origen</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {g.rows.map((r) => (
-                  <TableRow key={r.dbId}>
-                    <TableCell className="px-4 py-3.5">
-                      {[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5 text-muted-foreground">{r.phone ?? "—"}</TableCell>
-                    <TableCell className="px-4 py-3.5 text-muted-foreground">{r.companyName ?? "—"}</TableCell>
-                    <TableCell className="px-4 py-3.5 text-right tabular-nums">{formatNumber(r.ordersCount)}</TableCell>
-                    <TableCell className="px-4 py-3.5 text-right tabular-nums">
-                      {formatMoney(r.totalSpent, r.currency)}
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5">
-                      <Badge variant={r.source === "local" ? "default" : "outline"} className="font-normal">
-                        {r.source === "local" ? "local" : "ecommerce"}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+          <DataTable>
+            <DataTableHeader>
+              <DataTableTh>Nombre</DataTableTh>
+              <DataTableTh>Teléfono</DataTableTh>
+              <DataTableTh>Empresa</DataTableTh>
+              <DataTableTh numeric>Compras</DataTableTh>
+              <DataTableTh numeric>Total</DataTableTh>
+              <DataTableTh>Origen</DataTableTh>
+            </DataTableHeader>
+            <DataTableBody>
+              {g.rows.map((r) => (
+                <DataTableRow key={r.dbId}>
+                  <DataTableTd>
+                    {[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}
+                  </DataTableTd>
+                  <DataTableTd className="text-muted-foreground">{r.phone ?? "—"}</DataTableTd>
+                  <DataTableTd className="text-muted-foreground">{r.companyName ?? "—"}</DataTableTd>
+                  <DataTableTd numeric className="tabular-nums">{formatNumber(r.ordersCount)}</DataTableTd>
+                  <DataTableTd numeric className="tabular-nums">
+                    {formatMoney(r.totalSpent, r.currency)}
+                  </DataTableTd>
+                  <DataTableTd>
+                    <Badge variant={r.source === "local" ? "default" : "outline"} className="font-normal">
+                      {r.source === "local" ? "local" : "ecommerce"}
+                    </Badge>
+                  </DataTableTd>
+                </DataTableRow>
+              ))}
+            </DataTableBody>
+          </DataTable>
         </AppCard>
       ))}
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
@@ -27,7 +28,6 @@ export function SyncButton() {
       <AppTooltip tip={blocked && blocker ? `En curso: ${blocker}…` : undefined}>
         <span className="inline-flex">
           <Button
-            variant="outline"
             size="sm"
             disabled={starting || running || blocked}
             onClick={async () => {
@@ -36,6 +36,7 @@ export function SyncButton() {
               setMsg(r.ok ? null : r.message);
             }}
           >
+            <RefreshCw className={running || starting ? "animate-spin" : ""} aria-hidden />
             {running ? "Sincronizando…" : blocked ? "En proceso…" : "Sincronizar"}
           </Button>
         </span>

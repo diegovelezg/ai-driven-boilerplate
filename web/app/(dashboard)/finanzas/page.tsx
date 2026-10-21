@@ -13,6 +13,14 @@ import { displayStoreName, getActiveStore, type TenantStore } from "@/lib/tenant
 import { FinanceStrip } from "../finance-strip";
 import { ItemsRanking } from "./items-ranking";
 import { TopCustomers } from "./top-customers";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableHeader,
+  DataTableRow,
+  DataTableTd,
+  DataTableTh,
+} from "@/components/data-table";
 
 export const instant = false;
 
@@ -305,47 +313,45 @@ export default async function FinanzasPage({
             tone="sky"
           />
           <AppCard variant="table">
-            <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="border-b text-left text-[11px] tracking-wide text-muted-foreground uppercase">
-                    <th className="px-4 py-3 font-medium">Mes</th>
-                    <th className="px-4 py-3 text-right font-medium">Ventas</th>
-                    <th className="px-4 py-3 text-right font-medium">Órdenes</th>
-                    <th className="px-4 py-3 text-right font-medium">Ticket</th>
-                  </tr>
-                </thead>
-                <tbody className="tabular-nums">
-                  {[...buckets].reverse().map((b, i) => (
-                    <tr key={b.key} className="border-b transition-colors last:border-0 hover:bg-muted/30">
-                      <td className="px-4 py-3 capitalize">
-                        {`${b.label} ${b.key.slice(0, 4)}`}
-                        {i === 0 && (
-                          <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                            en curso
-                          </span>
-                        )}
-                        {b.key === bestKey && (
-                          <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                            mejor
-                          </span>
-                        )}
-                        {b.key === worstKey && b.key !== bestKey && (
-                          <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
-                            peor
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right">{formatMoney(b.salesMinor, viewCurrency)}</td>
-                      <td className="px-4 py-3 text-right">{formatNumber(b.orders)}</td>
-                      <td className="px-4 py-3 text-right">
-                        {b.orders > 0
-                          ? formatMoney(Math.round(b.salesMinor / b.orders), viewCurrency)
-                          : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <DataTable>
+              <DataTableHeader>
+                <DataTableTh>Mes</DataTableTh>
+                <DataTableTh numeric>Ventas</DataTableTh>
+                <DataTableTh numeric>Órdenes</DataTableTh>
+                <DataTableTh numeric>Ticket</DataTableTh>
+              </DataTableHeader>
+              <DataTableBody className="tabular-nums">
+                {[...buckets].reverse().map((b, i) => (
+                  <DataTableRow key={b.key}>
+                    <DataTableTd className="capitalize">
+                      {`${b.label} ${b.key.slice(0, 4)}`}
+                      {i === 0 && (
+                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          en curso
+                        </span>
+                      )}
+                      {b.key === bestKey && (
+                        <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                          mejor
+                        </span>
+                      )}
+                      {b.key === worstKey && b.key !== bestKey && (
+                        <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
+                          peor
+                        </span>
+                      )}
+                    </DataTableTd>
+                    <DataTableTd numeric>{formatMoney(b.salesMinor, viewCurrency)}</DataTableTd>
+                    <DataTableTd numeric>{formatNumber(b.orders)}</DataTableTd>
+                    <DataTableTd numeric>
+                      {b.orders > 0
+                        ? formatMoney(Math.round(b.salesMinor / b.orders), viewCurrency)
+                        : "—"}
+                    </DataTableTd>
+                  </DataTableRow>
+                ))}
+              </DataTableBody>
+            </DataTable>
           </AppCard>
         </section>
       )}

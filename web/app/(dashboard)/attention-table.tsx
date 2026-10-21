@@ -7,13 +7,13 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import { proposeSingleAction } from "@/lib/review-actions";
 import { useBackground } from "@/components/background-status";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataTable,
+  DataTableBody,
+  DataTableHeader,
+  DataTableRow,
+  DataTableTd,
+  DataTableTh,
+} from "@/components/data-table";
 import type { EditableCustomer } from "@/lib/customers-db";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber } from "@/lib/format";
@@ -112,21 +112,19 @@ export function AttentionTable({
 
   return (
     <>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="h-11 px-4 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              Customer
-            </TableHead>
-            <TableHead className="h-11 px-4 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              Motivo
-            </TableHead>
-            <TableHead className="h-11 w-24 px-4 text-right text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              Action
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+      <DataTable>
+        <DataTableHeader>
+          <DataTableTh>
+            Customer
+          </DataTableTh>
+          <DataTableTh>
+            Motivo
+          </DataTableTh>
+          <DataTableTh numeric className="w-24">
+            Action
+          </DataTableTh>
+        </DataTableHeader>
+        <DataTableBody>
           {rows.map((row) => {
             const tier = tierOf(row);
             const pred = row.decision === "actuar" || row.decision === "revision_humana"
@@ -156,12 +154,12 @@ export function AttentionTable({
                 ? `ticket esp. ${formatMoney(row.ticketEsperadoMinor, row.predCurrency ?? currency)} · sin descuento`
                 : null;
             return (
-            <TableRow
+            <DataTableRow
               key={row.signalId}
               onClick={() => void open(row)}
               className="cursor-pointer"
             >
-              <TableCell className="px-4 py-3.5 font-medium">
+              <DataTableTd className="font-medium">
                 {loadingId === row.customerDbId ? "Cargando…" : row.name}
                 <span className="block text-xs font-normal text-muted-foreground">
                   {row.email}{" "}
@@ -187,11 +185,11 @@ export function AttentionTable({
                     {frecuencia}
                   </span>
                 )}
-              </TableCell>
-              <TableCell className="px-4 py-3.5 text-muted-foreground">
+              </DataTableTd>
+              <DataTableTd className="text-muted-foreground">
                 {row.reason ?? row.kind}
-              </TableCell>
-              <TableCell className="px-4 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+              </DataTableTd>
+              <DataTableTd numeric onClick={(e) => e.stopPropagation()}>
                 {row.draftStatus === "pending" ? (
                   <Button render={<Link href="/review" />} nativeButton={false} variant="outline" size="sm">
                     Revisar
@@ -232,12 +230,12 @@ export function AttentionTable({
                     )}
                   </span>
                 )}
-              </TableCell>
-            </TableRow>
+              </DataTableTd>
+            </DataTableRow>
             );
           })}
-        </TableBody>
-      </Table>
+        </DataTableBody>
+      </DataTable>
       {selected && (
         <CustomerDrawer
           key={selected.dbId}

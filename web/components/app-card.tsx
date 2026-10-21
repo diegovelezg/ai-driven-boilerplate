@@ -70,7 +70,7 @@ export function AppCard({
       className={cn(
         tone !== "default" && TONE_BORDER[tone],
         variant === "hero" && "bg-gradient-to-br from-primary/[0.07] via-card to-card",
-        variant === "table" && "gap-0",
+        variant === "table" && "gap-0 py-0",
         className,
       )}
     >

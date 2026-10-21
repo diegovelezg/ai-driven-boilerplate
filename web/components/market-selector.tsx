@@ -2,13 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { displayMarket, type TenantMarket } from "@/lib/market-utils";
 
 /**
@@ -91,17 +85,12 @@ export function MarketSelector({
   };
 
   return (
-    <Select value={value} onValueChange={onChange} items={items}>
-      <SelectTrigger className="h-8 w-40" aria-label="Filtrar por país">
-        <SelectValue placeholder="Mercado" />
-      </SelectTrigger>
-      <SelectContent>
-        {markets.map((m) => (
-          <SelectItem key={m.id} value={m.id}>
-            {displayMarket(m)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterSelect value={value} onChange={onChange} items={items} ariaLabel="Filtrar por país" widthClass="w-40" placeholder="Mercado">
+      {markets.map((m) => (
+        <SelectItem key={m.id} value={m.id}>
+          {displayMarket(m)}
+        </SelectItem>
+      ))}
+    </FilterSelect>
   );
 }

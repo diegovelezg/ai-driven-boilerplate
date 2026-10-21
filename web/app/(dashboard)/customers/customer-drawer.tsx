@@ -26,20 +26,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { FilterSelect } from "@/components/filter-select";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  DrawerShell,
+  type DrawerTabDef,
+} from "@/components/drawer-shell";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DrawerTable,
+  DrawerTableBody,
+  DrawerTableHeader,
+  DrawerTableRow,
+  DrawerTableTd,
+  DrawerTableTh,
+} from "@/components/drawer-table";
 import { updateCustomerAction } from "@/lib/customer-actions";
 import {
   dismissSignalAction,
@@ -232,7 +231,8 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
   );
 
   return (
-    <div className="flex flex-col gap-6 px-8 py-6">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-8 py-6">
       <SectionHeading
         title="Datos del cliente"
         hint="Identidad y clasificación. Lo editado se conserva ante el sync de Medusa."
@@ -292,15 +292,15 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
         />
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-
-        <div className="sticky bottom-0 z-10 -mx-8 -mb-6 flex justify-end gap-3 border-t bg-background/95 px-8 py-4 backdrop-blur">
+      </div>
+      </div>
+      <div className="flex shrink-0 justify-end gap-3 border-t bg-background/95 px-8 py-4">
           <Button variant="outline" onClick={onClose} disabled={isPending} className="h-10 px-5">
             Cancelar
           </Button>
           <Button onClick={save} disabled={isPending || !dirty} className="h-10 px-6">
             {isPending ? "Guardando…" : "Guardar"}
           </Button>
-        </div>
       </div>
     </div>
   );
@@ -1175,27 +1175,25 @@ function ComprasTab({
       {orders.length === 0 ? (
         <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
       ) : (
-        <Table className="table-fixed">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-[112px] px-3 text-[11px] tracking-wide text-muted-foreground uppercase">
-                Fecha
-              </TableHead>
-              <TableHead className="px-3 text-[11px] tracking-wide text-muted-foreground uppercase">
-                Detalle
-              </TableHead>
-              <TableHead className="w-[96px] px-3 text-right text-[11px] tracking-wide text-muted-foreground uppercase">
-                Total
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+        <DrawerTable className="table-fixed">
+          <DrawerTableHeader>
+            <DrawerTableTh className="w-[112px]">
+              Fecha
+            </DrawerTableTh>
+            <DrawerTableTh>
+              Detalle
+            </DrawerTableTh>
+            <DrawerTableTh numeric className="w-[96px]">
+              Total
+            </DrawerTableTh>
+          </DrawerTableHeader>
+          <DrawerTableBody>
             {orders.map((o, i) => (
-              <TableRow key={i}>
-                <TableCell className="px-3 py-3 text-[13px] whitespace-nowrap tabular-nums">
+              <DrawerTableRow key={i}>
+                <DrawerTableTd className="whitespace-nowrap tabular-nums">
                   {o.date ? o.date.slice(0, 10) : "—"}
-                </TableCell>
-                <TableCell className="px-3 py-3 text-[13px] text-muted-foreground">
+                </DrawerTableTd>
+                <DrawerTableTd className="text-muted-foreground">
                   {o.items.length > 0 ? (
                     <AppTooltip tip={o.items.map((it) => `${it.title} x${formatNumber(it.quantity)}`).join("; ")}>
                       <div className="flex flex-col gap-1.5">
@@ -1252,14 +1250,14 @@ function ComprasTab({
                   ) : (
                     "—"
                   )}
-                </TableCell>
-                <TableCell className="px-3 py-3 text-right text-[13px] whitespace-nowrap tabular-nums">
+                </DrawerTableTd>
+                <DrawerTableTd numeric className="whitespace-nowrap tabular-nums">
                   {formatMoney(o.total, o.currency)}
-                </TableCell>
-              </TableRow>
+                </DrawerTableTd>
+              </DrawerTableRow>
             ))}
-          </TableBody>
-        </Table>
+          </DrawerTableBody>
+        </DrawerTable>
       )}
     </div>
   );
@@ -1381,18 +1379,20 @@ function FichaActions({ dbId }: { dbId: string }) {
           </Button>
         </span>
       </AppTooltip>
-      <Select value={reason} onValueChange={(v) => { if (v) setReason(v); }} disabled={loading || busy || !signalId}>
-        <SelectTrigger className="h-8 w-52 text-xs" aria-label="Motivo del descarte">
-          <SelectValue placeholder="Motivo" />
-        </SelectTrigger>
-        <SelectContent>
-          {FICHA_DISMISS_REASONS.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <FilterSelect
+        value={reason}
+        onChange={(v) => { setReason(v); }}
+        ariaLabel="Motivo del descarte"
+        widthClass="w-52"
+        placeholder="Motivo"
+        disabled={loading || busy || !signalId}
+      >
+        {FICHA_DISMISS_REASONS.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </FilterSelect>
       <AppTooltip tip={signalId ? "La esconde de Hoy 30 días (reversible en Review → Descartadas)" : "Sin señal abierta no hay qué descartar"}>
         <span className="inline-flex items-center">
           <Button size="sm" variant="outline" disabled={loading || busy || !signalId} onClick={() => void dismiss()}>
@@ -1568,94 +1568,64 @@ export function CustomerDrawer({
     .map((w) => w[0]!.toUpperCase())
     .join("");
 
-  const drawerTabs = [
+  const drawerTabs: DrawerTabDef[] = [
     { id: "datos", label: "Datos", icon: UserRound },
     { id: "compras", label: "Compras", icon: ShoppingBag },
     { id: "contactos", label: "Contactos", icon: MessageCircle },
     { id: "chat", label: "Agentes", icon: Bot },
-  ] as const;
+  ];
 
   return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full gap-0 p-0 data-[side=right]:sm:max-w-[min(920px,94vw)]">
-        <div className="flex items-center gap-4 border-b border-border/60 bg-gradient-to-br from-primary/[0.05] via-background to-background px-8 pt-6 pb-4">
-          <div
-            aria-hidden
-            className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold tracking-wide text-primary ring-1 ring-primary/15"
-          >
-            {initials || "—"}
-          </div>
-          <div className="min-w-0 pr-8">
-            <SheetTitle className="truncate text-xl font-semibold tracking-tight">{displayName || "Sin nombre"}</SheetTitle>
-            <SheetDescription className="truncate">{customer.email}</SheetDescription>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className="font-normal">
-                {customer.customerType === "B2B" ? "B2B · Empresa" : "B2C · Consumidor"}
-              </Badge>
-              {customer.country && (
-                <span className="text-[11px] text-muted-foreground">{customer.country}</span>
-              )}
-              {customer.manualFields.length > 0 && (
-                <span className="text-[11px] text-muted-foreground">· editado</span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="px-8 pt-5 pb-5">
-          <div
-            className="flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
-            role="tablist"
-            aria-label="Ficha del customer"
-          >
-            {drawerTabs.map((t) => {
-              const Icon = t.icon;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === t.id}
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    "flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-medium transition-colors",
-                    tab === t.id
-                      ? "bg-background text-foreground shadow-sm ring-1 ring-border/60"
-                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden />
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          {tab === "datos" ? (
-            <DatosTab customer={customer} onClose={onClose} />
-          ) : tab === "contactos" ? (
-            <ContactosTab dbId={customer.dbId} />
-          ) : tab === "compras" ? (
-            <ComprasTab
-              dbId={customer.dbId}
-              customerLabel={displayName || customer.email}
-              onGoAgent={(prompt) => {
-                setAgentSeed(prompt);
-                setTab("chat");
-              }}
-            />
-          ) : (
-            <CustomerChat
-              dbId={customer.dbId}
-              customerName={displayName || customer.email}
-              initialPrompt={agentSeed}
-              onInitialSent={() => setAgentSeed(null)}
-            />
+    <DrawerShell
+      onClose={onClose}
+      size="wide"
+      avatar={
+        <span className="text-sm font-semibold tracking-wide">
+          {initials || "—"}
+        </span>
+      }
+      title={displayName || "Sin nombre"}
+      description={customer.email}
+      badges={
+        <>
+          <Badge variant="secondary" className="font-normal">
+            {customer.customerType === "B2B" ? "B2B · Empresa" : "B2C · Consumidor"}
+          </Badge>
+          {customer.country && (
+            <span className="text-[11px] text-muted-foreground">{customer.country}</span>
           )}
-        </div>
-      </SheetContent>
-    </Sheet>
+          {customer.manualFields.length > 0 && (
+            <span className="text-[11px] text-muted-foreground">· editado</span>
+          )}
+        </>
+      }
+      tabs={drawerTabs}
+      tab={tab}
+      onTabChange={(id) => setTab(id as typeof tab)}
+      tabListLabel="Ficha del customer"
+      fill
+    >
+      {tab === "datos" ? (
+        <DatosTab customer={customer} onClose={onClose} />
+      ) : tab === "contactos" ? (
+        <ContactosTab dbId={customer.dbId} />
+      ) : tab === "compras" ? (
+        <ComprasTab
+          dbId={customer.dbId}
+          customerLabel={displayName || customer.email}
+          onGoAgent={(prompt) => {
+            setAgentSeed(prompt);
+            setTab("chat");
+          }}
+        />
+      ) : (
+        <CustomerChat
+          dbId={customer.dbId}
+          customerName={displayName || customer.email}
+          initialPrompt={agentSeed}
+          onInitialSent={() => setAgentSeed(null)}
+        />
+      )}
+    </DrawerShell>
   );
 }
