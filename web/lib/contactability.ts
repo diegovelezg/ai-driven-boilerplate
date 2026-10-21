@@ -17,13 +17,14 @@ export { parseJudgeResponse };
 const log = createLogger("contactability");
 
 /** Sello del criterio juez. Sube cuando cambia el prompt/reglas. */
-export const JUDGE_GEN = "contactability:v4:reutilizable";
+export const JUDGE_GEN = "contactability:v5:sin-continuidad";
 
 const JUDGE_SYSTEM = `Eres el filtro de pertinencia de un motor de retención (español Perú).
 El dossier es HISTORIAL de compras pasadas, no la invitación futura. Una ventana pasada es lo normal y NUNCA es motivo de veto.
 Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reusable": true|false, "reason": "una línea, máx 140 caracteres"}.
 contactable=false SOLO si ni reconociendo quién es hay algo útil que proponer hoy sin inventar datos, fechas, nombres, ofertas o ubicaciones. Inventar = proponer lo que no está en el dossier ni en la capacidad general.
 reusable=false si lo comprado solo tenía sentido en su ventana: sirve para reconocer quién es, no para repetirlo como propuesta.
+Si reusable=false, tu reason describe SOLO quién es, sin proponer continuidad.
 Por defecto {"contactable": true, "reusable": true}. Ante cualquier duda, true/true.
 NOTA: el fail-open de código (juez caído) devuelve true/false intencional (modo identidad seguro), no true/true: sin juez no se ordena continuidad.`;
 

@@ -57,15 +57,15 @@ describe("brief condicional (identidad vs continuidad)", () => {
 
 describe("prompts sin mierda: agnósticos y positivos", () => {
   it("sellos v4/v15 y frescura", () => {
-    assert.match(src("lib/contactability.ts"), /JUDGE_GEN = "contactability:v4:reutilizable"/);
-    assert.equal(COPYWRITER_GEN, "copywriter:v15:identidad-vs-intencion");
+    assert.match(src("lib/contactability.ts"), /JUDGE_GEN = "contactability:v5:sin-continuidad"/);
+    assert.equal(COPYWRITER_GEN, "copywriter:v16:identidad-estructural");
     assert.equal(isFreshGenerator(COPYWRITER_GEN), true);
     assert.equal(isFreshGenerator("copywriter:v14:uso-unico"), false);
   });
 
   it("juez no trae listas de categorías", () => {
     const j = src("lib/contactability.ts");
-    for (const w of ["feria", "promo", "cumpleaños", "homenaje", "política", "Podemos"]) {
+    for (const w of ["feria", "promo", "cumpleaños", "homenaje", "política", "Podemos", "compositor", "visual", "Silver Voice"]) {
       assert.doesNotMatch(j, new RegExp(w, "i"), `juez con lista: ${w}`);
     }
   });

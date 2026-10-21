@@ -68,7 +68,7 @@ Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 {"channel": "whatsapp"|"email", "subject": string|null, "body": string}
 Reglas (solo restricciones; la forma la eliges tú y debe variar entre borradores: aperturas, orden y cierres distintos):
 - Usa los datos de respaldo solo si encajan natural en una frase sobre el negocio del cliente: PROHIBIDO recitar fecha+lugar como telegrama. Toda cifra o lugar debe aparecer dentro de una frase sobre su negocio (qué vende, a quién, en qué temporada). PROHIBIDO inventar datos, meses, ofertas, descuentos o ubicaciones.
-- El cuerpo lleva SUSTANCIA concreta (línea/marca/soporte del brief + ángulo útil: temporada de su rubro o continuidad de su línea). PROHIBIDO el comodín vago solo («una idea», «una propuesta», «algo», «opciones») sin decir para qué línea/soporte y para cuándo.
+- El cuerpo lleva SUSTANCIA concreta según el modo (viene en el brief). En continuidad: línea/marca/soporte del brief + ángulo útil + ventana fechada. En identidad (verás IDENTIDAD en el brief): 1 frase de reconocimiento + capacidad general con 1 ejemplo, sin fecha inventada; si no hay motivo fechado, no pongas fecha. PROHIBIDO el comodín vago solo («una idea», «una propuesta», «algo», «opciones») sin decir para qué línea/soporte. PROHIBIDO reciclar el evento de fecha única cambiando el ángulo.
 - El historial dice quién es, no qué necesita hoy: úsalo solo para reconocer en una frase quién es. La propuesta nace de lo que el negocio sabe hacer por alguien como él, hoy. Si lo comprado solo tenía sentido en su ventana, esa ventana ya es recuerdo, no propuesta. Ve directo a lo nuevo; nunca hables del mensaje, de lo que no vas a proponer ni de tu razonamiento.
 - PROHIBIDAS las frases de plantilla y call center (hay control automático: si las usas el borrador se rechaza).
 - PROHIBIDA la pregunta abierta vaga y el ruego. Cierra con UNA invitación a accionar de máximo 15 palabras, siempre como pregunta reversible (¿te paso...? ¿te sirve...? ¿quieres que...?). PROHIBIDO declarar acciones cumplidas o comprometer inventario/disponibilidad como hecho: nunca bloqueo, reservo, aparto, separo, aseguro, avanzo o doy prioridad.
@@ -534,6 +534,9 @@ async function composeDraftCopy(
           : "pasarle una propuesta concreta y simple para retomar (producto + momento), y preguntarle si le sirve";
   const patron = mode === "identidad" ? identityPatron(quien) : basePatron;
   const jugada = mode === "identidad" ? identityJugada() : `${baseJugada}. ${sugLine}`;
+  // En identidad no se inyecta ventana sugerida: obligaba a inventar motivo
+  // para una fecha (caso Jin). La fecha solo dirige en continuidad.
+  const respaldoVentana = mode === "identidad" ? "" : ` ${sugLine}`;
   const dossier = quien
     ? `Cliente: ${firstName} — ${quien}${companyName && marcas[0] && marcas[0] !== companyName ? ` (en sus piezas: ${marcas[0]}${categorias[0] ? ` · ${categorias[0]}` : ""})` : categorias[0] && categorias[0] !== quien ? ` (${categorias[0]})` : ""} (objetivo ${objetivo})`
     : `Cliente: ${firstName} (objetivo ${objetivo})`;
@@ -542,7 +545,7 @@ async function composeDraftCopy(
     dossier,
     `Por-qué-ahora en una línea: ${estado}. ${patron}.`,
     `Jugada (elige UNA, no las combines): ${jugada}.`,
-    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días. ${sugLine}`,
+    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.${respaldoVentana}`,
     `Historial real (usa nombres tal cual, no inventes):`,
     hist,
     stamp.forceChannel === "whatsapp"
@@ -578,19 +581,24 @@ async function composeDraftCopy(
     ({ channel, body, subject } = retry);
   }
   // Ancla de identidad (issue #9): marca, empresa, categoría/tópico y, en
-  // última opción, ubicación. La fecha ISO puede aparecer pero NO valida
-  // (antes imponía el telegrama por código con reintento/descarte). Se
-  // conserva la prueba anti-alucinación sin recitar fecha+lugar.
+  // última opción, ubicación. En identidad también vale el activo propuesto
+  // (si no, el control obliga a repetir el evento puntual que identidad
+  // quería soltar). La fecha ISO puede aparecer pero NO valida.
   const identityTokens = [
     companyName,
     ...marcas.slice(0, 2),
     ...categorias.slice(0, 2),
     ...[...counts.keys()].slice(0, 3),
   ];
+  const identidadActivos = mode === "identidad"
+    ? ((stamp.brain?.topProductos ?? []).slice(0, 3).map((p) => p.title).filter((t) => t && t.length >= 4))
+    : [];
   const anchorTokens =
-    identityTokens.some((t) => !!t && t.length >= 3)
-      ? identityTokens
-      : [lastF];
+    identidadActivos.length > 0
+      ? [...identityTokens, ...identidadActivos]
+      : identityTokens.some((t) => !!t && t.length >= 3)
+        ? identityTokens
+        : [lastF];
   if (!hasAnchor(body, anchorTokens)) {
     const retry = await attempt("tu borrador no nombra de forma reconocible al cliente o su negocio (marca, empresa o línea): reescribe integrándolo de forma natural en una frase.");
     if (!hasAnchor(retry.body, anchorTokens)) throw new Error("Borrador sin ancla (rechazado por control de calidad).");
