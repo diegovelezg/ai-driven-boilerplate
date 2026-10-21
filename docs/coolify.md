@@ -11,13 +11,25 @@ Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
 
 | Recurso | Tipo Coolify | Dominio | Puerto interno |
 |---|---|---|---|
-| Supabase | Service (plantilla one-click `supabase`) | API: `https://retention-api.papelitosdecolor.com` (Kong) | 8000 |
-| Supabase | mismo service | Studio: `https://studio.papelitosdecolor.com` | 3000 (+ Basic Auth del dominio) |
+| Supabase lean (§1b: 7 sub-apps) | Service (plantilla one-click `supabase`) | API: `https://retention-api.papelitosdecolor.com` (Kong) | 8000 |
+| Supabase | mismo service | Studio: `https://retention-studio.papelitosdecolor.com` | 3000 (activar Basic Auth del dominio, pendiente §1.2) |
 | SearXNG | Service (plantilla one-click `searxng`) | autogenerado `https://<id>.papelitosdecolor.com` (wildcard, sin pedir DNS) | 8080 |
 | web | Application (repo git, build pack Dockerfile) | `https://retention.papelitosdecolor.com` | 3000 |
 | cron diario | Scheduled Task sobre `web` (ver 3b) | — | — |
 
 Postgres NO expone puerto público (la plantilla no publica 5432).
+
+¿Por qué dos dominios? No basta con Studio. Son piezas distintas:
+
+- `retention-api` (Kong) = el **backend**: la app `web` y cualquier cliente
+  leen/escriben ahí (`/rest/v1/`, `/auth/v1/`, `/realtime/v1/`). Sin este
+  dominio la app no tiene datos.
+- `retention-studio` = **panel visual solo para humanos** (mirar/editar
+  tablas a mano). La app jamás lo usa.
+
+Cada dominio va en su sub-app (Kong→8000, Studio→3000). Si ambos apuntan a
+Kong, el dominio de Studio solo duplica la API y el panel queda inaccesible
+(eso pasó el 2026-10-21 y se corrigió moviendo el dominio en Domains).
 
 ## 1. Service Supabase (one-click)
 
@@ -26,9 +38,11 @@ Coolify → proyecto `retention-ai-engine` → New → Service → `Supabase` �
 1. Sub-app `supabase-kong`, puerto 8000 → dominio
    `https://retention-api.papelitosdecolor.com`.
 2. Sub-app `supabase-studio`, puerto 3000 → dominio
-   `https://studio.papelitosdecolor.com` + **Basic Auth del dominio**
+   `https://retention-studio.papelitosdecolor.com` + **Basic Auth del dominio**
    (Domains → tu dominio → protección por contraseña). El Studio self-hosted
    no tiene login propio: sin esto queda abierto a internet.
+   **Pendiente (2026-10-21): hoy NO tiene Basic Auth** (responde 307 sin
+   credencial). Activarlo y anotar usuario/clave fuera de git.
 3. Environment del service (valores con esquema `https://` incluido):
    - `API_EXTERNAL_URL=https://retention-api.papelitosdecolor.com`
    - `SUPABASE_PUBLIC_URL=https://retention-api.papelitosdecolor.com`
@@ -43,6 +57,37 @@ Coolify → proyecto `retention-ai-engine` → New → Service → `Supabase` �
 4. Anotar del environment del service (se usan en la web, paso 3):
    `SUPABASE_ANON_KEY` (o `SERVICE_SUPABASEANON_KEY`), `SUPABASE_SERVICE_KEY` /
    `SUPABASE_SERVICE_ROLE_KEY` y `JWT_SECRET`.
+
+## 1b. Supabase lean (7 de 15 sub-apps, aplicado 2026-10-21)
+
+El stack one-click trae 15 sub-apps y ~1.5 GB solo para existir. Para el MVP
+bastan 7 (**~740 MB** medidos: kong 187 + studio 186 + realtime 142 + db 109
++ meta 65 + rest 33 + auth 19):
+
+- Se quedan: `db`, `rest`, `auth`, `realtime-dev`, `meta`, `kong`, `studio`.
+- Fuera: `storage` + `minio` + `minio-createbucket` (sin uploads S3),
+  `edge-functions` (lógica en la web/worker, no Deno), `analytics` + `vector`
+  (logs vía `docker logs`), `supavisor` (Postgres directo aguanta ~100
+  conexiones; picos reales <20), `imgproxy` (sin transforms por URL).
+
+Ajustes que acompañan al recorte (ya aplicados):
+
+- `PGRST_DB_SCHEMAS=public,graphql_public` (sin `storage`) en `rest` y `studio`.
+- `NEXT_PUBLIC_ENABLE_LOGS=false` en `studio` + fuera `LOGFLARE_*`,
+  `EDGE_FUNCTIONS_MANAGEMENT_FOLDER` y su volumen.
+- Kong responde `503` en `/storage/v1/*` y `/functions/v1/*` (rutas huérfanas
+  en `kong.yml`, inofensivas). Queda pendiente limpiar esos bloques y las
+  env huérfanas (`MINIO_*`, `STORAGE_*`, `IMGPROXY_*`, `FUNCTIONS_*`,
+  `POOLER_*`).
+
+**Fuente de verdad: `docker_compose_raw`, NO el archivo en disco.**
+Coolify regenera `/data/coolify/services/<uuid>/docker-compose.yml` desde
+`docker_compose_raw` (columna `services.docker_compose_raw`) en cada deploy:
+editar solo el archivo se pierde en el próximo redeploy (verificado: un
+restart resucitó los 8 servicios). Para recortar de forma durable hay que
+quitar los bloques del raw (vía `php artisan tinker` en el contenedor
+`coolify` + `Yaml::parse`, unset de los 8 servicios, `save()`) y redeplegar.
+Las filas huérfanas en `service_applications` (sin `fqdn`) no afectan.
 
 ## 2. Service SearXNG (one-click)
 
@@ -186,8 +231,9 @@ UPDATE auth.users
 
 ```bash
 curl -sk -o /dev/null -w '%{http_code}\n' https://retention.papelitosdecolor.com/login   # 200
-curl -sk https://retention-api.papelitosdecolor.com/auth/v1/health                       # GoTrue {"version":...}
-curl -sk -o /dev/null -w '%{http_code}\n' https://studio.papelitosdecolor.com/           # 401 sin credencial, 200 con ella
+curl -sk https://retention-api.papelitosdecolor.com/auth/v1/health                       # GoTrue exige apikey: 401 vía Kong es lo esperado
+curl -sk -o /dev/null -w '%{http_code}\n' https://retention-studio.papelitosdecolor.com/  # 307 (sin Basic Auth: pendiente §1.2)
+curl -sk -o /dev/null -w '%{http_code}\n' https://retention-api.papelitosdecolor.com/storage/v1/bucket  # 503 esperado (lean, §1b)
 curl -sk https://<searxng>/healthz
 docker ps --format '{{.Names}} {{.Ports}}' | grep -i 5432   # Postgres sin puerto público
 ```
@@ -250,9 +296,20 @@ node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');co
 ```
 - Redeploy que tumba el VPS: el build (`npm ci` + `next build` + toolchain
   nativo) satura un VPS al límite. Antes de reintentar: `free -m`, nada de
-  builds en paralelo, y parar stacks muertos (en este VPS había 3 stacks
-  Supabase y solo uno con datos). Si el container viejo sigue vivo, un
-  parche puntual vía `docker cp` (p. ej. `lib/` que el worker corre por
-  `tsx`) desbloquea sin rebuild; el fix real entra en el próximo build.
+  builds en paralelo, y parar stacks muertos (2026-10-21: había **5** stacks
+  Supabase y solo `jpixillx` con datos; los otros 4 se paran en Coolify con
+  Stop —no delete— para no perder volúmenes). Si el container viejo sigue
+  vivo, un parche puntual vía `docker cp` (p. ej. `lib/` que el worker corre
+  por `tsx`) desbloquea sin rebuild; el fix real entra en el próximo build.
 - No tocar contenedores, volúmenes, redes ni proxy de otros proyectos; no correr
   `docker builder prune` global.
+- Dominios `Indexable`: API y Studio no deben indexarse en Google (Domains →
+  engranaje → noindex). Pendiente de aplicar.
+
+## 8. Checklist de release (web)
+
+1. Env Coolify al día (valores literales, §3) + redeploy.
+2. Rebuild **sin caché** si cambió `NEXT_PUBLIC_*` o la anon key.
+3. §6 verde: login 200, API 401, Studio 307, SearXNG ok, conteos `verify`.
+4. Cron `retention-daily` corre 1 vez: `start stores=N … done failed=0`.
+5. Si el VPS está al límite, no desplegar nada más en paralelo (§7).
