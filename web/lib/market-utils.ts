@@ -25,6 +25,47 @@ export function marketCountry(m: Pick<TenantMarket, "name" | "countries">): stri
   return ISO2.test(name) ? name : null;
 }
 
+
+/** Asigna cada cliente a un market (issue #21 Paso 3): mayoría de market_id
+ *  en sus órdenes reales ≤ corte; fallback país→market; else null (legacy).
+ *  Asignación única: una fila por cliente (market_id = etiqueta).
+ *  Hogar puro compartido: producción (retention.ts) y tune (model-tune.ts)
+ *  usan la misma partición exacta. */
+export function assignMarket(
+  orderMarketIds: Array<string | null>,
+  customerCountry: string | null,
+  markets: TenantMarket[],
+): string | null {
+  const counts = new Map<string, number>();
+  for (const m of orderMarketIds) {
+    if (!m) continue;
+    counts.set(m, (counts.get(m) ?? 0) + 1);
+  }
+  if (counts.size > 0) {
+    let best: string | null = null;
+    let bestN = -1;
+    for (const [m, n] of counts) {
+      if (n > bestN || (n === bestN && (best === null || m < best))) {
+        best = m;
+        bestN = n;
+      }
+    }
+    if (best && markets.some((mk) => mk.id === best)) return best;
+    if (best) return best;
+  }
+  const cc = (customerCountry ?? "").trim().toUpperCase();
+  if (cc && /^[A-Z]{2}$/.test(cc)) {
+    for (const mk of markets) {
+      const countries = (mk.countries ?? []).map((c) => c.trim().toUpperCase());
+      if (countries.includes(cc)) return mk.id;
+    }
+    for (const mk of markets) {
+      if (marketCountry(mk) === cc) return mk.id;
+    }
+  }
+  return null;
+}
+
 /** Etiqueta del selector: "PE · PEN" (país si se identifica, si no nombre). */
 export function displayMarket(m: TenantMarket): string {
   const cur = (m.currency ?? "").toUpperCase();
