@@ -79,12 +79,36 @@ Coolify → New → Application → Public Repository:
 - `NEXT_PUBLIC_*` van **también como build-time** (Coolify: "Available at build
   time"): se inlinan en el bundle en `npm run build`. Todo cambio de URL o de
   ANON_KEY exige **rebuild sin caché** de la web.
+- Entre service y application **siempre valor literal, nunca `${...}`**: las
+  referencias no cruzan recursos y resuelven vacío (el worker queda sin key
+  con `401 No API key found`, ver §7). Service Supabase → Environment →
+  revelar y copiar:
+  - `SUPABASE_URL` = `https://retention-api.papelitosdecolor.com` (HTTPS
+    pública, no `localhost` ni hostname interno: cada service vive en su
+    propia red Docker).
+  - `SUPABASE_SERVICE_ROLE_KEY` = `SERVICE_ROLE_KEY` legacy (JWT `eyJ…`) o
+    `SUPABASE_SECRET_KEY` (`sb_secret_…`). **NO** usar
+    `SERVICE_ROLE_KEY_ASYMMETRIC` (es la JWK privada, no es apikey).
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = `ANON_KEY` legacy o
+    `SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_…`).
+  Tras cambiar env: **redeploy** de la `web` (si no, el container sigue con
+  el env viejo).
 - No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
 
 ## 3b. Cron diario (Scheduled Task sobre `web`, sin recurso worker)
 
 Coolify → Scheduled Task contra el recurso `web`, todos los días 11:00 UTC
 (= 06:00 Lima, sin DST):
+
+* Name: `retention-daily`
+* Schedule: `0 11 * * *`
+* Command:
+```
+npm run worker -- --once --kinds=sync,morning
+```
+* Timeout: `3600` (el full secuencial de 3-5 tiendas con pasos LLM supera
+  los 300s del default y la task lo mata a medias dejando solo la cabecera).
+* Container: el de la app `web`.
 
 ```
 npm run worker -- --once --kinds=sync,morning
@@ -93,6 +117,9 @@ npm run worker -- --once --kinds=sync,morning
 Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot atómico
 por tienda: si el login/manual lo está corriendo, el cron lo omite (run null),
 no duplica. Exit 1 si alguna tienda falló (visible en la tarea).
+Tras guardar: run manual y buscar en el log `start stores=N` … `done
+failed=0`. Si solo salen las líneas de `npm`/avisos de Node = el worker
+murió antes de arrancar (exit 0 falso): ver §7.
 Sin cola: la web corre `runSyncOnce` directo en `after()` (respuesta <200ms);
 el cron es solo el programador diario + las corridas manuales usan el mismo
 comando con `--store=<uuid>` opcional.
@@ -171,21 +198,23 @@ Probar una acción de enriquecimiento (usa `SEARXNG_URL`, `web/lib/retrieval.ts`
 ### Pipeline sin login (issue #24)
 
 ```sql
--- Studio → SQL editor:
-select kind, status, attempts, idempotency_key, available_at
-  from jobs where created_at > now() - interval '1 day'
-  order by created_at desc limit 20;
--- Esperado a las 06:05 Lima sin ningún login en 24h: 1 fila
--- kind=morning status=done por store, idempotency_key=morning-YYYY-MM-DD.
+-- Studio → SQL editor. La cinta es background_runs (la tabla jobs está
+-- retirada como artefacto histórico y siempre sale vacía, no la uses):
 select kind, status, summary, started_at
   from background_runs order by started_at desc limit 10;
--- La cinta muestra scout+strategist+copywriter+prospect `done` de hoy.
+-- Esperado a las 06:05 Lima sin ningún login en 24h: filas sync + scout +
+-- strategist + copywriter + prospect en done para cada store.
+-- Slot atómico (sin duplicados entre réplicas):
+select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+ where n.nspname = 'public' and proname = 'start_run_if_free';
+-- Debe devolver 1 fila; si sale vacía, aplicar
+-- supabase/migrations/20261029000001_run_slot.sql (ver §4 / script).
 ```
 
 Criterios: sin login en 24h el pipeline corre 1 vez por store; redeploy a
-mitad de job → el job se reintenta (`error` con `available_at` futuro, luego
-`done`; nunca `running` eterno); login con sesión siempre abierta no dispara
-trabajo pesado síncrono (solo `insert into jobs`, <200ms).
+mitad de run → `error` con `reap` a los 30min (sin reintento intra-día: hasta
+el próximo cron o rerun manual con `--store`); login con sesión siempre
+abierta no dispara trabajo pesado síncrono (solo `runSyncOnce` en `after()`).
 
 Local sigue igual: `npx supabase start` → `http://127.0.0.1:54323`.
 Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
@@ -200,5 +229,30 @@ Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
   `ADDITIONAL_REDIRECT_URLS` deben ser los dominios públicos con `https`.
 - `/customers` vacío: verificar conteos (paso 4 `verify`) y `merchant_users` linkeado.
 - SearXNG 403/5xx: revisar `SEARXNG_SECRET` del service y `SEARXNG_URL` de la web.
+- Task `retention-daily` en Success pero sin `start stores=N` (solo cabecera
+  `npm`/avisos Node): el worker murió antes de arrancar (exit 0 falso).
+  Causas vistas en prod, en orden:
+  1. `401 {"message":"No API key found in request"}` al listar `stores`:
+     falta `SUPABASE_SERVICE_ROLE_KEY` en el env de la `web` (típico:
+     quedó un `${...}` entre recursos o falta redeploy). Ojo: el task en
+     Success no significa nada (el `fetch` a `/health` no lanza con 401);
+     Kong exige `apikey` hasta en `/auth/v1/health`.
+  2. `[worker] Run slot: Could not find the function public.start_run_if_free`:
+     falta aplicar `20261029000001_run_slot.sql` en la BD prod (ver §6).
+  3. `[worker] Node.js detected but native WebSocket not found` (o silencio
+     total con exit 0 en tsx): `createClient` de supabase-js lanza en Node 20
+     sin WebSocket global. Fijado en `web/lib/supabase.ts` (polyfill `ws`
+     solo cuando falta; dep explícita en `web/package.json`).
+  Diagnóstico en la misma task (timeout 60), en orden:
+```
+node -e "fetch(process.env.SUPABASE_URL+'/auth/v1/health').then(r=>r.text().then(t=>console.log(r.status,t.slice(0,80)))).catch(e=>console.error('FETCH_FAIL',e.message))"
+node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');const db=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false}});const{data,error}=await db.from('stores').select('id,platform').limit(20);if(error){console.error('STORES_FAIL',error.message);process.exit(1)}console.log(JSON.stringify(data))})()"
+```
+- Redeploy que tumba el VPS: el build (`npm ci` + `next build` + toolchain
+  nativo) satura un VPS al límite. Antes de reintentar: `free -m`, nada de
+  builds en paralelo, y parar stacks muertos (en este VPS había 3 stacks
+  Supabase y solo uno con datos). Si el container viejo sigue vivo, un
+  parche puntual vía `docker cp` (p. ej. `lib/` que el worker corre por
+  `tsx`) desbloquea sin rebuild; el fix real entra en el próximo build.
 - No tocar contenedores, volúmenes, redes ni proxy de otros proyectos; no correr
   `docker builder prune` global.
