@@ -56,6 +56,15 @@ async function runOnce(store: string | undefined, kinds: string[] | undefined): 
   if (!isSupabaseConfigured()) {
     throw new Error("Falta SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");
   }
+  // Gate de esquema (2026-10-21: web 9 migraciones por delante de prod):
+  // fallar en rojo con el remedio exacto en vez de correr a medias y
+  // llenar el log de "Could not find the table ... in the schema cache".
+  {
+    const { getSupabase } = await import("@/lib/supabase");
+    const { checkSchema, schemaGapMessage } = await import("@/lib/schema-guard");
+    const gaps = await checkSchema(getSupabase());
+    if (gaps.length > 0) throw new Error(schemaGapMessage(gaps));
+  }
   const stores = await listSyncStores(store);
   if (stores.length === 0) {
     throw new Error("Sin tiendas (o --store inexistente).");
@@ -131,7 +140,7 @@ async function runDaemon(store: string | undefined, kinds: string[] | undefined,
 /** Errores que indican deploy roto (no transitorios): salir, no reintentar. */
 function isFatalWorkerError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
-  return /Falta SUPABASE|Sin tiendas|Stores read/i.test(msg);
+  return /Falta SUPABASE|Sin tiendas|Stores read|DB detrás del código/i.test(msg);
 }
 
 async function main(): Promise<void> {

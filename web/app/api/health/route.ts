@@ -35,7 +35,7 @@ export async function GET(req: Request) {
   const db = getSupabase();
   const scope = await resolveMarketScope(active.id, sp.get("market")).catch(() => null);
   try {
-    const [dupN, enrichN, buyersN] = await Promise.all([
+    const [dupN, enrichN, buyersN, schema] = await Promise.all([
       countDuplicateEmails(active.id, scope).catch(() => 0),
       pendingDomains(active.id, scope, { fresh: true }).then((d) => d.length).catch(() => 0),
       (async () => {
@@ -45,12 +45,21 @@ export async function GET(req: Request) {
         );
         return n ?? 0;
       })().catch(() => 0),
+      // Gate visible (best-effort, nunca tumba el health): si la DB va por
+      // detrás del código, la UI/cron lo ve aquí sin leer logs.
+      (async () => {
+        const { checkSchema } = await import("@/lib/schema-guard");
+        const gaps = await checkSchema(db);
+        return { ok: gaps.length === 0, gaps: gaps.map((g) => g.relation) };
+      })().catch(() => ({ ok: true, gaps: [] as string[] })),
     ]);
     return Response.json({
       store_id: active.id,
       duplicateCount: dupN,
       enrichPending: enrichN,
       buyers: buyersN,
+      schemaOk: schema.ok,
+      schemaGaps: schema.gaps,
     });
   } catch (e) {
     return Response.json(

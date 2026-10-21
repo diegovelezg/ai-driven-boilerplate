@@ -6,7 +6,7 @@
 // Corre en background con `background_runs` kind `strategist`.
 import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
-import { advanceRun, finishRun, setRunTotal, type RunStatus } from "@/lib/background";
+import { advanceRun, finishRun, setRunTotal, type RunStatus, formatRunError } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { formatNumber } from "@/lib/format";
 
@@ -221,7 +221,7 @@ export async function runStrategist(
       status: "error",
       processed: prioritized,
       failed: 0,
-      error: e instanceof Error ? e.message : String(e),
+      error: formatRunError(e),
     });
     log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
   }

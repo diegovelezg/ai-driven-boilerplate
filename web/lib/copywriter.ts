@@ -7,7 +7,7 @@ import { getSupabase } from "@/lib/supabase";
 import { getRankedMira } from "@/lib/mira";
 import { JUDGE_GEN, judgeContactability, type JudgeItem } from "@/lib/contactability";
 import { JUDGE_VETO_PREFIX } from "@/lib/single-audit";
-import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { advanceRun, finishRun, type RunStatus, formatRunError } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
 import { getLlmConfig } from "@/lib/ai/llm-config";
@@ -925,7 +925,7 @@ export async function runCopywriter(
       status: "error",
       processed: drafted,
       failed,
-      error: e instanceof Error ? e.message : String(e),
+      error: formatRunError(e),
     });
     log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
   }
@@ -1284,7 +1284,7 @@ export async function runStaleRefresh(
       status: "error",
       processed: drafted,
       failed,
-      error: e instanceof Error ? e.message : String(e),
+      error: formatRunError(e),
     }).catch(() => {});
     log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
   }

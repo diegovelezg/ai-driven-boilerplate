@@ -25,6 +25,11 @@ FROM node:20-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# Crawlee (scout/prospect) spawnea `ps` para sus snapshots de memoria
+# (@apify/ps-tree): la imagen slim no lo trae y el crawl muere con
+# `spawn ps ENOENT` (prospect en error 4 corridas seguidas, 2026-10-21).
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+  && rm -rf /var/lib/apt/lists/
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./

@@ -302,6 +302,23 @@ export async function advanceRun(
     .eq("id", runId);
 }
 
+/** Error compacto con stack para background_runs.error (text): si un worker
+ *  falla en prod, el origen queda en la DB sin adivinar (deuda 2026-10-21:
+ *  prospect moría con "Cannot read properties of undefined (reading
+ *  'bind')" sin frames). Solo mensaje + 3 frames, cap 600. */
+export function formatRunError(e: unknown, max = 600): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (!(e instanceof Error) || !e.stack) return msg;
+  const frames = e.stack
+    .split("\n")
+    .slice(1, 4)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(" <- ");
+  const out = frames ? `${msg} [${frames}]` : msg;
+  return out.length > max ? `${out.slice(0, max)}…` : out;
+}
+
 /** Cierra una corrida con su resultado final. */
 export async function finishRun(
   runId: string,

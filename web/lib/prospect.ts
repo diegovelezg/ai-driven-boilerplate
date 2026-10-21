@@ -17,7 +17,7 @@ import {
   type Scraped,
   type SearchHit,
 } from "@/lib/retrieval";
-import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
+import { advanceRun, finishRun, type RunStatus, formatRunError } from "@/lib/background";
 import { formatNumber } from "@/lib/format";
 import { createLogger } from "@/lib/log";
 
@@ -766,7 +766,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
       status: "error",
       processed,
       failed,
-      error: e instanceof Error ? e.message : String(e),
+      error: formatRunError(e),
     });
   }
 }

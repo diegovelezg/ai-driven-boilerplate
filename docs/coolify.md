@@ -188,10 +188,20 @@ peer-auth, sin password y sin copiar archivos al VPS). Script versionado:
 
 ```bash
 export SSHPASS='<root VPS>' VPS_IP=46.225.73.40
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh schema  # 52 migraciones en orden + tracking public.schema_migrations
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh status     # solo lectura: pendientes local vs VPS (exit 1 si hay)
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh schema     # todas las migraciones en orden + tracking public.schema_migrations
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh relations  # solo lectura: tablas/columnas que el código asume
 DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh data <public-data.sql> [auth.sql]  # data-only (sin tracking)
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify  # esperado: stores=1 customers=952 orders=699 merchant_users=0 auth.users=1 auth.identities=1
+DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify     # esperado: stores=1 customers=953 orders=699 merchant_users=1 auth.users=1 auth.identities=1
 ```
+
+Tras `schema` con DDL (tablas/columnas nuevas): **reiniciar la sub-app
+`rest`** en Coolify (o `NOTIFY pgrst, 'reload schema'`). PostgREST cachea el
+esquema: sin reload la app sigue viendo `Could not find the table ... in the
+schema cache` aunque la tabla ya exista (pasó el 2026-10-21 con `products`).
+Gate en runtime por si se omite este paso: el worker falla en rojo al
+arrancar (`DB detrás del código...`, ver `web/lib/schema-guard.ts`) y
+`/api/health` lo expone como `schemaOk/schemaGaps`.
 
 Notas:
 
@@ -275,6 +285,9 @@ Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
   `ADDITIONAL_REDIRECT_URLS` deben ser los dominios públicos con `https`.
 - `/customers` vacío: verificar conteos (paso 4 `verify`) y `merchant_users` linkeado.
 - SearXNG 403/5xx: revisar `SEARXNG_SECRET` del service y `SEARXNG_URL` de la web.
+- Prospect en `error` con `spawn ps ENOENT` (crawl en 0 requests): faltaba
+  `procps` en la imagen runner (Crawlee spawnea `ps` para memoria).
+  Fijado en `web/Dockerfile`; exige rebuild + redeploy de la web.
 - Task `retention-daily` en Success pero sin `start stores=N` (solo cabecera
   `npm`/avisos Node): el worker murió antes de arrancar (exit 0 falso).
   Causas vistas en prod, en orden:
@@ -308,6 +321,11 @@ node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');co
 
 ## 8. Checklist de release (web)
 
+0. Schema al día **antes** de desplegar la web: `status` sin pendientes,
+   `relations` ok y `verify` verde. Si el release trae DDL, reiniciar `rest`
+   tras el `schema` (schema-cache). Regla: nunca desplegar código que asuma
+   tablas/columnas que prod aún no tiene (2026-10-21: 9 migraciones por
+   detrás → `products` invisible + `para actuar hoy` 1 vs 2 por foto vieja).
 1. Env Coolify al día (valores literales, §3) + redeploy.
 2. Rebuild **sin caché** si cambió `NEXT_PUBLIC_*` o la anon key.
 3. §6 verde: login 200, API 401, Studio 307, SearXNG ok, conteos `verify`.

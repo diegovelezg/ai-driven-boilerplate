@@ -14,6 +14,12 @@
 #   public.schema_migrations (se crea si no existe). Idempotente: las ya
 #   aplicadas se omiten, y un fallo hace rollback y se reintenta en la próxima
 #   pasada (--single-transaction -v ON_ERROR_STOP=1).
+# - status: solo lectura. Compara *.sql locales contra el tracking e imprime
+#   las pendientes (exit 1 si hay). Usar en el checklist de release (§8) y
+#   como gate antes de desplegar la web.
+# - relations: solo lectura. Verifica que existan las tablas/columnas que el
+#   código ya asume (products, item_content, metadata_map, brain_json...).
+# - verify: comprueba conteos esperados (override con EXPECT_*).
 # - data: dumps data-only (generados con pg_dump --exclude-table-data=
 #   public.schema_migrations para no pisar el tracking). No toca el tracking.
 # - verify: comprueba conteos esperados (override con EXPECT_*).
@@ -35,15 +41,19 @@ usage() {
 }
 
 # psql en el contenedor. Sin args extra lee SQL por stdin; con -c ejecuta.
+# OJO ssh: los args se re-ensamblan en un shell remoto, así que se citan
+# con %q (sin esto, un `-c "SELECT count(*) ..."` rompe por los paréntesis).
 db_exec() {
   if [ -n "$VPS_IP" ]; then
+    local remote
+    remote="$(printf '%q ' docker exec -i -u postgres "$DB_CONTAINER" psql "$@")"
     if [ -n "$SSHPASS" ] && command -v sshpass >/dev/null 2>&1; then
       export SSHPASS
-      sshpass -e ssh -o StrictHostKeyChecking=accept-new "root@$VPS_IP" \
-        docker exec -i -u postgres "$DB_CONTAINER" psql "$@"
+      # shellcheck disable=SC2086
+      sshpass -e ssh -o StrictHostKeyChecking=accept-new "root@$VPS_IP" "$remote"
     else
-      ssh -o StrictHostKeyChecking=accept-new "root@$VPS_IP" \
-        docker exec -i -u postgres "$DB_CONTAINER" psql "$@"
+      # shellcheck disable=SC2086
+      ssh -o StrictHostKeyChecking=accept-new "root@$VPS_IP" "$remote"
     fi
   else
     docker exec -i -u postgres "$DB_CONTAINER" psql "$@"
@@ -51,6 +61,37 @@ db_exec() {
 }
 
 db_query() { db_exec -tA -c "$1"; }
+
+# status: solo lectura. Compara supabase/migrations/*.sql (fuente de verdad
+# local) contra public.schema_migrations del contenedor e imprime las
+# pendientes. Pensado para el checklist de release y como gate de deploy:
+# si imprime algo, la DB está detrás (ver docs/coolify.md §8).
+cmd_status() {
+  local applied
+  applied="$(db_query "SELECT filename FROM public.schema_migrations;" 2>/dev/null)" || {
+    echo "status: sin tracking (public.schema_migrations no existe o no legible)."
+    echo "status: DB vacía o anterior al versionado → todo pendiente."
+    exit 2
+  }
+  shopt -s nullglob
+  local n_pending=0
+  local f name
+  for f in "$MIGRATIONS_DIR"/*.sql; do
+    name="$(basename "$f")"
+    if printf '%s\n' "$applied" | grep -qxF "$name"; then
+      echo "ok    $name"
+    else
+      echo "PEND  $name"
+      n_pending=$((n_pending + 1))
+    fi
+  done
+  if [ "$n_pending" -eq 0 ]; then
+    echo "status: al día."
+  else
+    echo "status: $n_pending pendiente(s) → correr: DB_CONTAINER=$DB_CONTAINER ./scripts/retain-apply.sh schema"
+    exit 1
+  fi
+}
 
 cmd_schema() {
   db_exec --single-transaction -v ON_ERROR_STOP=1 -c \
@@ -99,16 +140,51 @@ cmd_verify() {
     fi
   }
   check "SELECT count(*) FROM public.stores;"            "${EXPECT_STORES:-1}"            "stores"
-  check "SELECT count(*) FROM public.customers;"         "${EXPECT_CUSTOMERS:-952}"       "customers"
+  check "SELECT count(*) FROM public.customers;"         "${EXPECT_CUSTOMERS:-953}"       "customers"
   check "SELECT count(*) FROM public.orders;"            "${EXPECT_ORDERS:-699}"          "orders"
-  check "SELECT count(*) FROM public.merchant_users;"    "${EXPECT_MERCHANT_USERS:-0}"    "merchant_users"
+  check "SELECT count(*) FROM public.merchant_users;"    "${EXPECT_MERCHANT_USERS:-1}"    "merchant_users"
   check "SELECT count(*) FROM auth.users;"               "${EXPECT_AUTH_USERS:-1}"        "auth.users"
   check "SELECT count(*) FROM auth.identities;"          "${EXPECT_AUTH_IDENTITIES:-1}"   "auth.identities"
   [ "$fail" -eq 0 ] && echo "verify: ok." || { echo "verify: FAIL."; exit 1; }
 }
 
+# Requiere tablas/columnas que el código ya asume (fail-closed): si falta
+# alguna, la app y el worker fallan con "Could not find the table..." en vez
+# de degradar en silencio. Ver lib/schema-guard.ts (gate en runtime).
+cmd_relations() {
+  local fail=0
+  rel() {
+    local got
+    got="$(db_query "SELECT to_regclass('public.$1');")"
+    if [ "$got" = "$1" ]; then
+      echo "ok    public.$1"
+    else
+      echo "FALTA public.$1"
+      fail=1
+    fi
+  }
+  rel products
+  rel product_stats
+  rel item_content
+  rel customer_predictions
+  rel background_runs
+  for col in metadata_map brain_json; do
+    local got
+    got="$(db_query "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='store_profiles' AND column_name='$col';")"
+    if [ "$got" = "$col" ]; then
+      echo "ok    store_profiles.$col"
+    else
+      echo "FALTA store_profiles.$col"
+      fail=1
+    fi
+  done
+  [ "$fail" -eq 0 ] && echo "relations: ok." || { echo "relations: FAIL."; exit 1; }
+}
+
 case "$MODE" in
   schema) cmd_schema ;;
+  status) cmd_status ;;
+  relations) cmd_relations ;;
   data) shift; cmd_data "$@" ;;
   verify) cmd_verify ;;
   *) usage ;;
