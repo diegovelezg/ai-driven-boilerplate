@@ -19,9 +19,10 @@ const log = createLogger("copywriter");
 
 /** Versión del criterio generador. Sube cuando cambia el prompt/reglas:
  *  el regenerador solo rehace pendientes con sello viejo. */
-import { COPYWRITER_GEN } from "./copywriter-gen";
+import { COPYWRITER_GEN, isFreshGenerator, selectStaleRefresh, type StaleDraftRow } from "./copywriter-gen";
 
 export { COPYWRITER_GEN };
+export { selectStaleRefresh, type StaleDraftRow };
 
 /** Sustantivo neutro para el brief según catálogo (el LLM repite esta palabra).
  *  Sin esto, todo tenant suena a vía pública ("pauta", "circuito", "zona"). */
@@ -918,6 +919,365 @@ export async function runCopywriter(
       failed,
       error: e instanceof Error ? e.message : String(e),
     });
+    log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+/**
+ * Auto-refresh transparente de stale (#26): re-redacta pendientes con sello
+ * viejo sin tocar approved/dispatched y sin auto-envíos. Flujo por borrador:
+ * compone con criterios actuales → borra el viejo POR ID solo si el nuevo
+ * quedó OK → inserta el fresco + señal a `actioned` (solo señales vivas).
+ * Huérfanos sin señal se purgan (no se pueden redactar ni enviar); señales
+ * `closed`/`dismissed` se saltan (no se resucitan). Acotado a 10/corrida y
+ * 1 `buildSystem` por corrida (sin N+1). Best-effort: el fallo deja el viejo
+ * pendiente y el siguiente login reintenta.
+ */
+export async function runStaleRefresh(
+  runId: string,
+  storeId: string,
+  opts: { limit?: number } = {},
+): Promise<void> {
+  const limit = Math.max(0, Math.min(opts.limit ?? 10, 10));
+  const db = getSupabase();
+  let drafted = 0;
+  let failed = 0;
+  let skipped = 0;
+  let purged = 0;
+  const step = (current: string | null) =>
+    advanceRun(runId, { processed: drafted, failed, current });
+  const doneSummary = (n: number) =>
+    n > 0
+      ? `${formatNumber(n)} ${n === 1 ? "borrador actualizado" : "borradores actualizados"} con criterios nuevos · ${n === 1 ? "sigue pendiente" : "siguen pendientes"} de tu visto bueno`
+      : "Nada que actualizar: todo con criterios actuales";
+  // Límite 0 = apagado real: ni purga ni redrafts, sin lecturas pesadas.
+  if (limit === 0) {
+    await finishRun(runId, { status: "done", processed: 0, failed: 0, summary: doneSummary(0), pulseState: "paused" });
+    log(`run ${runId} omitido (limite=0)`);
+    return;
+  }
+  try {
+    // 1. Pendientes stale (paginado con range, escaneo acotado: basta para
+    // llenar el límite sin leer el universo cada mañana).
+    const stale: Array<{ id: string; signal_id: string | null; customer_id: string; generator: string | null; decision: string | null; pRecompraH: number | null }> = [];
+    let scanned = 0;
+    const PAGE = 500;
+    const MAX_SCAN = 2000;
+    for (let off = 0; off < MAX_SCAN; off += PAGE) {
+      const { data, error } = await db
+        .from("proposed_actions")
+        .select("id,signal_id,customer_id,evidence_json")
+        .eq("store_id", storeId)
+        .eq("status", "pending_review")
+        .order("id", { ascending: true })
+        .range(off, off + PAGE - 1);
+      if (error) throw new Error(`Stale read: ${error.message}`);
+      const page = (data ?? []) as Array<Record<string, unknown>>;
+      scanned += page.length;
+      for (const r of page) {
+        const ev = (r.evidence_json as Record<string, unknown> | null) ?? null;
+        const gen = ev ? String((ev as Record<string, unknown>).generator ?? "") : "";
+        if (isFreshGenerator(gen)) continue;
+        // P2: el refresco debe conservar el segmento del motor (si no, cae
+        // en `unknown` en Finanzas). Se hereda del borrador viejo y, si falta,
+        // se rellena con la predicción vigente (paso 5b).
+        const decRaw = ev ? (ev as Record<string, unknown>).decision : null;
+        const pRaw = ev ? ((ev as Record<string, unknown>).p_recompra_h ?? (ev as Record<string, unknown>).pRecompraH) : null;
+        stale.push({
+          id: String(r.id ?? ""),
+          signal_id: (r.signal_id as string | null) ?? null,
+          customer_id: String(r.customer_id ?? ""),
+          generator: gen || null,
+          decision: typeof decRaw === "string" && decRaw ? decRaw : null,
+          pRecompraH: typeof pRaw === "number" && Number.isFinite(pRaw) ? pRaw : null,
+        });
+        if (stale.length >= Math.max(limit * 3, 30)) break;
+      }
+      if (page.length < PAGE) break;
+      if (stale.length >= Math.max(limit * 3, 30)) break;
+    }
+    log(`run ${runId} stale pendientes=${stale.length} (escaneados=${scanned} limite=${limit})`);
+    if (stale.length === 0) {
+      await finishRun(runId, { status: "done", processed: 0, failed: 0, summary: doneSummary(0), pulseState: "paused" });
+      return;
+    }
+    const staleIds = new Set(stale.map((s) => s.id));
+
+    // 2. Estado de sus señales (misma guarda que el bulk: sin comprobar no se toca).
+    const sids = [...new Set(stale.map((s) => s.signal_id).filter((x): x is string => !!x))];
+    const sigById = new Map<string, { status: string; kind: string; objective: string | null; score: number | null; reason: string | null; customer_id: string }>();
+    for (let i = 0; i < sids.length; i += 200) {
+      const { data, error } = await db
+        .from("churn_signals")
+        .select("id,status,kind,objective,score,reason,customer_id")
+        .in("id", sids.slice(i, i + 200));
+      if (error) throw new Error(`Signals read: ${error.message}`);
+      for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+        sigById.set(String(r.id ?? ""), {
+          status: String(r.status ?? ""),
+          kind: String(r.kind ?? ""),
+          objective: (r.objective as string | null) ?? null,
+          score: typeof r.score === "number" ? r.score : null,
+          reason: (r.reason as string | null) ?? null,
+          customer_id: String(r.customer_id ?? ""),
+        });
+      }
+    }
+
+    // 3. Huérfanos sin señal: se purgan (no se pueden redactar ni enviar,
+    // igual que el botón manual). Solo pending_review + stale + sin fila.
+    // P3: acotado por el mismo límite (barato pero mutación al fin): con
+    // más huérfanos que el límite, el resto queda para la próxima mañana.
+    const orphansAll = stale.filter((s) => !s.signal_id || !sigById.has(s.signal_id));
+    const orphans = orphansAll.slice(0, limit);
+    if (orphansAll.length > orphans.length) {
+      log(`run ${runId} huerfanos diferidos=${orphansAll.length - orphans.length} (limite=${limit})`);
+    }
+    for (let i = 0; i < orphans.length; i += 200) {
+      const chunk = orphans.slice(i, i + 200).map((s) => s.id);
+      const { error } = await db
+        .from("proposed_actions")
+        .delete()
+        .in("id", chunk)
+        .eq("status", "pending_review");
+      if (error) throw new Error(`Orphan purge: ${error.message}`);
+      purged += chunk.length;
+      await step(null).catch(() => {});
+    }
+    if (orphans.length > 0) log(`run ${runId} huerfanos purgados=${orphans.length}`);
+    const withSignal = stale.filter((s) => s.signal_id && sigById.has(s.signal_id));
+
+    // 4. Busy fresco (excluye a los propios stale: si no, todo se auto-bloquea).
+    // Paginado completo como runCopywriter (el .limit(500) truncado duplicaba).
+    const busySignal = new Set<string>();
+    const busyCustomer = new Set<string>();
+    for (let off = 0; ; off += 1000) {
+      const { data: epage, error: eErr } = await db
+        .from("proposed_actions")
+        .select("id,signal_id,customer_id")
+        .eq("store_id", storeId)
+        .in("status", ["pending_review", "approved"])
+        .order("id", { ascending: true })
+        .range(off, off + 999);
+      if (eErr) throw new Error(`Existing read: ${eErr.message}`);
+      const erows = (epage ?? []) as Array<Record<string, unknown>>;
+      for (const a of erows) {
+        const aid = String(a.id ?? "");
+        if (staleIds.has(aid)) continue;
+        const sid = String(a.signal_id ?? "");
+        const cid = String(a.customer_id ?? "");
+        if (sid) busySignal.add(sid);
+        if (cid) busyCustomer.add(cid);
+      }
+      if (erows.length < 1000) break;
+      if (busySignal.size + busyCustomer.size >= 20000) break;
+    }
+
+    // 5. Selección pura (stale-solo-pending, vivas, límite, 1-por-cliente).
+    const rows: StaleDraftRow[] = withSignal.map((s) => ({
+      id: s.id,
+      signalId: s.signal_id,
+      customerId: s.customer_id,
+      status: "pending_review",
+      generator: s.generator,
+    }));
+    const statusById: Record<string, string> = {};
+    for (const [k, v] of sigById) statusById[k] = v.status;
+    const picked = selectStaleRefresh(rows, statusById, { limit, busySignal, busyCustomer });
+    const closedSkipped = withSignal.length - picked.length - withSignal.filter((s) => busySignal.has(s.signal_id!) || busyCustomer.has(s.customer_id)).length;
+    log(`run ${runId} elegidos=${picked.length} (vivas=${withSignal.length} busy/omitidos=${withSignal.length - picked.length} cerradas≈${Math.max(0, closedSkipped)})`);
+    if (picked.length === 0) {
+      await finishRun(runId, {
+        status: "done",
+        processed: 0,
+        failed: 0,
+        summary: doneSummary(0),
+        pulseState: "paused",
+      });
+      return;
+    }
+
+    // 6. Datos para redactar los elegidos (clientes + predicción vigente).
+    // P2: sin decision/p_recompra_h el refrescado cae en `unknown` en
+    // Finanzas. Orden: borrador viejo → predicción vigente → null honesto.
+    const pickedCids = [...new Set(picked.map((p) => p.customerId))];
+    const staleById = new Map(stale.map((s) => [s.id, s]));
+    const custById = new Map<string, { email: string; first_name: string | null; last_name: string | null; phone: string | null; company_name: string | null; country: string | null }>();
+    for (let i = 0; i < pickedCids.length; i += 200) {
+      const { data, error } = await db
+        .from("customers")
+        .select("id,email,first_name,last_name,phone,company_name,country")
+        .in("id", pickedCids.slice(i, i + 200));
+      if (error) throw new Error(`Customers read: ${error.message}`);
+      for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+        custById.set(String(r.id ?? ""), {
+          email: String(r.email ?? ""),
+          first_name: (r.first_name as string | null) ?? null,
+          last_name: (r.last_name as string | null) ?? null,
+          phone: (r.phone as string | null) ?? null,
+          company_name: (r.company_name as string | null) ?? null,
+          country: (r.country as string | null) ?? null,
+        });
+      }
+    }
+    const predByCust = new Map<string, { decision: string | null; p: number | null }>();
+    for (let i = 0; i < pickedCids.length; i += 200) {
+      const { data, error } = await db
+        .from("customer_predictions")
+        .select("customer_id,decision,p_recompra_h,as_of")
+        .eq("store_id", storeId)
+        .in("customer_id", pickedCids.slice(i, i + 200))
+        .order("as_of", { ascending: false })
+        .order("id", { ascending: true })
+        .range(0, 499);
+      if (error) break;
+      for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+        const cid = String(r.customer_id ?? "");
+        if (!cid || predByCust.has(cid)) continue;
+        const dec = typeof r.decision === "string" && r.decision ? r.decision : null;
+        predByCust.set(cid, {
+          decision: dec,
+          p: typeof r.p_recompra_h === "number" ? (r.p_recompra_h as number) : null,
+        });
+      }
+    }
+
+    // 7. Un solo buildSystem por corrida (sin N+1, como runCopywriter).
+    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
+    const { isFullyOptedOut, isOptedOut } = await import("@/lib/pre-send");
+
+    const draftedCustomer = new Set<string>();
+    for (const p of picked) {
+      if (drafted >= limit) break;
+      if (draftedCustomer.has(p.customerId)) continue;
+      const sig = sigById.get(String(p.signalId!));
+      const cust = custById.get(p.customerId);
+      if (!sig || !cust) {
+        skipped += 1;
+        continue;
+      }
+      const s: Prioritized = {
+        id: String(p.signalId!),
+        kind: sig.kind,
+        objective: sig.objective,
+        score: sig.score,
+        reason: sig.reason,
+        customer_id: p.customerId,
+        email: cust.email,
+        first_name: cust.first_name,
+        last_name: cust.last_name,
+        phone: cust.phone,
+        companyName: cust.company_name,
+        country: cust.country,
+        decision: staleById.get(p.id)?.decision ?? predByCust.get(p.customerId)?.decision ?? null,
+        pRecompraH: staleById.get(p.id)?.pRecompraH ?? predByCust.get(p.customerId)?.p ?? null,
+      };
+      await step(null);
+      try {
+        if (await isFullyOptedOut(storeId, s.customer_id)) {
+          throw new OptOutSkip("baja total del destinatario (opt-out email + whatsapp)");
+        }
+        const { channel, body, subject, verdict } = await composeDraftCopy(db, storeId, system, s, {
+          runId,
+          catalog,
+          brain,
+          inactiveNorm,
+        });
+        if (await isOptedOut(storeId, s.customer_id, channel)) {
+          throw new OptOutSkip(`baja del destinatario en ${channel} (opt-out)`);
+        }
+        // Re-chequeo de señal viva justo antes de mutar (no resucitar
+        // closed/dismissed por carrera): solo open/prioritized/actioned.
+        const { data: liveRow } = await db
+          .from("churn_signals")
+          .select("id,status")
+          .eq("id", s.id)
+          .in("status", ["open", "prioritized", "actioned"])
+          .maybeSingle();
+        if (!liveRow) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (señal ya no viva)`);
+          continue;
+        }
+        // Borrar-tras-redactar-OK por id (no tumba un aprobado concurrente:
+        // el eq pending_review deja el aprobado intacto).
+        const { error: delErr } = await db
+          .from("proposed_actions")
+          .delete()
+          .eq("id", p.id)
+          .eq("status", "pending_review");
+        if (delErr) throw new Error(`Stale delete: ${delErr.message}`);
+        const { error: insErr } = await db.from("proposed_actions").insert({
+          store_id: storeId,
+          customer_id: s.customer_id,
+          country: s.country,
+          signal_id: s.id,
+          channel,
+          subject: channel === "email" ? subject : null,
+          body: body.slice(0, 2000),
+          status: "pending_review",
+          evidence_json: {
+            generator: COPYWRITER_GEN,
+            run_id: runId,
+            catalog,
+            at: new Date().toISOString(),
+            refreshed_from: p.id,
+            contactability: {
+              eligible: true,
+              reusable: verdict.reusable,
+              reason: verdict.reason,
+              fail_open: verdict.failOpen,
+              generator: JUDGE_GEN,
+            },
+            decision: s.decision ?? null,
+            p_recompra_h: s.pRecompraH ?? null,
+            kind: s.kind ?? null,
+            objective: s.objective ?? null,
+            reason: s.reason ?? null,
+          },
+        });
+        if (insErr) throw new Error(`Action insert: ${insErr.message}`);
+        // La señal queda con pendiente fresco: actioned. Solo se toca si
+        // sigue viva (guardia .in): jamás closed/dismissed.
+        await db
+          .from("churn_signals")
+          .update({ status: "actioned" })
+          .eq("id", s.id)
+          .in("status", ["open", "prioritized", "actioned"]);
+        drafted += 1;
+        draftedCustomer.add(s.customer_id);
+        log(`run ${runId} refresh ${s.email || s.customer_id} → ${channel} (${body.length} chars)`);
+      } catch (e) {
+        if (e instanceof OptOutSkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (opt-out): ${e.message}`);
+        } else if (e instanceof ContactabilitySkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (juez): ${e.message}`);
+        } else {
+          failed += 1;
+          log(`run ${runId} ${s.email || s.customer_id} ERROR ${e instanceof Error ? e.message : e}`);
+        }
+      }
+    }
+
+    await step(null);
+    const status: RunStatus = drafted === 0 && failed > 0 ? "error" : "done";
+    await finishRun(runId, {
+      status,
+      processed: drafted,
+      failed,
+      summary: doneSummary(drafted),
+      pulseState: drafted > 0 ? "needs" : "paused",
+    });
+    log(`run ${runId} ${status} actualizados=${drafted} purgados=${purged} omitidos=${skipped} fallidos=${failed} (limite=${limit})`);
+  } catch (e) {
+    await finishRun(runId, {
+      status: "error",
+      processed: drafted,
+      failed,
+      error: e instanceof Error ? e.message : String(e),
+    }).catch(() => {});
     log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
   }
 }

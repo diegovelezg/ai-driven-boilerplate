@@ -18,9 +18,18 @@ export function SyncButton() {
       size="sm"
       disabled={busy}
       onClick={async () => {
-        const r = await start(syncCustomersAction);
-        if (!r.ok) {
-          toast.add({ title: "No se pudo sincronizar", description: r.message, type: "error" });
+        try {
+          const r = await start(syncCustomersAction);
+          // Con run la cinta ya avisa; sin run avisar aquí.
+          if (!r.ok && !r.run) {
+            toast.add({ title: "No se pudo sincronizar", description: r.message, type: "error" });
+          }
+        } catch (e) {
+          toast.add({
+            title: "No se pudo sincronizar",
+            description: e instanceof Error ? e.message : "Error inesperado.",
+            type: "error",
+          });
         }
       }}
     >

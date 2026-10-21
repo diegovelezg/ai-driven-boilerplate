@@ -5,6 +5,7 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
 import { resolveStoreId } from "@/lib/customers-db";
 import { COPYWRITER_GEN, draftSingleSignal } from "@/lib/copywriter";
+import { getChannelVariants, isReusableChannelVariant, type ChannelVariant } from "@/lib/channel-variants";
 import { isFreshGenerator, isV1SignalReason } from "@/lib/copywriter-gen";
 import { advanceRun, finishRun, getLatestRun, hasConflict, setRunTotal, startRun, type BackgroundRun } from "@/lib/background";
 import { busyMessage } from "@/lib/operations";
@@ -265,6 +266,7 @@ export async function updateDraftContentAction(
     return { ok: false, message: `Canal desconocido: ${channel}.` };
   }
   const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const prevVariants = getChannelVariants(prev);
   const { error } = await db
     .from("proposed_actions")
     .update({
@@ -275,6 +277,17 @@ export async function updateDraftContentAction(
         // La edición humana valida el texto: sella criterios actuales para
         // que no quede como stale eterno (botón Regenerar + puerta de envío).
         generator: COPYWRITER_GEN,
+        // La edición es la verdad del canal: el switch la restaura tal cual.
+        variants: {
+          ...prevVariants,
+          [channel]: {
+            subject: cleanSubject,
+            body: cleanBody,
+            generator: COPYWRITER_GEN,
+            at: new Date().toISOString(),
+            manual: true,
+          },
+        },
         manual_edit: {
           at: new Date().toISOString(),
           by: await resolveApprover(),
@@ -350,16 +363,22 @@ export async function markDispatchedAction(id: string): Promise<ReviewOp> {
   return { ok: true, message: "Marcada como enviada por WhatsApp." };
 }
 
+/** Variante de borrador por canal: re-export neutro (la definición vive en
+ *  `lib/channel-variants` para poder testearse sin imports server). */
+export type { ChannelVariant } from "@/lib/channel-variants";
+export { getChannelVariants, isReusableChannelVariant } from "@/lib/channel-variants";
+
 /** Cambia el canal de un pendiente al otro (solo si el cliente tiene ambos
- *  contactos): borra el borrador, devuelve la señal a `prioritized` y
- *  redacta de nuevo con canal forzado. Una sola fila viva por cliente:
+ *  contactos): si ya existe variante fresca del otro canal, se restaura sin
+ *  LLM; si no, se redacta con canal forzado y ambas versiones quedan en
+ *  caché (`evidence_json.variants`). Una sola fila viva por cliente:
  *  imposible aprobar/enviar ambas (anti-spam por construcción). */
 export async function switchChannelAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
   const db = getSupabase();
   const { data: row, error: rErr } = await db
     .from("proposed_actions")
-    .select("id,channel,signal_id,customer_id,evidence_json,customers(email,phone,country)")
+    .select("id,channel,subject,body,signal_id,customer_id,evidence_json,customers(email,phone,country)")
     .eq("id", id)
     .eq("status", "pending_review")
     .maybeSingle();
@@ -391,6 +410,56 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
     };
   }
   const target = (current === "email" ? "whatsapp" : "email") as "email" | "whatsapp";
+  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
+  const prevVariants = getChannelVariants(prev);
+  // Guarda la versión actual antes de salir de ella: así el toggle es
+  // reversible sin LLM (incluye ediciones manuales, ya selladas frescas).
+  const currentBody = String(r.body ?? "");
+  const currentSubject = current === "email" ? ((r.subject as string | null) ?? null) : null;
+  const keptVariants: Record<string, ChannelVariant> = { ...prevVariants };
+  if (currentBody.trim()) {
+    keptVariants[current] = {
+      subject: currentSubject,
+      body: currentBody.slice(0, 2000),
+      generator: (prev.generator as string | null) ?? null,
+      at: new Date().toISOString(),
+      manual: Boolean((prev as Record<string, unknown>).manual_edit),
+    };
+  }
+  // Cache hit: variante fresca del otro canal → swap sin LLM, sin tocar la
+  // señal ni Medusa. La cola no se reordena (created_at intacto).
+  const cached = prevVariants[target] ?? keptVariants[target];
+  if (isReusableChannelVariant(target, cached)) {
+    const v = cached as ChannelVariant;
+    const { error: uErr } = await db
+      .from("proposed_actions")
+      .update({
+        channel: target,
+        subject: target === "email" ? v.subject : null,
+        body: v.body.slice(0, 2000),
+        evidence_json: {
+          ...prev,
+          generator: v.generator ?? COPYWRITER_GEN,
+          variants: keptVariants,
+          channel_switch: {
+            from: current,
+            to: target,
+            at: new Date().toISOString(),
+            by: await resolveApprover(),
+            prev_generator: (prev.generator as string | null) ?? null,
+            reused: true,
+          },
+        },
+      })
+      .eq("id", id)
+      .eq("status", "pending_review");
+    if (uErr) {
+      revalidatePath("/review");
+      return { ok: false, message: uErr.message };
+    }
+    revalidatePath("/review");
+    return { ok: true, message: `Ahora en ${target === "email" ? "Email" : "WhatsApp"} (versión guardada, sin regenerar).` };
+  }
   const conn = await readConnections();
   if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
   const storeId = await resolveStoreId(conn.medusaUrl);
@@ -406,7 +475,6 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
     revalidatePath("/review");
     return { ok: false, message: preview.message };
   }
-  const prev = ((r.evidence_json as Record<string, unknown> | null) ?? {});
   const { error: uErr } = await db
     .from("proposed_actions")
     .update({
@@ -417,12 +485,22 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
         ...prev,
         // Re-redactado con el copywriter actual: sella criterios actuales.
         generator: COPYWRITER_GEN,
+        variants: {
+          ...keptVariants,
+          [preview.channel]: {
+            subject: preview.channel === "email" ? preview.subject : null,
+            body: preview.body.slice(0, 2000),
+            generator: COPYWRITER_GEN,
+            at: new Date().toISOString(),
+          },
+        },
         channel_switch: {
           from: current,
           to: preview.channel,
           at: new Date().toISOString(),
           by: await resolveApprover(),
           prev_generator: (prev.generator as string | null) ?? null,
+          reused: false,
         },
       },
     })

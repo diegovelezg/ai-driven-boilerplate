@@ -103,12 +103,19 @@ export function AttentionTable({
     if (busyIds.includes(row.signalId)) return;
     setBusyIds((prev) => [...prev, row.signalId]);
     try {
-      // Por `useBackground().start`: el intento suma a la cinta global,
-      // que ya avisa del resultado: sin toast ni inline duplicados.
-      await start(async () => {
+      // Por `useBackground().start`: el intento suma a la cinta global.
+      // Con run la cinta avisa; sin run (veto/duplicado rápido) avisar aquí.
+      const r = await start(async () => {
         const x = await proposeSingleAction(row.signalId);
         return { ok: x.ok, message: x.message, run: x.run ?? null };
       });
+      if (!r.run) {
+        toast.add({
+          title: r.ok ? "Borrador redactado" : "No se pudo redactar",
+          description: r.message,
+          type: r.ok ? "success" : "error",
+        });
+      }
       // El veto escribe `evidence_json.contactability` en DB: el refresh ya
       // lo hizo `start()`; sin doble refresh no se aborta el RSC en vuelo
       // (ECONNRESET + parpadeo).

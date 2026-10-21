@@ -351,6 +351,16 @@ function EnrichedCompany({
     void start(() => reenrichDomainAction(data.domain))
       .then((r) => {
         if (r.ok) setReloadKey((k) => k + 1);
+        else if (!r.run) {
+          toast.add({ title: "No se pudo re-enriquecer", description: r.message, type: "error" });
+        }
+      })
+      .catch((e: unknown) => {
+        toast.add({
+          title: "No se pudo re-enriquecer",
+          description: e instanceof Error ? e.message : "Error inesperado.",
+          type: "error",
+        });
       })
       .finally(() => setWorking(false));
   };
@@ -608,13 +618,13 @@ function PredictionBlock({ dbId, summary, sessionsAt, onPrediction }: { dbId: st
         : null;
   const supMotivo =
     pred.decision === "organico"
-      ? "No tocar: suele volver solo"
+      ? "Sin nada que hacer: suele volver solo"
       : pred.decision === "dormido"
-        ? "No tocar en automático: dormido"
+        ? "Sin nada que hacer: dormido"
         : pred.decision === "sin_canal"
-          ? "No tocar: sin canal utilizable"
+          ? "Sin nada que hacer: sin canal utilizable"
           : pred.decision === "contactado_reciente"
-            ? "No tocar: contactado hace poco"
+            ? "Sin nada que hacer: contactado hace poco"
             : pred.decision === "revision_humana"
               ? "Revisión 1 a 1: ticket alto B2B"
               : null;
@@ -1348,10 +1358,18 @@ function FichaActions({ dbId }: { dbId: string }) {
     setBusy("redact");
     try {
       // Va por la cinta (`bg.start`): ella ya avisa del resultado.
+      // Sin run (veto/duplicado rápido) la cinta no vio nada: avisar aquí.
       const r = await bg.start(async () => {
         const x = await proposeSingleAction(signalId);
         return { ok: x.ok, message: x.message, run: x.run ?? null };
       });
+      if (!r.run) {
+        toast.add({
+          title: r.ok ? "Borrador redactado" : "No se pudo redactar",
+          description: r.message,
+          type: r.ok ? "success" : "error",
+        });
+      }
       if (r.ok) setSignalId(null);
     } catch (e) {
       toast.add({

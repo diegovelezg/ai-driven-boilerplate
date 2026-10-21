@@ -60,9 +60,18 @@ export function HoyHeroActions({
         size="sm"
         disabled={busy || redactableCount === 0}
         onClick={async () => {
-          const r = await start(startCopywriterAction);
-          if (!r.ok) {
-            toast.add({ title: "No se pudo redactar", description: r.message, type: "error" });
+          try {
+            const r = await start(startCopywriterAction);
+            // Con run la cinta ya avisa; sin run avisar aquí.
+            if (!r.ok && !r.run) {
+              toast.add({ title: "No se pudo redactar", description: r.message, type: "error" });
+            }
+          } catch (e) {
+            toast.add({
+              title: "No se pudo redactar",
+              description: e instanceof Error ? e.message : "Error inesperado.",
+              type: "error",
+            });
           }
         }}
       >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { LogOut } from "lucide-react";
 import {
   DropdownMenu,
@@ -24,6 +24,9 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
   const [email, setEmail] = useState<string | null>(initialEmail);
   const [loaded, setLoaded] = useState(initialEmail != null);
   const [pending, startSignOut] = useTransition();
+  // Doble-submit: la transición cubre el await, pero un segundo clic en la
+  // ventana previa redirigiría dos veces; el ref lo frena en seco.
+  const signingOutRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -104,10 +107,17 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
           disabled={pending}
           onClick={(e) => {
             e.preventDefault();
+            if (signingOutRef.current) return;
+            signingOutRef.current = true;
             startSignOut(async () => {
               try {
                 await signOutAction();
               } catch (err) {
+                // redirect() de la action viaja como digest NEXT_REDIRECT:
+                // no es un fallo, es la navegación a /login en curso.
+                const digest = err instanceof Error ? (err as { digest?: unknown }).digest : null;
+                if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) return;
+                signingOutRef.current = false;
                 toast.add({
                   title: "No se pudo cerrar sesión",
                   description: err instanceof Error ? err.message : "Error inesperado.",

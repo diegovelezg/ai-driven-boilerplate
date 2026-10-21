@@ -38,7 +38,7 @@ async function morningAlreadyDone(storeId: string): Promise<boolean> {
 
 async function step(
   storeId: string,
-  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect" | "brain",
+  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect" | "brain" | "regenerate",
   label: string,
   total: number,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -118,6 +118,19 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     });
   } catch (e) {
     log(`brain omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  // 0b. Auto-refresh stale (#26): corre en CADA login aunque la cadena de
+  // hoy ya esté done (como brain/enrichment, antes del gate). Solo
+  // pending_review con sello viejo → fresco; approved/dispatched jamás se
+  // tocan y nada se auto-envía (HITL intacto). Best-effort con kind
+  // `regenerate` (incompatible con copywriter/single en la matriz #16).
+  try {
+    const { runStaleRefresh } = await import("@/lib/copywriter");
+    await step(storeId, "regenerate", "Actualizando borradores", 10, (runId, sid) =>
+      runStaleRefresh(runId, sid, { limit: 10 }),
+    );
+  } catch (e) {
+    log(`stale-refresh omitido: ${e instanceof Error ? e.message : e}`);
   }
   if (await morningAlreadyDone(storeId)) {
     log("morning omitido (cadena de hoy ya done)");

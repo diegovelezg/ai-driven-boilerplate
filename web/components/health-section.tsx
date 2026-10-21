@@ -45,10 +45,13 @@ export function HealthSection({
     if (inFlight.current) return;
     const ctrl = new AbortController();
     inFlight.current = ctrl;
+    // Deadline propia: sin esto un /api/health colgado bloquea el poll
+    // para siempre (el guard de arriba saltaría todos los ticks).
+    const signal = AbortSignal.any([ctrl.signal, AbortSignal.timeout(15_000)]);
     try {
       const qs = new URLSearchParams({ store: storeId });
       if (marketId) qs.set("market", marketId);
-      const r = await fetch(`/api/health?${qs.toString()}`, { cache: "no-store", signal: ctrl.signal });
+      const r = await fetch(`/api/health?${qs.toString()}`, { cache: "no-store", signal });
       if (!r.ok) return;
       const j = (await r.json()) as {
         duplicateCount?: number;
@@ -76,6 +79,7 @@ export function HealthSection({
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       if (timer.current) clearInterval(timer.current);
+      document.removeEventListener("visibilitychange", onVisible);
       inFlight.current?.abort();
       inFlight.current = null;
     };

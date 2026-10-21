@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import {
   Brain,
   ListChecks,
@@ -10,7 +11,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AppCard } from "@/components/app-card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { formatNumber } from "@/lib/format";
+import { DECISION_COPY } from "@/lib/decision-copy";
 
 type Status = "needs" | "active" | "paused";
 
@@ -20,7 +23,7 @@ interface PulseRow {
   icon: LucideIcon;
   status: Status;
   headline: string;
-  why: string;
+  why: ReactNode;
   href?: string;
   cta?: string;
 }
@@ -108,7 +111,11 @@ function buildRows(p: TeamPulseProps): PulseRow[] {
         icon: Radar,
         status: "active",
         headline: `Vigiló ${formatNumber(p.totalVigilados)} · ${formatNumber(p.hoyActuar)} para hoy`,
-        why: `${formatNumber(p.hoyVigilar)} en seguimiento, resto al día${agoSuffix("scout")}`,
+        why: (
+          <AppTooltip tip={DECISION_COPY.puedenNecesitar.tip} contentClassName="max-w-sm">
+            <span>{`${formatNumber(p.hoyVigilar)} ${p.hoyVigilar === 1 ? "puede necesitar mensaje pronto" : "pueden necesitar mensaje pronto"}, resto sin acción${agoSuffix("scout")}`}</span>
+          </AppTooltip>
+        ),
       });
     } else {
       rows.push({

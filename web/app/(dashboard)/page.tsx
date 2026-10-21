@@ -21,13 +21,14 @@ import { formatNumber, formatPercentPoints } from "@/lib/format";
 import { getStoreProfile, resolveTenantCycleDays } from "@/lib/store-profiles";
 import { readConnections } from "@/lib/store";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { applyScopeFilter, displayMarket, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
+import { applyScopeFilter, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
 import {
   displayStoreName,
   getActiveStore,
   type TenantStore,
 } from "@/lib/tenant";
 import { TeamPulse } from "./team-pulse";
+import { DECISION_COPY } from "@/lib/decision-copy";
 import { type AttentionItem } from "./attention-table";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { avgTicket, getRankedMira } from "@/lib/mira";
@@ -688,7 +689,6 @@ export default async function DashboardPage({
   const viewCurrency = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
   const money = (n: number) => formatMoney(Math.round(n), viewCurrency);
   const storeName = displayStoreName(active);
-  const marketLabel = scope.market ? displayMarket(scope.market) : null;
   const reviewHref = withMarketParam("/review", scope.market?.id ?? null);
 
   const lastRun = (kinds: string[]): RunRow | null =>
@@ -719,16 +719,15 @@ export default async function DashboardPage({
               : `Todo al día, ${storeName}`
         }
         description={
-          (hasMotor
-            ? hoyActuar > 0
-              ? `${formatNumber(hoyCercano)} en seguimiento cercano · ${formatNumber(hoyResidual)} residuales en automático · ${formatNumber(hoyAuto)} al día`
-              : pending > 0
+          hasMotor && hoyActuar > 0
+            ? undefined
+            : hasMotor
+              ? pending > 0
                 ? `Nada nuevo hoy; ${formatNumber(pending)} por aprobar en Review.`
                 : "Ningún mensaje necesario hoy; la vigilancia sigue."
-            : atRisk > 0
-              ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
-              : "Ningún cliente vencido. Tu equipo IA sigue vigilando.") +
-          (marketLabel ? ` · viendo ${marketLabel}` : "")
+              : atRisk > 0
+                ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
+                : "Ningún cliente vencido. Tu equipo IA sigue vigilando."
         }
         right={
           stores.length > 1 ? (
@@ -813,7 +812,7 @@ export default async function DashboardPage({
             title={
               <span className="inline-flex items-center gap-1.5">
                 <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-                Hoy · {storeName}
+                Hoy
                 {cycleDays !== null ? ` · compran cada ~${formatNumber(cycleDays)}d` : ""}
               </span>
             }
@@ -827,9 +826,23 @@ export default async function DashboardPage({
                 <span className="block tabular-nums">
                   {hoyActuar > 0 ? (
                     <>
-                      {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático · {formatNumber(hoyAuto)} al día · entre {money(hoyLow)} y {money(hoyHigh)}
+                      <AppTooltip tip={DECISION_COPY.puedenNecesitar.tip} contentClassName="max-w-sm">
+                        <span>{formatNumber(hoyCercano)} {hoyCercano === 1 ? "puede necesitar mensaje pronto" : "pueden necesitar mensaje pronto"}</span>
+                      </AppTooltip>
+                      {" · "}
+                      <AppTooltip tip={DECISION_COPY.vigiladosSinAccion.tip} contentClassName="max-w-sm">
+                        <span>{formatNumber(hoyResidual)} vigilados sin acción hoy</span>
+                      </AppTooltip>
+                      {" · "}
+                      <AppTooltip tip={DECISION_COPY.sinNadaQueHacer.tip} contentClassName="max-w-sm">
+                        <span>{formatNumber(hoyAuto)} sin nada que hacer</span>
+                      </AppTooltip>
+                      {" · "}
+                      <AppTooltip tip={DECISION_COPY.valorEsperado.tip} contentClassName="max-w-sm">
+                        <span>valor esperado entre {money(hoyLow)} y {money(hoyHigh)}</span>
+                      </AppTooltip>
                       {hoyDebiles > 0 ? ` · ${formatNumber(hoyDebiles)} con pocos datos` : ""}
-                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} en cercano con pocos datos` : ""}
+                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} próximos con pocos datos` : ""}
                       {hoyForeign.map((fl) => (
                         <span key={fl.code}>
                           {" "}+{formatNumber(fl.n)} en {fl.code} ({formatMoney(Math.round(fl.value), fl.code)})
@@ -838,8 +851,14 @@ export default async function DashboardPage({
                     </>
                   ) : (
                     <>
-                      {formatNumber(hoyCercano)} en seguimiento cercano · {formatNumber(hoyResidual)} residuales en automático
-                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} en cercano con pocos datos` : ""}
+                      <AppTooltip tip={DECISION_COPY.puedenNecesitar.tip} contentClassName="max-w-sm">
+                        <span>{formatNumber(hoyCercano)} {hoyCercano === 1 ? "puede necesitar mensaje pronto" : "pueden necesitar mensaje pronto"}</span>
+                      </AppTooltip>
+                      {" · "}
+                      <AppTooltip tip={DECISION_COPY.vigiladosSinAccion.tip} contentClassName="max-w-sm">
+                        <span>{formatNumber(hoyResidual)} vigilados sin acción hoy</span>
+                      </AppTooltip>
+                      {hoyDebilesCercano > 0 ? ` · ${formatNumber(hoyDebilesCercano)} próximos con pocos datos` : ""}
                       {nextWindowDate ? ` · el próximo puede necesitar mensaje el ${nextWindowDate}` : ""}
                     </>
                   )}
@@ -859,10 +878,14 @@ export default async function DashboardPage({
             {hoyActuar > 0 ? (
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(hoyActuar)}</span>
-                <span className="text-base">para actuar</span>
-                <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary tabular-nums">
-                  {money(hoyValor)} valor de actuar hoy
-                </span>
+                <AppTooltip tip={DECISION_COPY.paraActuarHoy.tip} contentClassName="max-w-sm">
+                  <span className="text-base">para actuar hoy</span>
+                </AppTooltip>
+                <AppTooltip tip={DECISION_COPY.valorEsperado.tip} contentClassName="max-w-sm">
+                  <span className="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary tabular-nums">
+                    {money(hoyValor)} valor de actuar hoy
+                  </span>
+                </AppTooltip>
               </div>
             ) : pending > 0 ? (
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -905,11 +928,11 @@ export default async function DashboardPage({
                   n: vigilados,
                   minor: null as number | null,
                   bar: "bg-muted-foreground/30",
-                  tip: `El motor revisó hoy a cada cliente con compras y decidió: actuar, vigilar o dejar en automático. Ej.: hoy ${formatNumber(vigilados)} (${formatNumber(hoyActuar)} para actuar, ${formatNumber(hoyVigilar)} en vigilancia, ${formatNumber(hoyAuto)} en automático).`,
+                  tip: `El motor revisó hoy a cada cliente con compras y decidió: para actuar hoy, pueden necesitar mensaje pronto, vigilados sin acción hoy o sin nada que hacer. Ej.: hoy ${formatNumber(vigilados)} (${formatNumber(hoyActuar)} para actuar hoy, ${formatNumber(hoyCercano)} pueden necesitar pronto, ${formatNumber(hoyResidual)} vigilados sin acción hoy, ${formatNumber(hoyAuto)} sin nada que hacer).`,
                 },
                 {
                   key: "actuar",
-                  label: "Decisión actuar (modelo de hoy)",
+                  label: "Para actuar hoy",
                   n: hoyActuar,
                   minor: hoyActuar > 0 ? hoyValor : null,
                   bar: "bg-primary",

@@ -315,6 +315,12 @@ export function ReviewLists({
       const r = await getDrawerCustomerAction(customerId);
       if (r.ok && r.customer) setDrawerCustomer(r.customer);
       else if (!r.ok) toast.add({ title: "No se pudo abrir", description: r.message, type: "error" });
+    } catch (e) {
+      toast.add({
+        title: "No se pudo abrir",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setDrawerBusy(false);
     }
@@ -325,10 +331,20 @@ export function ReviewLists({
     try {
       const ids = [...selected];
       if (bg) {
-        await bg.start(async () => {
+        const r = await bg.start(async () => {
           const x = await approveBatchAction(ids);
           return { ok: x.ok, message: x.message, run: x.run ?? null };
         });
+        // Con run la cinta ya avisa; sin run avisar aquí. La selección solo
+        // se limpia en éxito: en fallo se conserva para reintentar.
+        if (!r.run) {
+          toast.add({
+            title: r.ok ? "Lote aprobado" : "No se pudo aprobar el lote",
+            description: r.message,
+            type: r.ok ? "success" : "error",
+          });
+        }
+        if (r.ok) setSelected(new Set());
       } else {
         const r = await approveBatchAction(ids);
         toast.add({
@@ -336,8 +352,14 @@ export function ReviewLists({
           description: r.message,
           type: r.ok ? "success" : "error",
         });
+        if (r.ok) setSelected(new Set());
       }
-      setSelected(new Set());
+    } catch (e) {
+      toast.add({
+        title: "No se pudo aprobar el lote",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setBatchBusy(false);
       // Sin doble refresh: `bg.start()` ya refrescó al resolver; un segundo

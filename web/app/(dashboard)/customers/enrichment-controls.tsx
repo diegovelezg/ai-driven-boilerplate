@@ -21,9 +21,18 @@ export function EnrichmentControls({ pending }: { pending: number }) {
       disabled={busy || pending === 0}
       className="border-transparent bg-accent text-accent-foreground hover:bg-accent/70"
       onClick={async () => {
-        const r = await start(startEnrichmentAction);
-        if (!r.ok) {
-          toast.add({ title: "No se pudo enriquecer", description: r.message, type: "error" });
+        try {
+          const r = await start(startEnrichmentAction);
+          // Con run la cinta ya avisa; sin run avisar aquí.
+          if (!r.ok && !r.run) {
+            toast.add({ title: "No se pudo enriquecer", description: r.message, type: "error" });
+          }
+        } catch (e) {
+          toast.add({
+            title: "No se pudo enriquecer",
+            description: e instanceof Error ? e.message : "Error inesperado.",
+            type: "error",
+          });
         }
       }}
     >

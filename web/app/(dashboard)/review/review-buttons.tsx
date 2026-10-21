@@ -51,6 +51,13 @@ export function ApprovePair({
         else win.close();
       }
       router.refresh();
+    } catch (e) {
+      win?.close();
+      toast.add({
+        title: kind === "approve" ? "No se pudo aprobar" : "No se pudo rechazar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setBusy(null);
     }
@@ -89,6 +96,12 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
             type: r.ok ? "success" : "error",
           });
           router.refresh();
+        } catch (e) {
+          toast.add({
+            title: "No se pudo descartar",
+            description: e instanceof Error ? e.message : "Error inesperado.",
+            type: "error",
+          });
         } finally {
           setBusy(false);
         }
@@ -101,7 +114,7 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
 
 /** Redacta un borrador para una señal sin mensaje (el inbox es el backlog:
  *  todo se gestiona aquí, no en el home). */
-export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
+export function RedactButton({ id, onRedact }: { id: string; onRedact: (sid: string) => Promise<ReviewOp> }) {
   const router = useRouter();
   const bg = useBackgroundOrNull();
   const [busy, setBusy] = useState(false);
@@ -115,10 +128,18 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
           setBusy(true);
           try {
             if (bg) {
-              await bg.start(async () => {
+              const r = await bg.start(async () => {
                 const x = await onRedact(id);
-                return { ok: x.ok, message: x.message, run: null };
+                return { ok: x.ok, message: x.message, run: x.run ?? null };
               });
+              // Con run la cinta ya avisa; sin run avisar aquí (veto/duplicado rápido).
+              if (!r.run) {
+                toast.add({
+                  title: r.ok ? "Borrador redactado" : "No se pudo redactar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
+              }
             } else {
               const r = await onRedact(id);
               toast.add({
@@ -128,6 +149,12 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
               });
               router.refresh();
             }
+          } catch (e) {
+            toast.add({
+              title: "No se pudo redactar",
+              description: e instanceof Error ? e.message : "Error inesperado.",
+              type: "error",
+            });
           } finally {
             setBusy(false);
           }
@@ -162,6 +189,12 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
                   type: r.ok ? "success" : "error",
                 });
                 router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo reabrir",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
               } finally {
                 setBusy(false);
               }
@@ -200,13 +233,20 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
                 // Por la cinta cuando hay provider: el copywriter que arranca
                 // suma su chip sin esperar al refresh.
                 const r = bg ? await bg.start(() => onRegenerate().then((x) => ({ ...x, run: x.run ?? null }))) : await onRegenerate();
-                if (!bg) toast.add({
+                // Con run la cinta ya avisa; sin run (o sin bg) avisar aquí.
+                if (!bg || !r.run) toast.add({
                   title: r.ok ? "Borradores regenerados" : "No se pudo regenerar",
                   description: r.message,
                   type: r.ok ? "success" : "error",
                 });
                 // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
                 if (!bg) router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo regenerar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
               } finally {
                 setBusy(false);
               }
@@ -241,6 +281,12 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
                   type: r.ok ? "success" : "error",
                 });
                 router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo cancelar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
               } finally {
                 setBusy(false);
               }
@@ -274,6 +320,12 @@ export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op 
                   type: r.ok ? "success" : "error",
                 });
                 router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo marcar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
               } finally {
                 setBusy(false);
               }
@@ -326,6 +378,12 @@ export function EditableDraft({
         setEditing(false);
         router.refresh();
       }
+    } catch (e) {
+      toast.add({
+        title: "No se pudo guardar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setBusy(false);
     }

@@ -20,6 +20,7 @@ import { cn } from "cn";
 import { Input } from "@/components/ui/input";
 import { AppCard } from "@/components/app-card";
 import { formatNumber } from "@/lib/format";
+import { DECISION_COPY } from "@/lib/decision-copy";
 
 interface Article {
   id: string;
@@ -333,18 +334,23 @@ const SECTIONS: Section[] = [
     articles: [
       {
         id: "g-actuar",
-        title: "Actuar",
-        text: "Conviene escribirle ahora: está en ventana, es recuperable y hay datos suficientes para hacerlo con criterio.",
+        title: DECISION_COPY.paraActuarHoy.label,
+        text: DECISION_COPY.paraActuarHoy.tip,
       },
       {
-        id: "g-vigilar",
-        title: "Vigilar",
-        text: "Aún no. Puede entrar en ventana pronto o la estimación todavía es débil; el motor sigue observando.",
+        id: "g-vigilar-pronto",
+        title: DECISION_COPY.puedenNecesitar.label,
+        text: DECISION_COPY.puedenNecesitar.tip,
+      },
+      {
+        id: "g-vigilar-sin-accion",
+        title: DECISION_COPY.vigiladosSinAccion.label,
+        text: DECISION_COPY.vigiladosSinAccion.tip,
       },
       {
         id: "g-notocar",
-        title: "No tocar",
-        text: "Volverá solo (orgánico), está dormido, no tiene canal usable o fue contactado hace poco. No se le escribe.",
+        title: DECISION_COPY.sinNadaQueHacer.label,
+        text: DECISION_COPY.sinNadaQueHacer.tip,
       },
       {
         id: "g-revision",

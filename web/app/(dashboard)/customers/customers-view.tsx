@@ -28,6 +28,7 @@ import type {
   EditableCustomer,
 } from "@/lib/customers-db";
 import { ventanaLabel, type CustomerPredictionLite } from "@/lib/customer-predictions";
+import { DECISION_COPY } from "@/lib/decision-copy";
 import {
   updateCustomerAction,
   type UpdateCustomerState,
@@ -87,8 +88,10 @@ function EditableCell({
     setSaving(true);
     try {
       const res = await onSave(next);
-      if (res.ok) setEditing(false);
-      else
+      if (res.ok) {
+        setEditing(false);
+        toast.add({ title: "Guardado", description: res.message, type: "success" });
+      } else
         toast.add({
           title: "No se pudo guardar",
           description: res.message,
@@ -332,7 +335,7 @@ export function CustomersView({
                 : value === "vigilar"
                   ? "Vigilar"
                   : value === "no-tocar"
-                    ? "No tocar (todos)"
+                    ? "Sin nada que hacer"
                     : value === "organico"
                       ? "· Volverán solos"
                       : value === "dormido"
@@ -347,7 +350,7 @@ export function CustomersView({
           <SelectItem value="all">Toda decisión</SelectItem>
           <SelectItem value="actuar">Para actuar</SelectItem>
           <SelectItem value="vigilar">Vigilar</SelectItem>
-          <SelectItem value="no-tocar">No tocar (todos)</SelectItem>
+          <SelectItem value="no-tocar">Sin nada que hacer</SelectItem>
           <SelectItem value="organico">· volverán solos</SelectItem>
           <SelectItem value="dormido">· dormidos</SelectItem>
           <SelectItem value="contactado_reciente">· contactados</SelectItem>
@@ -364,10 +367,10 @@ export function CustomersView({
         <FilterToggleButton
           active={filters.vista === "seguimiento"}
           disabled={isPending}
-          tip="Vigilar cercano: recuperables o p alta (mismo corte que el héroe)"
+          tip="Pueden necesitar mensaje pronto (mismo corte que el héroe)"
           onClick={() => setFilter({ vista: filters.vista === "seguimiento" ? null : "seguimiento" })}
         >
-          Seguimiento cercano
+          Pueden necesitar pronto
         </FilterToggleButton>
         <FilterSelect
           value={filters.ritmo ?? "all"}
@@ -530,7 +533,10 @@ export function CustomersView({
 
       {filters.vista === "seguimiento" && seguimiento && (
         <p className="text-[13px] text-muted-foreground tabular-nums">
-          Seguimiento cercano: ~{formatNumber(seguimiento.n)} clientes · ~{formatMoney(seguimiento.sumaMinor, shopCurrency)} en juego.
+          <AppTooltip tip={DECISION_COPY.puedenNecesitar.tip} contentClassName="max-w-sm">
+            <span>Pueden necesitar pronto</span>
+          </AppTooltip>
+          : ~{formatNumber(seguimiento.n)} clientes · ~{formatMoney(seguimiento.sumaMinor, shopCurrency)} en juego.
         </p>
       )}
 
