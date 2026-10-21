@@ -2,7 +2,7 @@
 // Corre con: npm test (node:test vía tsx, sin BD ni red).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { extractLeadContacts, pickLeadContact, sanitizeLeadContact } from "@/lib/retrieval";
+import { extractLeadContacts, firstWritableDir, pickLeadContact, sanitizeLeadContact } from "@/lib/retrieval";
 
 describe("extractLeadContacts", () => {
   it("mailto + tel + RRSS por href", () => {
@@ -130,6 +130,19 @@ describe("extractLeadContacts", () => {
       "+51 999",
     );
     assert.equal(pickLeadContact({ emails: [], phones: [], socials: [] }), null);
+  });
+
+  it("firstWritableDir cae a tmp si .data no es escribible (EACCES en Docker)", () => {
+    const eacces = (dir: string) => {
+      if (dir.includes(".data")) throw new Error("EACCES: permission denied, mkdir '/app/.data'");
+    };
+    assert.equal(firstWritableDir(["/app/.data/crawlee", "/tmp/retain-crawlee"], eacces), "/tmp/retain-crawlee");
+    assert.equal(firstWritableDir(["/app/.data/crawlee", "/tmp/retain-crawlee"], () => {}), "/app/.data/crawlee");
+    // Sin ningún dir creable devuelve el último (Crawlee dará su error, no otro).
+    assert.equal(
+      firstWritableDir(["/app/.data/crawlee", "/tmp/retain-crawlee"], () => { throw new Error("EACCES"); }),
+      "/tmp/retain-crawlee",
+    );
   });
 
   it("sanitizeLeadContact descarta nombres de personas", () => {

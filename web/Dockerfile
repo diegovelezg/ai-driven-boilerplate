@@ -38,6 +38,10 @@ COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/agent.ts ./agent.ts
 COPY --from=deps /app/node_modules ./node_modules
+# /app lo crea root y los COPY quedan root:root: sin esto, `nextjs` no puede
+# crear /app/.data (logs, .data/crawlee de Crawlee, fallback connections.json)
+# y la prospección revienta con `EACCES: permission denied, mkdir '/app/.data'`.
+RUN mkdir -p /app/.data/crawlee && chown -R nextjs:nodejs /app/.data
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000

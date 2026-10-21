@@ -3,6 +3,8 @@
 // SIN "server-only" a propósito: el pipeline del perfilador debe cargar en
 // scripts tsx (ver profiling/log.ts). El logging aquí es mínimo por diseño:
 // los fallos se propagan como errores con contexto, cada llamador loguea.
+import { accessSync, constants, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CheerioCrawler } from "@crawlee/cheerio";
 import {
@@ -12,7 +14,38 @@ import {
   type ModelRef,
 } from "@/lib/ai/llm-config";
 
-process.env.CRAWLEE_STORAGE_DIR ??= join(process.cwd(), ".data", "crawlee");
+/**
+ * Primer directorio creable de la lista (puro salvo `create`, inyectable en
+ * tests). Crawlee crea su storage con mkdir y propaga el error: si `.data`
+ * no es escribible (p. ej. `/app` root-owned en la imagen Docker con
+ * `USER nextjs`), `crawler.run()` revienta con `EACCES … mkdir '/app/.data'`
+ * y toda la prospección cae. El storage es caché efímera: caer a tmpdir es
+ * seguro. Exportado para tests.
+ */
+export function firstWritableDir(
+  candidates: string[],
+  // mkdir de un dir que ya existe no falla aunque sea read-only: hay que
+  // comprobar escritura real con accessSync(W_OK), no solo la creación.
+  create: (dir: string) => void = (dir) => {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+  },
+): string {
+  for (const dir of candidates) {
+    try {
+      create(dir);
+      return dir;
+    } catch {
+      // Siguiente candidato.
+    }
+  }
+  return candidates[candidates.length - 1] ?? join(tmpdir(), "retain-crawlee");
+}
+
+process.env.CRAWLEE_STORAGE_DIR ??= firstWritableDir([
+  join(process.cwd(), ".data", "crawlee"),
+  join(tmpdir(), "retain-crawlee"),
+]);
 
 const SEARXNG_RAW = (process.env.SEARXNG_URL ?? "").trim();
 const SEARXNG_URL = (SEARXNG_RAW || "http://localhost:8888").replace(/\/+$/, "");
