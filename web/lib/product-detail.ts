@@ -85,7 +85,7 @@ export async function loadProductDetail(
   const normTitle = normProductTitle(title);
 
   const scope = marketId
-    ? await resolveMarketScope(storeId, marketId).catch(() => null)
+    ? await resolveMarketScope(storeId, marketId)
     : null;
   const marketLabel = scope?.market ? displayMarket(scope.market) : null;
   const viewCurrency = scope?.market ? scope.market.currency.toUpperCase() : null;

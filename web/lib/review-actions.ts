@@ -977,15 +977,19 @@ export async function triggerProspectAction(marketId?: string | null): Promise<R
   let marketLabel: string | null = null;
   try {
     const { resolveMarketScope, displayMarket } = await import("@/lib/markets");
-    const resolved = await resolveMarketScope(storeId, marketId ?? null).catch(() => null);
+    const resolved = await resolveMarketScope(storeId, marketId ?? null);
+    if (marketId && !resolved?.market) {
+      return { ok: false, message: "Market inválido: no existe en esta tienda.", run: null };
+    }
     if (resolved?.market) {
       scope = { countries: resolved.countries, customerIds: resolved.customerIds };
       marketLabel = displayMarket(resolved.market);
     } else if (resolved) {
       scope = { countries: resolved.countries, customerIds: resolved.customerIds };
     }
-  } catch {
-    // sin scope: global
+  } catch (e) {
+    if (marketId) return { ok: false, message: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, run: null };
+    // sin marketId y sin scope: global
   }
   try {
     const elig = await prospectEligibility(storeId);

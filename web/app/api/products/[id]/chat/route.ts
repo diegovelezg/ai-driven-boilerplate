@@ -62,11 +62,19 @@ export async function POST(
   const denied = await requireStoreMember(storeId, auth);
   if (denied) return denied;
 
-  // Mismo filtro global que el drawer (?market= del header): el agente
-  // responde sobre el mismo universo que la GUI muestra.
-  const marketScope = typeof body.marketId === "string" && body.marketId
-    ? await resolveMarketScope(storeId, body.marketId).catch(() => null)
-    : null;
+  // Mismo filtro global que el drawer: mismo universo que la GUI muestra.
+  // Sin fallback silencioso a "todos": marketId inválido o DB caída = 400.
+  let marketScope: Awaited<ReturnType<typeof resolveMarketScope>> | null = null;
+  if (typeof body.marketId === "string" && body.marketId) {
+    try {
+      marketScope = await resolveMarketScope(storeId, body.marketId);
+    } catch (e) {
+      return Response.json({ error: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, code: "INVALID_MARKET" }, { status: 400 });
+    }
+    if (!marketScope?.market) {
+      return Response.json({ error: "Market inválido: no existe en esta tienda.", code: "INVALID_MARKET" }, { status: 400 });
+    }
+  }
   const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
   const title = String(pr.title ?? "");
   // Solo identidad en el prompt: las cifras salen de get_product_summary

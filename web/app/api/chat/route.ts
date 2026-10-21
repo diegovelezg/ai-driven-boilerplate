@@ -80,11 +80,19 @@ export async function POST(req: Request) {
   const s = store as Record<string, unknown>;
   const storeName = String(s.name ?? s.shop_url ?? storeId);
 
-  // Filtro global por mercado (?market= del header): se valida contra la
-  // tienda y se resuelve a países/IDs una vez por request para las tools.
-  const marketScope = typeof body.marketId === "string" && body.marketId
-    ? await resolveMarketScope(storeId, body.marketId).catch(() => null)
-    : null;
+  // Filtro global por mercado: mismo Scope que el drawer (países/IDs + moneda).
+  // Sin fallback silencioso a "todos": marketId inválido o DB caída = 400.
+  let marketScope: Awaited<ReturnType<typeof resolveMarketScope>> | null = null;
+  if (typeof body.marketId === "string" && body.marketId) {
+    try {
+      marketScope = await resolveMarketScope(storeId, body.marketId);
+    } catch (e) {
+      return Response.json({ error: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, code: "INVALID_MARKET" }, { status: 400 });
+    }
+    if (!marketScope?.market) {
+      return Response.json({ error: "Market inválido: no existe en esta tienda.", code: "INVALID_MARKET" }, { status: 400 });
+    }
+  }
   const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
 
   const prior = history
@@ -107,6 +115,7 @@ export async function POST(req: Request) {
       focusLabel: `${storeName}${marketSuffix} · equipo orquestado`,
       marketCountries: marketScope?.countries ?? null,
       marketCustomerIds: marketScope?.customerIds ?? null,
+      marketCurrency: marketScope?.market ? marketScope.market.currency.toUpperCase() : null,
     });
   } catch (e) {
     return Response.json(

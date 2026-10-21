@@ -877,8 +877,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const n = limit ?? 5;
       const db = getSupabase();
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
-      const shopCurrency = (await resolveShopCurrency(storeId).catch(() => null)) ?? "PEN";
-      const viewCurrency = shopCurrency.toUpperCase();
+      // Sin ?? PEN: sin market ni shop_currency no se asume moneda (null = todas,
+      // como el drawer). Asumir PEN mezclaba/ocultaba otras monedas.
+      const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
+      const viewCurrency = marketCurrency ?? shopCurrency;
       // Misma ventana que /finanzas (12m): año móvil para no mezclar historia vieja.
       const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
       const PAGE = 1000;
@@ -915,6 +917,53 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           is_test: o.is_test === true,
         }),
       );
+      // Sin viewCurrency (todas) NO se llama a rankItems con null: sumaría
+      // PEN+MXN por título. Se rankea por (título, moneda) con rótulo por
+      // fila, como el drawer (nunca se mezclan monedas).
+      if (!viewCurrency) {
+        const byKey = new Map<string, { title: string; currency: string; quantity: number; revenueMinor: number; orders: number }>();
+        for (const o of realRows) {
+          const cur = ((o.currency as string | null) ?? "SIN-MONEDA").toUpperCase();
+          const items = Array.isArray(o.items_json) ? o.items_json : [];
+          const seenThisOrder = new Set<string>();
+          for (const raw of items as Array<Record<string, unknown>>) {
+            const rawTitle = String(raw.title ?? "").trim() || "Sin título";
+            const key = `${rawTitle.toLowerCase()}|${cur}`;
+            const qty = Number(raw.quantity ?? 0) || 0;
+            const price = Number(raw.unit_price ?? 0) || 0;
+            if (qty <= 0 && price <= 0) continue;
+            let g = byKey.get(key);
+            if (!g) {
+              g = { title: rawTitle, currency: cur, quantity: 0, revenueMinor: 0, orders: 0 };
+              byKey.set(key, g);
+            }
+            g.quantity += qty;
+            g.revenueMinor += qty * price;
+            if (!seenThisOrder.has(key)) {
+              seenThisOrder.add(key);
+              g.orders += 1;
+            }
+          }
+        }
+        const all = [...byKey.values()].sort((a, b) => b.revenueMinor - a.revenueMinor);
+        const pickAll = all.slice(0, n);
+        const pick =
+          sort === "quantity"
+            ? [...pickAll].sort((a, b) => b.quantity - a.quantity)
+            : sort === "orders"
+              ? [...pickAll].sort((a, b) => b.orders - a.orders)
+              : pickAll;
+        return {
+          items: pick,
+          bottom: [],
+          total_count: byKey.size,
+          returned_count: pick.length,
+          truncated: ordersTruncated || byKey.size > pick.length,
+          view_currency: viewCurrency,
+          note_truncated: ordersTruncated ? "Muestra parcial: órdenes mayores al CAP 20k; ranking parcial." : null,
+          note: "Sin moneda de vista: ranking por (título, moneda) con rótulo por fila, nunca se suman PEN+MXN. Montos en minor units (céntimos): dividir /100.",
+        };
+      }
       const { top, bottom } = rankItems(
         realRows.map((r) => ({ currency: (r.currency as string | null) ?? null, items_json: r.items_json })),
         viewCurrency,
@@ -926,10 +975,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           ? [...top].sort((a, b) => b.orders - a.orders)
           : top;
       // total_count = títulos distintos intra-moneda (no el largo de la ventana).
+      // Sin viewCurrency (todas) no se filtra por moneda.
       const seen = new Set<string>();
       for (const o of realRows) {
         const cur = (o.currency as string | null) ?? null;
-        if (cur && cur.toUpperCase() !== viewCurrency) continue;
+        if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency) continue;
         const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
         for (const it of items) {
           const t = String(it.title ?? "").trim().toLowerCase() || "sin-titulo";
@@ -1253,19 +1303,22 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   });
 
   /** Quiénes compran el ítem en foco (top por monto, lo mismo que el tab
-   *  Clientes del drawer). El total exacto sale de product_stats (buyers_all
-   *  por moneda): la lista es parcial y truncated lo declara (N de M). */
+   *  Clientes del drawer). Total = distintos reales del scan (buyerAgg.size):
+   *  product_stats es por (product_id,currency) y duplica a quien compra en
+   *  2 monedas; solo se expone como stats_total + flag stats_stale. */
   const productBuyers = new FunctionTool({
     name: "get_product_buyers",
     description:
-      "Top compradores del producto en foco (nombre, email, empresa, cantidad y monto). Pasa limit (1-20, default 5). Devuelve envelope {items, total_count, returned_count, truncated}: total_count = compradores distintos (product_stats); si truncated=true dilo ('te muestro N de M') y nunca afirmes que viste a todos.",
+      "Top compradores del producto en foco (nombre, email, empresa, cantidad y monto). Pasa limit (1-20, default 5) y offset para paginar ('los otros 5' = mismo limit + offset 5). Devuelve envelope {items, total_count, returned_count, truncated, stats_stale}: total_count = compradores distintos reales; si truncated=true dilo ('te muestro N de M') y nunca afirmes que viste a todos; si stats_stale=true, product_stats está desactualizado.",
     parameters: z.object({
       limit: z.number().int().min(1).max(20).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
     }),
-    execute: async ({ limit }: { limit?: number }) => {
+    execute: async ({ limit, offset }: { limit?: number; offset?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       if (!productId) return noProduct;
       const n = limit ?? 5;
+      const off = offset ?? 0;
       const db = getSupabase();
       const [{ data: p }, { data: stats }] = await Promise.all([
         db
@@ -1284,7 +1337,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (!p) return { error: "Producto no encontrado en esta tienda." };
       const { normProductTitle } = await import("@/lib/product-stats");
       const normTitle = normProductTitle(String((p as Record<string, unknown>).title ?? ""));
-      const totalBuyers = ((stats ?? []) as Array<Record<string, unknown>>)
+      const statsTotal = ((stats ?? []) as Array<Record<string, unknown>>)
         .reduce((acc, s) => acc + Number(s.buyers_all ?? 0), 0);
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
@@ -1344,10 +1397,18 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           break;
         }
       }
-      const ranked = [...buyerAgg.entries()].map(([cid, perCur]) => {
+      const rankedAll = [...buyerAgg.entries()].map(([cid, perCur]) => {
         const [currency, b] = [...perCur.entries()].sort((a, b2) => b2[1].revenue - a[1].revenue)[0]!;
         return { customer_id: cid, qty: b.qty, revenue: b.revenue, currency };
-      }).sort((a, b) => b.revenue - a.revenue).slice(0, n);
+      }).sort((a, b) => b.revenue - a.revenue);
+      // Total honesto: distintos reales del scan. product_stats suma por moneda
+      // (duplica multi-moneda) y puede estar stale: se expone aparte, no como total.
+      // Scope-aware: con market activo el scan va filtrado y stats es global,
+      // comparar sería siempre true (ruido). Solo se compara sin scope.
+      const total = buyerAgg.size;
+      const scoped = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
+      const statsStale = scoped ? null : (stats ?? []).length === 0 ? total > 0 : statsTotal !== total;
+      const ranked = rankedAll.slice(off, off + n);
       let items: Array<Record<string, unknown>> = ranked.map((r) => ({ ...r, email: "", name: "Sin nombre", company: null }));
       if (ranked.length > 0) {
         const cq = withMarket(
@@ -1374,14 +1435,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           };
         });
       }
-      // N de M honesto: product_stats es global (sin scope); con market
-      // activo el ranking sale de órdenes filtradas, así que el total es el
-      // de la ventana escaneada (exacto salvo hitCap, que marca truncated).
-      // Sin scope, buyers_all por moneda; quien compró en 2 monedas cuenta
-      // 1× aquí (agg por customer) aunque el total global lo duplique.
-      const scoped = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
-      const total = scoped ? buyerAgg.size : totalBuyers > 0 ? totalBuyers : buyerAgg.size;
-      const truncated = total > items.length || hitCap;
+      const truncated = total > items.length + off || hitCap;
+      // NULL-comodín: los sin país pasan todo filtro y contaminan cada market.
+      // Se expone para no presentar el total como limpio.
+      const { count: nullCountryCount } = await withMarket(
+        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).is("country", null),
+        "id",
+      );
       return {
         items,
         total_count: total,
@@ -1389,7 +1449,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         truncated,
         scanned_orders: scanned,
         view_currency: viewCurrency,
-        note_truncated: hitCap ? "Muestra parcial: universo mayor al CAP escaneado." : null,
+        stats_total: statsTotal,
+        stats_stale: statsStale,
+        null_country_count: nullCountryCount ?? null,
+        note_truncated: hitCap ? "Muestra parcial: universo mayor al CAP escaneado." : truncated ? `Te muestro ${items.length} de ${total}: pide offset ${off + items.length} para los siguientes.` : null,
         note: "Montos en minor units (céntimos): dividir /100.",
       };
     },
