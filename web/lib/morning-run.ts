@@ -64,7 +64,7 @@ async function step(
 }
 
 /** Cadena completa post-sync. Llamar dentro de `after()` (no bloquea login). */
-export async function runMorningPipeline(storeId: string): Promise<void> {
+export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?: boolean }): Promise<void> {
   if (await hasConflict(storeId, { kind: "sync" })) {
     log("morning omitido (sync en curso)");
     return;
@@ -131,6 +131,22 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     );
   } catch (e) {
     log(`stale-refresh omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  // 0c. Foto del día (2026-10-22): si el sync trajo órdenes nuevas o
+  // corregidas, la foto vigente miente (t_days congelados) y el scout la
+  // reutilizaría igual. Se regenera ANTES del gate de cadena-done (ese gate
+  // es justo el que escondía el bug: cadena done + datos nuevos). Upsert
+  // sobre las mismas keys del día: idempotente, sin borrar nada. Sin
+  // cambios se reutiliza (ahorro intacto). FallaEnAbierto: si el recompute
+  // falla, el scout sigue con la foto vigente (conducta anterior).
+  if (opts?.refreshFoto) {
+    try {
+      const { runRetentionModel } = await import("@/lib/retention");
+      const r = await runRetentionModel(storeId, new Date());
+      log(`foto regenerada (órdenes cambiaron en sync): predicted=${r.predicted} actuar=${r.actuar} vigilar=${r.vigilar}`);
+    } catch (e) {
+      log(`foto no regenerada (${e instanceof Error ? e.message : e}): el scout usa la vigente`);
+    }
   }
   if (await morningAlreadyDone(storeId)) {
     log("morning omitido (cadena de hoy ya done)");
