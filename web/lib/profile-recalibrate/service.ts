@@ -285,6 +285,8 @@ async function runRecalibrationInner(
   const { tuneModelParams } = await import("@/lib/model-tune");
   const modelTune = await tuneModelParams(storeId, { dryRun: opts.dryRun }).catch((e) => ({
     wrote: false,
+    action: "keep" as const,
+    partitions: [],
     reason: `Tune omitido: ${e instanceof Error ? e.message : "error"}.`,
   }));
   calibLog(`model_tune: ${modelTune.reason}`);
