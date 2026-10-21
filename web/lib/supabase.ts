@@ -18,10 +18,10 @@ export function getSupabase(): SupabaseClient {
     throw new Error("Falta SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY en .env.local");
   }
   if (!cached) {
-    // Node 20 (imagen prod `node:20-bookworm-slim`) no trae WebSocket
-    // global: realtime-js de supabase-js LANZA en `createClient` y tumba
-    // el worker/scheduled-task en silencio (exit 0 sin `start`). Next y
-    // browsers ya lo tienen: solo se polifilea cuando falta.
+    // WebSocket global: Node <22 no lo trae y realtime-js de supabase-js
+    // LANZA en `createClient` tumbando el worker/scheduled-task en silencio
+    // (exit 0 sin `start`). Next y browsers ya lo tienen: solo se polifilea
+    // cuando falta (red de seguridad aunque la imagen ya sea node:22).
     if (typeof globalThis.WebSocket === "undefined") {
       globalThis.WebSocket = WsPolyfill as unknown as typeof WebSocket;
     }

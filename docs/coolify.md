@@ -302,9 +302,10 @@ Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
   2. `[worker] Run slot: Could not find the function public.start_run_if_free`:
      falta aplicar `20261029000001_run_slot.sql` en la BD prod (ver §6).
   3. `[worker] Node.js detected but native WebSocket not found` (o silencio
-     total con exit 0 en tsx): `createClient` de supabase-js lanza en Node 20
-     sin WebSocket global. Fijado en `web/lib/supabase.ts` (polyfill `ws`
-     solo cuando falta; dep explícita en `web/package.json`).
+     total con exit 0 en tsx): `createClient` de supabase-js lanzaba en Node 20
+     sin WebSocket global (imagen vieja `node:20`; actual `node:22` + polyfill).
+     Fijado en `web/lib/supabase.ts` (polyfill `ws` solo cuando falta; dep
+     explícita en `web/package.json`).
   Diagnóstico en la misma task (timeout 60), en orden:
 ```
 node -e "fetch(process.env.SUPABASE_URL+'/auth/v1/health').then(r=>r.text().then(t=>console.log(r.status,t.slice(0,80)))).catch(e=>console.error('FETCH_FAIL',e.message))"

@@ -1,6 +1,7 @@
 # web — Dockerfile prod para Coolify (deploy único con compose raíz).
-# Node 20.19+ exigido por @google/adk.
-FROM node:20-bookworm-slim AS deps
+# Node 22 exigido por supabase-js/better-sqlite3/mikro-orm/kysely (>=22);
+# @google/adk no pinea engines y es compatible.
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 # better-sqlite3 (vía crawlee) compila nativo con node-gyp: necesita toolchain.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -8,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-bookworm-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -21,7 +22,7 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:20-bookworm-slim AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -42,7 +43,10 @@ COPY --from=builder /app/worker.ts ./worker.ts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/agent.ts ./agent.ts
+# Solo prod en la imagen final: poda devDeps (eslint/tailwind/supabase-CLI/
+# adk-devtools/typescript). `tsx` es dep prod (la usa el cron) y se conserva.
 COPY --from=deps /app/node_modules ./node_modules
+RUN npm prune --omit=dev
 # /app lo crea root y los COPY quedan root:root: sin esto, `nextjs` no puede
 # crear /app/.data (logs, .data/crawlee de Crawlee, fallback connections.json)
 # y la prospección revienta con `EACCES: permission denied, mkdir '/app/.data'`.
@@ -52,9 +56,8 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 # El cron de prod (Scheduled Task Coolify, docs/coolify.md 3b) corre one-shot
-# dentro de esta misma imagen: `npm run worker -- --once --kinds=sync,morning`.
-# WORKER_MODE=1 → `npm run worker` (solo dev/daemon local); si no, web Next.js.
-# `exec`: PID1 es el proceso real y recibe el SIGTERM de compose/Coolify (sin
-# exec, PID1 queda `sh`, los handlers del worker nunca se disparan y cada
-# redeploy deja el job en `running` hasta el reap).
-CMD ["sh", "-c", "if [ \"$WORKER_MODE\" = \"1\" ]; then exec npm run worker; else exec node server.js; fi"]
+# dentro de esta misma imagen: `./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning`.
+# WORKER_MODE=1 → worker (solo dev/daemon local); si no, web Next.js.
+# Sin `npm`: un nivel menos de procesos anidados (sh → tsx → node en vez de
+# sh → npm → tsx → node). `exec`: PID1 es el proceso real y recibe el SIGTERM.
+CMD ["sh", "-c", "if [ \"$WORKER_MODE\" = \"1\" ]; then exec ./node_modules/.bin/tsx worker.ts; else exec node server.js; fi"]

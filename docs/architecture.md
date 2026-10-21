@@ -360,12 +360,12 @@ model ProposedAction {
 
 ## 6. Technology Stack
 
-- **Runtime & Framework:** Node.js 20.19+ with Next.js (latest, App Router, TypeScript end-to-end). API routes act as a thin proxy; all intelligence lives in ADK.
+- **Runtime & Framework:** Node.js 22 with Next.js (latest, App Router, TypeScript end-to-end). API routes act as a thin proxy; all intelligence lives in ADK.
 - **UI:** shadcn/ui + TailwindCSS (merchant dashboard, chat, canvas).
 - **Database & Auth:** Supabase (PostgreSQL + Auth + Realtime). Read models via Supabase client; views `churn_risk_view` / `rfm_summary` with RLS per merchant.
 - **Queue / Job Scheduling:** Upstash Redis + QStash/BullMQ (event ingestion, daily RFM cron, Firecrawl scraping tasks).
 - **Deep Scraping:** Firecrawl API (clean markdown extraction).
-- **AI Orchestration:** [ADK for TypeScript](https://github.com/google/adk-js) (`@google/adk`, Node 20.19+). `LlmAgent` with Zod-validated function tools over Supabase views/tables. Dev/test via `@google/adk-devtools` (`adk web`, `adk run`). No Vercel AI SDK.
+- **AI Orchestration:** [ADK for TypeScript](https://github.com/google/adk-js) (`@google/adk`, Node 22). `LlmAgent` with Zod-validated function tools over Supabase views/tables. Dev/test via `@google/adk-devtools` (`adk web`, `adk run`). No Vercel AI SDK.
 - **Outbound Channels:**
   - **Email:** Resend API (clean developer experience, high deliverability).
   - **WhatsApp:** Meta Cloud API or Twilio WhatsApp Business API.
