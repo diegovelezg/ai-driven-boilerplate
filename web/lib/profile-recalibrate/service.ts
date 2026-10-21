@@ -278,6 +278,17 @@ async function runRecalibrationInner(
   }));
   calibLog(`band_cuts: ${bandCalib.reason}`);
 
+  // Tune mensual del modelo (issue #27 Paso 4): re-aprende ventana de
+  // episodio + mezcla K con backtest contra la versión vigente. Solo escribe
+  // si la candidata gana por margen; lo estructural (cambio de K) se propone
+  // sin auto-aplicar. Fail-open como bandas (nunca rompe el recalibrado).
+  const { tuneModelParams } = await import("@/lib/model-tune");
+  const modelTune = await tuneModelParams(storeId, { dryRun: opts.dryRun }).catch((e) => ({
+    wrote: false,
+    reason: `Tune omitido: ${e instanceof Error ? e.message : "error"}.`,
+  }));
+  calibLog(`model_tune: ${modelTune.reason}`);
+
   const ageDays = await getProfileAgeDays(storeId);
   const triggers = evaluateDrift(
     last?.stats ?? null,
@@ -292,8 +303,8 @@ async function runRecalibrationInner(
       status: "dry-run",
       reason:
         strong.length > 0
-          ? `Dry-run: ${formatNumber(strong.length)} trigger(s) llamarían al set perfilador. ${calib.reason}`
-          : `Dry-run: sin drift, no se llamaría al set perfilador. ${calib.reason}`,
+          ? `Dry-run: ${formatNumber(strong.length)} trigger(s) llamarían al set perfilador. ${calib.reason} ${modelTune.reason}`
+          : `Dry-run: sin drift, no se llamaría al set perfilador. ${calib.reason} ${modelTune.reason}`,
       triggers,
     };
   }
@@ -315,8 +326,8 @@ async function runRecalibrationInner(
       status: "no-drift",
       reason:
         triggers.length > 0
-          ? `Sin drift accionable (${triggers.map((t) => t.detail).join(" ")}).`
-          : "Sin drift: el perfil sigue representando a la tienda.",
+          ? `Sin drift accionable (${triggers.map((t) => t.detail).join(" ")}). ${modelTune.reason}`
+          : `Sin drift: el perfil sigue representando a la tienda. ${modelTune.reason}`,
       triggers,
     };
   }

@@ -10,19 +10,33 @@ import {
   resolveTenantCycleDays,
 } from "@/lib/store-profiles";
 import {
+  EPISODE_VERSION,
   HORIZON_BY_ARCHETYPE,
+  MIXTURE_VERSION,
   SIGMA0_BY_ARCHETYPE,
+  asValidMixtureFit,
+  episodeize,
   predictStore,
   sessionize,
   type CustomerSessions,
+  type MixtureEvidence,
+  type MixtureLike,
   type Prediction,
 } from "@/lib/retention-model";
-import { listStoreMarkets, marketCountry, type TenantMarket } from "@/lib/markets";
+import { assignMarket, listStoreMarkets, type TenantMarket } from "@/lib/markets";
+import {
+  paramsForPartition,
+  resolveModelParams,
+  type TenantModelParams,
+} from "@/lib/model-params";
 
 /** Versión del criterio: se guarda en evidence_json.generator. */
-const RETENTION_GEN = "retention:v2:lognormal-grid-market-b2b";
-/** model_version para la clave única (store, customer, as_of). */
-const RETENTION_VERSION = "retention:v2";
+const RETENTION_GEN = "retention:v3:episodes-mixture";
+/** model_version para la clave única (store, customer, as_of).
+ *  v3 = pipeline con episodios + mezcla (issue #27): en frío produce lo
+ *  mismo que v2 (las filas v2 viejas no se reescriben; los lectores
+ *  prefieren v3 por orden lexicográfico). */
+const RETENTION_VERSION = "retention:v3";
 
 const DAY_MS = 86_400_000;
 
@@ -61,44 +75,6 @@ function effectiveType(
   return (manual ?? base) === "B2B" ? "B2B" : "B2C";
 }
 
-/** Asigna cada cliente a un market (issue #21 Paso 3): mayoría de market_id
- *  en sus órdenes reales ≤ corte; fallback país→market; else null (legacy).
- *  Asignación única: una fila por cliente (market_id = etiqueta). */
-function assignMarket(
-  orderMarketIds: Array<string | null>,
-  customerCountry: string | null,
-  markets: TenantMarket[],
-): string | null {
-  const counts = new Map<string, number>();
-  for (const m of orderMarketIds) {
-    if (!m) continue;
-    counts.set(m, (counts.get(m) ?? 0) + 1);
-  }
-  if (counts.size > 0) {
-    let best: string | null = null;
-    let bestN = -1;
-    for (const [m, n] of counts) {
-      if (n > bestN || (n === bestN && (best === null || m < best))) {
-        best = m;
-        bestN = n;
-      }
-    }
-    if (best && markets.some((mk) => mk.id === best)) return best;
-    if (best) return best;
-  }
-  const cc = (customerCountry ?? "").trim().toUpperCase();
-  if (cc && /^[A-Z]{2}$/.test(cc)) {
-    for (const mk of markets) {
-      const countries = (mk.countries ?? []).map((c) => c.trim().toUpperCase());
-      if (countries.includes(cc)) return mk.id;
-    }
-    for (const mk of markets) {
-      if (marketCountry(mk) === cc) return mk.id;
-    }
-  }
-  return null;
-}
-
 /**
  * Corre el modelo para una tienda y hace upsert en `customer_predictions`.
  * Bulk (sin N+1): una sola query de órdenes por tienda paginada.
@@ -116,12 +92,13 @@ export async function runRetentionModel(
   ).toISOString();
   const asOfIso = dayIso;
 
-  const [profile, cycleDays, shopCurrency, bandCuts, markets] = await Promise.all([
+  const [profile, cycleDays, shopCurrency, bandCuts, markets, modelParamsByKey] = await Promise.all([
     getStoreProfile(storeId).catch(() => null),
     resolveTenantCycleDays(storeId).catch(() => null),
     resolveShopCurrency(storeId).catch(() => null),
     resolveBandCuts(storeId).catch(() => ({ high: 0.6, low: 0.15 })),
     listStoreMarkets(storeId).catch(() => [] as TenantMarket[]),
+    resolveModelParams(storeId).catch(() => new Map<string | null, TenantModelParams>()),
   ]);
   const archetype = profile?.archetype ?? "b2c_consumible";
   const cycle = cycleDays ?? ARCHETYPES[archetype]?.defaultCycleDays ?? 30;
@@ -290,6 +267,9 @@ export async function runRetentionModel(
   const partCustomers = new Map<string | null, CustomerSessions[]>();
   const gapsById = new Map<string, number>();
   const tById = new Map<string, number>();
+  const episodesById = new Map<string, number>();
+  const paramsSourceById = new Map<string, "tienda:market" | "tienda:global" | "arquetipo">();
+  const episodeWindowById = new Map<string, number | null>();
   for (const c of custRows) {
     const assigned = marketById.get(c.id) ?? null;
     const ords = ordersByCust.get(c.id) ?? [];
@@ -317,13 +297,24 @@ export async function runRetentionModel(
     const list = partCustomers.get(assigned) ?? [];
     list.push(cs);
     partCustomers.set(assigned, list);
-    // Evidencia para el upsert.
+    // Evidencia para el upsert (issue #27 Pasos 1+3): episodios con la ventana
+    // aprendida de la partición; en frío (sin fila) cada sesión = 1 episodio
+    // ⇒ idéntico a v2. La mezcla la aplica predictStore con el fit explícito.
+    const { params: custParams, source: custSource } = paramsForPartition(
+      modelParamsByKey,
+      assigned,
+    );
+    const custWindow = custParams?.episodeWindowDays ?? null;
+    paramsSourceById.set(c.id, custSource);
+    episodeWindowById.set(c.id, custWindow);
+    const episodes = episodeize(sessions, custWindow, null);
+    episodesById.set(c.id, episodes.length);
     let gaps = 0;
-    for (let i = 1; i < sessions.length; i += 1) {
-      if ((sessions[i].at - sessions[i - 1].at) / DAY_MS > 0) gaps += 1;
+    for (let i = 1; i < episodes.length; i += 1) {
+      if ((episodes[i].startAt - episodes[i - 1].endAt) / DAY_MS > 0) gaps += 1;
     }
     gapsById.set(c.id, gaps);
-    const last = sessions[sessions.length - 1].at;
+    const last = episodes[episodes.length - 1].endAt;
     tById.set(c.id, Math.max(0, (asOfMs - last) / DAY_MS));
   }
 
@@ -333,10 +324,23 @@ export async function runRetentionModel(
   const marketByMarketId = new Map(markets.map((m) => [m.id, m]));
   const preds: Prediction[] = [];
   const currencyById = new Map<string, string | null>();
+  // Mezcla desactivada salvo parámetros aprendidos (issue #27 Pasos 3-4):
+  // sin fila vigente ⇒ fits null ⇒ camino legacy exacto. La mezcla
+  // aprendida (mismo fit para ambos niveles en v1) es estable entre tunes:
+  // la predicción diaria NO reajusta. Su aplicación la arbitra el tune con
+  // backtest (Paso 4); aquí solo lectura fail-open.
+  // (Un ajuste por partición y nivel: renovación usa store, F=1 cohorte.)
+  const mixtureByPart = new Map<string | null, MixtureEvidence>();
   for (const [partId, customers] of partCustomers) {
     const market = partId === null ? null : (marketByMarketId.get(partId) ?? null);
     const partCurrency = (market?.currency ?? shopCurrency ?? null) as string | null;
     for (const cs of customers) currencyById.set(cs.customerId, partCurrency);
+    const partMixture: MixtureEvidence = {};
+    const { params: partParams } = paramsForPartition(modelParamsByKey, partId);
+    // Fit aprendido por partición (v1: mismo para tienda y cohorte);
+    // null/inválido ⇒ legacy o EM al vuelo (EM apagado: mixtureMaxK null).
+    const learnedFit: MixtureLike | null =
+      partParams?.mixture ? asValidMixtureFit(partParams.mixture) : null;
     const part = predictStore({
       asOf: asOfMs,
       cycleDays: cycle,
@@ -349,7 +353,13 @@ export async function runRetentionModel(
       marketId: partId,
       bandHigh: bandCuts.high,
       bandLow: bandCuts.low,
+      episodeGapDays: partParams?.episodeWindowDays ?? null,
+      mixtureMaxK: null,
+      mixtureStoreFit: learnedFit,
+      mixtureCohortFit: learnedFit,
+      mixtureEvidence: partMixture,
     });
+    mixtureByPart.set(partId, partMixture);
     preds.push(...part);
   }
 
@@ -359,7 +369,13 @@ export async function runRetentionModel(
   //   20261026000001_store_band_cuts.
   // El upsert incluye `market_id` sin guarda (fail-closed como ejes #14A):
   // sin la migración la corrida falla entera. Los resolvers sí son fail-open.
-  const rows = preds.map((p) => ({
+  const rows = preds.map((p) => {
+    // Nivel de mezcla por modelo (issue #27 Paso 2): renovación ⇒ store,
+    // segunda_compra ⇒ cohorte. Null cuando la mezcla está desactivada.
+    const partMix = mixtureByPart.get(p.marketId);
+    const levelFit = p.model === "renovacion" ? partMix?.store : partMix?.cohort;
+    const fit = levelFit !== undefined ? levelFit : null;
+    return {
     store_id: storeId,
     customer_id: p.customerId,
     market_id: p.marketId,
@@ -394,8 +410,24 @@ export async function runRetentionModel(
       customer_type: typeById.get(p.customerId) ?? null,
       band_high: bandCuts.high,
       band_low: bandCuts.low,
+      episodes: episodesById.get(p.customerId) ?? 0,
+      episode_version: EPISODE_VERSION,
+      episode_window_days: episodeWindowById.get(p.customerId) ?? null,
+      model_params_source: paramsSourceById.get(p.customerId) ?? "arquetipo",
+      mixture_k: fit !== null && fit !== undefined ? fit.k : null,
+      mixture_weights: fit !== null && fit !== undefined
+        ? fit.components.map((c) => Math.round(c.weight * 1000) / 1000)
+        : null,
+      mixture_version: fit !== null && fit !== undefined ? MIXTURE_VERSION : null,
+      mixture_resp: partMix?.respById?.get(p.customerId)?.map((r) => Math.round(r * 1000) / 1000) ?? null,
+      // Medianas en días por componente (Paso 5.1: sustento humano sin jerga;
+      // `describeCustomerRhythm` las lee de aquí, nunca μ/σ/pesos crudos).
+      mixture_meds: fit !== null && fit !== undefined
+        ? fit.components.map((c) => Math.max(1, Math.round(Math.exp(c.mu))))
+        : null,
     },
-  }));
+  };
+  });
   for (let i = 0; i < rows.length; i += 500) {
     const batch = rows.slice(i, i + 500);
     const { error } = await db

@@ -1,5 +1,6 @@
 import { getSupabase } from "@/lib/supabase";
 import { requireCustomerStoreAccess, resolveRouteCustomerId } from "@/lib/api/guard";
+import { describeCustomerRhythm } from "@/lib/rhythm-describe";
 
 interface CustomerPredictionDTO {
   model: string;
@@ -18,6 +19,8 @@ interface CustomerPredictionDTO {
   asOf: string | null;
   tDays: number | null;
   cycleDays: number | null;
+  /** Sustento humano del ritmo (issue #27 Paso 5.1); null en legacy/K=1. */
+  ritmoResumen: string | null;
 }
 
 export async function GET(
@@ -67,6 +70,11 @@ export async function GET(
     asOf: (pred.as_of as string | null) ?? null,
     tDays: ev.t_days == null ? null : Number(ev.t_days),
     cycleDays: ev.cycle_days == null ? null : Number(ev.cycle_days),
+    ritmoResumen: describeCustomerRhythm({
+      mixture_k: ev.mixture_k ?? null,
+      mixture_meds: ev.mixture_meds ?? null,
+      mixture_resp: ev.mixture_resp ?? null,
+    }),
   };
   return Response.json({ prediction: dto });
 }

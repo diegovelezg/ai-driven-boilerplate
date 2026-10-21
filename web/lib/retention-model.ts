@@ -133,6 +133,26 @@ export interface StoreModelInput {
    *  defaults 0.6/0.15 (reproducen v2). Calibración intacta. */
   bandHigh?: number | null;
   bandLow?: number | null;
+  /** Ventana de episodización por tenant en días (issue #27 Pasos 1+3).
+   *  El núcleo la normaliza vía `asValidEpisodeWindowDays` (finita en
+   *  (1,60]; lo demás ⇒ sin fusión temporal = legacy). La fuente validada
+   *  es `validateModelParams` (rechaza >60 a legacy completo). */
+  episodeGapDays?: number | null;
+  /** K máximo de la mezcla de ritmos (issue #27 Paso 2). Null/inválido/<2
+   *  ⇒ legacy: grilla única (idéntico a v2). Entero ≥2 habilita la
+   *  selección de K por BIC con guardarraíles (K≤4); si el K elegido es 1
+   *  se usa el camino legacy exacto. La aplicación en producción la arbitra
+   *  el tune con backtest (Paso 4); el default es no mezclar. */
+  mixtureMaxK?: number | null;
+  /** Fits aprendidos por el tune y persistidos por tenant (issue #27 Paso 3):
+   *  mezcla efectiva por nivel, estable entre tunes (la predicción diaria NO
+   *  reajusta). Validados en uso (fail-open ⇒ se ignoran si inválidos);
+   *  preceden al ajuste EM al vuelo. K=1 ⇒ camino legacy exacto. */
+  mixtureStoreFit?: MixtureLike | null;
+  mixtureCohortFit?: MixtureLike | null;
+  /** Out-param opcional: el caller lo pasa para volcar K/pesos/resp a
+   *  `evidence_json` sin cambiar el contrato `Prediction`. */
+  mixtureEvidence?: MixtureEvidence;
 }
 
 export const HORIZON_BY_ARCHETYPE: Record<string, number> = {
@@ -469,6 +489,401 @@ function predictFromGrid(
   };
 }
 
+/** Bisección de cuantil condicional con CDF arbitraria (issue #27 Paso 2).
+ *  Extraído de `predictiveQuantile` sin cambiar su matemática: F monótona,
+ *  búsqueda en [t, t+3000], 16 iteraciones, null si S(t)≈0 o no alcanza. */
+function quantileFromCdf(q: number, t: number, cdf: (x: number) => number): number | null {
+  const tt = Math.max(0, t);
+  if (tt <= 0) {
+    const hi0 = 3000;
+    if (cdf(hi0) < q) return null;
+    let lo = 0.5;
+    let hi = hi0;
+    for (let i = 0; i < 16; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (cdf(mid) < q) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+  const fT = cdf(tt);
+  const sT = 1 - fT;
+  if (sT <= 1e-9) return null;
+  const target = fT + q * sT;
+  if (target >= 1) return null;
+  let lo = tt;
+  let hi = tt + 3000;
+  if (cdf(hi) < target) return null;
+  for (let i = 0; i < 16; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (cdf(mid) < target) lo = mid;
+    else hi = mid;
+  }
+  return Math.max(tt, (lo + hi) / 2);
+}
+
+/** Mezcla de K ritmos (issue #27 Paso 2): K familias LogNormal sobre
+ *  tiempos entre episodios, con censura. Es la evolución de la grilla
+ *  única (1 familia → K familias, K∈[1..4]); K=1 equivale en espíritu al
+ *  modelo actual. Todo puro/determinista: el ajuste EM es por partición
+ *  (tienda/cohorte), nunca por cliente; por cliente solo se evalúan K
+ *  CDFs (pertenencia blanda). NO es K-Means: pertenencia blanda, forma
+ *  LogNormal por componente y la censura ("aún no volvió") entra como
+ *  supervivencia en E-step, pesos y BIC. La M-step estima (μ,σ) en forma
+ *  cerrada sobre gaps completados; los censurados pesan en E-step
+ *  (asignación), pesos y verosimilitud total (documentado: MLE censurado
+ *  completo queda para el tune con más n; con ~100 repetidores el punto
+ *  justo es este). */
+export const MIXTURE_VERSION = "mix1:lognormal-em";
+export const MIXTURE_MAX_K = 4;
+/** Guardarraíles de tamaño (issue #27 Paso 2): por componente, lo mayor
+ *  entre N absoluto y fracción de la base. Por debajo ⇒ ese K no existe. */
+const MIXTURE_MIN_COMPONENT_N = 15;
+const MIXTURE_MIN_COMPONENT_FRAC = 0.1;
+/** Cotas operativas de componentes (issue #27 Paso 3): espejan la grilla
+ *  del núcleo (σ∈[0.25,1.4]) y el techo de ciclo del tenant (μ≤ln(1095),
+ *  μ≥ln(1): un ritmo mediano sub-diario no es un episodio). El lector las
+ *  exige (fail-open a legacy); el EM ya las produce por construcción. */
+export const MIXTURE_MU_MIN = 0;
+export const MIXTURE_MU_MAX = Math.log(1095);
+export const MIXTURE_SIGMA_MIN = 0.25;
+export const MIXTURE_SIGMA_MAX = 1.4;
+
+export interface MixtureComponent {
+  weight: number;
+  mu: number;
+  sigma: number;
+}
+
+/** Mezcla utilizable para predecir: K + componentes. `MixtureFit` (salida
+ *  del EM con BIC/n/masa) la extiende; los fits aprendidos por el tune
+ *  (Paso 3/4, persistidos sin BIC) entran por aquí. */
+export interface MixtureLike {
+  k: number;
+  components: MixtureComponent[];
+}
+
+export interface MixtureFit extends MixtureLike {
+  bic: number;
+  logLik: number;
+  n: number;
+  /** Masa blanda por componente (Σ responsabilidades), para guardarraíles. */
+  mass: number[];
+}
+
+/** Valida una mezcla externa (p. ej. aprendida por el tune, issue #27 Paso 3).
+ *  Estricta en forma (k entero 1..4, N componentes, pesos finitos >0 con suma
+ *  ≈1) y en rango operativo (μ∈[ln1,ln1095], σ∈[0.25,1.4]: fuera de eso es
+ *  basura persistida, no un ritmo); ordena la copia por μ. Null ⇒ el caller
+ *  usa legacy/EM (fail-open). Pura. */
+export function asValidMixtureFit(raw: unknown): MixtureLike | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const k = r.k;
+  const comps = r.components;
+  if (!Number.isInteger(k) || (k as number) < 1 || (k as number) > MIXTURE_MAX_K) return null;
+  if (!Array.isArray(comps) || comps.length !== k) return null;
+  const parsed: MixtureComponent[] = [];
+  let sum = 0;
+  for (const c of comps) {
+    if (typeof c !== "object" || c === null) return null;
+    const cc = c as Record<string, unknown>;
+    if (
+      typeof cc.weight !== "number" || !Number.isFinite(cc.weight) || cc.weight <= 0 ||
+      typeof cc.mu !== "number" || !Number.isFinite(cc.mu) ||
+      cc.mu < MIXTURE_MU_MIN || cc.mu > MIXTURE_MU_MAX ||
+      typeof cc.sigma !== "number" || !Number.isFinite(cc.sigma) ||
+      cc.sigma < MIXTURE_SIGMA_MIN || cc.sigma > MIXTURE_SIGMA_MAX
+    ) {
+      return null;
+    }
+    sum += cc.weight as number;
+    parsed.push({ weight: cc.weight as number, mu: cc.mu as number, sigma: cc.sigma as number });
+  }
+  if (!(Math.abs(sum - 1) <= 1e-6)) return null;
+  parsed.sort((a, b) => a.mu - b.mu);
+  return { k: k as number, components: parsed };
+}
+
+/** Evidencia de mezcla por corrida (out-param de `predictStore`).
+ *  El caller la vuelca a `evidence_json`; `Prediction` no cambia.
+ *  El objeto es de un solo uso por llamada/partición: `predictStore` lo
+ *  rellena entero (incluido un `respById` fresco) para no mezclar
+ *  particiones si se reutiliza por error. */
+export interface MixtureEvidence {
+  store?: MixtureLike | null;
+  cohort?: MixtureLike | null;
+  respById?: Map<string, number[]>;
+}
+
+/** Ajusta K componentes LogNormal por EM determinista (issue #27 Paso 2).
+ *  Init por cuantiles de ln(gaps) (determinista); null si k<1 o sin datos.
+ *  Componentes ordenados por μ ascendente (ancla estable entre tunes). */
+export function fitMixture(
+  gapsCompletados: number[],
+  censurados: number[],
+  k: number,
+  opts?: { priorMu?: number; sigma0?: number; maxIter?: number },
+): MixtureFit | null {
+  if (!Number.isInteger(k) || k < 1 || k > MIXTURE_MAX_K) return null;
+  const gaps = gapsCompletados.filter((g) => g > 0);
+  const cens = censurados.filter((t) => t > 0);
+  const n = gaps.length + cens.length;
+  if (n === 0) return null;
+  const priorMu = typeof opts?.priorMu === "number" && Number.isFinite(opts.priorMu)
+    ? opts.priorMu
+    : Math.log(30);
+  const sigma0 = typeof opts?.sigma0 === "number" && opts.sigma0 > 0 ? opts.sigma0 : 0.7;
+  const maxIter = typeof opts?.maxIter === "number" && opts.maxIter > 0
+    ? Math.min(200, Math.floor(opts.maxIter))
+    : 50;
+  const logGaps = gaps.map((g) => Math.log(g)).sort((a, b) => a - b);
+  // Init determinista por cuantiles; sin gaps completados ⇒ prior.
+  const comps: Array<{ w: number; mu: number; sigma: number }> = [];
+  for (let c = 0; c < k; c += 1) {
+    let mu = priorMu;
+    if (logGaps.length > 0) {
+      const lo = Math.floor((c * logGaps.length) / k);
+      const hi = Math.max(lo + 1, Math.floor(((c + 1) * logGaps.length) / k));
+      const slice = logGaps.slice(lo, hi);
+      mu = slice.reduce((a, b) => a + b, 0) / slice.length;
+    }
+    comps.push({ w: 1 / k, mu, sigma: sigma0 });
+  }
+  // σ acotada al rango operativo (ver MIXTURE_SIGMA_MIN/MAX).
+  const SIG_LO = MIXTURE_SIGMA_MIN;
+  const SIG_HI = MIXTURE_SIGMA_MAX;
+  let prevLl = Number.NEGATIVE_INFINITY;
+  let mass = comps.map(() => 0);
+  for (let iter = 0; iter < maxIter; iter += 1) {
+    // E-step en log-espacio: completados ⇒ pdf; censurados ⇒ supervivencia.
+    const respG: number[][] = gaps.map(() => new Array<number>(k).fill(0));
+    const respC: number[][] = cens.map(() => new Array<number>(k).fill(0));
+    let ll = 0;
+    for (let i = 0; i < gaps.length; i += 1) {
+      let mx = Number.NEGATIVE_INFINITY;
+      const lr: number[] = new Array<number>(k);
+      for (let c = 0; c < k; c += 1) {
+        lr[c] = Math.log(Math.max(1e-300, comps[c].w)) + logNormalLogPdf(gaps[i], comps[c].mu, comps[c].sigma);
+        if (lr[c] > mx) mx = lr[c];
+      }
+      let tot = 0;
+      for (let c = 0; c < k; c += 1) {
+        respG[i][c] = Math.exp(lr[c] - mx);
+        tot += respG[i][c];
+      }
+      for (let c = 0; c < k; c += 1) respG[i][c] /= tot;
+      ll += mx + Math.log(Math.max(1e-300, tot));
+    }
+    for (let i = 0; i < cens.length; i += 1) {
+      let mx = Number.NEGATIVE_INFINITY;
+      const lr: number[] = new Array<number>(k);
+      for (let c = 0; c < k; c += 1) {
+        const s = Math.max(1e-300, 1 - logNormalCdf(cens[i], comps[c].mu, comps[c].sigma));
+        lr[c] = Math.log(Math.max(1e-300, comps[c].w)) + Math.log(s);
+        if (lr[c] > mx) mx = lr[c];
+      }
+      let tot = 0;
+      for (let c = 0; c < k; c += 1) {
+        respC[i][c] = Math.exp(lr[c] - mx);
+        tot += respC[i][c];
+      }
+      for (let c = 0; c < k; c += 1) respC[i][c] /= tot;
+      ll += mx + Math.log(Math.max(1e-300, tot));
+    }
+    if (!Number.isFinite(ll)) return null;
+    // M-step: pesos con toda la masa; (μ,σ) en forma cerrada sobre gaps.
+    const Nk = new Array<number>(k).fill(0);
+    for (const r of respG) for (let c = 0; c < k; c += 1) Nk[c] += r[c];
+    for (const r of respC) for (let c = 0; c < k; c += 1) Nk[c] += r[c];
+    mass = Nk;
+    let alive = true;
+    for (let c = 0; c < k; c += 1) {
+      if (!(Nk[c] > 1e-9)) {
+        alive = false;
+        break;
+      }
+    }
+    if (!alive) return null;
+    for (let c = 0; c < k; c += 1) {
+      comps[c].w = Nk[c] / n;
+      let num = 0;
+      let den = 0;
+      for (let i = 0; i < gaps.length; i += 1) {
+        num += respG[i][c] * Math.log(gaps[i]);
+        den += respG[i][c];
+      }
+      if (den > 1e-9 && gaps.length > 0) {
+        const mu = num / den;
+        let v = 0;
+        for (let i = 0; i < gaps.length; i += 1) {
+          const d = Math.log(gaps[i]) - mu;
+          v += respG[i][c] * d * d;
+        }
+        comps[c].mu = mu;
+        comps[c].sigma = Math.min(SIG_HI, Math.max(SIG_LO, Math.sqrt(Math.max(1e-6, v / den))));
+      }
+    }
+    if (Math.abs(ll - prevLl) < 1e-6 * Math.max(1, Math.abs(ll))) {
+      prevLl = ll;
+      break;
+    }
+    prevLl = ll;
+  }
+  // Ordenar por μ ascendente (ancla estable: el "grupo 2" no cambia de
+  // significado entre tunes; la superficie habla de comportamiento).
+  const order = comps.map((_, i) => i).sort((a, b) => comps[a].mu - comps[b].mu);
+  const components: MixtureComponent[] = order.map((i) => ({
+    weight: comps[i].w,
+    mu: comps[i].mu,
+    sigma: comps[i].sigma,
+  }));
+  const orderedMass = order.map((i) => mass[i]);
+  // Verosimilitud total final con componentes ordenados.
+  let logLik = 0;
+  for (const g of gaps) {
+    let tot = 0;
+    for (const c of components) tot += c.weight * Math.exp(logNormalLogPdf(g, c.mu, c.sigma));
+    logLik += Math.log(Math.max(1e-300, tot));
+  }
+  for (const t of cens) {
+    let tot = 0;
+    for (const c of components) tot += c.weight * Math.max(1e-300, 1 - logNormalCdf(t, c.mu, c.sigma));
+    logLik += Math.log(Math.max(1e-300, tot));
+  }
+  if (!Number.isFinite(logLik)) return null;
+  const nParams = 3 * k - 1;
+  const bic = -2 * logLik + nParams * Math.log(Math.max(1, n));
+  return { k, components, bic, logLik, n, mass: orderedMass };
+}
+
+/** Elige K por BIC con guardarraíles de tamaño (issue #27 Paso 2).
+ *  Descarta K cuya masa mínima < max(MIN_N, MIN_FRAC·n); K=1 es válido
+ *  con n≥1. Retorna null si ningún K es válido ⇒ el caller usa legacy. */
+export function selectMixtureK(
+  candidates: Array<MixtureFit | null>,
+  opts?: { minComponentN?: number; minComponentFrac?: number },
+): MixtureFit | null {
+  const minN = typeof opts?.minComponentN === "number" && opts.minComponentN > 0
+    ? opts.minComponentN
+    : MIXTURE_MIN_COMPONENT_N;
+  const minFrac = typeof opts?.minComponentFrac === "number" && opts.minComponentFrac >= 0
+    ? opts.minComponentFrac
+    : MIXTURE_MIN_COMPONENT_FRAC;
+  let best: MixtureFit | null = null;
+  for (const fit of candidates) {
+    if (!fit || fit.n < 1) continue;
+    const floor = Math.max(minN, minFrac * fit.n);
+    const minMass = Math.min(...fit.mass);
+    if (fit.k > 1 && !(minMass >= floor)) continue;
+    if (best === null || fit.bic < best.bic) best = fit;
+  }
+  return best;
+}
+
+/** Pertenencia blanda del cliente (issue #27 Paso 2): posterior de cada
+ *  componente ∝ peso × verosimilitud de sus gaps (pdf) y su t (supervivencia
+ *  si t>0). Sin datos ⇒ prior (pesos). Suma 1. */
+export function mixtureResponsibilities(
+  gaps: number[],
+  t: number,
+  fit: MixtureLike,
+): number[] {
+  const k = fit.k;
+  const lr: number[] = new Array<number>(k);
+  for (let c = 0; c < k; c += 1) {
+    const comp = fit.components[c];
+    let l = Math.log(Math.max(1e-300, comp.weight));
+    for (const g of gaps) {
+      if (g <= 0) continue;
+      l += logNormalLogPdf(g, comp.mu, comp.sigma);
+    }
+    if (t > 0) {
+      l += Math.log(Math.max(1e-300, 1 - logNormalCdf(t, comp.mu, comp.sigma)));
+    }
+    lr[c] = l;
+  }
+  const mx = Math.max(...lr);
+  const w = lr.map((v) => (Number.isFinite(v) ? Math.exp(v - mx) : 0));
+  const tot = w.reduce((a, b) => a + b, 0);
+  if (!(tot > 0)) return fit.components.map((c) => c.weight);
+  return w.map((v) => v / tot);
+}
+
+function mixtureCdf(x: number, fit: MixtureLike, resp: number[]): number {
+  if (x <= 0) return 0;
+  let acc = 0;
+  for (let c = 0; c < fit.k; c += 1) {
+    acc += resp[c] * logNormalCdf(x, fit.components[c].mu, fit.components[c].sigma);
+  }
+  return Math.min(1, Math.max(0, acc));
+}
+
+/** p del cliente como mezcla (issue #27 Paso 2): Σ respₖ · pₖ con la misma
+ *  fórmula de cura que `predictFromGrid` por componente puntual. pLow/pHigh
+ *  = percentiles 10/90 ponderados por resp (misma regla que la grilla);
+ *  cuantiles condicionales sobre la CDF mezcla; sT con cura para dormido. */
+export function predictFromMixture(
+  fit: MixtureLike,
+  resp: number[],
+  t: number,
+  H: number,
+  cureProb = 0,
+): GridPrediction {
+  const tt = Math.max(0, t);
+  const pi = Math.min(0.8, Math.max(0, cureProb));
+  const pCells: Array<{ p: number; w: number }> = [];
+  let pMean = 0;
+  for (let c = 0; c < fit.k; c += 1) {
+    const comp = fit.components[c];
+    const w = resp[c] ?? 0;
+    if (!(w > 1e-12)) continue;
+    const ft = tt <= 0 ? 0 : logNormalCdf(tt, comp.mu, comp.sigma);
+    const fth = logNormalCdf(tt + H, comp.mu, comp.sigma);
+    const st = 1 - ft;
+    const sMix = pi + (1 - pi) * st;
+    let p = 0;
+    if (sMix > 1e-12) p = ((1 - pi) * (fth - ft)) / sMix;
+    if (!Number.isFinite(p)) p = 0;
+    p = Math.min(1, Math.max(0, p));
+    pCells.push({ p, w });
+    pMean += w * p;
+  }
+  pMean = Math.min(1, Math.max(0, pMean));
+  pCells.sort((a, b) => a.p - b.p);
+  let acc = 0;
+  let pLow = pCells.length > 0 ? pCells[0].p : 0;
+  let pHigh = pCells.length > 0 ? pCells[pCells.length - 1].p : 0;
+  let foundLow = false;
+  for (const c of pCells) {
+    acc += c.w;
+    if (!foundLow && acc >= 0.1) {
+      pLow = c.p;
+      foundLow = true;
+    }
+    if (acc >= 0.9) {
+      pHigh = c.p;
+      break;
+    }
+  }
+  const cdf = (x: number): number => mixtureCdf(x, fit, resp);
+  const sT = pi + (1 - pi) * (1 - cdf(tt));
+  const clampQ = (q: number | null): number | null => {
+    if (q === null) return null;
+    const v = Math.max(tt, q);
+    return Math.max(1, Math.round(v));
+  };
+  return {
+    pMean,
+    pLow,
+    pHigh,
+    sT: Math.min(1, Math.max(0, sT)),
+    expDays: clampQ(quantileFromCdf(0.5, tt, cdf)),
+    p25: clampQ(quantileFromCdf(0.25, tt, cdf)),
+    p75: clampQ(quantileFromCdf(0.75, tt, cdf)),
+  };
+}
+
 /**
  * Ordena ascendente y fusiona órdenes a <1 día en una sesión
  * (fecha = la primera, ticket = suma solo si misma moneda).
@@ -498,6 +913,89 @@ export function sessionize(
   return out;
 }
 
+/** Versión de episodización (auditable, issue #27 Paso 1). */
+export const EPISODE_VERSION = "ep1:gap-keys";
+/** Techo operativo de la ventana de episodio (issue #27 Paso 3): por encima
+ *  se colapsa el ritmo recurrente real (F→1). El lector lo rechaza
+ *  (fail-open a legacy); el tune además lo mueve con trust region. */
+export const EPISODE_WINDOW_MAX_DAYS = 60;
+
+/** Normaliza una ventana de episodio (puro, issue #27 review Pasos 1-3).
+ *  Retorna días finitos en (1,60] o null (= legacy, sin fusión temporal).
+ *  El núcleo se autodefiende aunque el caller no haya validado: una ventana
+ *  absurda (>60) NO fusiona un año en un episodio, cae a legacy. */
+export function asValidEpisodeWindowDays(windowDays: unknown): number | null {
+  if (typeof windowDays !== "number" || !Number.isFinite(windowDays)) return null;
+  if (windowDays <= 1 || windowDays > EPISODE_WINDOW_MAX_DAYS) return null;
+  return windowDays;
+}
+
+/** Un episodio = 1+ sesiones fusionadas (ráfaga/campaña).
+ *  startAt = primera sesión; endAt = última (fin del episodio, para `t`).
+ *  En legacy (sin ventana válida) startAt === endAt === sesión.at. */
+export interface Episode {
+  startAt: number;
+  endAt: number;
+  ticketMinor: number;
+  currency: string | null;
+  sessionCount: number;
+  windowKey: string | null;
+}
+
+/**
+ * Agrupa sesiones en episodios de compra (issue #27 Paso 1, puro/testeable).
+ * Fusiona conservadoramente si (a) brecha entre sesiones ≤ windowDays
+ * (solo ventana válida vía `asValidEpisodeWindowDays`: finita en (1,60];
+ * null/inválida/<=1/>60 ⇒ sin fusión temporal = comportamiento actual),
+ * o (b) comparten `windowKeys` no nula
+ * (misma ventana declarada del metadata map del tenant, p. ej. mismo
+ * dateStart..dateEnd; agnóstica al contenido: el caller la resuelve).
+ * `windowKeys` es paralela al array de entrada (pre-orden); se ordena junto
+ * a las sesiones. Ordena ascendente, ignora `at` no finitos.
+ */
+export function episodeize(
+  sessions: SessionInput[],
+  windowDays?: number | null,
+  windowKeys?: Array<string | null> | null,
+): Episode[] {
+  const pairs = sessions
+    .map((s, i) => ({ s, k: windowKeys?.[i] ?? null }))
+    .filter((p) => Number.isFinite(p.s.at))
+    .sort((a, b) => a.s.at - b.s.at);
+  const gapWindow = asValidEpisodeWindowDays(windowDays);
+  const out: Episode[] = [];
+  for (const { s, k } of pairs) {
+    const key = typeof k === "string" && k.length > 0 ? k : null;
+    const last = out[out.length - 1];
+    if (last) {
+      const gapDays = (s.at - last.endAt) / DAY_MS;
+      const sameWindow = key !== null && last.windowKey !== null && key === last.windowKey;
+      if (sameWindow || (gapWindow !== null && gapDays <= gapWindow)) {
+        // Fusiona: fin avanza, ticket suma solo misma moneda (regla sesión),
+        // sessionCount crece; la ventana solo se conserva si coincide en
+        // ambas (misma key no nula); si la fusión fue solo temporal, la
+        // ventana del episodio queda indeterminada (null, mixto).
+        last.endAt = s.at;
+        const a = (last.currency ?? "").toUpperCase();
+        const b = (s.currency ?? "").toUpperCase();
+        if (a === b) last.ticketMinor += s.ticketMinor;
+        last.sessionCount += 1;
+        if (!sameWindow) last.windowKey = null;
+        continue;
+      }
+    }
+    out.push({
+      startAt: s.at,
+      endAt: s.at,
+      ticketMinor: s.ticketMinor,
+      currency: s.currency ?? null,
+      sessionCount: 1,
+      windowKey: key,
+    });
+  }
+  return out;
+}
+
 function medianOf(xs: number[]): number | null {
   if (xs.length === 0) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -522,20 +1020,26 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   interface PerCustomer {
     id: string;
     sessions: SessionInput[];
+    episodes: Episode[];
     gaps: number[];
     t: number;
     lastAt: number | null;
   }
   const per: PerCustomer[] = input.customers.map((c) => {
     const sessions = [...c.sessions].sort((a, b) => a.at - b.at);
+    // Episodios (issue #27 Paso 1): sin ventana válida cada sesión es un
+    // episodio (startAt=endAt=at) ⇒ gaps/t idénticos a v2. Con ventana >1
+    // los gaps son entre episodios (siguiente.start - previo.end) y t desde
+    // el fin del último episodio.
+    const episodes = episodeize(sessions, input.episodeGapDays ?? null, null);
     const gaps: number[] = [];
-    for (let i = 1; i < sessions.length; i += 1) {
-      const g = (sessions[i].at - sessions[i - 1].at) / DAY_MS;
+    for (let i = 1; i < episodes.length; i += 1) {
+      const g = (episodes[i].startAt - episodes[i - 1].endAt) / DAY_MS;
       if (g > 0) gaps.push(g);
     }
-    const lastAt = sessions.length > 0 ? sessions[sessions.length - 1].at : null;
+    const lastAt = episodes.length > 0 ? episodes[episodes.length - 1].endAt : null;
     const t = lastAt === null ? 0 : Math.max(0, (input.asOf - lastAt) / DAY_MS);
-    return { id: c.customerId, sessions, gaps, t, lastAt };
+    return { id: c.customerId, sessions, episodes, gaps, t, lastAt };
   });
 
   // Grilla de tienda SOLO con F>=2 (issue #10 P1-3): los censurados F=1
@@ -544,20 +1048,20 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   const storeGaps: number[] = [];
   const storeCens: number[] = [];
   for (const p of per) {
-    if (p.sessions.length < 2) continue;
+    if (p.episodes.length < 2) continue;
     for (const g of p.gaps) storeGaps.push(g);
     storeCens.push(p.t);
   }
   const storeGrid = fitGrid(storeGaps, storeCens, priorMu0, priorSigmaMu, sigma0);
   const storeMu = gridMuMean(storeGrid);
 
-  // Cohorte F=1: tiempo hasta la 2ª sesión (completado) o censura.
+  // Cohorte F=1: tiempo hasta el 2º episodio (completado) o censura.
   const cohortGaps: number[] = [];
   const cohortCens: number[] = [];
   for (const p of per) {
-    if (p.sessions.length === 0) continue;
-    if (p.sessions.length >= 2) {
-      const first = (p.sessions[1].at - p.sessions[0].at) / DAY_MS;
+    if (p.episodes.length === 0) continue;
+    if (p.episodes.length >= 2) {
+      const first = (p.episodes[1].startAt - p.episodes[0].endAt) / DAY_MS;
       if (first > 0) cohortGaps.push(first);
     } else {
       cohortCens.push(p.t);
@@ -565,11 +1069,45 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   }
   const cohortGrid = fitGrid(cohortGaps, cohortCens, priorMu0, priorSigmaMu, sigma0);
 
+  // Mezcla de K ritmos (issue #27 Pasos 2-3): dos fuentes, orden fijo.
+  // 1) Fits aprendidos por el tune y persistidos por tenant/partición
+  //    (estables entre tunes: la predicción diaria NO reajusta).
+  // 2) Ajuste EM al vuelo con selección de K por BIC (opt-in temporal).
+  // Default (sin fits ni mixtureMaxK≥2) ⇒ legacy: grilla única exacta.
+  const explicitStore = asValidMixtureFit(input.mixtureStoreFit ?? null);
+  const explicitCohort = asValidMixtureFit(input.mixtureCohortFit ?? null);
+  const mixtureK = typeof input.mixtureMaxK === "number" && Number.isFinite(input.mixtureMaxK)
+    ? Math.min(MIXTURE_MAX_K, Math.max(1, Math.floor(input.mixtureMaxK)))
+    : 1;
+  let storeMixture: MixtureLike | null = explicitStore;
+  let cohortMixture: MixtureLike | null = explicitCohort;
+  if (mixtureK >= 2 && (storeMixture === null || cohortMixture === null)) {
+    const storeCands: Array<MixtureFit | null> = [];
+    const cohortCands: Array<MixtureFit | null> = [];
+    for (let k = 1; k <= mixtureK; k += 1) {
+      if (storeMixture === null) {
+        storeCands.push(fitMixture(storeGaps, storeCens, k, { priorMu: priorMu0, sigma0 }));
+      }
+      if (cohortMixture === null) {
+        cohortCands.push(fitMixture(cohortGaps, cohortCens, k, { priorMu: priorMu0, sigma0 }));
+      }
+    }
+    if (storeMixture === null) storeMixture = selectMixtureK(storeCands);
+    if (cohortMixture === null) cohortMixture = selectMixtureK(cohortCands);
+  }
+  if (input.mixtureEvidence !== undefined) {
+    input.mixtureEvidence.store = storeMixture;
+    input.mixtureEvidence.cohort = cohortMixture;
+    // Fresco por llamada: evita mezclar resp de otra partición si el objeto
+    // se reutiliza por error (el caller crea uno por partición).
+    input.mixtureEvidence.respById = new Map();
+  }
+
   // Fracción cura por nivel (issue #10 P1-3): proporción de censurados
   // viejos que probablemente jamás vuelvan. Acotada para no matar la señal.
   // Renovación: viejos = t > 3*ciclo entre F>=2. Segunda compra: t > 2*ciclo.
-  const renewalOld = per.filter((p) => p.sessions.length >= 2 && p.t > 3 * cycle).length;
-  const renewalTotal = Math.max(1, per.filter((p) => p.sessions.length >= 2).length);
+  const renewalOld = per.filter((p) => p.episodes.length >= 2 && p.t > 3 * cycle).length;
+  const renewalTotal = Math.max(1, per.filter((p) => p.episodes.length >= 2).length);
   const f1Old = cohortCens.filter((t) => t > 2 * cycle).length;
   const f1Total = Math.max(1, cohortCens.length + cohortGaps.length);
   const cureRenewal = Math.min(0.4, renewalOld / renewalTotal);
@@ -583,10 +1121,11 @@ export function predictStore(input: StoreModelInput): Prediction[] {
     if (sessionCur === null) return false;
     return sessionCur.toUpperCase() === shopCur.toUpperCase();
   };
-  // Ticket: m0 = mediana de ticket de sesión en la moneda de la tienda.
+  // Ticket: m0 = mediana de ticket de episodio en la moneda de la tienda
+  // (issue #27 Paso 1: en legacy cada episodio = 1 sesión ⇒ idéntico a v2).
   const poolTickets: number[] = [];
   for (const p of per) {
-    for (const s of p.sessions) {
+    for (const s of p.episodes) {
       if (strictSameCurrency(s.currency, input.shopCurrency)) poolTickets.push(s.ticketMinor);
     }
   }
@@ -599,7 +1138,7 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   for (const p of per) {
     let sum = 0;
     let n = 0;
-    for (const s of p.sessions) {
+    for (const s of p.episodes) {
       if (strictSameCurrency(s.currency, input.shopCurrency)) {
         sum += s.ticketMinor;
         n += 1;
@@ -684,16 +1223,28 @@ export function predictStore(input: StoreModelInput): Prediction[] {
 
   const out: Prediction[] = [];
   for (const p of per) {
-    if (p.sessions.length === 0 || p.lastAt === null) continue;
-    const nSessions = p.sessions.length;
+    if (p.episodes.length === 0 || p.lastAt === null) continue;
+    const nSessions = p.episodes.length;
     const isRenewal = nSessions >= 2;
+    // Camino mezcla (issue #27 Paso 2): solo si el K elegido del nivel es
+    // ≥2; con K=1 se usa el camino legacy exacto (grilla jerárquica).
+    const levelMixture = isRenewal ? storeMixture : cohortMixture;
+    const useMixture = levelMixture !== null && levelMixture.k >= 2;
+    const resp = useMixture && levelMixture !== null
+      ? mixtureResponsibilities(p.gaps, p.t, levelMixture)
+      : null;
+    if (useMixture && resp !== null && input.mixtureEvidence?.respById !== undefined) {
+      input.mixtureEvidence.respById.set(p.id, resp);
+    }
     // Jerárquico real (issue #10 P1-2): prior paramétrico desde la media de
     // tienda + dispersión entre clientes, datos del cliente una sola vez.
-    const grid = isRenewal
-      ? fitClientGrid(storeMu, priorSigmaMu, sigma0, p.gaps, p.t)
-      : cohortGrid;
+    const grid = !useMixture
+      ? (isRenewal ? fitClientGrid(storeMu, priorSigmaMu, sigma0, p.gaps, p.t) : cohortGrid)
+      : null;
     const cure = isRenewal ? cureRenewal : cureSecond;
-    const pr = predictFromGrid(grid, p.t, H, cure);
+    const pr = useMixture && levelMixture !== null && resp !== null
+      ? predictFromMixture(levelMixture, resp, p.t, H, cure)
+      : predictFromGrid(grid ?? cohortGrid, p.t, H, cure);
     const ticket = ticketById.get(p.id) ?? null;
     const valor = ticket === null ? null : Math.round(pr.pMean * ticket);
 
@@ -720,7 +1271,10 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       pr.pMean > effHigh ? "organico-probable" : pr.pMean >= effLow ? "recuperable" : "lejos";
     let ventana: Prediction["ventana"];
     if (p.t > 3 * cycle) {
-      const sLn = Math.max(0, Math.min(1, 1 - predictiveCdf(p.t, grid)));
+      const cdfT = useMixture && levelMixture !== null && resp !== null
+        ? mixtureCdf(p.t, levelMixture, resp)
+        : predictiveCdf(p.t, grid ?? cohortGrid);
+      const sLn = Math.max(0, Math.min(1, 1 - cdfT));
       const pChurn = cure > 0 ? cure / (cure + (1 - cure) * Math.max(1e-9, sLn)) : 1 - sLn > 0.9 ? 1 : 0;
       const isDormido = cure > 0 ? pChurn > 0.7 : pr.sT < 0.1;
       ventana = isDormido ? "dormido" : pr.p75 !== null && p.t > pr.p75 ? "pasada" : "en";
