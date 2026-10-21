@@ -89,6 +89,10 @@ export async function runAnalyst(
     }
     const revenueByAction = new Map<string, number>();
 
+    // N+1 serial por cliente: con cola grande se acota y se deja constancia.
+    if (byCustomer.size > 200) {
+      log(`run ${runId} cola grande: ${byCustomer.size} clientes por medir (serie acotada 5k/cliente)`);
+    }
     for (const [cid, list] of byCustomer) {
       const earliest = list[0];
       const sent0 = new Date(earliest.dispatched_at).getTime();
@@ -193,6 +197,41 @@ export async function runAnalyst(
     }
 
     await advanceRun(runId, { processed: measured, failed: 0, current: null });
+    // Hito 2 (#25.7): atribución estratificada por canal/objetivo/banda.
+    // Reusa veto 24h (vetados nunca llegan a dispatched: no contaminan) y
+    // alimenta el gatillo P5/cohorte de #22 (log auditable, sin auto-aplicar aquí).
+    // Reusa proposed_leads.similar como lookalike: el pool ya vive en prospect
+    // (buildSimilarPool), aquí solo se evita medir lo vetado.
+    try {
+      const breakdown = await attributionBySlice(storeId, 90).catch(() => null);
+      if (breakdown) {
+        const byCanal = Object.entries(breakdown.byChannel).map(([k, v]) => `${k} ${v}`).join(" · ").slice(0, 160);
+        if (byCanal) log(`run ${runId} atribucion_90d canal: ${byCanal}`);
+        const byObj = Object.entries(breakdown.byObjective).map(([k, v]) => `${k} ${v}`).join(" · ").slice(0, 160);
+        if (byObj) log(`run ${runId} atribucion_90d objetivo: ${byObj}`);
+        const byDec = Object.entries(breakdown.byDecision).map(([k, v]) => `${k} ${v}`).join(" · ").slice(0, 160);
+        if (byDec) log(`run ${runId} atribucion_90d banda/decision: ${byDec}`);
+      }
+      // Enlace #22: si existe la calibración P5 o la cohorte accionable, se deja
+      // constancia para el tune (el tune decide; el analyst no auto-aplica).
+      try {
+        const { readFileSync, existsSync } = await import("node:fs");
+        const { join, dirname } = await import("node:path");
+        const { fileURLToPath } = await import("node:url");
+        const here = dirname(fileURLToPath(import.meta.url));
+        const calPath = join(here, "..", ".data", "calibrate-retention.json");
+        if (existsSync(calPath)) {
+          const raw = readFileSync(calPath, "utf-8").slice(0, 2000);
+          if (/2 fallos|fuera de tolerancia|skill/i.test(raw)) {
+            log(`run ${runId} p5_gatillo: calibración con señal para el tune #22 (ver .data/calibrate-retention.json)`);
+          }
+        }
+      } catch {
+        // sin calibración local: nada que enlazar.
+      }
+    } catch {
+      // best-effort: la medición principal ya cerró.
+    }
     const status: RunStatus = "done";
     // Filosofía TeamPulse: el $ es lo único que importa aquí. La pausa
     // (ventana abierta) se explica, no se esconde en el log.
@@ -227,7 +266,60 @@ export async function runAnalyst(
       processed: measured,
       failed: 0,
       error: e instanceof Error ? e.message : String(e),
+      pulseState: "paused",
     });
     log(`run ${runId} ERROR ${e instanceof Error ? e.message : e}`);
   }
+}
+
+/** Atribución estratificada (Hito 2): revenue_attributed por canal/objetivo/banda.
+ *  Determinista, paginado con limit/cursor. El veto 24h ya filtró arriba
+ *  (vetados nunca se redactan ni se envían): aquí solo se mide lo enviado. */
+export async function attributionBySlice(
+  storeId: string,
+  days = 90,
+): Promise<{
+  byChannel: Record<string, number>;
+  byObjective: Record<string, number>;
+  byDecision: Record<string, number>;
+  total: number;
+  conversions: number;
+}> {
+  const db = getSupabase();
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  const byChannel: Record<string, number> = {};
+  const byObjective: Record<string, number> = {};
+  const byDecision: Record<string, number> = {};
+  let total = 0;
+  let conversions = 0;
+  for (let off = 0; ; off += 500) {
+    const { data, error } = await db
+      .from("proposed_actions")
+      .select("channel,revenue_attributed,evidence_json,dispatched_at")
+      .eq("store_id", storeId)
+      .eq("status", "dispatched")
+      .not("revenue_attributed", "is", null)
+      .gte("dispatched_at", since)
+      .order("dispatched_at", { ascending: false })
+      .order("id", { ascending: true })
+      .range(off, off + 499);
+    if (error) throw new Error(`Attribution read: ${error.message}`);
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      const rev = Number(r.revenue_attributed ?? 0);
+      if (!(rev > 0)) continue;
+      total += rev;
+      conversions += 1;
+      const ch = String(r.channel ?? "unknown");
+      byChannel[ch] = (byChannel[ch] ?? 0) + rev;
+      const ev = (r.evidence_json as Record<string, unknown> | null) ?? null;
+      const obj = typeof ev?.objective === "string" ? ev.objective : typeof ev?.kind === "string" ? ev.kind : "unknown";
+      byObjective[obj] = (byObjective[obj] ?? 0) + rev;
+      const dec = typeof ev?.decision === "string" ? ev.decision : "unknown";
+      byDecision[dec] = (byDecision[dec] ?? 0) + rev;
+    }
+    if (rows.length < 500) break;
+    if (off >= 4500) break;
+  }
+  return { byChannel, byObjective, byDecision, total, conversions };
 }

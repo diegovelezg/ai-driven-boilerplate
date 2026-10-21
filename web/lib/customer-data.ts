@@ -19,6 +19,8 @@ export interface CustomerOrderItem {
   categoria?: string | null;
   /** Resto de metadata (texto corto/número), sanitizado. */
   detalles?: Record<string, string | number>;
+  /** Material aprobado (booleano *approved) o null. */
+  aprobado?: boolean | null;
 }
 
 export interface CustomerOrder {

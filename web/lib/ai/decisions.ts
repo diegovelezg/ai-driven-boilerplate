@@ -58,11 +58,21 @@ async function decide(
   input: string,
   questions: DecisionQuestion[],
 ): Promise<DecisionAnswer[]> {
-  const res = await fetch(DECISIONS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` },
-    body: JSON.stringify({ model: DECISIONS_MODEL, input, questions }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(DECISIONS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` },
+      body: JSON.stringify({ model: DECISIONS_MODEL, input, questions }),
+      // Sin timeout el caller se queda colgado para siempre. 120s cubre el peor caso.
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error("Decisions: timeout (120s) sin respuesta");
+    }
+    throw e;
+  }
   if (!res.ok) {
     throw new Error(`Decisions ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }

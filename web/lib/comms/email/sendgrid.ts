@@ -30,26 +30,36 @@ export async function sendViaSendGrid(opts: {
   if (!msg.to || !msg.subject) {
     return { ok: false, provider: "sendgrid", error: "Falta destinatario o asunto" };
   }
-  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: msg.to }] }],
-      from: { email: msg.from ?? from },
-      subject: msg.subject,
-      content: [
-        { type: "text/plain", value: msg.text },
-        { type: "text/html", value: msg.html ?? textToHtml(msg.text) },
-      ],
-      // Issue #13 (salida del destinatario): el cliente de correo ofrece
-      // "darse de baja" escribiendo al remitente. La baja gestionada
-      // (tabla opt_outs) vive en la app; esto es la salida a nivel mensaje.
-      headers: { "List-Unsubscribe": `<mailto:${msg.from ?? from}>` },
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: msg.to }] }],
+        from: { email: msg.from ?? from },
+        subject: msg.subject,
+        content: [
+          { type: "text/plain", value: msg.text },
+          { type: "text/html", value: msg.html ?? textToHtml(msg.text) },
+        ],
+        // Issue #13 (salida del destinatario): el cliente de correo ofrece
+        // "darse de baja" escribiendo al remitente. La baja gestionada
+        // (tabla opt_outs) vive en la app; esto es la salida a nivel mensaje.
+        headers: { "List-Unsubscribe": `<mailto:${msg.from ?? from}>` },
+      }),
+      // Envío en background: 30s sobra; sin timeout el dispatcher se cuelga.
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      return { ok: false, provider: "sendgrid", error: "SendGrid: timeout (30s) sin respuesta" };
+    }
+    throw e;
+  }
   if (!res.ok) {
     const body = (await res.text()).slice(0, 300);
     return { ok: false, provider: "sendgrid", error: `SendGrid ${res.status}: ${body}` };

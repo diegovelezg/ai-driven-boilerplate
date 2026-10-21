@@ -5,6 +5,7 @@ import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
 import type { CanonicalCustomer } from "@/lib/medusa";
+import type { ConnectorPlatform } from "@/lib/connectors/types";
 import {
   matchesDecisionFilter,
   BANDA_VALUES,
@@ -24,15 +25,36 @@ import {
   type MarketScope,
 } from "@/lib/markets";
 
-export async function resolveStoreId(medusaUrl: string): Promise<string | null> {
+export async function resolveStoreId(
+  shopUrl: string,
+  platform: ConnectorPlatform = "medusa",
+): Promise<string | null> {
   if (!isSupabaseConfigured()) return null;
   const { data } = await getSupabase()
     .from("stores")
     .select("id")
-    .eq("platform", "medusa")
-    .eq("shop_url", normalizeShopUrl(medusaUrl))
+    .eq("platform", platform)
+    .eq("shop_url", normalizeShopUrl(shopUrl))
     .maybeSingle();
   return (data?.id as string) ?? null;
+}
+
+/**
+ * Lista tiendas por plataforma (el worker y los scripts `run-once` la usan
+ * en vez de filtrar `.eq("platform","medusa")` inline: agregar un conector
+ * con backend no exige tocarlos).
+ */
+export async function listStoresByPlatform(
+  platforms: readonly string[],
+  filterStore?: string,
+  limit = 100,
+): Promise<string[]> {
+  const q = getSupabase().from("stores").select("id").in("platform", [...platforms]);
+  const { data, error } = filterStore
+    ? await q.eq("id", filterStore)
+    : await q.order("created_at", { ascending: true }).limit(limit);
+  if (error) throw new Error(`Stores read: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id)).filter(Boolean);
 }
 
 function str(v: unknown): string | null {

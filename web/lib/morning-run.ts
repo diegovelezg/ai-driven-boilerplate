@@ -38,7 +38,7 @@ async function morningAlreadyDone(storeId: string): Promise<boolean> {
 
 async function step(
   storeId: string,
-  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect",
+  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect" | "brain",
   label: string,
   total: number,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -84,6 +84,40 @@ export async function runMorningPipeline(storeId: string): Promise<void> {
     }
   } catch (e) {
     log(`enrichment omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  // 0. TenantBrain diario (#25 Hito 1.3): 1 job/día, antes del loop.
+  // Snapshot agnóstico en store_profiles.brain_json; lo leen writer/juez/prospect
+  // con 1 query (sin N+1 por borrador). Best-effort: no tumba la cadena.
+  try {
+    await step(storeId, "brain", "TenantBrain", 1, async (runId, sid) => {
+      const { computeTenantBrain, saveTenantBrain, getTenantBrain, isBrainFresh } = await import("@/lib/brain");
+      const { finishRun } = await import("@/lib/background");
+      const cur = await getTenantBrain(sid).catch(() => null);
+      if (isBrainFresh(cur)) {
+        await finishRun(runId, { status: "done", processed: 0, failed: 0, summary: "Brain fresco (<24h), sin recompute", pulseState: "paused" });
+        log("brain fresco, sin recompute");
+        return;
+      }
+      const brain = await computeTenantBrain(sid);
+      await saveTenantBrain(sid, brain);
+      let ticketTxt: string | null = null;
+      try {
+        const { formatMoney } = await import("@/lib/medusa");
+        ticketTxt = brain.ticketP50 != null ? formatMoney(brain.ticketP50, brain.ticketCurrency) : null;
+      } catch {
+        ticketTxt = brain.ticketP50 != null ? String(Math.round(brain.ticketP50 / 100)) : null;
+      }
+      await finishRun(runId, {
+        status: "done",
+        processed: 1,
+        failed: 0,
+        summary: `Brain actualizado: top ${brain.topProductos[0]?.title?.slice(0, 40) ?? "sin top"} · ticket p50 ${ticketTxt ?? "?"}`,
+        pulseState: "paused",
+      });
+      log(`brain done top=${brain.topProductos.length} ventana=${brain.ventanaMedianaDias} ticketP50=${ticketTxt ?? brain.ticketP50}`);
+    });
+  } catch (e) {
+    log(`brain omitido: ${e instanceof Error ? e.message : e}`);
   }
   if (await morningAlreadyDone(storeId)) {
     log("morning omitido (cadena de hoy ya done)");

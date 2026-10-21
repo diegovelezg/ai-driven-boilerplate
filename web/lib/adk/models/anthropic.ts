@@ -99,9 +99,16 @@ export class AnthropicLlm extends BaseLlm {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify(body),
-        signal: abortSignal,
+        // Ningún caller pasa abortSignal: deadline propia de 120s para no
+        // colgar el chat de la UI para siempre. Respeta la externa si llega.
+        signal: abortSignal ?? AbortSignal.timeout(120_000),
       });
     } catch (e) {
+      if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+        const msg = "anthropic: timeout (120s) sin respuesta";
+        log(`etapa=llm_ERROR proveedor=anthropic modelo=${model} error=${msg} ms=${Date.now() - t0}`);
+        throw new Error(`anthropic ${this.model}: ${msg}`);
+      }
       const msg = e instanceof Error ? e.message : "fetch failed";
       log(`etapa=llm_ERROR proveedor=anthropic modelo=${model} error=red: ${msg} ms=${Date.now() - t0}`);
       throw new Error(`anthropic ${this.model}: ${msg}`);

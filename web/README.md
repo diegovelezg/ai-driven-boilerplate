@@ -6,7 +6,8 @@ Dashboard merchant + sync multi-tenant de ecommerce (Medusa hoy, Shopify/Woo des
 
 - Next.js 16 (App Router) + React 19 + TailwindCSS 4 + shadcn/ui
 - Supabase local (Postgres + PostgREST) vía CLI + Docker; misma migración corre en cloud
-- Medusa v1/v2 en modo **solo lectura** (ver `lib/medusa.ts`)
+- Medusa v1/v2 en modo **solo lectura** (ver `lib/connectors/medusa.ts`, detalle en `lib/medusa.ts`)
+- Conectores centralizados en `lib/connectors/` (ver `## Conectores ecommerce`)
 
 ## Quickstart
 
@@ -23,6 +24,17 @@ cd web
 npm install
 npm run dev               # :3000
 ```
+
+## Conectores ecommerce (Medusa hoy, Shopify/Woo después)
+
+Punto centralizado `lib/connectors/`:
+
+- `lib/connectors/types.ts` — interfaz `EcommerceConnector` + `ConnectorPlatform` (`medusa|shopify|woocommerce`).
+- `lib/connectors/medusa.ts` — único conector real (adapta `lib/medusa.ts`: API v1/v2 + tipos canónicos `Canonical*`).
+- `lib/connectors/index.ts:getConnector(platform)` — registro; `shopify`/`woocommerce` lanzan "sin backend" hasta implementarse (agregarlos = nuevo archivo + 1 línea).
+- `lib/sync.ts:syncStoreFromPlatform()` — orquesta contra la interfaz (sources `channel/market/product` salen del conector, no hardcodeados); `syncStoreFromMedusa()` queda como wrapper compat.
+- `lib/sync-runner.ts:runSyncOnce(..., { platform })` — default `medusa`.
+- `lib/store.ts:Platform` — `medusa|shopify|woocommerce`; Shopify guarda preset pero no sincroniza (`shopify-sin-backend` en `lib/login-sync.ts`).
 
 ## Conectar tienda y sincronizar
 

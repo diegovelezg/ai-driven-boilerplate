@@ -14,6 +14,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { ChannelTag, KindTag, StatusTag, TodayTag } from "@/components/inbox-tag";
+import { toast } from "@/components/ui/toast";
 import { SectionLoading } from "@/components/section-loading";
 import { formatMoney } from "@/lib/medusa";
 import { formatNumber } from "@/lib/format";
@@ -289,7 +290,6 @@ export function ReviewLists({
   // (Fase 3): progreso real en la cinta en vez del loop ciego.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [batchBusy, setBatchBusy] = useState(false);
-  const [batchMsg, setBatchMsg] = useState<string | null>(null);
   const bg = useBackgroundOrNull();
   // SSR inicial + vivo del contexto: el snapshot solo ya no engaña cuando
   // una corrida arranca después del primer render.
@@ -314,6 +314,7 @@ export function ReviewLists({
     try {
       const r = await getDrawerCustomerAction(customerId);
       if (r.ok && r.customer) setDrawerCustomer(r.customer);
+      else if (!r.ok) toast.add({ title: "No se pudo abrir", description: r.message, type: "error" });
     } finally {
       setDrawerBusy(false);
     }
@@ -321,16 +322,21 @@ export function ReviewLists({
   const approveSelected = async () => {
     if (batchBusy || selected.size === 0) return;
     setBatchBusy(true);
-    setBatchMsg(null);
     try {
       const ids = [...selected];
-      const r = bg
-        ? await bg.start(async () => {
-            const x = await approveBatchAction(ids);
-            return { ok: x.ok, message: x.message, run: x.run ?? null };
-          })
-        : await approveBatchAction(ids);
-      setBatchMsg(r.message);
+      if (bg) {
+        await bg.start(async () => {
+          const x = await approveBatchAction(ids);
+          return { ok: x.ok, message: x.message, run: x.run ?? null };
+        });
+      } else {
+        const r = await approveBatchAction(ids);
+        toast.add({
+          title: r.ok ? "Lote aprobado" : "No se pudo aprobar el lote",
+          description: r.message,
+          type: r.ok ? "success" : "error",
+        });
+      }
       setSelected(new Set());
     } finally {
       setBatchBusy(false);
@@ -390,7 +396,6 @@ export function ReviewLists({
             >
               {batchBusy ? "Aprobando…" : `Aprobar seleccionados (${formatNumber(selected.size)})`}
             </Button>
-            {batchMsg && <span className="text-xs text-muted-foreground">{batchMsg}</span>}
           </div>
         )}
         {actions.length === 0 &&

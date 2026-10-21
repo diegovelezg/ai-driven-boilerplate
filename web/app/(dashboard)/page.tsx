@@ -1228,7 +1228,6 @@ export default async function DashboardPage({
               dispatcher: dispatcherRun?.pulseState ?? null,
               analyst: analystRun?.pulseState ?? null,
             }}
-            runningLabels={runs.filter((r) => r.status === "running").map((r) => r.label)}
           />
       </section>
 

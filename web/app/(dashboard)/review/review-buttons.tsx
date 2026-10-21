@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Mail, MessageCircle } from "lucide-react";
 import { useBackgroundOrNull } from "@/components/background-status";
+import { toast } from "@/components/ui/toast";
 import type { ReviewOp } from "@/lib/review-actions";
 import { formatNumber } from "@/lib/format";
 
@@ -30,41 +31,43 @@ export function ApprovePair({
   channel?: string | null;
 }) {
   const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const run = async (fn: Op) => {
+  const [busy, setBusy] = useState<null | "approve" | "reject">(null);
+  const run = async (fn: Op, kind: "approve" | "reject") => {
     if (busy) return;
     let win: Window | null = null;
     if (fn === onApprove && openOnApproveUrl) {
       win = window.open("", "_blank", "noopener");
     }
-    setBusy(true);
+    setBusy(kind);
     try {
       const r = await fn(id);
-      setMsg(r.message);
+      toast.add({
+        title: kind === "approve" ? (r.ok ? "Aprobado" : "No se pudo aprobar") : r.ok ? "Rechazado" : "No se pudo rechazar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
       if (win) {
         if (r.ok && openOnApproveUrl) win.location.href = openOnApproveUrl;
         else win.close();
       }
       router.refresh();
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
   return (
     <span className="flex items-center gap-2">
-      <Button size="sm" disabled={busy} onClick={() => run(onApprove)}>
+      <Button size="sm" disabled={busy !== null} onClick={() => run(onApprove, "approve")}>
         {channel === "whatsapp" ? (
           <MessageCircle className="size-4" aria-label="WhatsApp" />
         ) : channel === "email" ? (
           <Mail className="size-4" aria-label="Email" />
         ) : null}
-        Aprobar
+        {busy === "approve" ? "Aprobando…" : "Aprobar"}
       </Button>
-      <Button size="sm" variant="outline" disabled={busy} onClick={() => run(onReject)}>
-        Rechazar
+      <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => run(onReject, "reject")}>
+        {busy === "reject" ? "Rechazando…" : "Rechazar"}
       </Button>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -79,14 +82,19 @@ export function DismissButton({ id, onDismiss }: { id: string; onDismiss: Op }) 
       onClick={async () => {
         setBusy(true);
         try {
-          await onDismiss(id);
+          const r = await onDismiss(id);
+          toast.add({
+            title: r.ok ? "Descartado" : "No se pudo descartar",
+            description: r.message,
+            type: r.ok ? "success" : "error",
+          });
           router.refresh();
         } finally {
           setBusy(false);
         }
       }}
     >
-      Descartar
+      {busy ? "Descartando…" : "Descartar"}
     </Button>
   );
 }
@@ -97,7 +105,6 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
   const router = useRouter();
   const bg = useBackgroundOrNull();
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <Button
@@ -106,16 +113,21 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
         disabled={busy}
         onClick={async () => {
           setBusy(true);
-          setMsg(null);
           try {
-            const r = bg
-              ? await bg.start(async () => {
-                  const x = await onRedact(id);
-                  return { ok: x.ok, message: x.message, run: null };
-                })
-              : await onRedact(id);
-            setMsg(r.message);
-            if (!bg) router.refresh();
+            if (bg) {
+              await bg.start(async () => {
+                const x = await onRedact(id);
+                return { ok: x.ok, message: x.message, run: null };
+              });
+            } else {
+              const r = await onRedact(id);
+              toast.add({
+                title: r.ok ? "Borrador redactado" : "No se pudo redactar",
+                description: r.message,
+                type: r.ok ? "success" : "error",
+              });
+              router.refresh();
+            }
           } finally {
             setBusy(false);
           }
@@ -123,7 +135,6 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
       >
         {busy ? "Redactando…" : "Redactar"}
       </Button>
-      {msg && <span className="max-w-56 text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -133,7 +144,6 @@ export function RedactButton({ id, onRedact }: { id: string; onRedact: Op }) {
 export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <AppTooltip tip="Reabre la señal descartada: vuelve a la cola del motor para contactar igual.">
@@ -146,7 +156,11 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
               setBusy(true);
               try {
                 const r = await onReopen(id);
-                setMsg(r.message);
+                toast.add({
+                  title: r.ok ? "Señal reabierta" : "No se pudo reabrir",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
                 router.refresh();
               } finally {
                 setBusy(false);
@@ -157,7 +171,6 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -172,7 +185,6 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
   const router = useRouter();
   const bg = useBackgroundOrNull();
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   if (count <= 0) return null;
   return (
     <span className="flex items-center gap-2">
@@ -188,7 +200,11 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
                 // Por la cinta cuando hay provider: el copywriter que arranca
                 // suma su chip sin esperar al refresh.
                 const r = bg ? await bg.start(() => onRegenerate().then((x) => ({ ...x, run: x.run ?? null }))) : await onRegenerate();
-                setMsg(r.message);
+                if (!bg) toast.add({
+                  title: r.ok ? "Borradores regenerados" : "No se pudo regenerar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
                 // `bg.start()` ya refrescó; repetirlo aborta el RSC en vuelo.
                 if (!bg) router.refresh();
               } finally {
@@ -200,7 +216,6 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -208,7 +223,6 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
 /** Cancela un envío aún no salido (approved → rejected). */
 export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <AppTooltip tip="Cancela el envío antes de que salga. No toca lo ya enviado.">
@@ -221,7 +235,11 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
               setBusy(true);
               try {
                 const r = await onRevoke(id);
-                setMsg(r.message);
+                toast.add({
+                  title: r.ok ? "Envío cancelado" : "No se pudo cancelar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
                 router.refresh();
               } finally {
                 setBusy(false);
@@ -232,7 +250,6 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -240,7 +257,6 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
 /** Marca un aprobado-WhatsApp como enviado manual (flujo wa.me). */
 export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <AppTooltip tip="Úsalo después de enviar desde WhatsApp. Pasa a enviada y el analyst la mide.">
@@ -252,7 +268,11 @@ export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op 
               setBusy(true);
               try {
                 const r = await onMarkSent(id);
-                setMsg(r.message);
+                toast.add({
+                  title: r.ok ? "Marcado como enviado" : "No se pudo marcar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
                 router.refresh();
               } finally {
                 setBusy(false);
@@ -263,7 +283,6 @@ export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op 
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -289,7 +308,6 @@ export function EditableDraft({
   const [sSubject, setSSubject] = useState(subject ?? "");
   const [sBody, setSBody] = useState(body);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const limit = channel === "whatsapp" ? 450 : 800;
   const over = sBody.trim().length > limit;
   const unchanged = sBody === body && (channel === "whatsapp" || sSubject === (subject ?? ""));
@@ -299,7 +317,11 @@ export function EditableDraft({
     setBusy(true);
     try {
       const r = await onSave(id, channel === "whatsapp" ? null : sSubject, sBody);
-      setMsg(r.message);
+      toast.add({
+        title: r.ok ? "Borrador guardado" : "No se pudo guardar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
       if (r.ok) {
         setEditing(false);
         router.refresh();
@@ -320,31 +342,31 @@ export function EditableDraft({
     return (
       <>
         {channel !== "whatsapp" && subject && (
+          <AppTooltip tip="Clic para editar">
+            <p
+              className="cursor-text rounded px-1 -mx-1 text-[13px] font-medium hover:bg-muted/60"
+              onClick={() => {
+                setSSubject(subject ?? "");
+                setSBody(body);
+                setEditing(true);
+              }}
+            >
+              {subject}
+            </p>
+          </AppTooltip>
+        )}
+        <AppTooltip tip="Clic para editar">
           <p
-            className="cursor-text rounded px-1 -mx-1 text-[13px] font-medium hover:bg-muted/60"
-            title="Clic para editar"
+            className="cursor-text rounded px-1 -mx-1 whitespace-pre-wrap text-[13px] hover:bg-muted/60"
             onClick={() => {
               setSSubject(subject ?? "");
               setSBody(body);
-              setMsg(null);
               setEditing(true);
             }}
           >
-            {subject}
+            {body}
           </p>
-        )}
-        <p
-          className="cursor-text rounded px-1 -mx-1 whitespace-pre-wrap text-[13px] hover:bg-muted/60"
-          title="Clic para editar"
-          onClick={() => {
-            setSSubject(subject ?? "");
-            setSBody(body);
-            setMsg(null);
-            setEditing(true);
-          }}
-        >
-          {body}
-        </p>
+        </AppTooltip>
       </>
     );
   }
@@ -371,13 +393,16 @@ export function EditableDraft({
         {formatNumber(sBody.trim().length)}/{formatNumber(limit)} caracteres
       </span>
       <span className="flex items-center gap-2">
-        <Button size="sm" disabled={!canSave} onClick={save} title="Ctrl+Enter">
-          {busy ? "Guardando…" : "Guardar"}
-        </Button>
+        <AppTooltip tip="Ctrl+Enter">
+          <span className="inline-flex items-center">
+            <Button size="sm" disabled={!canSave} onClick={save}>
+              {busy ? "Guardando…" : "Guardar"}
+            </Button>
+          </span>
+        </AppTooltip>
         <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditing(false)}>
           Cancelar
         </Button>
-        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </span>
     </span>
   );
@@ -407,12 +432,6 @@ export function DraftActions({
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<null | "approve" | "reject" | "switch">(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const done = (message: string) => {
-    setMsg(message);
-    setBusy(null);
-    router.refresh();
-  };
   const approve = async () => {
     if (busy) return;
     let win: Window | null = null;
@@ -426,10 +445,19 @@ export function DraftActions({
         if (r.ok && wameUrl) win.location.href = wameUrl;
         else win.close();
       }
-      done(r.message);
+      toast.add({
+        title: r.ok ? "Aprobado" : "No se pudo aprobar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
+      setBusy(null);
+      router.refresh();
     } catch (e) {
       win?.close();
-      done(e instanceof Error ? e.message : "Error");
+      const message = e instanceof Error ? e.message : "Error";
+      toast.add({ title: "No se pudo aprobar", description: message, type: "error" });
+      setBusy(null);
+      router.refresh();
     }
   };
   const reject = async () => {
@@ -437,23 +465,45 @@ export function DraftActions({
     setBusy("reject");
     try {
       const r = await onReject(id);
-      done(r.message);
+      toast.add({
+        title: r.ok ? "Rechazado" : "No se pudo rechazar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
+      setBusy(null);
+      router.refresh();
     } catch (e) {
-      done(e instanceof Error ? e.message : "Error");
+      const message = e instanceof Error ? e.message : "Error";
+      toast.add({ title: "No se pudo rechazar", description: message, type: "error" });
+      setBusy(null);
+      router.refresh();
     }
   };
   const switchChannel = async () => {
     if (busy) return;
     setBusy("switch");
+    // Feedback inmediato: la re-redacción usa LLM reasoning y tarda
+    // decenas de segundos; sin esto el botón parece muerto. Se cierra al
+    // resolver (add + close, sin update: el update vive solo en la cinta).
+    const loadingId = `switch-${id}`;
+    toast.close(loadingId);
+    toast.add({ id: loadingId, title: "Cambiando de canal…", type: "loading" });
     try {
       const r = await onSwitch(id);
-      // En éxito no hay mensaje: el canal visible ya cambió y el texto
-      // inline ("Ahora en Email") movía los botones. Solo se avisa el fallo.
-      if (!r.ok) setMsg(r.message);
+      toast.close(loadingId);
+      toast.add({
+        title: r.ok ? "Canal cambiado" : "No se pudo cambiar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
       setBusy(null);
       router.refresh();
     } catch (e) {
-      done(e instanceof Error ? e.message : "Error");
+      const message = e instanceof Error ? e.message : "Error";
+      toast.close(loadingId);
+      toast.add({ title: "No se pudo cambiar", description: message, type: "error" });
+      setBusy(null);
+      router.refresh();
     }
   };
   return (
@@ -479,7 +529,6 @@ export function DraftActions({
       {channel === "whatsapp" && !wameUrl && (
         <span className="text-xs text-muted-foreground">Sin teléfono válido: pide la versión email.</span>
       )}
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </div>
   );
 }

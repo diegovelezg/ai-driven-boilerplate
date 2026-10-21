@@ -1,12 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { AppTooltip } from "@/components/ui/app-tooltip";
 import { useBackground } from "@/components/background-status";
 import { startCopywriterAction } from "@/lib/retention-actions";
 import { formatNumber } from "@/lib/format";
+import { toast } from "@/components/ui/toast";
 
 /** CTAs del héroe de Hoy: lote solo en no-B2B; en B2B se revisa de a uno.
  *  El botón solo se ofrece si hay algo redactable: si todo lo accionable ya
@@ -25,7 +24,6 @@ export function HoyHeroActions({
   reviewHref: string;
 }) {
   const { activeRuns, starting, start, isBusy } = useBackground();
-  const [msg, setMsg] = useState<string | null>(null);
 
   if (isB2B) {
     return (
@@ -56,30 +54,23 @@ export function HoyHeroActions({
   }
   const running = activeRuns.some((r) => r.kind === "copywriter");
   const busy = starting || running || isBusy("copywriter");
-  const blocker = !running && isBusy("copywriter") ? activeRuns[0]?.label ?? null : null;
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
-      <AppTooltip tip={blocker ? `En curso: ${blocker}…` : undefined}>
-        <span className="inline-flex">
-          <Button
-            size="sm"
-            disabled={busy || redactableCount === 0}
-            onClick={async () => {
-              const r = await start(startCopywriterAction);
-              setMsg(r.message);
-            }}
-          >
-            {running ? "Redactando…" : busy ? "En proceso…" : `Redactar los ${formatNumber(redactableCount)}`}
-          </Button>
-        </span>
-      </AppTooltip>
-      {msg ? (
-        <span className="text-xs text-muted-foreground">{msg}</span>
-      ) : (
-        <Button render={<Link href={reviewHref} />} nativeButton={false} variant="outline" size="sm">
-          Ir a Review
-        </Button>
-      )}
+      <Button
+        size="sm"
+        disabled={busy || redactableCount === 0}
+        onClick={async () => {
+          const r = await start(startCopywriterAction);
+          if (!r.ok) {
+            toast.add({ title: "No se pudo redactar", description: r.message, type: "error" });
+          }
+        }}
+      >
+        {running ? "Redactando…" : `Redactar los ${formatNumber(redactableCount)}`}
+      </Button>
+      <Button render={<Link href={reviewHref} />} nativeButton={false} variant="outline" size="sm">
+        Ir a Review
+      </Button>
     </span>
   );
 }

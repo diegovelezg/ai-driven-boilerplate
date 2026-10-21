@@ -1,22 +1,38 @@
 // Mapeo de metadata por tenant (settings, human-in-the-loop).
-// UNA sola pregunta: ¿qué campo trae el contenido a entender? (0-1 key).
-// El resto se clasifica solo por forma: fechas → ventana, texto → citado,
-// resto escalar → detalles. Sin roles, sin presets en código.
+// UNA sola pregunta principal: ¿qué campo trae el contenido a entender? (0-1 key).
+// Hito 2 (#25.4): roles opcionales por forma (fecha/nota/variante/archivo),
+// inferidos por heurística + confirmación en settings. Sin presets por tenant:
+// solo forma (kind) y nombre genérico (date/start/nota/variant/file…).
 import { getSupabase } from "@/lib/supabase";
+
+/** Roles semánticos por forma (0-N keys por rol; lo no-mapeado cae a detalles). */
+export interface MetadataRoles {
+  /** Keys que arman ventana (fechas de entrega/pauta/reserva). */
+  fecha?: string[];
+  /** Keys de variante corta (talla/color/modelo/ubicación…). */
+  variante?: string[];
+  /** Keys de nota humana (comentario del cliente). */
+  nota?: string[];
+  /** Keys de archivo a entender (contenido). */
+  archivo?: string[];
+}
 
 export interface MetadataMap {
   content?: string | null;
   /** Keys que no se mandan al engine (ni a detalles ni a citado). */
   exclude?: string[];
+  /** Roles opcionales (Hito 2): confirman la clasificación por forma. */
+  roles?: MetadataRoles | null;
 }
 
 /** Key resuelta para el lector ("" = sin mapear: no hay lookup de contenido). */
 export interface ResolvedItemKeys {
   file: string;
   exclude: string[];
+  roles: MetadataRoles;
 }
 
-export const EMPTY_KEYS: ResolvedItemKeys = { file: "", exclude: [] };
+export const EMPTY_KEYS: ResolvedItemKeys = { file: "", exclude: [], roles: {} };
 
 const SECRET_KEY_RE = /token|secret|password|signature|api[-_]?key|access[-_]?key|private[-_]?key/i;
 
@@ -110,7 +126,54 @@ export function suggestContentKey(keys: MetadataKeyInfo[]): string | null {
   );
 }
 
-/** Valida forma: 0-1 key de texto. */
+/** Heurística pura por forma+nombre genérico (sin tenant): propone roles.
+ *  El merchant confirma en settings (Hito 2). Determinista, testeable. */
+export function inferMetadataRoles(keys: MetadataKeyInfo[]): MetadataRoles {
+  const byKind = (kind: MetadataKeyInfo["kind"]) => keys.filter((k) => k.kind === kind).map((k) => k.key);
+  const fecha = keys
+    .filter((k) => k.kind === "date" || /date|start|end|fecha|entrega|pauta|ventana|reserva|booking/i.test(k.key))
+    .map((k) => k.key)
+    .slice(0, 8);
+  const archivo = keys
+    .filter((k) => k.kind === "url" || /file|media|image|img|video|adjunto|archivo/i.test(k.key))
+    .map((k) => k.key)
+    .slice(0, 4);
+  const nota = keys
+    .filter(
+      (k) =>
+        k.kind === "text" &&
+        /nota|note|comment|mensaje|message|cliente.*dijo|observ/i.test(k.key),
+    )
+    .map((k) => k.key)
+    .slice(0, 4);
+  const variante = keys
+    .filter(
+      (k) =>
+        (k.kind === "text" || k.kind === "number") &&
+        k.freq >= 5 &&
+        !fecha.includes(k.key) &&
+        !archivo.includes(k.key) &&
+        !nota.includes(k.key) &&
+        k.samples.some((s) => s.length <= 60),
+    )
+    .map((k) => k.key)
+    .slice(0, 12);
+  const out: MetadataRoles = {};
+  if (fecha.length > 0) out.fecha = fecha;
+  if (archivo.length > 0) out.archivo = archivo;
+  if (nota.length > 0) out.nota = nota;
+  if (variante.length > 0) out.variante = variante;
+  void byKind;
+  return out;
+}
+
+function cleanStrList(v: unknown, max = 12): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const list = [...new Set(v.map((k) => String(k ?? "").trim()).filter((k) => k && k.length <= 120))].slice(0, max);
+  return list.length > 0 ? list : undefined;
+}
+
+/** Valida forma: 0-1 key de contenido + roles opcionales. */
 export function validateMetadataMap(raw: unknown): { ok: true; map: MetadataMap } | { ok: false; message: string } {
   const m = (raw as Record<string, unknown> | null) ?? {};
   // Compat: mapas viejos {file,…} → se toma file como contenido.
@@ -128,7 +191,20 @@ export function validateMetadataMap(raw: unknown): { ok: true; map: MetadataMap 
     return { ok: false, message: "Excluidos: máx 50 keys de texto." };
   }
   const exclude = [...new Set(exc.map((k) => String(k).trim()))].filter((k) => k !== content);
-  return { ok: true, map: { content, exclude } };
+  let roles: MetadataRoles | null = null;
+  if (m.roles != null) {
+    if (typeof m.roles !== "object" || Array.isArray(m.roles)) {
+      return { ok: false, message: "Roles: objeto {fecha,variante,nota,archivo}." };
+    }
+    const r = m.roles as Record<string, unknown>;
+    const fecha = cleanStrList(r.fecha, 8);
+    const variante = cleanStrList(r.variante, 12);
+    const nota = cleanStrList(r.nota, 4);
+    const archivo = cleanStrList(r.archivo, 4);
+    roles = { ...(fecha ? { fecha } : {}), ...(variante ? { variante } : {}), ...(nota ? { nota } : {}), ...(archivo ? { archivo } : {}) };
+    if (Object.keys(roles).length === 0) roles = null;
+  }
+  return { ok: true, map: { content, exclude, roles } };
 }
 
 /** Lee el mapa guardado (null = sin mapear). */
@@ -162,5 +238,5 @@ export async function saveMetadataMap(storeId: string, raw: unknown): Promise<Me
 export async function resolveItemKeys(storeId: string): Promise<ResolvedItemKeys> {
   const map = await getMetadataMap(storeId).catch(() => null);
   if (!map) return EMPTY_KEYS;
-  return { file: map.content ?? "", exclude: map.exclude ?? [] };
+  return { file: map.content ?? "", exclude: map.exclude ?? [], roles: map.roles ?? {} };
 }

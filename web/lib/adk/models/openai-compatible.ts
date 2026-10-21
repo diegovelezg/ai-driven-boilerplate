@@ -112,9 +112,16 @@ export class OpenAiCompatibleLlm extends BaseLlm {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify(body),
-        signal: abortSignal,
+        // Ningún caller pasa abortSignal: deadline propia de 120s para no
+        // colgar el chat de la UI para siempre. Respeta la externa si llega.
+        signal: abortSignal ?? AbortSignal.timeout(120_000),
       });
     } catch (e) {
+      if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+        const msg = `${this.provider ?? "openai"}: timeout (120s) sin respuesta`;
+        log(`etapa=llm_ERROR proveedor=${provider} modelo=${model} error=${msg} ms=${Date.now() - t0}`);
+        throw new Error(`${this.provider ?? "openai"} ${this.model}: ${msg}`);
+      }
       const msg = e instanceof Error ? e.message : "fetch failed";
       log(`etapa=llm_ERROR proveedor=${provider} modelo=${model} error=red: ${msg} ms=${Date.now() - t0}`);
       throw new Error(`${this.provider ?? "openai"} ${this.model}: ${msg}`);

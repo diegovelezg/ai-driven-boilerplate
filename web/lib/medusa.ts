@@ -1,3 +1,27 @@
+// API cruda de Medusa v1/v2 + tipos canónicos compartidos.
+// BARRERA DE CONECTORES: el código nuevo por plataforma programa contra
+// `@/lib/connectors` (o `@/lib/canonical` para reglas puras). El import
+// directo de este módulo queda reservado a `connectors/medusa.ts` (adaptador)
+// y a la UI/legacy existente. No agregar aquí lógica de Shopify/Woo.
+// Las reglas puras (isRealOrder, groupTotalsByCurrency, modeCountry,
+// resolveOrderCountry, isRealDbOrder) viven en `lib/canonical.ts` y aquí
+// solo se re-exportan por compatibilidad.
+import {
+  isTestOrder,
+  resolveOrderCountry,
+} from "@/lib/canonical";
+
+export {
+  EXCLUDED_ORDER_STATUSES,
+  EXCLUDED_PAYMENT_STATUSES,
+  groupTotalsByCurrency,
+  isRealDbOrder,
+  isRealOrder,
+  isTestOrder,
+  modeCountry,
+  resolveOrderCountry,
+} from "@/lib/canonical";
+
 export type MedusaVersion = "v1" | "v2";
 
 export interface CanonicalCustomer {
@@ -21,16 +45,16 @@ export interface CurrencyTotals {
   totalSpent: number;
 }
 
-/** Canal de venta canónico: Medusa sales_channel / Shopify publication. */
+/** Canal de venta canónico: Medusa sales_channel / Shopify publication / Woo. */
 export interface CanonicalChannelRef {
-  source: "medusa_sales_channel" | "shopify_channel";
+  source: "medusa_sales_channel" | "shopify_channel" | "woocommerce_channel";
   sourceId: string;
   name: string;
 }
 
-/** Zona comercial canónica: Medusa region / Shopify market. */
+/** Zona comercial canónica: Medusa region / Shopify market / Woo. */
 export interface CanonicalMarketRef {
-  source: "medusa_region" | "shopify_market";
+  source: "medusa_region" | "shopify_market" | "woocommerce_market";
   sourceId: string;
   name: string;
   currency: string;
@@ -86,12 +110,22 @@ export async function medusaLogin(
 ): Promise<string> {
   const path =
     version === "v1" ? "/admin/auth/token" : "/auth/user/emailpass";
-  const res = await fetch(`${baseUrl(url)}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(url)}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+      cache: "no-store",
+      // Sin timeout la UI se queda colgada (botón atascado). 60s sobra en LAN.
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error("Medusa: timeout (60s) sin respuesta");
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`Medusa ${res.status}: ${await parseError(res)}`);
   const data = await res.json();
   const token = data?.access_token ?? data?.token;
@@ -100,10 +134,20 @@ export async function medusaLogin(
 }
 
 async function adminGet(url: string, token: string, path: string) {
-  const res = await fetch(`${baseUrl(url)}${path}`, {
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl(url)}${path}`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      cache: "no-store",
+      // Sin timeout la UI se queda colgada (botón atascado). 60s sobra en LAN.
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error("Medusa: timeout (60s) sin respuesta");
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`Medusa ${res.status}: ${await parseError(res)}`);
   return res.json();
 }
@@ -215,22 +259,6 @@ export async function listMedusaOrdersRaw(
   return { orders, count: Number(data?.count ?? orders.length) };
 }
 
-/** Agrupa montos por moneda — nunca sumar PEN + MXN en un solo número. */
-export function groupTotalsByCurrency(
-  amounts: Array<{ amount: number; currency: string | null }>,
-): CurrencyTotals[] {
-  const map = new Map<string, CurrencyTotals>();
-  for (const a of amounts) {
-    if (!a.currency) continue;
-    const cur = a.currency.toLowerCase();
-    const prev = map.get(cur) ?? { currency: cur, ordersCount: 0, totalSpent: 0 };
-    prev.ordersCount += 1;
-    prev.totalSpent += a.amount;
-    map.set(cur, prev);
-  }
-  return [...map.values()].sort((x, y) => y.totalSpent - x.totalSpent);
-}
-
 /** Regiones Medusa (id → moneda/países). `countries` suele venir vacío. */
 export async function listMedusaRegions(
   url: string,
@@ -250,130 +278,6 @@ export async function listMedusaRegions(
     };
   }
   return out;
-}
-
-/** Estados de orden que NO cuentan como compra real (RFM/agregados). */
-const EXCLUDED_ORDER_STATUSES = new Set([
-  "canceled",
-  "cancelled",
-  "archived",
-  "requires_action",
-]);
-
-/** Estados de pago que NO cuentan como compra real. */
-const EXCLUDED_PAYMENT_STATUSES = new Set(["canceled", "cancelled", "failed"]);
-
-/**
- * Palabras que delatan ítems de prueba, ES + EN. Se matchea por palabra
- * completa (no subcadena): "test" marca "Prueba MX" pero no "contest".
- */
-const TEST_ITEM_KEYWORDS = [
-  "prueba",
-  "pruebas",
-  "probando",
-  "test",
-  "tests",
-  "testing",
-  "teste",
-  "draft",
-  "drafts",
-  "borrador",
-  "borradores",
-  "dummy",
-  "fake",
-  "fakes",
-  "ejemplo",
-  "ejemplos",
-  "example",
-  "examples",
-  "demo",
-  "demos",
-];
-
-const TEST_ITEM_RE = new RegExp(`\\b(${TEST_ITEM_KEYWORDS.join("|")})\\b`, "i");
-
-/** true si el título del ítem parece de prueba (ES/EN, palabra completa). */
-function isTestItemTitle(title: string): boolean {
-  return TEST_ITEM_RE.test(title.trim());
-}
-
-/** true si algún ítem de la orden parece de prueba. */
-function isTestOrder(
-  items: Array<{ title?: unknown } | Record<string, unknown>>,
-): boolean {
-  return items.some((i) =>
-    isTestItemTitle(String((i as Record<string, unknown>).title ?? "")),
-  );
-}
-
-/** true si la orden canónica cuenta como compra real (no test, no cancelada…). */
-export function isRealOrder(o: Pick<CanonicalOrder, "status" | "paymentStatus" | "isTest">): boolean {
-  if (o.isTest) return false;
-  if (o.status && EXCLUDED_ORDER_STATUSES.has(o.status.toLowerCase())) return false;
-  if (o.paymentStatus && EXCLUDED_PAYMENT_STATUSES.has(o.paymentStatus.toLowerCase())) return false;
-  return true;
-}
-
-/** true si una fila DB de orders cuenta como compra real (issue #11/#12).
- *  Unifica el criterio: analyst y copywriter usaban un filtro inline que
- *  ignoraba payment_status y requires_action. */
-export function isRealDbOrder(o: {
-  status?: string | null;
-  payment_status?: string | null;
-  paymentStatus?: string | null;
-  is_test?: boolean | null;
-  isTest?: boolean | null;
-}): boolean {
-  return isRealOrder({
-    status: o.status ?? null,
-    paymentStatus: (o.payment_status ?? o.paymentStatus ?? null) as string | null,
-    isTest: Boolean(o.is_test ?? o.isTest ?? false),
-  });
-}
-
-/**
- * País canónico ISO2 de una orden — general medusa v1/v2 + shopify.
- * Cascada (primera que resuelva gana):
- *   1. country crudo: shipping_address.country_code → billing_address.country_code
- *      (Medusa v1/v2 y Shopify exponen ISO2 aquí cuando hay dirección).
- *   2. market.countries con un único ISO2 (region de un solo país).
- *   3. nombre del market si es ISO2 ("PE", "MX", "CL").
- *   4. null = sin país (bienes digitales, checkout sin dirección).
- * Shopify mapea igual: shipping/billing country_code → shopify_market.
- */
-export function resolveOrderCountry(
-  raw: string | null | undefined,
-  market: Pick<CanonicalMarketRef, "name" | "countries"> | null,
-): string | null {
-  const iso = (v: string | null | undefined): string | null => {
-    const t = (v ?? "").trim().toUpperCase();
-    return /^[A-Z]{2}$/.test(t) ? t : null;
-  };
-  const fromRaw = iso(raw);
-  if (fromRaw) return fromRaw;
-  if (market) {
-    const only = (market.countries ?? []).map((c) => iso(c)).filter((c) => c !== null);
-    if (only.length === 1) return only[0];
-    const fromName = iso(market.name);
-    if (fromName) return fromName;
-  }
-  return null;
-}
-
-/**
- * Moda con desempate alfabético determinista (para atribuciones por país:
- * customer ← órdenes, lead ← referencias). null si no hay votos.
- */
-export function modeCountry(votes: Map<string, number>): string | null {
-  let best: string | null = null;
-  let bestN = 0;
-  for (const [c, n] of votes) {
-    if (n > bestN || (n === bestN && (best === null || c < best))) {
-      best = c;
-      bestN = n;
-    }
-  }
-  return best;
 }
 
 /** Mapea una order cruda de Medusa v1 al modelo canónico (channel + market + moneda). */

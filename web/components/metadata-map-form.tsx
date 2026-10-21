@@ -7,12 +7,14 @@ import { toast } from "@/components/ui/toast";
 import { saveMetadataMapAction, scanMetadataAction } from "@/lib/metadata-actions";
 import type { MetadataKeyInfo } from "@/lib/metadata-map";
 
-/** Una sola pregunta: ¿qué campo trae el contenido a entender?
- *  El resto se clasifica solo (fechas → ventana, prosa → citado, resto → detalles). */
+/** Contenido + roles por forma: el merchant confirma qué campo trae el
+ *  contenido (uno solo) y qué roles propone el motor (fecha/nota/variante).
+ *  Sin presets por tenant: solo forma + confirmación humana. */
 export function MetadataMapForm({ storeId }: { storeId: string }) {
   const [keys, setKeys] = useState<MetadataKeyInfo[] | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [roles, setRoles] = useState<{ fecha: string[]; variante: string[]; nota: string[]; archivo: string[] }>({ fecha: [], variante: [], nota: [], archivo: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,21 @@ export function MetadataMapForm({ storeId }: { storeId: string }) {
       // Guardado manda; si no hay, sugerencia por forma.
       setContent(r.saved?.content ?? r.suggested ?? null);
       setExcluded(r.saved?.exclude ?? []);
+      const rr = r.saved?.roles ?? (r as unknown as { suggestedRoles?: { fecha?: string[]; variante?: string[]; nota?: string[]; archivo?: string[] } }).suggestedRoles ?? {};
+      setRoles({
+        fecha: [...(rr.fecha ?? [])],
+        variante: [...(rr.variante ?? [])],
+        nota: [...(rr.nota ?? [])],
+        archivo: [...(rr.archivo ?? [])],
+      });
+    }).catch((e: unknown) => {
+      if (!live) return;
+      setLoading(false);
+      toast.add({
+        title: "No se pudo cargar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     });
     return () => {
       live = false;
@@ -49,13 +66,29 @@ export function MetadataMapForm({ storeId }: { storeId: string }) {
 
   const save = async () => {
     setSaving(true);
-    const r = await saveMetadataMapAction(storeId, { content, exclude: excluded });
-    setSaving(false);
-    toast.add({
-      title: r.ok ? "Contenido guardado" : "No se pudo guardar",
-      description: r.message,
-      type: r.ok ? "success" : "error",
-    });
+    try {
+      const clean = {
+        fecha: roles.fecha.filter(Boolean),
+        variante: roles.variante.filter(Boolean),
+        nota: roles.nota.filter(Boolean),
+        archivo: roles.archivo.filter(Boolean),
+      };
+      const hasRoles = clean.fecha.length + clean.variante.length + clean.nota.length + clean.archivo.length > 0;
+      const r = await saveMetadataMapAction(storeId, { content, exclude: excluded, ...(hasRoles ? { roles: clean } : {}) });
+      toast.add({
+        title: r.ok ? "Contenido guardado" : "No se pudo guardar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
+    } catch (e) {
+      toast.add({
+        title: "No se pudo guardar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggleExclude = (key: string) => {
@@ -68,7 +101,7 @@ export function MetadataMapForm({ storeId }: { storeId: string }) {
     <AppCard
       tone="primary"
       title="Contenido"
-      description="¿Qué campo trae lo que hay que entender? Uno solo. Con “No mandar” eliges qué no llega al engine hoy."
+      description="¿Qué campo trae lo que hay que entender? Uno solo. Con “No mandar” eliges qué no llega al engine hoy. Abajo los roles por forma (fecha/nota/variante/archivo) que propone el motor: se confirman con Guardar."
       contentClassName="flex flex-col gap-3"
       footer={
         <span className="flex items-center gap-2">
@@ -78,6 +111,9 @@ export function MetadataMapForm({ storeId }: { storeId: string }) {
         </span>
       }
     >
+      <p className="text-xs text-muted-foreground">
+        Roles inferidos (forma, confirmables): fecha [{roles.fecha.join(", ") || "—"}] · nota [{roles.nota.join(", ") || "—"}] · variante [{roles.variante.join(", ") || "—"}] · archivo [{roles.archivo.join(", ") || "—"}]
+      </p>
       <div className="flex flex-wrap gap-1.5">
         <button
           type="button"

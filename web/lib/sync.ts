@@ -1,19 +1,26 @@
 // Sync ecommerce → Supabase. Upsert-only: nunca borra (preserva source='local').
+// Orquesta contra la interfaz `lib/connectors` (un conector por plataforma);
+// hoy solo `medusa` tiene backend. El detalle Medusa vive en `connectors/medusa.ts`.
+// Reglas puras (isRealOrder, totales, país) → `lib/canonical.ts`, nunca `lib/medusa`.
 import { getSupabase } from "@/lib/supabase";
 import { createLogger } from "@/lib/log";
 import {
+  getConnector,
+  isConnectorSupported,
+  ConnectorNotImplementedError,
+} from "@/lib/connectors";
+import type {
+  CanonicalOrder,
+  ConnectorPlatform,
+  MedusaVersion,
+  RegionMap,
+  TokenLike,
+} from "@/lib/connectors/types";
+import {
   groupTotalsByCurrency,
   isRealOrder,
-  listMedusaCustomers,
-  listMedusaOrdersRaw,
-  listMedusaProductsRaw,
-  listMedusaRegions,
-  medusaOrderToCanonical,
-  medusaProductToCanonical,
   modeCountry,
-  type CanonicalOrder,
-  type MedusaVersion,
-} from "@/lib/medusa";
+} from "@/lib/canonical";
 
 /** Log a consola + archivo (.data/sync.log). */
 const log = createLogger("sync");
@@ -53,30 +60,44 @@ export interface SyncProgress {
 
 export interface SyncOptions {
   onProgress?: (p: SyncProgress) => void | Promise<void>;
+  /** Versión de API cuando aplica (Medusa v1/v2). Sin sentido para Shopify/Woo. */
+  version?: MedusaVersion | string;
 }
 
-/** Caché corta de regions por shop (evita el doble fetch ensureStore → sync
- *  en el primer sync; las regions casi no cambian). TTL 5 min. */
-const regionsCache = new Map<string, { at: number; regions: Record<string, { name: string; currency: string; countries: string[] }> }>();
+/** Caché corta de markets por plataforma+shop (evita el doble fetch ensureStore → sync
+ *  en el primer sync; los markets casi no cambian). TTL 5 min. */
+const regionsCache = new Map<string, { at: number; regions: RegionMap }>();
 const REGIONS_TTL_MS = 5 * 60_000;
 
-function getCachedRegions(shopUrl: string): Record<string, { name: string; currency: string; countries: string[] }> | null {
-  const hit = regionsCache.get(shopUrl);
+function cacheKey(platform: ConnectorPlatform, shopUrl: string): string {
+  return `${platform}:${shopUrl}`;
+}
+
+function getCachedRegions(
+  platform: ConnectorPlatform,
+  shopUrl: string,
+): RegionMap | null {
+  const key = cacheKey(platform, shopUrl);
+  const hit = regionsCache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.at > REGIONS_TTL_MS) {
-    regionsCache.delete(shopUrl);
+    regionsCache.delete(key);
     return null;
   }
   return hit.regions;
 }
 
 /** Upsert idempotente de la tienda. Devuelve su id. */
-async function upsertStore(shopUrl: string, shopCurrency: string): Promise<string> {
+async function upsertStore(
+  shopUrl: string,
+  shopCurrency: string,
+  platform: ConnectorPlatform = "medusa",
+): Promise<string> {
   const db = getSupabase();
   const { data, error } = await db
     .from("stores")
     .upsert(
-      { platform: "medusa", shop_url: shopUrl, shop_currency: shopCurrency },
+      { platform, shop_url: shopUrl, shop_currency: shopCurrency },
       { onConflict: "platform,shop_url" },
     )
     .select("id")
@@ -89,12 +110,33 @@ async function upsertStore(shopUrl: string, shopCurrency: string): Promise<strin
  * Crea/actualiza la tienda y devuelve su id. Necesario para registrar el run de
  * background antes de que exista el sync (la primera vez aún no hay tienda).
  */
-export async function ensureStore(medusaUrl: string, token: string): Promise<string> {
-  const shopUrl = normalizeShopUrl(medusaUrl);
-  const regions = await listMedusaRegions(medusaUrl, token);
-  regionsCache.set(shopUrl, { at: Date.now(), regions });
+export async function ensureStore(
+  rawShopUrl: string,
+  creds: TokenLike,
+  platform: ConnectorPlatform = "medusa",
+): Promise<string> {
+  if (!isConnectorSupported(platform)) throw new ConnectorNotImplementedError(platform);
+  const connector = getConnector(platform);
+  const shopUrl = normalizeShopUrl(rawShopUrl);
+  const regions = await fetchConnectorRegions(connector, rawShopUrl, creds);
+  regionsCache.set(cacheKey(platform, shopUrl), { at: Date.now(), regions });
   const shopCurrency = Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
-  return upsertStore(shopUrl, shopCurrency);
+  return upsertStore(shopUrl, shopCurrency, platform);
+}
+
+/**
+ * Lee markets del conector en forma legacy `RegionMap`.
+ * Prefiere `listMarkets()` (genérica); cae a `listRegions()` (Medusa legacy).
+ */
+async function fetchConnectorRegions(
+  connector: { listMarkets: (shopUrl: string, creds: TokenLike) => Promise<Array<{ sourceId: string; name: string; currency: string; countries: string[] }>>; listRegions?: (shopUrl: string, creds: TokenLike) => Promise<RegionMap> },
+  rawShopUrl: string,
+  creds: TokenLike,
+): Promise<RegionMap> {
+  const { marketsToRegions } = await import("@/lib/connectors/types");
+  const markets = await connector.listMarkets(rawShopUrl, creds);
+  if (markets.length > 0 || !connector.listRegions) return marketsToRegions(markets);
+  return connector.listRegions(rawShopUrl, creds);
 }
 
 async function fetchAll<T>(
@@ -136,34 +178,44 @@ async function fetchAll<T>(
   return out;
 }
 
-export async function syncStoreFromMedusa(
-  medusaUrl: string,
-  version: MedusaVersion,
-  token: string,
+/**
+ * Sync genérico por plataforma: orquesta contra `getConnector(platform)`.
+ * Agregar Shopify/Woo no toca este archivo (solo `connectors/<platform>.ts`).
+ * `version` posicional es legacy Medusa (v1/v2, default "v1"); el próximo
+ * proveedor la ignora. Nuevo código → `opts.version`.
+ */
+export async function syncStoreFromPlatform(
+  platform: ConnectorPlatform,
+  rawShopUrl: string,
+  version: MedusaVersion | string | undefined,
+  creds: TokenLike,
   opts: SyncOptions = {},
 ): Promise<SyncSummary> {
-  void version;
+  if (!isConnectorSupported(platform)) throw new ConnectorNotImplementedError(platform);
+  const connector = getConnector(platform);
   const db = getSupabase();
-  const shopUrl = normalizeShopUrl(medusaUrl);
+  const shopUrl = normalizeShopUrl(rawShopUrl);
+  // `version` solo tiene sentido en Medusa; el conector la normaliza (v2→v2, resto→v1).
+  const resolvedVersion = opts.version ?? version ?? "v1";
   const now = new Date().toISOString();
   const report = (processed: number, current: string) => {
     log(`fase ${processed + 1}/${SYNC_TOTAL}: ${current}`);
     return opts.onProgress?.({ processed, total: SYNC_TOTAL, current });
   };
-  log(`start shopUrl=${shopUrl}`);
+  log(`start platform=${platform} shopUrl=${shopUrl}`);
 
-  // 1. Store (tenant) + regions → markets. Reusa caché de ensureStore
+  // 1. Store (tenant) + markets. Reusa caché de ensureStore
   // (mismo proceso): el primer sync ya no hace doble fetch.
   await report(0, "Tienda y mercados");
-  const regions = getCachedRegions(shopUrl) ?? await listMedusaRegions(medusaUrl, token);
-  if (!getCachedRegions(shopUrl)) regionsCache.set(shopUrl, { at: Date.now(), regions });
+  const regions = getCachedRegions(platform, shopUrl) ?? await fetchConnectorRegions(connector, rawShopUrl, creds);
+  if (!getCachedRegions(platform, shopUrl)) regionsCache.set(cacheKey(platform, shopUrl), { at: Date.now(), regions });
   const shopCurrency =
     Object.values(regions)[0]?.currency?.toUpperCase() || "PEN";
-  const storeId = await upsertStore(shopUrl, shopCurrency);
+  const storeId = await upsertStore(shopUrl, shopCurrency, platform);
 
   const marketRows = Object.entries(regions).map(([sourceId, r]) => ({
     store_id: storeId,
-    source: "medusa_region",
+    source: connector.marketSource,
     source_id: sourceId,
     name: r.name,
     currency: r.currency,
@@ -206,19 +258,19 @@ export async function syncStoreFromMedusa(
   await report(1, "Descargando customers, orders y productos");
   const [customers, rawOrders, rawProducts] = await Promise.all([
     fetchAll((offset, limit) =>
-      listMedusaCustomers(medusaUrl, "v1", token, { offset, limit }).then((r) => ({
+      connector.listCustomers(rawShopUrl, creds, { offset, limit }, String(resolvedVersion ?? "")).then((r) => ({
         rows: r.customers,
         count: r.count,
       })),
     ),
     fetchAll((offset, limit) =>
-      listMedusaOrdersRaw(medusaUrl, token, { offset, limit }).then((r) => ({
+      connector.listOrdersRaw(rawShopUrl, creds, { offset, limit }).then((r) => ({
         rows: r.orders,
         count: r.count,
       })),
     ),
     fetchAll((offset, limit) =>
-      listMedusaProductsRaw(medusaUrl, token, { offset, limit }).then((r) => ({
+      connector.listProductsRaw(rawShopUrl, creds, { offset, limit }).then((r) => ({
         rows: r.products,
         count: r.count,
       })),
@@ -229,7 +281,7 @@ export async function syncStoreFromMedusa(
     }),
   ]);
   const orders: CanonicalOrder[] = rawOrders
-    .map((o) => medusaOrderToCanonical(o, regions))
+    .map((o) => connector.orderToCanonical(o, regions))
     .filter((o): o is CanonicalOrder => o !== null);
   log(`descargados customers=${customers.length} orders=${orders.length} (raw=${rawOrders.length})`);
 
@@ -420,11 +472,11 @@ export async function syncStoreFromMedusa(
   // así el sync jamás pisa lo definido en UI.
   await report(5, "Guardando productos");
   const productRows = rawProducts
-    .map((p) => medusaProductToCanonical(p))
+    .map((p) => connector.productToCanonical(p))
     .filter((p): p is NonNullable<typeof p> => p !== null)
     .map((p) => ({
       store_id: storeId,
-      source: "medusa_product",
+      source: connector.productSource,
       source_id: p.sourceId,
       title: p.title,
       handle: p.handle,
@@ -462,7 +514,7 @@ export async function syncStoreFromMedusa(
           .from("products")
           .select("id,source_id")
           .eq("store_id", storeId)
-          .eq("source", "medusa_product")
+          .eq("source", connector.productSource)
           .order("id", { ascending: true })
           .range(off, off + 999);
         if (error) throw new Error(`Products tombstone read: ${error.message}`);
@@ -517,4 +569,14 @@ export async function syncStoreFromMedusa(
     products: productCount,
     productStats: productStatRows,
   };
+}
+
+/** Compat: el sync Medusa actual. Nuevo código → `syncStoreFromPlatform`. */
+export function syncStoreFromMedusa(
+  medusaUrl: string,
+  version: MedusaVersion,
+  token: string,
+  opts: SyncOptions = {},
+): Promise<SyncSummary> {
+  return syncStoreFromPlatform("medusa", medusaUrl, version, token, opts);
 }

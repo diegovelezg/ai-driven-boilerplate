@@ -24,7 +24,8 @@ El dossier es HISTORIAL de compras pasadas, no la invitación futura. Una ventan
 Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reusable": true|false, "reason": "una línea, máx 140 caracteres"}.
 contactable=false SOLO si ni reconociendo quién es hay algo útil que proponer hoy sin inventar datos, fechas, nombres, ofertas o ubicaciones. Inventar = proponer lo que no está en el dossier ni en la capacidad general.
 reusable=false si lo comprado solo tenía sentido en su ventana: sirve para reconocer quién es, no para repetirlo como propuesta.
-Por defecto {"contactable": true, "reusable": true}. Ante cualquier duda, true/true.`;
+Por defecto {"contactable": true, "reusable": true}. Ante cualquier duda, true/true.
+NOTA: el fail-open de código (juez caído) devuelve true/false intencional (modo identidad seguro), no true/true: sin juez no se ordena continuidad.`;
 
 export interface JudgeItem {
   title: string;
@@ -34,6 +35,10 @@ export interface JudgeItem {
   /** Ventana ya resuelta ("A→B" partida en inicio/fin) o nulls. */
   dateStart: string | null;
   dateEnd: string | null;
+  /** Contrato final (#25): opcionales sin romper callers. */
+  valorEsperadoMinor?: number | null;
+  isActive?: boolean | null;
+  detalles?: Record<string, string | number> | null;
 }
 
 export interface JudgeDossier {
@@ -43,6 +48,10 @@ export interface JudgeDossier {
   daysSince: number | null;
   todayIso: string;
   items: JudgeItem[];
+  /** Catálogo del tenant (servicio/producto): afina la propuesta sin listas. */
+  catalog?: string | null;
+  /** Ventana típica del negocio en días (brain): el juez no veta lo normal. */
+  ventanaTipicaDias?: number | null;
 }
 
 /** Dossier de texto para el juez (compacto: lo que necesita, nada más). */
@@ -50,6 +59,8 @@ function buildJudgeDossier(d: JudgeDossier): string {
   const lines = [
     `Cliente: ${d.firstName}${d.companyName ? ` — ${d.companyName}` : ""} (objetivo ${d.objetivo})`,
     `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}.`,
+    ...(d.catalog ? [`Negocio: ${d.catalog}.`] : []),
+    ...(d.ventanaTipicaDias != null ? [`Ventana típica del negocio: ~${d.ventanaTipicaDias}d (no vetar lo normal).`] : []),
     `Historial pasado (no es la oferta; no vetes por fechas):`,
   ];
   for (const it of d.items.slice(0, 6)) {
@@ -86,11 +97,22 @@ async function completeJudge(ref: ModelRef, system: string, user: string, opts: 
     ...reasoningBody(ref.provider, ref.model, opts.effort),
   };
   const t0 = Date.now();
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      // Sin timeout el caller se queda colgado para siempre (botón en
+      // "Cambiando…" sin toast). 120s cubre reasoning lento.
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error(`${ref.provider}: timeout (120s) sin respuesta`);
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
   if (meter?.storeId) {

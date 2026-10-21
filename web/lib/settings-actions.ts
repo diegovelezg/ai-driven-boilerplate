@@ -2,7 +2,7 @@
 
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
-import { medusaLogin, testMedusa } from "@/lib/medusa";
+import { getConnector, isConnectorSupported } from "@/lib/connectors";
 import type { MedusaVersion } from "@/lib/medusa";
 import { readConnections, writeConnections } from "@/lib/store";
 import type { DefaultChannel, EmailProvider, Platform } from "@/lib/store";
@@ -88,15 +88,37 @@ export async function saveConnectionsAction(
   // La plataforma está fijada mientras haya credenciales guardadas (el
   // selector viaja deshabilitado + hidden input). Rechazo de defensa ante
   // un POST manipulado: cambiarla con token vivo deja secretos huérfanos.
-  if ((prev.medusaToken || prev.shopifyToken) && platform !== prev.platform) {
+  if ((prev.medusaToken || prev.shopifyToken || prev.wooConsumerKey || prev.wooConsumerSecret) && platform !== prev.platform) {
     return { ok: false, message: "Revoca el token guardado antes de cambiar de plataforma." };
   }
 
-  if (platform === "shopify") {
-    const shopifyStore = String(formData.get("shopifyStore") ?? "").trim();
-    const shopifyToken = String(formData.get("shopifyToken") ?? "").trim();
+  if (!isConnectorSupported(platform)) {
+    // Preset sin backend (Shopify/Woo hoy): se guarda sin validar contra la
+    // plataforma. Agregar backend = registrar el conector en
+    // `connectors/index.ts`; este archivo no se toca.
     const denied = await denyWithoutMembership(await resolveConnStoreId(prev.medusaUrl), user);
     if (denied) return { ok: false, message: denied };
+    if (platform === "woocommerce") {
+      const wooStore = String(formData.get("wooStore") ?? "").trim();
+      const wooConsumerKey = String(formData.get("wooConsumerKey") ?? "").trim();
+      const wooConsumerSecret = String(formData.get("wooConsumerSecret") ?? "").trim();
+      try {
+        await writeConnections({
+          ...prev,
+          platform,
+          wooStore: wooStore || prev.wooStore,
+          // Vacío = conservar (los inputs deshabilitados no se envían).
+          wooConsumerKey: wooConsumerKey || prev.wooConsumerKey,
+          wooConsumerSecret: wooConsumerSecret || prev.wooConsumerSecret,
+        });
+      } catch (e) {
+        return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };
+      }
+      revalidatePath("/settings");
+      return { ok: true, message: "Preset WooCommerce guardado (aún sin backend)." };
+    }
+    const shopifyStore = String(formData.get("shopifyStore") ?? "").trim();
+    const shopifyToken = String(formData.get("shopifyToken") ?? "").trim();
     try {
       await writeConnections({
         ...prev,
@@ -129,7 +151,8 @@ export async function saveConnectionsAction(
   }
 
   try {
-    const token = await medusaLogin(medusaUrl, version, email, password);
+    const connector = getConnector(platform);
+    const token = await connector.authenticate(medusaUrl, { email, password, version });
     // Cross-tenant: si la tienda ya existe, exige membresía antes de rotar su token.
     const denied = await denyWithoutMembership(await resolveConnStoreId(medusaUrl), user);
     if (denied) return { ok: false, message: denied };
@@ -145,7 +168,7 @@ export async function saveConnectionsAction(
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : "Token obtenido pero no se pudo guardar." };
     }
-    const result = await testMedusa(medusaUrl, version, token);
+    const result = await connector.testConnection(medusaUrl, token, version);
     revalidatePath("/settings");
     revalidatePath("/customers");
     if (!result.ok) return { ok: false, message: `Login ok, pero falla lectura: ${result.error}` };
@@ -276,7 +299,7 @@ export async function testEmailAction(
   }
 }
 
-export type RevocableSecret = "medusa_token" | "shopify_token" | "email_api_key";
+export type RevocableSecret = "medusa_token" | "shopify_token" | "woo_consumer_key" | "woo_consumer_secret" | "email_api_key";
 
 /**
  * Revoca un secreto (issue #20): borra la fila en `store_secrets` (+ auditoría)
@@ -311,7 +334,15 @@ export async function revokeSecretAction(secret: RevocableSecret): Promise<SaveS
   }
   const { writeConnectionsJson } = await import("@/lib/store");
   const jsonKey =
-    secret === "medusa_token" ? "medusaToken" : secret === "shopify_token" ? "shopifyToken" : "emailApiKey";
+    secret === "medusa_token"
+      ? "medusaToken"
+      : secret === "shopify_token"
+        ? "shopifyToken"
+        : secret === "woo_consumer_key"
+          ? "wooConsumerKey"
+          : secret === "woo_consumer_secret"
+            ? "wooConsumerSecret"
+            : "emailApiKey";
   await writeConnectionsJson({ ...conn, [jsonKey]: "" });
   revalidatePath("/settings");
   return { ok: true, message: `Secreto ${secret} revocado.` };

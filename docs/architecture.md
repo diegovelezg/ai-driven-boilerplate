@@ -67,9 +67,15 @@
 +-------------------------------------------------------------------------+
 ```
 
-## 2. Ingestion Module: Medusa.js v2 Integration
+## 2. Ingestion Module: ecommerce connectors (Medusa hoy)
 
-Medusa v2's event bus architecture is the primary source of truth.
+> **Estado implementado:** punto centralizado en `web/lib/connectors/`
+> (`types.ts` + `medusa.ts` + `index.ts:getConnector(platform)`). `web/lib/sync.ts`
+> orquesta contra esa interfaz (`syncStoreFromPlatform(platform, …)`; `syncStoreFromMedusa`
+> queda como wrapper compat). `web/lib/medusa.ts` conserva la API v1/v2 + tipos
+> canónicos; futuros conectores (Shopify/Woo/tupantalla) agregan
+> `web/lib/connectors/<platform>.ts` + 1 línea en el registro, sin tocar el sync.
+> Visión multi-plataforma abajo; Medusa como primera fuente.
 
 ### Medusa Subscribers
 

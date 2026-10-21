@@ -5,8 +5,10 @@ import {
   saveMetadataMap,
   scanMetadataKeys,
   suggestContentKey,
+  inferMetadataRoles,
   type MetadataKeyInfo,
   type MetadataMap,
+  type MetadataRoles,
 } from "@/lib/metadata-map";
 
 /** Membresía por tenant (patrón repo: lib/api/guard). Legacy/dev sin auth: permite. */
@@ -23,7 +25,10 @@ async function denyStore(storeId: string): Promise<string | null> {
 /** Escanea keys + sugerencia para el formulario (lectura). */
 export async function scanMetadataAction(
   storeId: string,
-): Promise<{ ok: true; keys: MetadataKeyInfo[]; saved: MetadataMap | null; suggested: string | null } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; keys: MetadataKeyInfo[]; saved: MetadataMap | null; suggested: string | null; suggestedRoles: MetadataRoles }
+  | { ok: false; message: string }
+> {
   try {
     const denied = await denyStore(storeId);
     if (denied) return { ok: false, message: denied };
@@ -31,7 +36,7 @@ export async function scanMetadataAction(
       scanMetadataKeys(storeId),
       getMetadataMap(storeId).catch(() => null),
     ]);
-    return { ok: true, keys, saved, suggested: suggestContentKey(keys) };
+    return { ok: true, keys, saved, suggested: suggestContentKey(keys), suggestedRoles: inferMetadataRoles(keys) };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "No se pudo escanear." };
   }

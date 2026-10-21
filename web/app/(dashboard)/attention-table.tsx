@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
+import { toast } from "@/components/ui/toast";
 import { proposeSingleAction } from "@/lib/review-actions";
 import { useBackground } from "@/components/background-status";
 import {
@@ -63,7 +64,6 @@ export function AttentionTable({
   // Lock por señal (Fase 3 + P2): cada fila rastrea su propio vuelo; el
   // servidor frena lo incompatible (misma señal, bulk, regenerate, sync).
   const [busyIds, setBusyIds] = useState<string[]>([]);
-  const [draftError, setDraftError] = useState<{ id: string; message: string } | null>(null);
   const { start } = useBackground();
 
   // La fila habla tratamiento (qué hago), no identidad. Sin predicción del
@@ -78,9 +78,22 @@ export function AttentionTable({
     setLoadingId(row.customerDbId);
     try {
       const res = await fetch(`/api/customers/${row.customerDbId}/summary`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        toast.add({
+          title: "No se pudo abrir la ficha",
+          description: `La ficha respondió ${res.status}.`,
+          type: "error",
+        });
+        return;
+      }
       const j = (await res.json()) as { customer?: EditableCustomer };
       if (j.customer) setSelected(j.customer);
+    } catch (e) {
+      toast.add({
+        title: "No se pudo abrir la ficha",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setLoadingId(null);
     }
@@ -89,22 +102,23 @@ export function AttentionTable({
   const redact = async (row: AttentionItem) => {
     if (busyIds.includes(row.signalId)) return;
     setBusyIds((prev) => [...prev, row.signalId]);
-    setDraftError(null);
     try {
-      // Por `useBackground().start`: el intento suma a la cinta global.
-      const r = await start(async () => {
+      // Por `useBackground().start`: el intento suma a la cinta global,
+      // que ya avisa del resultado: sin toast ni inline duplicados.
+      await start(async () => {
         const x = await proposeSingleAction(row.signalId);
         return { ok: x.ok, message: x.message, run: x.run ?? null };
       });
-      if (r.ok) {
-        return;
-      }
-      // Issue #16 Fase 1: no descartar `r.message` (trae "Ya tiene
-      // borrador…" / veto del juez). Se muestra tal cual.
-      setDraftError({ id: row.signalId, message: r.message });
       // El veto escribe `evidence_json.contactability` en DB: el refresh ya
       // lo hizo `start()`; sin doble refresh no se aborta el RSC en vuelo
       // (ECONNRESET + parpadeo).
+    } catch (e) {
+      // Sin corrida no hay cinta que avise: solo la excepción va a toast.
+      toast.add({
+        title: "No se pudo redactar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
       setBusyIds((prev) => prev.filter((id) => id !== row.signalId));
     }
@@ -221,13 +235,6 @@ export function AttentionTable({
                     >
                       {busyIds.includes(row.signalId) ? "Redactando…" : "Redactar"}
                     </Button>
-                    {draftError?.id === row.signalId && (
-                      <AppTooltip tip={draftError.message}>
-                        <span className="max-w-44 text-xs text-destructive">
-                          {draftError.message}
-                        </span>
-                      </AppTooltip>
-                    )}
                   </span>
                 )}
               </DataTableTd>

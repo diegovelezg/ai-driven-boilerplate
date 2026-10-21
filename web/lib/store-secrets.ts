@@ -12,13 +12,13 @@ import {
   isEncryptionConfigured,
 } from "@/lib/secrets-crypto";
 
-const SECRET_KEYS = ["medusa_token", "shopify_token", "email_api_key"] as const;
+const SECRET_KEYS = ["medusa_token", "shopify_token", "woo_consumer_key", "woo_consumer_secret", "email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
 // Campos de conexión no-secretos que TAMBIÉN viven cifrados en DB en prod
 // (el JSON local es efímero en contenedores: se pierde en cada redeploy y el
 // usuario nextjs no siempre puede escribirlo → EACCES).
-const CONN_FIELD_KEYS = ["medusa_url", "medusa_email"] as const;
+const CONN_FIELD_KEYS = ["medusa_url", "medusa_email", "woo_store"] as const;
 export type ConnFieldName = (typeof CONN_FIELD_KEYS)[number];
 
 type SecretAction = "upsert" | "revoke";
@@ -63,9 +63,9 @@ async function logAudit(
   }
 }
 
-/** Lee y descifra los 3 secretos de una tienda. Sin DB/key → nulls (fallback JSON). */
+/** Lee y descifra los secretos de una tienda. Sin DB/key → "" (fallback JSON). */
 export async function getStoreSecrets(storeId: string): Promise<Record<SecretKeyName, string>> {
-  const empty = { medusa_token: "", shopify_token: "", email_api_key: "" };
+  const empty = { medusa_token: "", shopify_token: "", woo_consumer_key: "", woo_consumer_secret: "", email_api_key: "" };
   if (!isSecretsDbReady()) return { ...empty };
   try {
     const db = getSupabase();
@@ -93,9 +93,9 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
   }
 }
 
-/** Lee y descifra medusa_url / medusa_email de una tienda. Sin DB/key → "" (fallback JSON). */
+/** Lee y descifra medusa_url / medusa_email / woo_store de una tienda. Sin DB/key → "" (fallback JSON). */
 export async function getStoreConnFields(storeId: string): Promise<Record<ConnFieldName, string>> {
-  const empty = { medusa_url: "", medusa_email: "" };
+  const empty = { medusa_url: "", medusa_email: "", woo_store: "" };
   if (!isSecretsDbReady()) return { ...empty };
   try {
     const db = getSupabase();

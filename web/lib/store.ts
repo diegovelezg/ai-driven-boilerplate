@@ -8,8 +8,10 @@
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { MedusaVersion } from "@/lib/medusa";
+import type { ConnectorPlatform } from "@/lib/connectors/types";
 
-export type Platform = "medusa" | "shopify";
+/** Plataforma de la tienda. Fuente única: `ConnectorPlatform` (conectores). */
+export type Platform = ConnectorPlatform;
 
 export type EmailProvider = "sendgrid" | "resend" | "none";
 
@@ -23,6 +25,9 @@ export interface StoreConnections {
   medusaToken: string;
   shopifyStore: string;
   shopifyToken: string;
+  wooStore: string;
+  wooConsumerKey: string;
+  wooConsumerSecret: string;
   emailProvider: EmailProvider;
   emailFrom: string;
   emailApiKey: string;
@@ -32,7 +37,7 @@ export interface StoreConnections {
 const DATA_DIR = join(process.cwd(), ".data");
 const CONFIG_FILE = join(DATA_DIR, "connections.json");
 
-const SECRET_JSON_KEYS = ["medusaToken", "shopifyToken", "emailApiKey"] as const;
+const SECRET_JSON_KEYS = ["medusaToken", "shopifyToken", "wooConsumerKey", "wooConsumerSecret", "emailApiKey"] as const;
 
 // Keys del JSON que también viven en DB cifrada en prod (se scraban del JSON
 // cuando la DB las persiste, y el write al JSON se omite del todo en prod).
@@ -46,6 +51,9 @@ const EMPTY: StoreConnections = {
   medusaToken: "",
   shopifyStore: "",
   shopifyToken: "",
+  wooStore: "",
+  wooConsumerKey: "",
+  wooConsumerSecret: "",
   emailProvider: "sendgrid",
   emailFrom: "",
   emailApiKey: "",
@@ -66,6 +74,9 @@ export interface SafeStoreConnections {
   hasMedusaToken: boolean;
   shopifyStore: string;
   hasShopifyToken: boolean;
+  wooStore: string;
+  hasWooConsumerKey: boolean;
+  hasWooConsumerSecret: boolean;
   emailProvider: EmailProvider;
   emailFrom: string;
   hasEmailApiKey: boolean;
@@ -81,6 +92,9 @@ export function toSafeConnections(c: StoreConnections): SafeStoreConnections {
     hasMedusaToken: Boolean(c.medusaToken),
     shopifyStore: c.shopifyStore,
     hasShopifyToken: Boolean(c.shopifyToken),
+    wooStore: c.wooStore,
+    hasWooConsumerKey: Boolean(c.wooConsumerKey),
+    hasWooConsumerSecret: Boolean(c.wooConsumerSecret),
     emailProvider: c.emailProvider,
     emailFrom: c.emailFrom,
     hasEmailApiKey: Boolean(c.emailApiKey),
@@ -167,8 +181,11 @@ export async function readConnections(storeId?: string | null): Promise<StoreCon
       ...json,
       medusaUrl: fields?.medusa_url || json.medusaUrl,
       medusaEmail: fields?.medusa_email || json.medusaEmail,
+      wooStore: fields?.woo_store || json.wooStore,
       medusaToken: overlaySecret(json.medusaToken, db?.medusa_token ?? ""),
       shopifyToken: overlaySecret(json.shopifyToken, db?.shopify_token ?? ""),
+      wooConsumerKey: overlaySecret(json.wooConsumerKey, db?.woo_consumer_key ?? ""),
+      wooConsumerSecret: overlaySecret(json.wooConsumerSecret, db?.woo_consumer_secret ?? ""),
       emailApiKey: overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
     };
   } catch {
@@ -220,12 +237,15 @@ export async function writeConnections(
       if (sid) {
         dbExpected = true;
         const { setStoreSecret } = await import("@/lib/store-secrets");
-        const pairs: Array<[string, "medusa_token" | "shopify_token" | "email_api_key" | "medusa_url" | "medusa_email", string]> = [
+        const pairs: Array<[string, "medusa_token" | "shopify_token" | "woo_consumer_key" | "woo_consumer_secret" | "email_api_key" | "medusa_url" | "medusa_email" | "woo_store", string]> = [
           ["medusaToken", "medusa_token", next.medusaToken],
           ["shopifyToken", "shopify_token", next.shopifyToken],
+          ["wooConsumerKey", "woo_consumer_key", next.wooConsumerKey],
+          ["wooConsumerSecret", "woo_consumer_secret", next.wooConsumerSecret],
           ["emailApiKey", "email_api_key", next.emailApiKey],
           ["medusaUrl", "medusa_url", next.medusaUrl],
           ["medusaEmail", "medusa_email", next.medusaEmail],
+          ["wooStore", "woo_store", next.wooStore],
         ];
         for (const [jsonKey, dbKey, val] of pairs) {
           // Solo toca la key que el caller trae non-empty o que ya existe en

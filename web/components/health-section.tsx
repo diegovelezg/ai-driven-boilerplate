@@ -37,12 +37,18 @@ export function HealthSection({
 }) {
   const [live, setLive] = useState<HealthInitial>(initial);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Vuelo en curso: si el tick anterior sigue vivo, el nuevo se salta
+  // (evita solapar fetches lentos cada 15s).
+  const inFlight = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return;
+    const ctrl = new AbortController();
+    inFlight.current = ctrl;
     try {
       const qs = new URLSearchParams({ store: storeId });
       if (marketId) qs.set("market", marketId);
-      const r = await fetch(`/api/health?${qs.toString()}`, { cache: "no-store" });
+      const r = await fetch(`/api/health?${qs.toString()}`, { cache: "no-store", signal: ctrl.signal });
       if (!r.ok) return;
       const j = (await r.json()) as {
         duplicateCount?: number;
@@ -56,7 +62,9 @@ export function HealthSection({
         buyers: typeof j.buyers === "number" ? j.buyers : prev.buyers,
       }));
     } catch {
-      // Poll best-effort: el próximo intervalo reintenta.
+      // Poll best-effort: el próximo intervalo reintenta (abort incluido).
+    } finally {
+      if (inFlight.current === ctrl) inFlight.current = null;
     }
   }, [storeId, marketId]);
 
@@ -68,7 +76,8 @@ export function HealthSection({
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       if (timer.current) clearInterval(timer.current);
-      document.removeEventListener("visibilitychange", onVisible);
+      inFlight.current?.abort();
+      inFlight.current = null;
     };
   }, [refresh]);
 

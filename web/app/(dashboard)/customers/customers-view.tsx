@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { FilterToggleButton } from "@/components/filter-button";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
+import { toast } from "@/components/ui/toast";
 import {
   DataTable,
   DataTableBody,
@@ -71,7 +72,6 @@ function EditableCell({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const busyRef = useRef(false);
   const cancelRef = useRef(false);
 
@@ -81,14 +81,29 @@ function EditableCell({
     const next = draft.trim().replace(/\s+/g, " ");
     if (next === value) {
       setEditing(false);
-    } else {
-      setSaving(true);
-      const res = await onSave(next);
-      setSaving(false);
-      if (res.ok) setEditing(false);
-      else setError(res.message);
+      busyRef.current = false;
+      return;
     }
-    busyRef.current = false;
+    setSaving(true);
+    try {
+      const res = await onSave(next);
+      if (res.ok) setEditing(false);
+      else
+        toast.add({
+          title: "No se pudo guardar",
+          description: res.message,
+          type: "error",
+        });
+    } catch (e) {
+      toast.add({
+        title: "No se pudo guardar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
+    } finally {
+      setSaving(false);
+      busyRef.current = false;
+    }
   };
 
   const handleBlur = () => {
@@ -96,7 +111,6 @@ function EditableCell({
       cancelRef.current = false;
       busyRef.current = false;
       setEditing(false);
-      setError(null);
       return;
     }
     void commit();
@@ -110,7 +124,6 @@ function EditableCell({
           onClick={(e) => {
             e.stopPropagation();
             setDraft(value);
-            setError(null);
             setEditing(true);
           }}
           className="block w-full cursor-text rounded px-1 py-0.5 text-left hover:bg-accent"
@@ -122,14 +135,13 @@ function EditableCell({
   }
   return (
     <span onClick={(e) => e.stopPropagation()} className="block">
-      <AppTooltip tip={error ?? "Enter guarda · Escape cancela · vacío = valor de Medusa"}>
+      <AppTooltip tip="Enter guarda · Escape cancela · vacío = valor de Medusa">
         <Input
           autoFocus
           value={draft}
           disabled={saving}
           onChange={(e) => {
             setDraft(e.target.value);
-            setError(null);
           }}
           onBlur={handleBlur}
           onKeyDown={(e) => {
@@ -139,8 +151,7 @@ function EditableCell({
               (e.target as HTMLInputElement).blur();
             }
           }}
-          aria-invalid={error ? true : undefined}
-          className={`h-7 px-1.5 ${error ? "border-destructive" : ""}`}
+          className="h-7 px-1.5"
         />
       </AppTooltip>
     </span>

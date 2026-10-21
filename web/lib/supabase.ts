@@ -25,7 +25,15 @@ export function getSupabase(): SupabaseClient {
     if (typeof globalThis.WebSocket === "undefined") {
       globalThis.WebSocket = WsPolyfill as unknown as typeof WebSocket;
     }
-    cached = createClient(url, key, { auth: { persistSession: false } });
+    // Sin timeout un Supabase colgado deja server actions colgadas para
+    // siempre (botón atascado, sin toast): fetch global con deadline de 60s.
+    cached = createClient(url, key, {
+      auth: { persistSession: false },
+      global: {
+        fetch: (input, init) =>
+          fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(60_000) }),
+      },
+    });
   }
   return cached;
 }

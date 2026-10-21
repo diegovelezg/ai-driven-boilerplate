@@ -49,6 +49,7 @@ export interface ProductDetailMovement {
     detalles: Record<string, string>;
     contiene: string | null;
     categoria: string | null;
+    aprobado?: boolean | null;
   } | null;
 }
 
@@ -224,6 +225,7 @@ export async function loadProductDetail(
       const dijo: string[] = [];
       let contiene: string | null = null;
       let categoria: string | null = null;
+      let aprobado: boolean | null = null;
       for (const e of list) {
         for (const [k, v] of Object.entries(e.detalles)) {
           if (!(k in detalles)) detalles[k] = String(v);
@@ -232,8 +234,9 @@ export async function loadProductDetail(
         if (e.clienteDijo && !dijo.includes(e.clienteDijo)) dijo.push(e.clienteDijo);
         if (!contiene && e.contiene) contiene = e.contiene;
         if (!categoria && e.categoria) categoria = e.categoria;
+        if (aprobado === null && e.aprobado !== null) aprobado = e.aprobado;
       }
-      const hasAny = Object.keys(detalles).length > 0 || ventanas.size > 0 || dijo.length > 0 || !!contiene || !!categoria;
+      const hasAny = Object.keys(detalles).length > 0 || ventanas.size > 0 || dijo.length > 0 || !!contiene || !!categoria || aprobado !== null;
       mv.meta = hasAny
         ? {
             ventana: [...ventanas].join(" · ") || null,
@@ -241,6 +244,7 @@ export async function loadProductDetail(
             detalles,
             contiene,
             categoria,
+            aprobado,
           }
         : null;
     }

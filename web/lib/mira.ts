@@ -1,5 +1,5 @@
 // Ranking único de la mira (SSOT): ordena por valor esperado del motor
-// probabilístico (`valor_esperado_minor` desc, desempate `p_recompra_h` desc).
+// probabilístico (`valor_esperado_minor` desc, fallback `score` desc).
 // Sin predicción (tienda sin corrida aún), la fila queda al final ordenada por
 // antigüedad (hecho temporal, sinscores ni segmentos).
 // Lo consumen Overview, Review, Copywriter y Strategist.
@@ -329,12 +329,12 @@ export async function getRankedMira(
       contactability: parseContactability((r.evidence_json as Record<string, unknown> | null) ?? null),
     };
   });
-  // Ranking principal: valor_esperado_minor desc, desempate p_recompra_h desc.
+  // Ranking principal (#25): valor_esperado_minor desc si existe, fallback score.
   // Sin predicción (tienda sin corrida aún): al final, por antigüedad.
   const rankKey = (r: MiraRow): [number, number, number] => [
     r.valorEsperadoMinor ?? -1,
+    r.score ?? -1,
     r.pRecompraH ?? -1,
-    r.daysSince ?? -1,
   ];
   const cmp = (a: MiraRow, b: MiraRow) => {
     const ka = rankKey(a);

@@ -32,8 +32,9 @@ export interface Icp {
 }
 
 /** ICP V1 manual + auto-derivado: si no hay icp_description, se construye desde
- *  los mejores compradores (top gasto) + firmográficos + perfil. Así el
- *  prospector deja de dar 0 sin intervención manual. */
+ *  los mejores compradores (top gasto) + firmográficos + perfil + brain (#25:
+ *  top_productos/categorías del TenantBrain, 1 query). Así el prospector deja
+ *  de dar 0 sin intervención manual. */
 export async function getIcp(storeId: string): Promise<Icp> {
   const { data, error } = await getSupabase()
     .from("store_profiles")
@@ -91,11 +92,25 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>):
       .slice(0, 5);
   }
   const p = profile ?? {};
+  // Hito 1 (#25.3): el brain (top activos/categorías) afina el ICP sin N+1.
+  let brainLine: string | null = null;
+  try {
+    const { getTenantBrain } = await import("@/lib/brain");
+    const brain = await getTenantBrain(storeId).catch(() => null);
+    const tops = (brain?.topProductos ?? []).slice(0, 3).map((t) => t.title).filter(Boolean);
+    const cats = (brain?.topCategorias ?? []).slice(0, 3).map((c) => c.categoria).filter(Boolean);
+    if (tops.length > 0 || cats.length > 0) {
+      brainLine = `Lo que más se vende (activos): ${tops.join(" · ") || "—"}${cats.length > 0 ? ` · líneas ${cats.join(", ")}` : ""}`;
+    }
+  } catch {
+    brainLine = null;
+  }
   const lines = [
     `Negocio: ${String(p.vertical_detected ?? p.description ?? "ecommerce").toString().slice(0, 200)}`,
     `Comprador ideal: ${String(p.buyer_type ?? "").toString().slice(0, 160) || "negocios que ya compraron y gastaron más"}`,
     `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~S/ ${formatNumber(median)}`,
     industries.length > 0 ? `Industrias top en tus mejores: ${[...new Set(industries)].slice(0, 5).join(", ")}` : null,
+    brainLine,
     `Ejemplos de dominios que sí te compran: ${doms.slice(0, 8).join(", ") || "—"}`,
     "Buscar: negocios parecidos a esos (misma industria/tamaño, con web propia y contacto público). Excluir marketplaces y redes sociales.",
   ].filter(Boolean);
@@ -231,18 +246,49 @@ interface Scored {
   similar: SimilarPick[];
 }
 
-/** Embeddings runtime (sin BD): 1 fetch batch por corrida (~2s, <$0.001).
- *  Falla → el llamador usa el pool completo (conducta anterior). */
-async function embedTexts(texts: string[]): Promise<number[][]> {
+/** Embeddings runtime (sin BD): 1 fetch batch por corrida.
+ *  Modelo via EMBEDDINGS_MODEL (default text-embedding-3-small); key del
+ *  proveedor OpenAI configurado. Con metering best-effort; falla → pool
+ *  completo (conducta anterior). */
+async function embedTexts(texts: string[], meter?: { storeId: string }): Promise<number[][]> {
+  const model = process.env.EMBEDDINGS_MODEL?.trim() || "text-embedding-3-small";
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Falta OPENAI_API_KEY");
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: "text-embedding-3-small", input: texts }),
-  });
+  const t0 = Date.now();
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, input: texts }),
+      // 1 batch por corrida: 60s sobra y evita colgar el pipeline.
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error("embeddings: timeout (60s) sin respuesta");
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`embeddings ${res.status}`);
   const data = await res.json();
+  if (meter?.storeId) {
+    try {
+      const { logLlmUsage } = await import("@/lib/ai/usage");
+      const usage = (data as Record<string, unknown>)?.usage as Record<string, unknown> | undefined;
+      const promptTokens = typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+      const totalTokens = typeof usage?.total_tokens === "number" ? usage.total_tokens : promptTokens;
+      if (promptTokens != null) {
+        void logLlmUsage({
+          storeId: meter.storeId, process: "prospect_embed", provider: "openai", model,
+          promptTokens, completionTokens: 0, totalTokens: totalTokens ?? promptTokens,
+          reasoningTokens: 0, latencyMs: Date.now() - t0, usedFallback: false,
+        });
+      }
+    } catch {
+      // metering best-effort
+    }
+  }
   const vecs = (data?.data ?? []) as Array<{ index: number; embedding: number[] }>;
   return vecs
     .sort((a, b) => a.index - b.index)
@@ -459,7 +505,7 @@ export async function runProspect(runId: string, storeId: string, opts: Prospect
         const vecs = await embedTexts([
           ...pool.map((p) => `${p.label}. ${p.industry}`),
           ...scraped.map((c) => `${c.title}. ${c.text.slice(0, 800)}`),
-        ]);
+        ], { storeId });
         const poolVecs = vecs.slice(0, pool.length);
         const candVecs = vecs.slice(pool.length);
         topByIndex = new Map(scraped.map((_, i) => [i, rankTop(candVecs[i] ?? [], pool, poolVecs, 3)]));

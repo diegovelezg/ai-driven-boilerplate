@@ -27,6 +27,8 @@ export interface EnrichedOrderItem {
   categoria: string | null;
   /** Resto de metadata (texto corto/número con su key: talla, color…), sanitizado. */
   detalles: Record<string, string | number>;
+  /** Material aprobado (booleano *approved) o null si sin señal. */
+  aprobado: boolean | null;
 }
 
 /** Texto con pinta de prosa humana (vs código corto): va citado, no a detalles.
@@ -34,31 +36,60 @@ export interface EnrichedOrderItem {
  *  fecha con forma AAAA-MM-DD arma ventana. Válvula: "No mandar" por campo. */
 const PROSE_MIN = 24;
 
-/** Parte determinista (sin DB): ventana + citado + detalles desde metadata crudo.
+/** Parte determinista (sin DB): ventana + citado + detalles + aprobado.
  *  Sin preguntas: las fechas (forma AAAA-MM-DD) arman la ventana, la prosa
  *  humana se cita, el resto (texto corto/número, sin URLs ni secretos) cae a
- *  detalles con su key. Los booleanos no son prosa: se omiten. */
+ *  detalles tipados con su key. Los booleanos *approved alimentan `aprobado`
+ *  (el material aprobado sí dirige la jugada); el resto se omite. Los roles
+ *  del mapa (fecha/nota/variante) confirman la clasificación por forma. */
 function rawItemContext(
   metadata: Record<string, unknown> | null | undefined,
   keys: ResolvedItemKeys,
-): Pick<EnrichedOrderItem, "ventana" | "clienteDijo" | "detalles"> {
+): Pick<EnrichedOrderItem, "ventana" | "clienteDijo" | "detalles" | "aprobado"> {
   const md = metadata ?? {};
   const skip = new Set(keys.exclude ?? []);
+  const roles = keys.roles ?? {};
+  const fechaRole = new Set(roles.fecha ?? []);
+  const notaRole = new Set(roles.nota ?? []);
+  const varianteRole = new Set(roles.variante ?? []);
+  const archivoRole = new Set(roles.archivo ?? []);
+  if (keys.file) archivoRole.add(keys.file);
   const dates: string[] = [];
   const prose: string[] = [];
   const detalles: Record<string, string | number> = {};
+  let aprobado: boolean | null = null;
+  const hasFechaRoles = fechaRole.size > 0;
+  const hasVarianteRoles = varianteRole.size > 0;
   for (const [k, v] of Object.entries(md)) {
     if (skip.has(k) || SECRET_KEY_RE.test(k)) continue;
-    if (typeof v === "boolean") continue;
+    if (archivoRole.has(k) && typeof v === "string" && /^https?:\/\//i.test(v.trim())) continue;
+    if (typeof v === "boolean") {
+      if (/approv|aprob/i.test(k)) aprobado = v;
+      continue;
+    }
     if (typeof v !== "string" && typeof v !== "number") continue;
     const s = String(v).trim();
     if (!s || s.length > 200 || /^https?:\/\//i.test(s)) continue;
-    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(s)) {
-      dates.push(s.slice(0, 10));
+    const isDateShape = typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(s);
+    if (isDateShape) {
+      // Con roles fecha declarados, solo esas keys arman ventana; sin roles,
+      // cualquier forma fecha arma ventana (fail-open agnóstico).
+      if (!hasFechaRoles || fechaRole.has(k)) dates.push(s.slice(0, 10));
       continue;
     }
-    if (typeof v === "string" && s.length >= PROSE_MIN) prose.push(s);
-    else detalles[k] = typeof v === "string" ? s : v;
+    if (notaRole.has(k)) {
+      if (typeof v === "string") prose.push(s);
+      else detalles[k] = v;
+      continue;
+    }
+    if (typeof v === "string" && s.length >= PROSE_MIN) {
+      prose.push(s);
+      continue;
+    }
+    // Texto corto / número: con roles variante declarados, solo variante va
+    // a detalles; el resto es ruido y se omite (no bloat del prompt).
+    if (hasVarianteRoles && !varianteRole.has(k)) continue;
+    detalles[k] = typeof v === "string" ? s : v;
   }
   dates.sort();
   const ventana =
@@ -67,6 +98,7 @@ function rawItemContext(
     ventana,
     clienteDijo: prose.length > 0 ? prose.join(" / ").slice(0, 400) : null,
     detalles,
+    aprobado,
   };
 }
 

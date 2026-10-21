@@ -40,6 +40,7 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { updateCustomerAction } from "@/lib/customer-actions";
+import { toast } from "@/components/ui/toast";
 import {
   dismissSignalAction,
   getCustomerSignalAction,
@@ -146,7 +147,6 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
     customer_type: effStr(customer, "customer_type"),
   });
   const [reverted, setReverted] = useState<ManualField[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const isOverridden = (key: ManualField) =>
@@ -155,7 +155,6 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
   const markRevert = (key: ManualField) => {
     setReverted((r) => (r.includes(key) ? r : [...r, key]));
     setDrafts((d) => ({ ...d, [key]: baseStr(customer, key) }));
-    setError(null);
   };
 
   const setDraft = (key: ManualField, v: string) => {
@@ -163,7 +162,6 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
     if (v !== baseStr(customer, key)) {
       setReverted((r) => r.filter((k) => k !== key));
     }
-    setError(null);
   };
 
   const ALL_KEYS: ManualField[] = [...FIELDS.map((f) => f.key), "customer_type"];
@@ -191,8 +189,12 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
     }
     startTransition(async () => {
       const res = await updateCustomerAction({ id: customer.dbId, values, reverts });
-      if (res.ok) onClose();
-      else setError(res.message);
+      if (res.ok) {
+        toast.add({ title: "Datos guardados", description: res.message, type: "success" });
+        onClose();
+      } else {
+        toast.add({ title: "No se pudo guardar", description: res.message, type: "error" });
+      }
     });
   };
 
@@ -290,8 +292,6 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
           dbId={customer.dbId}
           onUseCompany={(name) => setDraft("company_name", name)}
         />
-
-        {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
       </div>
       <div className="flex shrink-0 justify-end gap-3 border-t bg-background/95 px-8 py-4">
@@ -318,7 +318,6 @@ function EnrichedCompany({
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
   const [working, setWorking] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
   const { start, isBusy } = useBackground();
 
   useEffect(() => {
@@ -348,10 +347,10 @@ function EnrichedCompany({
   const runReenrich = () => {
     if (reloading) return;
     setWorking(true);
+    // Va por la cinta (`bg.start`): ella ya avisa del resultado.
     void start(() => reenrichDomainAction(data.domain))
       .then((r) => {
         if (r.ok) setReloadKey((k) => k + 1);
-        else setMsg(r.message);
       })
       .finally(() => setWorking(false));
   };
@@ -411,7 +410,6 @@ function EnrichedCompany({
               </Button>
             </span>
           </div>
-          {msg && <p className="text-xs text-destructive">{msg}</p>}
         </div>
       ) : (
         <div className="mt-2 flex items-center justify-between gap-2">
@@ -1283,7 +1281,6 @@ const CONTACT_STATUS_CLASS: Record<string, string> = {
  *  descartada del cliente (el descarte la escondía 30d sin remedio). */
 function ContactarIgual({ dbId }: { dbId: string }) {
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
   return (
     <span className="flex items-center gap-2">
       <AppTooltip tip="Reabre la última señal descartada de este cliente: vuelve a la cola del motor.">
@@ -1294,14 +1291,17 @@ function ContactarIgual({ dbId }: { dbId: string }) {
             disabled={pending}
             onClick={() => start(async () => {
               const r = await reopenCustomerSignalAction(dbId);
-              setMsg(r.message);
+              toast.add({
+                title: r.ok ? "Señal reabierta" : "No se pudo reabrir",
+                description: r.message,
+                type: r.ok ? "success" : "error",
+              });
             })}
           >
             {pending ? "Reabriendo…" : "Contactar igual"}
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </span>
   );
 }
@@ -1322,8 +1322,8 @@ const FICHA_DISMISS_REASONS = [
 function FichaActions({ dbId }: { dbId: string }) {
   const bg = useBackground();
   const [signalId, setSignalId] = useState<string | null | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [signalError, setSignalError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | "redact" | "dismiss">(null);
   const [reason, setReason] = useState<string>("contactado_fuera");
   useEffect(() => {
     let alive = true;
@@ -1331,8 +1331,12 @@ function FichaActions({ dbId }: { dbId: string }) {
       .then((r) => {
         if (alive) setSignalId(r.signalId);
       })
-      .catch(() => {
-        if (alive) setSignalId(null);
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setSignalId(null);
+        const message = e instanceof Error ? e.message : "Error inesperado.";
+        setSignalError(message);
+        toast.add({ title: "No se pudo cargar la señal", description: message, type: "error" });
       });
     return () => {
       alive = false;
@@ -1341,41 +1345,51 @@ function FichaActions({ dbId }: { dbId: string }) {
   const loading = signalId === undefined;
   const redact = async () => {
     if (!signalId || busy) return;
-    setBusy(true);
-    setMsg(null);
+    setBusy("redact");
     try {
+      // Va por la cinta (`bg.start`): ella ya avisa del resultado.
       const r = await bg.start(async () => {
         const x = await proposeSingleAction(signalId);
         return { ok: x.ok, message: x.message, run: x.run ?? null };
       });
-      setMsg(r.message);
       if (r.ok) setSignalId(null);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "No se pudo redactar.");
+      toast.add({
+        title: "No se pudo redactar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
   const dismiss = async () => {
     if (!signalId || busy) return;
-    setBusy(true);
-    setMsg(null);
+    setBusy("dismiss");
     try {
       const r = await dismissSignalAction(signalId, reason);
-      setMsg(r.message);
+      toast.add({
+        title: r.ok ? "Señal descartada" : "No se pudo descartar",
+        description: r.message,
+        type: r.ok ? "success" : "error",
+      });
       if (r.ok) setSignalId(null);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "No se pudo descartar.");
+      toast.add({
+        title: "No se pudo descartar",
+        description: e instanceof Error ? e.message : "Error inesperado.",
+        type: "error",
+      });
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <AppTooltip tip={signalId ? "Redacta un borrador para este cliente (va a Review)" : "Este cliente no está en Hoy: sin señal abierta no hay qué redactar"}>
+      <AppTooltip tip={signalError ?? (signalId ? "Redacta un borrador para este cliente (va a Review)" : "Este cliente no está en Hoy: sin señal abierta no hay qué redactar")}>
         <span className="inline-flex items-center">
-          <Button size="sm" disabled={loading || busy || !signalId} onClick={() => void redact()}>
-            {busy ? "Redactando…" : "Redactar mensaje"}
+          <Button size="sm" disabled={loading || busy !== null || !signalId} onClick={() => void redact()}>
+            {busy === "redact" ? "Redactando…" : "Redactar mensaje"}
           </Button>
         </span>
       </AppTooltip>
@@ -1385,7 +1399,7 @@ function FichaActions({ dbId }: { dbId: string }) {
         ariaLabel="Motivo del descarte"
         widthClass="w-52"
         placeholder="Motivo"
-        disabled={loading || busy || !signalId}
+        disabled={loading || busy !== null || !signalId}
       >
         {FICHA_DISMISS_REASONS.map((o) => (
           <SelectItem key={o.value} value={o.value}>
@@ -1393,14 +1407,13 @@ function FichaActions({ dbId }: { dbId: string }) {
           </SelectItem>
         ))}
       </FilterSelect>
-      <AppTooltip tip={signalId ? "La esconde de Hoy 30 días (reversible en Review → Descartadas)" : "Sin señal abierta no hay qué descartar"}>
+      <AppTooltip tip={signalError ?? (signalId ? "La esconde de Hoy 30 días (reversible en Review → Descartadas)" : "Sin señal abierta no hay qué descartar")}>
         <span className="inline-flex items-center">
-          <Button size="sm" variant="outline" disabled={loading || busy || !signalId} onClick={() => void dismiss()}>
-            Descartar 30d
+          <Button size="sm" variant="outline" disabled={loading || busy !== null || !signalId} onClick={() => void dismiss()}>
+            {busy === "dismiss" ? "Descartando…" : "Descartar 30d"}
           </Button>
         </span>
       </AppTooltip>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </div>
   );
 }

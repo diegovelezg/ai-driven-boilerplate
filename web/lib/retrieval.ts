@@ -42,11 +42,23 @@ export async function completeJson(
     ...reasoningBody(ref.provider, ref.model, effort),
   };
   const t0 = Date.now();
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      // Sin timeout el caller se queda colgado para siempre (botón en
+      // "Cambiando…" sin toast). 120s cubre reasoning lento; el abortado
+      // baja como error honesto, no como silencio.
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error(`${ref.provider}: timeout (120s) sin respuesta del modelo`);
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const data = await res.json();
   if (meter?.storeId) {
@@ -122,7 +134,16 @@ export interface SearchHit {
 
 export async function searchSearxng(query: string, perQuery = 5): Promise<SearchHit[]> {
   const u = `${SEARXNG_URL}/search?q=${encodeURIComponent(query)}&format=json&language=es-PE`;
-  const res = await fetch(u);
+  let res: Response;
+  try {
+    // SearXNG local: 30s sobra; sin timeout cuelga el pipeline si el contenedor se cuelga.
+    res = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error("SearXNG: timeout (30s) sin respuesta");
+    }
+    throw e;
+  }
   if (!res.ok) throw new Error(`SearXNG ${res.status} (¿contenedor caído? ${SEARXNG_URL})`);
   const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
   return ((data.results ?? []).slice(0, perQuery)).map((r) => ({

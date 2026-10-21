@@ -51,9 +51,6 @@ export interface TeamPulseProps {
   /** Última conclusión declarada por cada worker (SSOT histórica). La vista en
    *  vivo (conteos) manda; esto distingue "pausa intencional" de "nunca corrió". */
   pulseStates?: Record<string, "needs" | "active" | "paused" | null>;
-  /** Corridas en curso ahora (Fase 4): tira separada "En curso", sin tocar
-   *  el pulso (que es outcome, no actividad). */
-  runningLabels?: string[];
 }
 
 const dotCls: Record<Status, string> = {
@@ -323,11 +320,6 @@ export function TeamPulse(p: TeamPulseProps) {
               ? `${formatNumber(needsCount)} ${needsCount === 1 ? "agente necesita tu decisión" : "agentes necesitan tu decisión"}, el resto trabaja solo.`
               : "Nadie te necesita ahora — todos vigilan solos."}
           </span>
-          {p.runningLabels && p.runningLabels.length > 0 && (
-            <span className="block text-xs tabular-nums">
-              En curso ahora: {p.runningLabels.join(" · ")}
-            </span>
-          )}
         </>
       }
       footer={

@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { signOutAction } from "@/lib/auth-actions";
+import { toast } from "@/components/ui/toast";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
 
 /**
@@ -103,8 +104,16 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
           disabled={pending}
           onClick={(e) => {
             e.preventDefault();
-            startSignOut(() => {
-              void signOutAction();
+            startSignOut(async () => {
+              try {
+                await signOutAction();
+              } catch (err) {
+                toast.add({
+                  title: "No se pudo cerrar sesión",
+                  description: err instanceof Error ? err.message : "Error inesperado.",
+                  type: "error",
+                });
+              }
             });
           }}
         >

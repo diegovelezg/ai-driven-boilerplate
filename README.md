@@ -57,6 +57,7 @@ Mapeo:
 
 - Conector **Medusa** en modo solo lectura: sincroniza `customers`, `orders`, `channels`,
   `market_regions` a Supabase (`supabase/migrations/20261016000000_phase1_multitenant.sql`).
+  Punto centralizado `web/lib/connectors/` (`getConnector(platform)` + `syncStoreFromPlatform()`); futuros Shopify/Woo agregan `connectors/<platform>.ts` sin tocar el sync (ver `docs/architecture.md` §2 y `web/README.md`).
 - Dashboard Next.js (App Router) que lee desde BD (no del ecommerce en vivo): `/settings`,
   `/customers`.
 - Chat por cliente con LLM (streaming; config de modelos con primario + fallback).

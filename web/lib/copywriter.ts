@@ -195,15 +195,65 @@ interface Prioritized {
   /** Motor retention:v1 (para estratificar el holdout futuro). */
   decision?: string | null;
   pRecompraH?: number | null;
+  /** Contrato final (#25): opcionales para ranking/activos sin romper callers. */
+  valorEsperadoMinor?: number | null;
+  isActive?: boolean | null;
+  detalles?: Record<string, string | number> | null;
 }
 
 type Db = ReturnType<typeof getSupabase>;
 
-/** System prompt con el lenguaje de compra del tenant (1 query, reutilizable). */
-async function buildSystem(storeId: string): Promise<{ system: string; catalog: CatalogType | null }> {
-  const profile = await getStoreProfile(storeId).catch(() => null);
+/** System prompt con el lenguaje de compra + activos del tenant (2 queries, reutilizable).
+ *  Hito 1 (#25): top-3 activos de product_stats + vertical + ventana/ticket del brain.
+ *  El writer propone solo activos (cero inactivos) con fecha concreta. */
+async function buildSystem(storeId: string): Promise<{
+  system: string;
+  catalog: CatalogType | null;
+  brain: import("@/lib/brain").TenantBrain | null;
+  inactiveNorm: Set<string>;
+}> {
+  const [brainNs, profile] = await Promise.all([
+    import("@/lib/brain").catch(() => null),
+    getStoreProfile(storeId).catch(() => null),
+  ]);
+  let brain: import("@/lib/brain").TenantBrain | null = null;
+  try {
+    brain = brainNs ? await brainNs.getTenantBrain(storeId).catch(() => null) : null;
+  } catch {
+    brain = null;
+  }
   const langLine = purchaseLanguage(profile?.catalogType ?? null, profile?.verticalDetected ?? null);
-  return { system: `${SYSTEM}\nLenguaje del negocio: ${langLine}`, catalog: profile?.catalogType ?? null };
+  const vertical = (profile?.verticalDetected ?? "").trim().slice(0, 120) || null;
+  const topActivos = (brain?.topProductos ?? []).slice(0, 3).map((p) => p.title).filter(Boolean);
+  let inactiveNorm = new Set<string>();
+  try {
+    const { normProductTitle } = await import("@/lib/product-stats");
+    const { data } = await getSupabase()
+      .from("products")
+      .select("title")
+      .eq("store_id", storeId)
+      .eq("is_active", false)
+      .limit(1000);
+    for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+      const t = normProductTitle(String(r.title ?? ""));
+      if (t) inactiveNorm.add(t);
+    }
+  } catch {
+    inactiveNorm = new Set<string>();
+  }
+  const brainLine = brain
+    ? `Activos que sí se pueden proponer (top ventas activas): ${topActivos.length > 0 ? topActivos.join(" · ") : "sin top"}.`
+      + `${vertical ? ` Capacidad general: ${vertical}.` : ""}`
+      + `${brain.ventanaMedianaDias != null ? ` Ventana típica: ~${brain.ventanaMedianaDias}d.` : ""}`
+      + `${brain.ticketP50 != null ? ` Ticket típico: ${brain.ticketP50}.` : ""}`
+      + ` PROHIBIDO proponer inactivos/descatalogados (no están en la lista) o inventar disponibilidad.`
+    : `${vertical ? `Capacidad general: ${vertical}. ` : ""}PROHIBIDO proponer inactivos/descatalogados o inventar disponibilidad.`;
+  return {
+    system: `${SYSTEM}\nLenguaje del negocio: ${langLine}\n${brainLine}`,
+    catalog: profile?.catalogType ?? null,
+    brain,
+    inactiveNorm,
+  };
 }
 
 /** Compone el copy de UN borrador (historial real → juez → LLM → controles).
@@ -214,7 +264,13 @@ async function composeDraftCopy(
   storeId: string,
   system: string,
   s: Prioritized,
-  stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
+  stamp: {
+    runId: string | null;
+    catalog: CatalogType | null;
+    forceChannel?: "email" | "whatsapp" | null;
+    brain?: import("@/lib/brain").TenantBrain | null;
+    inactiveNorm?: Set<string>;
+  },
 ): Promise<{
   channel: string;
   body: string;
@@ -248,19 +304,48 @@ async function composeDraftCopy(
     })),
   );
   const itemKeys = await resolveItemKeys(storeId).catch(() => null);
-  const enrichedFlat = await enrichOrderItems(storeId, rawPerOrder.flat(), itemKeys ?? undefined);
-  let cur = 0;
+  const enrichedAll = await enrichOrderItems(storeId, rawPerOrder.flat(), itemKeys ?? undefined);
+  // Filtro de activos (#25.1): cero borradores de inactivos. Agnóstico: compara
+  // por título normalizado contra products.is_active=false (viene del stamp,
+  // 1 query por corrida, no por borrador).
+  const { normProductTitle: normTitle } = await import("@/lib/product-stats");
+  const inactive = stamp.inactiveNorm ?? new Set<string>();
+  const isInactiveTitle = (t: string) => inactive.has(normTitle(t));
+  // Reconstruye por pedido ANTES de filtrar: enrichedAll va en orden plano
+  // rawPerOrder.flat(). Si se filtra y luego se hace slice por longitudes
+  // crudas, los ítems se atribuyen a fecha/orden equivocada (P1).
+  const perOrderEnriched: Array<Array<(typeof enrichedAll)[number]>> = [];
+  {
+    let c0 = 0;
+    for (const arr of rawPerOrder) {
+      perOrderEnriched.push(enrichedAll.slice(c0, c0 + arr.length));
+      c0 += arr.length;
+    }
+  }
+  const enrichedFlat = perOrderEnriched.flat().filter((it) => !isInactiveTitle(it.title));
+  // Si todo era inactivo, se conserva uno para reconocer (modo identidad) pero
+  // el patrón/jugada nunca propone inactivos (brain.topProductos manda).
+  const perOrderForHist = perOrderEnriched.map((arr) => {
+    const f = arr.filter((it) => !isInactiveTitle(it.title));
+    return f.length > 0 ? f : arr.slice(0, 1);
+  });
   const noun = briefNoun(stamp.catalog);
+  // Ticket del cliente (respaldo concreto, no comodín). Minor units → mayor.
+  const { formatMoney } = await import("@/lib/medusa");
+  const ticketVals = real.map((o) => Number(o.total_amount ?? 0)).filter((n) => n > 0);
+  const ticketClienteMinor = ticketVals.length > 0 ? Math.round(ticketVals.reduce((a, b) => a + b, 0) / ticketVals.length) : null;
+  const ticketClienteTxt = ticketClienteMinor != null ? formatMoney(ticketClienteMinor, (real[0]?.currency as string | null) ?? stamp.brain?.ticketCurrency ?? null) : null;
   const histLines = real.map((o, oi) => {
     const iso = String(o.placed_at ?? "?").slice(0, 10);
     const f = fechaCorta(String(o.placed_at ?? "")) ?? iso;
-    const items = enrichedFlat.slice(cur, cur + rawPerOrder[oi].length);
-    cur += rawPerOrder[oi].length;
+    const items = perOrderForHist[oi] ?? [];
     const titles = items.map((i) => i.title).filter((t) => t && t !== "—").slice(0, 4).join(" · ");
     const extras: string[] = [];
     for (const it of items.slice(0, 2)) {
       if (it.contiene) extras.push(`contiene "${it.contiene}"${it.categoria ? ` [${it.categoria}]` : ""}`);
       if (it.ventana) extras.push(`periodo ${it.ventana}`);
+      if (it.aprobado === true) extras.push(`material aprobado`);
+      else if (it.aprobado === false) extras.push(`material pendiente de aprobación`);
       if (it.clienteDijo) extras.push(`cliente dijo: "${it.clienteDijo.slice(0, 120)}"`);
       const det = Object.entries(it.detalles ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ");
       if (det) extras.push(det);
@@ -268,12 +353,13 @@ async function composeDraftCopy(
     return `- ${f} (${iso}): ${titles || noun.empty}${extras.length > 0 ? ` — ${extras.join("; ")}` : ""}`;
   });
   const hist = histLines.join("\n") || "(sin compras visibles)";
-  // Patrón del cliente: ¿repite circuito o explora? (top ubicación por frecuencia)
+  // Patrón del cliente: ¿repite circuito o explora? Solo activos (inactivos fuera).
   const counts = new Map<string, number>();
   for (const o of real) {
     for (const i of ((o.items_json as Array<Record<string, unknown>>) ?? [])) {
       const t = String(i.title ?? "").trim();
-      if (t && t !== "—") counts.set(t, (counts.get(t) ?? 0) + 1);
+      if (!t || t === "—" || isInactiveTitle(t)) continue;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
     }
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -337,9 +423,10 @@ async function composeDraftCopy(
   }
   const quien = companyName ?? marcas[0] ?? categorias[0] ?? null;
 
-  // Puerta de contactabilidad (#9, #23): el juez razona una vez sobre
+  // Puerta de contactabilidad (#9, #23, #25.6): el juez razona una vez sobre
   // contenido + ventanas + hoy y devuelve reusable. La ventana sale del
   // enriquecido genérico ("A→B" | "A" | null), nunca de keys crudas.
+  // Hito 2: recibe {catalog, ventana_tipica} para no vetar lo normal.
   const splitVentana = (v: string | null): { dateStart: string | null; dateEnd: string | null } => {
     if (!v) return { dateStart: null, dateEnd: null };
     const [a, b] = v.split("→");
@@ -356,13 +443,16 @@ async function composeDraftCopy(
       dateEnd: w.dateEnd,
     };
   });
+  const todayIso = new Date().toISOString().slice(0, 10);
   const verdict = await judgeContactability({
     firstName,
     companyName,
     objetivo,
     daysSince: days,
-    todayIso: new Date().toISOString().slice(0, 10),
+    todayIso,
     items: judgeItems,
+    catalog: stamp.catalog ?? null,
+    ventanaTipicaDias: stamp.brain?.ventanaMedianaDias ?? null,
   }, { storeId });
   if (!verdict.contactable) {
     // Flag auditado en la señal (sin estados ni columnas nuevas): por qué no
@@ -398,6 +488,26 @@ async function composeDraftCopy(
   // Brief condicional (#23): si reusable=false, el pasado solo reconoce.
   // Nunca ordenar continuidad en modo identidad: esa era la raíz del caso
   // Patricia (CONTENIDO + jugada habitual vs PROHIBIDO del SYSTEM).
+  // Hito 1 (#25.1): ventana concreta + ticket + aprobado dirigen la jugada.
+  const flatForHist = perOrderForHist.flat();
+  const lastVentanaStr = flatForHist.find((it) => it.ventana)?.ventana ?? null;
+  const lastW = splitVentana(lastVentanaStr);
+  const anyApproved = flatForHist.some((it) => it.aprobado === true);
+  const anyPending = flatForHist.some((it) => it.aprobado === false);
+  const durFromLast = (() => {
+    if (lastW.dateStart && lastW.dateEnd) {
+      const d = (Date.parse(lastW.dateEnd) - Date.parse(lastW.dateStart)) / 86_400_000;
+      if (Number.isFinite(d) && d >= 0 && d <= 60) return Math.round(d);
+    }
+    return stamp.brain?.ventanaMedianaDias ?? 4;
+  })();
+  const sugStart = new Date(`${todayIso}T12:00:00`);
+  sugStart.setDate(sugStart.getDate() + 6);
+  const sugEnd = new Date(sugStart);
+  sugEnd.setDate(sugEnd.getDate() + Math.max(0, durFromLast));
+  const sugStartIso = sugStart.toISOString().slice(0, 10);
+  const sugEndIso = sugEnd.toISOString().slice(0, 10);
+  const sugLine = `Ventana sugerida (concreta, como su última pauta): ${fechaCorta(sugStartIso) ?? sugStartIso} → ${fechaCorta(sugEndIso) ?? sugEndIso} (${sugStartIso}→${sugEndIso}). Última pauta ${lastW.dateStart ? `${fechaCorta(lastW.dateStart) ?? lastW.dateStart}→${fechaCorta(lastW.dateEnd ?? lastW.dateStart ?? "") ?? lastW.dateEnd}` : lastF ?? "sin fecha"}${anyApproved ? " con material aprobado" : anyPending ? " (material pendiente entonces)" : ""}${ticketClienteTxt != null ? ` · ticket típico suyo ~${ticketClienteTxt}` : ""}.`;
   const mode = briefMode(verdict.reusable);
   const basePatron =
     topCat && topCat[1] >= 2
@@ -422,7 +532,7 @@ async function composeDraftCopy(
           ? "mostrarle algo nuevo y concreto de su línea, o pasarle su favorito con ventana concreta para que lo mire sin compromiso"
           : "pasarle una propuesta concreta y simple para retomar (producto + momento), y preguntarle si le sirve";
   const patron = mode === "identidad" ? identityPatron(quien) : basePatron;
-  const jugada = mode === "identidad" ? identityJugada() : baseJugada;
+  const jugada = mode === "identidad" ? identityJugada() : `${baseJugada}. ${sugLine}`;
   const dossier = quien
     ? `Cliente: ${firstName} — ${quien}${companyName && marcas[0] && marcas[0] !== companyName ? ` (en sus piezas: ${marcas[0]}${categorias[0] ? ` · ${categorias[0]}` : ""})` : categorias[0] && categorias[0] !== quien ? ` (${categorias[0]})` : ""} (objetivo ${objetivo})`
     : `Cliente: ${firstName} (objetivo ${objetivo})`;
@@ -431,7 +541,7 @@ async function composeDraftCopy(
     dossier,
     `Por-qué-ahora en una línea: ${estado}. ${patron}.`,
     `Jugada (elige UNA, no las combines): ${jugada}.`,
-    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días.`,
+    `Datos de respaldo (úsalos solo si encajan natural en una frase sobre su negocio, nunca como lista ni telegrama): ${noun.last} ${lastF ?? "?"}${lastIso ? ` (${lastIso})` : ""}, hace ${days ?? "?"} días. ${sugLine}`,
     `Historial real (usa nombres tal cual, no inventes):`,
     hist,
     stamp.forceChannel === "whatsapp"
@@ -504,7 +614,13 @@ async function draftForSignal(
   storeId: string,
   system: string,
   s: Prioritized,
-  stamp: { runId: string | null; catalog: CatalogType | null; forceChannel?: "email" | "whatsapp" | null },
+  stamp: {
+    runId: string | null;
+    catalog: CatalogType | null;
+    forceChannel?: "email" | "whatsapp" | null;
+    brain?: import("@/lib/brain").TenantBrain | null;
+    inactiveNorm?: Set<string>;
+  },
 ): Promise<{ channel: string; chars: number }> {
   // Issue #13: baja total (ambos canales) → ni se redacta. La baja parcial
   // se chequea tras conocer el canal (el otro canal sigue sirviendo).
@@ -542,7 +658,9 @@ async function draftForSignal(
             decision: s.decision ?? null,
             p_recompra_h: s.pRecompraH ?? null,
             // Auditoría humana: por qué esta propuesta (visible en Review/logs).
+            // objective = tratamiento (winback/nurture/vip_care); kind = origen.
             kind: s.kind ?? null,
+            objective: s.objective ?? null,
             reason: s.reason ?? null,
           },
         });
@@ -575,7 +693,7 @@ export async function previewSignalCopy(
   }
   try {
     const db = getSupabase();
-    const { system, catalog } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
     const { channel, body, subject } = await composeDraftCopy(db, storeId, system, {
       id: found.signalId,
       kind: found.kind,
@@ -591,7 +709,7 @@ export async function previewSignalCopy(
       country: found.country,
       decision: found.decision ?? null,
       pRecompraH: found.pRecompraH ?? null,
-    }, { runId: null, catalog, forceChannel });
+    }, { runId: null, catalog, forceChannel, brain, inactiveNorm });
     return { ok: true, channel, body, subject };
   } catch (e) {
     if (e instanceof OptOutSkip) {
@@ -640,7 +758,7 @@ export async function draftSingleSignal(
     return { ok: false, message: "Este cliente ya tiene un borrador en Review (otra señal)." };
   }
   try {
-    const { system, catalog } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
     const { channel } = await draftForSignal(db, storeId, system, {
       id: found.signalId,
       kind: found.kind,
@@ -656,7 +774,7 @@ export async function draftSingleSignal(
       country: found.country,
       decision: found.decision ?? null,
       pRecompraH: found.pRecompraH ?? null,
-    }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null });
+    }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null, brain, inactiveNorm });
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
     if (e instanceof OptOutSkip) {
@@ -733,9 +851,10 @@ export async function runCopywriter(
     const fresh = rows.filter((r) => !busySignal.has(r.id) && !busyCustomer.has(r.customer_id));
     log(`run ${runId} candidatas=${fresh.length} (con borrador: ${rows.length - fresh.length})`);
 
-    // Lenguaje de compra del tenant (1 query por corrida, no por borrador):
-    // sin esto el redactor trata todo como bodega (“llevaste un Rp Cajamarca”).
-    const { system, catalog } = await buildSystem(storeId);
+    // Lenguaje + activos del tenant (2 queries por corrida, no por borrador):
+    // sin esto el redactor trata todo como bodega (“llevaste un Rp Cajamarca”)
+    // y puede proponer inactivos.
+    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
 
     // La puerta del juez puede omitir: se recorre el ranking hasta llenar el
     // límite (orden determinista + sensatez LLM). Omitidos ≠ fallidos.
@@ -747,7 +866,7 @@ export async function runCopywriter(
       if (draftedCustomer.has(s.customer_id)) continue;
       await step(null);
       try {
-        const { channel, chars } = await draftForSignal(db, storeId, system, s, { runId, catalog });
+        const { channel, chars } = await draftForSignal(db, storeId, system, s, { runId, catalog, brain, inactiveNorm });
         drafted += 1;
         draftedCustomer.add(s.customer_id);
         log(`run ${runId} ${s.email} → ${channel} (${chars} chars)`);

@@ -17,14 +17,10 @@ import { createLogger } from "@/lib/log";
 
 const log = createLogger("worker");
 
-async function listMedusaStores(filterStore?: string): Promise<string[]> {
-  const { getSupabase } = await import("@/lib/supabase");
-  const q = getSupabase().from("stores").select("id").eq("platform", "medusa");
-  const { data, error } = filterStore
-    ? await q.eq("id", filterStore)
-    : await q.order("created_at", { ascending: true }).limit(100);
-  if (error) throw new Error(`Stores read: ${error.message}`);
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id)).filter(Boolean);
+async function listSyncStores(filterStore?: string): Promise<string[]> {
+  const { SUPPORTED_CONNECTORS } = await import("@/lib/connectors");
+  const { listStoresByPlatform } = await import("@/lib/customers-db");
+  return listStoresByPlatform(SUPPORTED_CONNECTORS, filterStore);
 }
 
 async function runStore(storeId: string, kinds: string[] | undefined): Promise<void> {
@@ -37,9 +33,10 @@ async function runStore(storeId: string, kinds: string[] | undefined): Promise<v
       log(`store=${storeId} sin conexión, omitido`);
       return;
     }
-    const runId = await runSyncOnce(storeId, target.medusaUrl, {
+    const runId = await runSyncOnce(storeId, target.shopUrl, {
       version: target.version,
       token: target.token,
+      platform: target.platform,
       withMorning: wantMorning,
     });
     // null = slot ocupado (lo cubre la corrida en curso): omitido, no fallo.
@@ -59,9 +56,9 @@ async function runOnce(store: string | undefined, kinds: string[] | undefined): 
   if (!isSupabaseConfigured()) {
     throw new Error("Falta SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.");
   }
-  const stores = await listMedusaStores(store);
+  const stores = await listSyncStores(store);
   if (stores.length === 0) {
-    throw new Error("Sin tiendas medusa (o --store inexistente).");
+    throw new Error("Sin tiendas (o --store inexistente).");
   }
   log(`start stores=${stores.length} kinds=${kinds?.join(",") ?? "sync,morning"}`);
   let failed = 0;

@@ -34,10 +34,16 @@ export interface StrategistOpts {
   limit?: number;
 }
 
-/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente; winback = 1 compra (incluye 2ª compra del Modelo B); resto nurture.
- *  Issue #11: F por sesiones/modelo del motor, no por orders_count (pago partido mismo día = 1 sesión). */
-function objective(o: OpenSignal, vipSpend: number): "winback" | "nurture" | "vip_care" {
-  if (o.orders_count >= 3 && o.total_spent >= vipSpend) return "vip_care";
+/** Objetivo según valor y frecuencia: VIP = alto gasto recurrente + top activo;
+ *  winback = 1 compra (incluye 2ª compra del Modelo B); resto nurture.
+ *  Issue #11: F por sesiones/modelo del motor, no por orders_count (pago partido mismo día = 1 sesión).
+ *  Hito 2 (#25.6): vipSpend + product_stats (hasTopActivo) para vip_care real. */
+function objective(
+  o: OpenSignal,
+  vipSpend: number,
+  hasTopActivo: boolean | null = null,
+): "winback" | "nurture" | "vip_care" {
+  if (o.orders_count >= 3 && o.total_spent >= vipSpend && (hasTopActivo !== false)) return "vip_care";
   // Modelo B (segunda_compra) o 1 sola sesión real → winback aunque
   // orders_count cuente 2 por pago partido.
   if (o.model === "segunda_compra" || o.orders_count <= 1) return "winback";
@@ -98,7 +104,21 @@ export async function runStrategist(
     }
     const spends = [...rows.filter((r) => mira.rows.some((m) => m.signalId === r.id)).map((r) => r.total_spent)].sort((a, b) => a - b);
     const vipSpend = spends.length > 0 ? spends[Math.floor(spends.length * 0.8)] : 0;
-    log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend}`);
+    // Hito 2 (#25.6): vip_care real = alto gasto + compra de top activo.
+    // Sin product_stats (sin ventas) se conserva el criterio solo-gasto.
+    let topActiveNorm = new Set<string>();
+    try {
+      const { getTenantBrain } = await import("@/lib/brain");
+      const { normProductTitle } = await import("@/lib/product-stats");
+      const brain = await getTenantBrain(storeId).catch(() => null);
+      for (const t of (brain?.topProductos ?? []).slice(0, 3)) {
+        const n = normProductTitle(t.title);
+        if (n) topActiveNorm.add(n);
+      }
+    } catch {
+      topActiveNorm = new Set<string>();
+    }
+    log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend} topActivos=${topActiveNorm.size}`);
     // Trazabilidad del ranking: si el top se discute, el log dice quién era.
     log(`run ${runId} top5=${rows.slice(0, 5).map((r) => r.email || r.customer_id).join(",")}`);
 
@@ -108,17 +128,69 @@ export async function runStrategist(
       batch.length > 0
         ? [batch[0].first_name, batch[0].last_name].filter(Boolean).join(" ") || batch[0].email || "tu top"
         : null;
+    // ¿Compró top activo? Paginado por chunk (200 cids) con range interno.
+    // Sin paginar, un heavy buyer >2000 órdenes truncaba y daba hasTop=false.
+    const hasTopByCust = new Map<string, boolean>();
+    if (topActiveNorm.size > 0 && batch.length > 0) {
+      try {
+        const { normProductTitle: normT } = await import("@/lib/product-stats");
+        const ids = [...new Set(batch.map((b) => b.customer_id))];
+        for (let k = 0; k < ids.length; k += 200) {
+          const chunk = ids.slice(k, k + 200);
+          for (let off = 0; ; off += 1000) {
+            const { data, error } = await db
+              .from("orders")
+              .select("customer_id,items_json")
+              .eq("store_id", storeId)
+              .in("customer_id", chunk)
+              .order("id", { ascending: true })
+              .range(off, off + 999);
+            if (error) throw new Error(error.message);
+            const rows = (data ?? []) as Array<Record<string, unknown>>;
+            for (const o of rows) {
+              const cid = String(o.customer_id ?? "");
+              if (!cid || hasTopByCust.get(cid) === true) continue;
+              const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
+              for (const it of items) {
+                if (topActiveNorm.has(normT(String(it.title ?? "")))) {
+                  hasTopByCust.set(cid, true);
+                  break;
+                }
+              }
+            }
+            if (rows.length < 1000) break;
+          }
+          for (const cid of chunk) if (!hasTopByCust.has(cid)) hasTopByCust.set(cid, false);
+        }
+      } catch {
+        // fail-open: sin evidencia se conserva criterio solo-gasto.
+      }
+    }
     let i = 0;
     for (const s of batch) {
       i += 1;
       await advanceRun(runId, { processed: prioritized, failed: 0, current: null });
-      const kind = objective(s, vipSpend);
+      const hasTop = topActiveNorm.size === 0 ? null : (hasTopByCust.get(s.customer_id) ?? false);
+      const kind = objective(s, vipSpend, hasTop);
       // Issue #11 P1: kind (origen) ya no se pisa. El tratamiento va en
       // objective; kind se conserva. Ciclo scout→strategist→scout conserva
       // winback y revision_humana (test dedicado).
+      // Articulación por DB: merge con evidence previo (no sobrescribir scout).
+      let prevEv: Record<string, unknown> = {};
+      try {
+        const { data: prevRow } = await db
+          .from("churn_signals")
+          .select("evidence_json")
+          .eq("id", s.id)
+          .maybeSingle();
+        const pe = (prevRow as Record<string, unknown> | null)?.evidence_json;
+        if (pe && typeof pe === "object") prevEv = pe as Record<string, unknown>;
+      } catch {
+        prevEv = {};
+      }
       const { error: upErr } = await db
         .from("churn_signals")
-        .update({ status: "prioritized", objective: kind, evidence_json: { generator: STRATEGIST_GEN, run_id: runId, at: new Date().toISOString() } })
+        .update({ status: "prioritized", objective: kind, evidence_json: { ...prevEv, generator: STRATEGIST_GEN, run_id: runId, at: new Date().toISOString() } })
         .eq("id", s.id);
       if (upErr) {
         log(`run ${runId} ${s.email} ERROR ${upErr.message}`);

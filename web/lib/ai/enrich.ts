@@ -48,11 +48,21 @@ async function complete(
   if (jsonMode === "native") body.response_format = { type: "json_object" };
   Object.assign(body, reasoningBody(ref.provider, ref.model, reasoningEffort));
   const t0 = Date.now();
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      // Sin timeout el caller se queda colgado para siempre. 120s cubre reasoning lento.
+      signal: AbortSignal.timeout(120_000),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
+      throw new Error(`${ref.provider}: timeout (120s) sin respuesta`);
+    }
+    throw e;
+  }
   if (!res.ok) {
     throw new Error(`${ref.provider} ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }
