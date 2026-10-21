@@ -545,12 +545,17 @@ export function DraftActions({
     // resolver (add + close, sin update: el update vive solo en la cinta).
     const loadingId = `switch-${id}`;
     toast.close(loadingId);
-    toast.add({ id: loadingId, title: "Cambiando de canal…", type: "loading" });
+    toast.add({
+      id: loadingId,
+      title: `Cambiando a ${toLabel}…`,
+      description: "Preparando mensaje apropiado para ese canal…",
+      type: "loading",
+    });
     try {
       const r = await onSwitch(id);
       toast.close(loadingId);
       toast.add({
-        title: r.ok ? "Canal cambiado" : "No se pudo cambiar",
+        title: r.ok ? `Cambiado a ${toLabel}` : `No se pudo cambiar a ${toLabel}`,
         description: r.message,
         type: r.ok ? "success" : "error",
       });
@@ -559,7 +564,7 @@ export function DraftActions({
     } catch (e) {
       const message = e instanceof Error ? e.message : "Error";
       toast.close(loadingId);
-      toast.add({ title: "No se pudo cambiar", description: message, type: "error" });
+      toast.add({ title: `No se pudo cambiar a ${toLabel}`, description: message, type: "error" });
       setBusy(null);
       router.refresh();
     }
@@ -581,7 +586,7 @@ export function DraftActions({
       </span>
       {canSwitch && (
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={switchChannel}>
-          {busy === "switch" ? "Cambiando…" : `Cambiar a ${toLabel}`}
+          {busy === "switch" ? `Cambiando a ${toLabel}…` : `Cambiar a ${toLabel}`}
         </Button>
       )}
       {channel === "whatsapp" && !wameUrl && (

@@ -363,10 +363,10 @@ export async function markDispatchedAction(id: string): Promise<ReviewOp> {
   return { ok: true, message: "Marcada como enviada por WhatsApp." };
 }
 
-/** Variante de borrador por canal: re-export neutro (la definición vive en
- *  `lib/channel-variants` para poder testearse sin imports server). */
+/** Variante de borrador por canal: el tipo vive en `lib/channel-variants`
+ *  (los helpers síncronos se importan desde ahí; "use server" solo permite
+ *  exportar funciones async, así que no se re-exportan valores aquí). */
 export type { ChannelVariant } from "@/lib/channel-variants";
-export { getChannelVariants, isReusableChannelVariant } from "@/lib/channel-variants";
 
 /** Cambia el canal de un pendiente al otro (solo si el cliente tiene ambos
  *  contactos): si ya existe variante fresca del otro canal, se restaura sin
@@ -458,7 +458,7 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
       return { ok: false, message: uErr.message };
     }
     revalidatePath("/review");
-    return { ok: true, message: `Ahora en ${target === "email" ? "Email" : "WhatsApp"} (versión guardada, sin regenerar).` };
+    return { ok: true, message: `Mensaje para ${target === "email" ? "Email" : "WhatsApp"} restaurado (versión guardada, sin regenerar).` };
   }
   const conn = await readConnections();
   if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
@@ -512,7 +512,7 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
     return { ok: false, message: uErr.message };
   }
   revalidatePath("/review");
-  return { ok: true, message: `Ahora en ${preview.channel === "email" ? "Email" : "WhatsApp"}.` };
+  return { ok: true, message: `Mensaje para ${preview.channel === "email" ? "Email" : "WhatsApp"} redactado de nuevo.` };
 }
 
 export async function approveLeadAction(id: string): Promise<ReviewOp> {
