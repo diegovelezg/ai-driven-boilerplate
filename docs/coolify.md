@@ -98,6 +98,9 @@ La web lo consume por **URL HTTPS pública** (dominio autogenerado del service,
 resuelve por wildcard sin pedir DNS):
 
 - `SEARXNG_URL=https://<id>.papelitosdecolor.com` (sin `/` final; ver `web/lib/retrieval.ts`)
+- Si el SearXNG es compartido y protegido con Basic Auth (Traefik):
+  `SEARXNG_BASIC_AUTH=usuario:clave` (en claro; el código la codifica).
+  Sin esto, todo da 401. La instancia vieja abierta no lo necesita.
 - Los services de Coolify viven en redes Docker distintas, así que no se asume
   resolución por hostname interno entre recursos.
 

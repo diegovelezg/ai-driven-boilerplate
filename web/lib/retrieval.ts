@@ -50,6 +50,16 @@ process.env.CRAWLEE_STORAGE_DIR ??= firstWritableDir([
 const SEARXNG_RAW = (process.env.SEARXNG_URL ?? "").trim();
 const SEARXNG_URL = (SEARXNG_RAW || "http://localhost:8888").replace(/\/+$/, "");
 
+/** Basic Auth opcional para un SearXNG compartido y protegido.
+ *  `SEARXNG_BASIC_AUTH="usuario:clave"` en claro (se codifica aquí).
+ *  Se lee por llamada —no en módulo— para que tests y redeploys la tomen
+ *  sin reimportar. Sin la env, GET plano como antes (instancia abierta). */
+export function searxngHeaders(): Record<string, string> {
+  const raw = (process.env.SEARXNG_BASIC_AUTH ?? "").trim();
+  if (!raw) return {};
+  return { Authorization: `Basic ${Buffer.from(raw, "utf8").toString("base64")}` };
+}
+
 /** Chat completion que devuelve JSON (lanza si la respuesta no es texto útil).
  *  Metering issue #15: con `meter.storeId` loguea usage en `llm_usage`
  *  (fire-and-forget, nunca bloquea). Sin storeId solo advierte en el insert. */
@@ -171,7 +181,7 @@ export async function searchSearxng(query: string, perQuery = 5): Promise<Search
   let res: Response;
   try {
     // SearXNG local: 30s sobra; sin timeout cuelga el pipeline si el contenedor se cuelga.
-    res = await fetch(u, { signal: AbortSignal.timeout(30_000) });
+    res = await fetch(u, { signal: AbortSignal.timeout(30_000), headers: { ...searxngHeaders() } });
   } catch (e) {
     if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) {
       throw new Error("SearXNG: timeout (30s) sin respuesta");
