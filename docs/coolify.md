@@ -329,6 +329,9 @@ node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');co
    tras el `schema` (schema-cache). Regla: nunca desplegar código que asuma
    tablas/columnas que prod aún no tiene (2026-10-21: 9 migraciones por
    detrás → `products` invisible + `para actuar hoy` 1 vs 2 por foto vieja).
+   Si el release toca dependencias solo-node o `next.config.ts`:
+   `npm run build && npm run check:bundle` (Crawlee bundleado en el SSR
+   tumba prospect solo en prod, sin síntoma en dev).
 1. Env Coolify al día (valores literales, §3) + redeploy.
 2. Rebuild **sin caché** si cambió `NEXT_PUBLIC_*` o la anon key.
 3. §6 verde: login 200, API 401, Studio 307, SearXNG ok, conteos `verify`.

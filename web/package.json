@@ -10,7 +10,8 @@
     "lint": "eslint",
     "test": "tsx --test \"tests/*.test.ts\"",
     "adk": "node --env-file=.env.local node_modules/.bin/adk web",
-    "adk:run": "node --env-file=.env.local node_modules/.bin/adk run agent.ts"
+    "adk:run": "node --env-file=.env.local node_modules/.bin/adk run agent.ts",
+    "check:bundle": "bash scripts/check-server-bundle.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
