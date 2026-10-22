@@ -18,8 +18,9 @@ function Delta({ pct }: { pct: number | null }) {
 /**
  * Dos charts sleek, una escala cada uno (nunca se mezclan):
  * 1. Facturación: ventas (línea) + órdenes (barras).
- * 2. Recupero: en juego (punteada) + rescatado (barras), misma escala
- *    → el gap es la fuga. SVG hecho a mano, sin ejes Y.
+ * 2. Recupero: en juego (sólida) + rescatado (barras), misma escala
+ *    → el gap es la fuga. Tramo final al mes en curso: punteado tenue.
+ *    SVG hecho a mano, sin ejes Y.
  */
 function Trend({
   buckets,
