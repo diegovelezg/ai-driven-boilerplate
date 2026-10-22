@@ -169,7 +169,7 @@ export async function rejectActionAction(id: string): Promise<ReviewOp> {
 }
 
 /** Cancela un envío aún no salido (approved → pending_review, solo si
- *  dispatched_at es null): vuelve a Mensajes por aprobar. Si ya no te
+ *  dispatched_at es null): vuelve a Clientes por contactar. Si ya no te
  *  interesa, descártalo desde pendientes. */
 export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
@@ -191,7 +191,7 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
 }
 
 /** Reabre un mensaje rechazado/cancelado (rejected → pending_review):
- *  "rescatar si te arrepentiste" — vuelve a Mensajes por aprobar sin
+ *  "rescatar si te arrepentiste" — vuelve a Clientes por contactar sin
  *  duplicar. Solo si aún no salió (dispatched_at null). */
 export async function reopenActionAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
@@ -207,7 +207,7 @@ export async function reopenActionAction(id: string): Promise<ReviewOp> {
     return { ok: false, message: "Ya reabierto o inexistente: nada que rescatar." };
   }
   revalidatePath("/review");
-  return { ok: true, message: "Rescatado: vuelve a Mensajes por aprobar." };
+  return { ok: true, message: "Rescatado: vuelve a Clientes por contactar." };
 }
 
 /** Da de baja a un cliente en un canal (issue #13): nunca más enviable por

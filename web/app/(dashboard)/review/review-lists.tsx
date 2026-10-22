@@ -65,6 +65,11 @@ function Sustento({ children }: { children: ReactNode }) {
   );
 }
 
+/** Tamaño de página de los historiales (Enviados/Contactados): los únicos
+ *  que crecen sin cota con el tiempo. Pendientes y Por enviar van con tope
+ *  fijo porque son cola de trabajo, no archivo. */
+export const HISTORY_PAGE_SIZE = 20;
+
 export interface ActionRow {
   id: string;
   channel: string;
@@ -82,6 +87,9 @@ export interface ActionRow {
   /** Issue #19: auditoría de aprobación (null = sin registro, pre-migración). */
   approvedBy?: string | null;
   approvedAt?: string | null;
+  /** Solo Enviados: cuándo salió y cuánto revenue atribuyó el analyst. */
+  dispatchedAt?: string | null;
+  revenueMinor?: number | null;
   /** Link wa.me con mensaje prellenado (whatsapp + teléfono normalizable). */
   wameUrl?: string | null;
   /** El cliente tiene email y WhatsApp: se ofrece cambiar de canal. */
@@ -145,7 +153,7 @@ export interface SignalRow {
   ordersCount?: number | null;
   totalSpent?: number | null;
   currency?: string | null;
-  /** Evidencia del motor (mismo sustento que "Mensajes por aprobar"). */
+  /** Evidencia del motor (mismo sustento que "Clientes por contactar"). */
   predCycleDays?: number | null;
   predTDays?: number | null;
   predHorizon?: number | null;
@@ -163,7 +171,7 @@ export interface SignalRow {
 export type ReviewTab = "actions" | "leads" | "signals";
 
 /** Sustento de una señal (Clientes en riesgo): mismo Hecho/Evidencia/
- *  Impacto que "Mensajes por aprobar", sin canal (aún no hay borrador). */
+ *  Impacto que "Clientes por contactar", sin canal (aún no hay borrador). */
 function SignalSustento({
   s,
   shopCurrency,
@@ -233,6 +241,34 @@ function SignalSustento({
   );
 }
 
+/** Paginador de historiales (Enviados/Contactados): solo aparece cuando hay
+ *  más de una página. Página 0 = la más reciente. */
+function HistoryPager({
+  total,
+  page,
+  onPage,
+}: {
+  total: number;
+  page: number;
+  onPage: (p: number) => void;
+}) {
+  const pages = Math.ceil(total / HISTORY_PAGE_SIZE);
+  if (pages <= 1) return null;
+  return (
+    <div className="flex items-center justify-center gap-2 pt-1">
+      <Button size="sm" variant="outline" disabled={page <= 0} onClick={() => onPage(page - 1)}>
+        ← Anterior
+      </Button>
+      <span className="text-xs text-muted-foreground tabular-nums">
+        Página {formatNumber(page + 1)} de {formatNumber(pages)}
+      </span>
+      <Button size="sm" variant="outline" disabled={page >= pages - 1} onClick={() => onPage(page + 1)}>
+        Siguiente →
+      </Button>
+    </div>
+  );
+}
+
 /** Listas del inbox: UN renderer para /review y para el canvas del chat.
  *  Recibe filas ya filtradas; `visible` decide qué secciones se muestran
  *  (con filtro del chat, solo lo pedido). Mutaciones por las mismas
@@ -241,11 +277,16 @@ export function ReviewLists({
   actions,
   approvedActions = [],
   rejectedActions = [],
+  dispatchedActions = [],
+  dispatchedTotal = 0,
+  dispatchedPage = 0,
   leads,
   /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
   approvedLeads = [],
   /** Contactados y descartados: filtros visibles, nada desaparece para siempre. */
   contactedLeads = [],
+  contactedTotal = 0,
+  contactedPage = 0,
   discardedLeads = [],
   signals,
   /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
@@ -270,11 +311,17 @@ export function ReviewLists({
   approvedActions?: ActionRow[];
   /** Rechazadas/canceladas: visibles para rescatar si te arrepentiste. */
   rejectedActions?: ActionRow[];
+  /** Enviadas (historial paginado): lo que ya salió y mide el analyst. */
+  dispatchedActions?: ActionRow[];
+  dispatchedTotal?: number;
+  dispatchedPage?: number;
   leads: LeadRow[];
   /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
   approvedLeads?: LeadRow[];
   /** Contactados y descartados: filtros visibles, nada desaparece para siempre. */
   contactedLeads?: LeadRow[];
+  contactedTotal?: number;
+  contactedPage?: number;
   discardedLeads?: LeadRow[];
   signals: SignalRow[];
   /** Descartadas recientes: "contactar igual" las reabre (issue #14 B3). */
@@ -297,7 +344,7 @@ export function ReviewLists({
 }) {
   const router = useRouter();
   const tabs: Array<{ id: ReviewTab; label: string; show: boolean; icon: LucideIcon }> = [
-    { id: "actions", label: `Mensajes por aprobar (${formatNumber(actions.length)})`, show: visible.actions, icon: PenLine },
+    { id: "actions", label: `Clientes por contactar (${formatNumber(actions.length)})`, show: visible.actions, icon: PenLine },
     { id: "leads", label: `Empresas por contactar (${formatNumber(leads.length)})`, show: visible.leads, icon: UserPlus },
     { id: "signals", label: `Clientes en riesgo (${formatNumber(signals.length)})`, show: visible.signals, icon: Radar },
   ];
@@ -309,7 +356,15 @@ export function ReviewLists({
   /** Sub-filtro de la pestaña leads: nada desaparece, se filtra arriba. */
   const [leadFilter, setLeadFilter] = useState<"pending" | "contacted" | "discarded">("pending");
   /** Sub-filtro de mensajes: mismo patrón que leads (nada desaparece). */
-  const [actionFilter, setActionFilter] = useState<"pending" | "approved" | "rejected">("pending");
+  const [actionFilter, setActionFilter] = useState<"pending" | "approved" | "rejected" | "sent">("pending");
+  /** Paginación de historiales por URL (?apage=/ ?cpage=): el servidor trae
+   *  la ventana; el estado del filtro no se pierde (sin remount). */
+  const setPageParam = (key: "apage" | "cpage", page: number) => {
+    const params = new URLSearchParams(window.location.search);
+    if (page <= 0) params.delete(key);
+    else params.set(key, String(page));
+    router.replace(`?${params.toString()}`, { scroll: false });
+  };
   /** Búsqueda libre local (empresa/dominio/url/contacto/motivo). */
   const [leadQuery, setLeadQuery] = useState("");
   const q = leadQuery.trim().toLowerCase();
@@ -414,7 +469,7 @@ export function ReviewLists({
   };
   const emptyActions = filtered
     ? "Sin resultados para ese filtro."
-    : "Sin mensajes por aprobar. Pídelos en el chat o desde Overview.";
+    : "Sin clientes por contactar. Pídelos en el chat o desde Overview.";
   const emptyLeads = filtered ? "Sin resultados para ese filtro." : "Sin empresas por contactar.";
 
   return (
@@ -443,7 +498,7 @@ export function ReviewLists({
       {visible.actions && active === "actions" && (
       <section className="flex flex-col gap-4" role="tabpanel">
         <SectionHeading
-          title={`Mensajes por aprobar (${formatNumber(actions.length)})`}
+          title={`Clientes por contactar (${formatNumber(actions.length)})`}
           hint="El Redactor propone; tú apruebas. Nada se envía sin tu visto bueno."
           tone="primary"
           right={
@@ -464,6 +519,9 @@ export function ReviewLists({
               </FilterToggleButton>
               <FilterToggleButton active={actionFilter === "rejected"} onClick={() => setActionFilter("rejected")}>
                 Descartados ({formatNumber((rejectedActions ?? []).length)})
+              </FilterToggleButton>
+              <FilterToggleButton active={actionFilter === "sent"} onClick={() => setActionFilter("sent")}>
+                Enviados ({formatNumber(dispatchedTotal ?? 0)})
               </FilterToggleButton>
             </>
           )}
@@ -682,7 +740,7 @@ export function ReviewLists({
           <div className="mt-2 flex flex-col gap-4">
             <SectionHeading
               title={`Descartados (${formatNumber((rejectedActions ?? []).length)})`}
-              hint="Nada se pierde: rescata el que quieras devolver a Mensajes por aprobar."
+              hint="Nada se pierde: rescata el que quieras devolver a Clientes por contactar."
               tone="amber"
             />
             {(rejectedActions ?? []).length === 0 && (
@@ -717,6 +775,54 @@ export function ReviewLists({
             ))}
           </div>
         )}
+        {!filtered && actionFilter === "sent" && (
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Enviados (${formatNumber(dispatchedTotal ?? 0)})`}
+              hint="Lo que ya salió. El analyst atribuye revenue cuando vuelven a comprar."
+              tone="emerald"
+            />
+            {(dispatchedTotal ?? 0) === 0 && (
+              <AppCardState>Sin enviados todavía: lo que apruebes por email sale solo; WhatsApp al marcar Ya lo envié.</AppCardState>
+            )}
+            {(dispatchedActions ?? []).map((a) => (
+              <AppCard
+                key={a.id}
+                tone="emerald"
+                onHeaderClick={() => void openDrawer(a.customerId)}
+                title={
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate">{a.name}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      · {a.email}
+                    </span>
+                  </span>
+                }
+                description={
+                  <span className="tabular-nums">
+                    Enviado{a.dispatchedAt ? ` · ${a.dispatchedAt.slice(0, 10)}` : ""}
+                    {a.revenueMinor != null ? ` · recuperado ${formatMoney(a.revenueMinor, shopCurrency)}` : ""}
+                  </span>
+                }
+                action={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <ChannelTag value={a.channel} />
+                    <KindTag value={a.kind} />
+                  </span>
+                }
+                contentClassName="flex flex-col gap-3"
+              >
+                {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
+                <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+              </AppCard>
+            ))}
+            <HistoryPager
+              total={dispatchedTotal ?? 0}
+              page={dispatchedPage ?? 0}
+              onPage={(p) => setPageParam("apage", p)}
+            />
+          </div>
+        )}
       </section>
       )}
 
@@ -749,7 +855,7 @@ export function ReviewLists({
               Pendientes ({formatNumber(leads.length + approvedLeads.length)})
             </FilterToggleButton>
             <FilterToggleButton active={leadFilter === "contacted"} onClick={() => setLeadFilter("contacted")}>
-              Contactados ({formatNumber(contactedLeads.length)})
+              Enviados ({formatNumber(contactedTotal ?? 0)})
             </FilterToggleButton>
             <FilterToggleButton active={leadFilter === "discarded"} onClick={() => setLeadFilter("discarded")}>
               Descartados ({formatNumber(discardedLeads.length)})
@@ -986,11 +1092,11 @@ export function ReviewLists({
         {!filtered && leadFilter === "contacted" && (
           <>
             {shownContacted.length === 0 ? (
-              <AppCardState>{q ? "Sin resultados para esa búsqueda." : "Sin contactados todavía: marca “Contactado” cuando escribas a una empresa."}</AppCardState>
+              <AppCardState>{q ? "Sin resultados para esa búsqueda." : "Sin enviados todavía: marca “Contactado” cuando escribas a una empresa."}</AppCardState>
             ) : (
           <div className="mt-2 flex flex-col gap-4">
             <SectionHeading
-              title={`Contactados (${formatNumber(shownContacted.length)})`}
+              title={`Enviados (${formatNumber(contactedTotal ?? 0)})`}
               hint="Ya los contactaste por tu cuenta. No se reproponen."
               tone="emerald"
             />
@@ -1016,6 +1122,13 @@ export function ReviewLists({
                 ) : null}
               </AppCard>
             ))}
+            {q === "" && (
+              <HistoryPager
+                total={contactedTotal ?? 0}
+                page={contactedPage ?? 0}
+                onPage={(p) => setPageParam("cpage", p)}
+              />
+            )}
           </div>
             )}
           </>

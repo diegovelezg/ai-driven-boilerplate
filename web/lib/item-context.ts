@@ -1,8 +1,11 @@
 // Contexto por línea de compra, en forma agnóstica al tipo de negocio.
-// Une metadata crudo (cualquier key según el tipo de negocio) + contenido
-// Nivel 1 (tabla item_content) para agentes y GUI. Nunca expone URLs de
-// archivos ni tokens (solo lo interpretado).
+// Une el contenido Nivel 1 (tabla item_content) resuelto con LA key elegida
+// en settings (metadata_map.content, una sola) para agentes y GUI. Nunca
+// expone URLs de archivos ni tokens (solo lo interpretado).
 // Clave: la GUI/agentes se atan a este schema estable, no a las keys de cada negocio.
+// REGLA DURA: de META sale única y exclusivamente lo de la key elegida en
+// settings. Nada de otras keys (fechas, notas, variantes, booleans): sin key
+// de contenido, contiene/categoria son null honestos.
 import { createHash } from "node:crypto";
 import { getSupabase } from "@/lib/supabase";
 import { EMPTY_KEYS, type ResolvedItemKeys } from "@/lib/metadata-map";
@@ -12,99 +15,20 @@ function contentUrlHash(url: string): string {
   return createHash("sha256").update(url).digest("hex");
 }
 
-/** Nunca al prompt/GUI: secretos y tokens internos. */
-const SECRET_KEY_RE = /token|secret|password|signature|api[-_]?key|access[-_]?key|private[-_]?key/i;
-
 export interface EnrichedOrderItem {
   title: string;
   quantity: number;
-  /** Ventana "2026-07-10→2026-07-11" (start/end) o null: pauta, turno, reserva… */
-  ventana: string | null;
-  /** Lo que escribió el cliente (comentario/nota) o null. Fuente humana: citar, no mezclar. */
-  clienteDijo: string | null;
-  /** Sobre qué es la línea (contenido IA o catálogo, "marca: qué") o null. */
+  /** Sobre qué es la línea (contenido IA o catálogo, "marca: qué") o null. Solo con la key de contenido elegida en settings. */
   contiene: string | null;
+  /** Categoría del contenido o null. Solo con la key de contenido elegida en settings. */
   categoria: string | null;
-  /** Resto de metadata (texto corto/número con su key: talla, color…), sanitizado. */
-  detalles: Record<string, string | number>;
-  /** Material aprobado (booleano *approved) o null si sin señal. */
-  aprobado: boolean | null;
-}
-
-/** Texto con pinta de prosa humana (vs código corto): va citado, no a detalles.
- *  Decisión KISS conocida: el umbral puede dejar fuera citado corto y cualquier
- *  fecha con forma AAAA-MM-DD arma ventana. Válvula: "No mandar" por campo. */
-const PROSE_MIN = 24;
-
-/** Parte determinista (sin DB): ventana + citado + detalles + aprobado.
- *  Sin preguntas: las fechas (forma AAAA-MM-DD) arman la ventana, la prosa
- *  humana se cita, el resto (texto corto/número, sin URLs ni secretos) cae a
- *  detalles tipados con su key. Los booleanos *approved alimentan `aprobado`
- *  (el material aprobado sí dirige la jugada); el resto se omite. Los roles
- *  del mapa (fecha/nota/variante) confirman la clasificación por forma. */
-function rawItemContext(
-  metadata: Record<string, unknown> | null | undefined,
-  keys: ResolvedItemKeys,
-): Pick<EnrichedOrderItem, "ventana" | "clienteDijo" | "detalles" | "aprobado"> {
-  const md = metadata ?? {};
-  const skip = new Set(keys.exclude ?? []);
-  const roles = keys.roles ?? {};
-  const fechaRole = new Set(roles.fecha ?? []);
-  const notaRole = new Set(roles.nota ?? []);
-  const varianteRole = new Set(roles.variante ?? []);
-  const archivoRole = new Set(roles.archivo ?? []);
-  if (keys.file) archivoRole.add(keys.file);
-  const dates: string[] = [];
-  const prose: string[] = [];
-  const detalles: Record<string, string | number> = {};
-  let aprobado: boolean | null = null;
-  const hasFechaRoles = fechaRole.size > 0;
-  const hasVarianteRoles = varianteRole.size > 0;
-  for (const [k, v] of Object.entries(md)) {
-    if (skip.has(k) || SECRET_KEY_RE.test(k)) continue;
-    if (archivoRole.has(k) && typeof v === "string" && /^https?:\/\//i.test(v.trim())) continue;
-    if (typeof v === "boolean") {
-      if (/approv|aprob/i.test(k)) aprobado = v;
-      continue;
-    }
-    if (typeof v !== "string" && typeof v !== "number") continue;
-    const s = String(v).trim();
-    if (!s || s.length > 200 || /^https?:\/\//i.test(s)) continue;
-    const isDateShape = typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(s);
-    if (isDateShape) {
-      // Con roles fecha declarados, solo esas keys arman ventana; sin roles,
-      // cualquier forma fecha arma ventana (fail-open agnóstico).
-      if (!hasFechaRoles || fechaRole.has(k)) dates.push(s.slice(0, 10));
-      continue;
-    }
-    if (notaRole.has(k)) {
-      if (typeof v === "string") prose.push(s);
-      else detalles[k] = v;
-      continue;
-    }
-    if (typeof v === "string" && s.length >= PROSE_MIN) {
-      prose.push(s);
-      continue;
-    }
-    // Texto corto / número: con roles variante declarados, solo variante va
-    // a detalles; el resto es ruido y se omite (no bloat del prompt).
-    if (hasVarianteRoles && !varianteRole.has(k)) continue;
-    detalles[k] = typeof v === "string" ? s : v;
-  }
-  dates.sort();
-  const ventana =
-    dates.length === 0 ? null : dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]}→${dates[dates.length - 1]}`;
-  return {
-    ventana,
-    clienteDijo: prose.length > 0 ? prose.join(" / ").slice(0, 400) : null,
-    detalles,
-    aprobado,
-  };
 }
 
 /**
  * Enriquece líneas con contenido Nivel 1 (1 sola query a item_content por todas).
- * Sin contenido (sin archivo o aún no procesado) → contiene/categoria null, sin fallar.
+ * Solo la key elegida en settings (metadata_map.content): sin key no hay
+ * lookup y contiene/categoria son null honestos. Ninguna otra key del metadata
+ * crudo fluye al engine/agentes (ni fechas, ni notas, ni variantes).
  */
 export async function enrichOrderItems(
   storeId: string,
@@ -132,7 +56,6 @@ export async function enrichOrderItems(
   }
   return raw.map((r) => {
     const md = (r.metadata as Record<string, unknown> | null) ?? null;
-    const base = rawItemContext(md, keys);
     const u = md && typeof md[keys.file] === "string" ? md[keys.file] as string : null;
     const cap = (u && contents.get(urls.get(u) as string)) || null;
     const marca = cap && typeof cap.marca === "string" ? cap.marca.trim() : "";
@@ -142,7 +65,6 @@ export async function enrichOrderItems(
     return {
       title: r.title,
       quantity: r.quantity,
-      ...base,
       contiene,
       categoria: cat || null,
     };

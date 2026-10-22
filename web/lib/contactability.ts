@@ -3,9 +3,10 @@
 // redactar. El ranking (lib/mira) y el strategist siguen 100% deterministas;
 // este es el paso posterior que pone la sensatez. Agnóstico por diseño: el
 // código no trae ninguna lista de palabras ni regex; solo arma el dossier con
-// datos estructurados (contenido enriquecido + ventanas dateStart/dateEnd +
-// hoy + silencio) y el modelo razona. Sin columnas nuevas ni estados nuevos:
+// datos estructurados (contenido de la key elegida en settings + hoy +
+// silencio) y el modelo razona. Sin columnas nuevas ni estados nuevos:
 // el veredicto vive en `evidence_json.contactability`.
+// META: solo contiene/categoria (key elegida en settings). Nada de otras keys.
 // Fail-open: si el juez falla (llave, red, JSON roto), se redacta igual y el
 // ranking determinista manda. La puerta nunca vacía la cola por infra.
 import { createLogger } from "@/lib/log";
@@ -20,26 +21,22 @@ const log = createLogger("contactability");
 export const JUDGE_GEN = "contactability:v5:sin-continuidad";
 
 const JUDGE_SYSTEM = `Eres el filtro de pertinencia de un motor de retención (español Perú).
-El dossier es HISTORIAL de compras pasadas, no la invitación futura. Una ventana pasada es lo normal y NUNCA es motivo de veto.
+El dossier es HISTORIAL de compras pasadas, no la invitación futura.
 Responde SOLO con un objeto JSON válido, sin markdown: {"contactable": true|false, "reusable": true|false, "reason": "una línea, máx 140 caracteres"}.
 contactable=false SOLO si ni reconociendo quién es hay algo útil que proponer hoy sin inventar datos, fechas, nombres, ofertas o ubicaciones. Inventar = proponer lo que no está en el dossier ni en la capacidad general.
-reusable=false si lo comprado solo tenía sentido en su ventana: sirve para reconocer quién es, no para repetirlo como propuesta.
+reusable=false si lo comprado fue puntual/de ocasión (1-2 compras previas): sirve para reconocer quién es, no para repetirlo como propuesta.
 Si reusable=false, tu reason describe SOLO quién es, sin proponer continuidad.
 Por defecto {"contactable": true, "reusable": true}. Ante cualquier duda, true/true.
 NOTA: el fail-open de código (juez caído) devuelve true/false intencional (modo identidad seguro), no true/true: sin juez no se ordena continuidad.`;
 
 export interface JudgeItem {
   title: string;
+  /** Contenido de la key elegida en settings (única metadata que fluye). */
   contiene: string | null;
   categoria: string | null;
-  clienteDijo: string | null;
-  /** Ventana ya resuelta ("A→B" partida en inicio/fin) o nulls. */
-  dateStart: string | null;
-  dateEnd: string | null;
   /** Contrato final (#25): opcionales sin romper callers. */
   valorEsperadoMinor?: number | null;
   isActive?: boolean | null;
-  detalles?: Record<string, string | number> | null;
 }
 
 export interface JudgeDossier {
@@ -48,6 +45,8 @@ export interface JudgeDossier {
   objetivo: string;
   daysSince: number | null;
   todayIso: string;
+  /** Compras reales del cliente (órdenes, SSOT): funda puntual vs habitual. */
+  comprasPrevias?: number | null;
   items: JudgeItem[];
   /** Catálogo del tenant (servicio/producto): afina la propuesta sin listas. */
   catalog?: string | null;
@@ -59,7 +58,7 @@ export interface JudgeDossier {
 function buildJudgeDossier(d: JudgeDossier): string {
   const lines = [
     `Cliente: ${d.firstName}${d.companyName ? ` — ${d.companyName}` : ""} (objetivo ${d.objetivo})`,
-    `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}.`,
+    `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}. Compras previas: ${d.comprasPrevias ?? "?"}.`,
     ...(d.catalog ? [`Negocio: ${d.catalog}.`] : []),
     ...(d.ventanaTipicaDias != null ? [`Ventana típica del negocio: ~${d.ventanaTipicaDias}d (no vetar lo normal).`] : []),
     `Historial pasado (no es la oferta; no vetes por fechas):`,
@@ -69,10 +68,6 @@ function buildJudgeDossier(d: JudgeDossier): string {
       it.title || "pieza sin título",
       it.contiene ? `contiene "${it.contiene}"` : "",
       it.categoria ? `[${it.categoria}]` : "",
-      it.clienteDijo ? `cliente dijo: "${it.clienteDijo.slice(0, 100)}"` : "",
-      it.dateStart || it.dateEnd
-        ? `ventana ${it.dateStart ?? "?"}→${it.dateEnd ?? "?"}`
-        : "sin ventana",
     ].filter(Boolean);
     lines.push(`- ${bits.join(" · ")}`);
   }

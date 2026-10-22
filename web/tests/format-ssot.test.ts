@@ -122,4 +122,32 @@ describe("SSOT formato numérico", () => {
     assert.ok(!agent.includes("minor units /100"), "el agente aún pide dividir minor units");
     assert.ok(agent.includes("*_display"), "el agente no instruye usar *_display verbatim");
   });
+
+  it("META = solo la key elegida en settings (cero heurísticas)", () => {
+    const ctx = readFileSync(join(ROOT, "lib/item-context.ts"), "utf8");
+    // Sin derivación de otras keys: ni ventana, ni citado, ni detalles, ni aprobado.
+    for (const banned of ["rawItemContext", "PROSE_MIN", "clienteDijo", "aprobado", "detalles", "ventana"]) {
+      assert.ok(!ctx.includes(banned), `item-context.ts aún deriva '${banned}' de otras keys`);
+    }
+    assert.ok(ctx.includes("REGLA DURA"), "item-context.ts debe declarar la regla settings-only");
+    // Enriquecido mínimo: título + cantidad + contenido de la key elegida.
+    for (const f of ["contiene", "categoria"]) {
+      assert.ok(ctx.includes(f), `item-context.ts debe exponer '${f}'`);
+    }
+    const judge = readFileSync(join(ROOT, "lib/contactability.ts"), "utf8");
+    assert.ok(!judge.includes("clienteDijo"), "el juez aún recibe citado de otras keys");
+    assert.ok(!judge.includes("dateStart"), "el juez aún recibe ventanas de metadata");
+    const cw = readFileSync(join(ROOT, "lib/copywriter.ts"), "utf8");
+    assert.ok(!cw.includes("splitVentana"), "el copywriter aún arma ventanas de metadata");
+    assert.ok(!cw.includes("anyApproved"), "el copywriter aún usa aprobado de metadata");
+    assert.ok(!/it\.(ventana|clienteDijo|aprobado|detalles)/.test(cw), "el brief aún vuelca metadata de otras keys");
+  });
+
+  it("el ritmo del cliente sale de compras reales (SSOT), no de metadata", () => {
+    const cw = readFileSync(join(ROOT, "lib/copywriter.ts"), "utf8");
+    assert.ok(cw.includes("gapMed"), "el copywriter no calcula ritmo propio de órdenes reales");
+    assert.ok(cw.includes("Última compra"), "el brief no ancla en última compra real");
+    const judge = readFileSync(join(ROOT, "lib/contactability.ts"), "utf8");
+    assert.ok(judge.includes("comprasPrevias"), "el juez no recibe compras reales");
+  });
 });

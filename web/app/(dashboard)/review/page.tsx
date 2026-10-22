@@ -8,6 +8,7 @@ import { isSupabaseConfigured, getSupabase } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
 import {
   ReviewLists,
+  HISTORY_PAGE_SIZE,
   type ActionRow,
   type LeadRow,
   type SignalRow,
@@ -33,18 +34,31 @@ export default async function ReviewPage({
     actionIds?: string;
     leadIds?: string;
     signalIds?: string;
+    /** Paginación de historiales (los únicos que crecen sin cota). */
+    apage?: string;
+    cpage?: string;
   }>;
 }) {
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl);
   const dbReady = isSupabaseConfigured();
   const sp = await searchParams;
+  const clampPage = (raw: string | undefined): number => {
+    const n = Number.parseInt(raw ?? "", 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const sentPage = clampPage(sp.apage);
+  const contactedPage = clampPage(sp.cpage);
 
   let actions: ActionRow[] = [];
   /** Aprobadas aún no enviadas (invisibles hasta hoy: solo se listaba pending). */
   let approvedActions: ActionRow[] = [];
   /** Rechazadas/canceladas recientes: nada desaparece, se rescatan con Reabrir. */
   let rejectedActions: ActionRow[] = [];
+  /** Enviadas (historial paginado con total exacto). */
+  let dispatchedActions: ActionRow[] = [];
+  let dispatchedTotal = 0;
+  let contactedTotal = 0;
   let leads: LeadRow[] = [];
   /** Aprobados aún no contactados: "Ya lo contacté" los cierra. */
   let approvedLeads: LeadRow[] = [];
@@ -76,13 +90,13 @@ export default async function ReviewPage({
         // señales filtran por sus customers; leads no tienen país (van todos).
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketLabel = scope?.market ? displayMarket(scope.market) : null;
-        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: ar, error: arErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { data: dl, error: dlErr }, { data: br }] =
+        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: ar, error: arErr }, { data: ds, error: dsErr }, { count: dsTotal, error: dsCountErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { count: clTotal, error: clCountErr }, { data: dl, error: dlErr }, { data: br }] =
           await Promise.all([
             (async () => {
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "pending_review"),
                 scope,
@@ -93,7 +107,7 @@ export default async function ReviewPage({
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "approved")
                   .is("dispatched_at", null),
@@ -105,12 +119,36 @@ export default async function ReviewPage({
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "rejected"),
                 scope,
               );
               return aq.order("created_at", { ascending: false }).limit(20);
+            })(),
+            (async () => {
+              const aq = applyScopeFilter(
+                db
+                  .from("proposed_actions")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .eq("store_id", storeId)
+                  .eq("status", "dispatched"),
+                scope,
+              );
+              return aq
+                .order("dispatched_at", { ascending: false })
+                .range(sentPage * HISTORY_PAGE_SIZE, sentPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE - 1);
+            })(),
+            (async () => {
+              const cq = applyScopeFilter(
+                db
+                  .from("proposed_actions")
+                  .select("id", { count: "exact", head: true })
+                  .eq("store_id", storeId)
+                  .eq("status", "dispatched"),
+                scope,
+              );
+              return cq;
             })(),
             applyScopeFilter(
               db
@@ -135,7 +173,7 @@ export default async function ReviewPage({
             )
               .order("created_at", { ascending: true })
               .limit(30),
-            // Contactados y descartados: visibles, reabribles, nada se pierde.
+            // Contactados (historial paginado con total exacto) y descartados.
             applyScopeFilter(
               db
                 .from("proposed_leads")
@@ -146,7 +184,16 @@ export default async function ReviewPage({
               null,
             )
               .order("created_at", { ascending: false })
-              .limit(30),
+              .range(contactedPage * HISTORY_PAGE_SIZE, contactedPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE - 1),
+            applyScopeFilter(
+              db
+                .from("proposed_leads")
+                .select("id", { count: "exact", head: true })
+                .eq("store_id", storeId)
+                .eq("status", "contacted"),
+              scope,
+              null,
+            ),
             applyScopeFilter(
               db
                 .from("proposed_leads")
@@ -169,10 +216,16 @@ export default async function ReviewPage({
         if (aErr) throw new Error(`Actions read: ${aErr.message}`);
         if (apErr) throw new Error(`Approved read: ${apErr.message}`);
         if (arErr) throw new Error(`Rejected read: ${arErr.message}`);
+        if (dsErr) throw new Error(`Dispatched read: ${dsErr.message}`);
+        if (dsCountErr) throw new Error(`Dispatched count: ${dsCountErr.message}`);
         if (lErr) throw new Error(`Leads read: ${lErr.message}`);
         if (alErr) throw new Error(`Approved leads read: ${alErr.message}`);
         if (clErr) throw new Error(`Contacted leads read: ${clErr.message}`);
+        if (clCountErr) throw new Error(`Contacted count: ${clCountErr.message}`);
         if (dlErr) throw new Error(`Discarded leads read: ${dlErr.message}`);
+        // head:true no trae filas: el total vive en `count` de la respuesta.
+        dispatchedTotal = dsTotal ?? 0;
+        contactedTotal = clTotal ?? 0;
         runningKinds = new Set(
           ((br ?? []) as Array<Record<string, unknown>>)
             .filter((r) => r.status === "running")
@@ -216,6 +269,8 @@ export default async function ReviewPage({
             generator: ((r.evidence_json as Record<string, unknown> | null)?.generator as string | null) ?? null,
             approvedBy: (r.approved_by as string | null) ?? null,
             approvedAt: (r.approved_at as string | null) ?? null,
+            dispatchedAt: (r.dispatched_at as string | null) ?? null,
+            revenueMinor: r.revenue_attributed == null ? null : Number(r.revenue_attributed),
             wameUrl,
             canSwitchChannel: caps.capability === "both",
           };
@@ -223,6 +278,7 @@ export default async function ReviewPage({
         actions = ((a ?? []) as Array<Record<string, unknown>>).map(toActionRow);
         approvedActions = ((ap ?? []) as Array<Record<string, unknown>>).map(toActionRow);
         rejectedActions = ((ar ?? []) as Array<Record<string, unknown>>).map(toActionRow);
+        dispatchedActions = ((ds ?? []) as Array<Record<string, unknown>>).map(toActionRow);
         // Sustento del motor: última predicción por cliente + última orden real.
         // Un join en JS sobre dos queries bulk (sin N+1).
         try {
@@ -380,7 +436,7 @@ export default async function ReviewPage({
           dismissedSignals = [];
         }
         // Sustento del motor para "Clientes en riesgo" (igual que en
-        // "Mensajes por aprobar"): última predicción + última orden real.
+        // "Clientes por contactar"): última predicción + última orden real.
         // Bulk en 2 queries (sin N+1), cubriendo abiertas y descartadas.
         try {
           const sigCustIds = [
@@ -558,9 +614,14 @@ export default async function ReviewPage({
             actions={actions}
             approvedActions={approvedActions}
             rejectedActions={rejectedActions}
+            dispatchedActions={dispatchedActions}
+            dispatchedTotal={dispatchedTotal}
+            dispatchedPage={sentPage}
             leads={leads}
             approvedLeads={approvedLeads}
             contactedLeads={contactedLeads}
+            contactedTotal={contactedTotal}
+            contactedPage={contactedPage}
             discardedLeads={discardedLeads}
             signals={signals}
             dismissedSignals={dismissedSignals}

@@ -1212,11 +1212,6 @@ function ComprasTab({
                               </span>
                             )}
                           </div>
-                          {it.ventana && (
-                            <div className="break-words text-[12px] tabular-nums text-muted-foreground">
-                              {it.ventana}
-                            </div>
-                          )}
                           {it.contiene && (
                             <div className="break-words text-[12px]">
                               {it.contiene}
@@ -1227,24 +1222,6 @@ function ComprasTab({
                                 >
                                   {it.categoria}
                                 </Badge>
-                              )}
-                            </div>
-                          )}
-                          {it.clienteDijo && (
-                            <AppTooltip tip={it.clienteDijo}>
-                              <div className="break-words text-[12px] text-muted-foreground italic">
-                                “{it.clienteDijo.length > 140 ? `${it.clienteDijo.slice(0, 140)}…` : it.clienteDijo}”
-                              </div>
-                            </AppTooltip>
-                          )}
-                          {it.detalles && Object.keys(it.detalles).length > 0 && (
-                            <div className="break-words text-[12px] text-muted-foreground">
-                              {Object.entries(it.detalles)
-                                .slice(0, 4)
-                                .map(([k, v]) => `${k}: ${v}`)
-                                .join(" · ")}
-                              {Object.keys(it.detalles).length > 4 && (
-                                <span> (+{Object.keys(it.detalles).length - 4} más)</span>
                               )}
                             </div>
                           )}

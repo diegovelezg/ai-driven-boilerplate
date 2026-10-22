@@ -1204,7 +1204,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const productMovements = new FunctionTool({
     name: "get_product_movements",
     description:
-      "Últimos movimientos del producto en foco (más reciente primero): fecha, cantidad, precio y monto con gemelos *_display ya formateados, y metadata de ESA compra (ventana, lo que dijo el cliente, detalles, contiene, categoría). Pasa limit (1-15, default 5) y offset para paginar. Devuelve envelope {items, total_count, returned_count, truncated}: total_count=null (historial abierto); si truncated, dilo ('te muestro N, hay más'). " + DISPLAY_RULE,
+      "Últimos movimientos del producto en foco (más reciente primero): fecha, cantidad, precio y monto con gemelos *_display ya formateados, y contenido de la línea (contiene/categoria de la key elegida en settings, o null). Pasa limit (1-15, default 5) y offset para paginar. Devuelve envelope {items, total_count, returned_count, truncated}: total_count=null (historial abierto); si truncated, dilo ('te muestro N, hay más'). " + DISPLAY_RULE,
     parameters: z.object({
       limit: z.number().int().min(1).max(15).optional(),
       offset: z.number().int().min(0).max(10000).optional(),
@@ -1303,7 +1303,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       }
       const hasMore = items.length > off + n;
       const window = items.slice(off, off + n);
-      // Metadata POR COMPRA (misma fusión que el drawer: first-wins + uniones).
+      // Contenido POR LÍNEA (misma fusión que el drawer: first-wins).
+      // Solo la key elegida en settings (contiene/categoria); ninguna otra key fluye.
       if (metaLines.length > 0 && window.length > 0) {
         const { EMPTY_KEYS, resolveItemKeys } = await import("@/lib/metadata-map");
         const { enrichOrderItems } = await import("@/lib/item-context");
@@ -1321,35 +1322,14 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           if (oi < off || oi >= off + window.length) continue;
           const mv = window[oi - off] as Record<string, unknown>;
           if (!mv) continue;
-          const detalles: Record<string, string> = {};
-          const ventanas = new Set<string>();
-          const dijo: string[] = [];
           let contiene: string | null = null;
           let categoria: string | null = null;
-          let aprobado: boolean | null = null;
           for (const e of list) {
-            for (const [k, v] of Object.entries(e.detalles)) {
-              if (!(k in detalles)) detalles[k] = String(v);
-            }
-            if (e.ventana) ventanas.add(e.ventana);
-            if (e.clienteDijo && !dijo.includes(e.clienteDijo)) dijo.push(e.clienteDijo);
             if (!contiene && e.contiene) contiene = e.contiene;
             if (!categoria && e.categoria) categoria = e.categoria;
-            if (aprobado === null && e.aprobado !== null) aprobado = e.aprobado;
           }
-          // Mismas claves que el drawer (clienteDijo + aprobado): el agente
-          // cita lo mismo que la GUI muestra.
-          const hasAny = Object.keys(detalles).length > 0 || ventanas.size > 0 || dijo.length > 0 || !!contiene || !!categoria || aprobado !== null;
-          mv.meta = hasAny
-            ? {
-                ventana: [...ventanas].join(" · ") || null,
-                clienteDijo: dijo.join(" / ").slice(0, 400) || null,
-                detalles,
-                contiene,
-                categoria,
-                aprobado,
-              }
-            : null;
+          // Mismas claves que el drawer: el agente cita lo mismo que la GUI muestra.
+          mv.meta = contiene || categoria ? { contiene, categoria } : null;
         }
       }
       const truncated = hasMore || hitCap;
@@ -1361,7 +1341,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         scanned_orders: scanned,
         view_currency: viewCurrency,
         note_truncated: truncated ? "Ventana escaneada: puede haber más historial; no afirmes el total." : null,
-        note: "Meta = metadata DE ESA COMPRA, no del ítem. " + DISPLAY_RULE,
+        note: "Meta = solo el contenido de la key elegida en settings (contiene/categoria) o null. " + DISPLAY_RULE,
       };
     },
   });

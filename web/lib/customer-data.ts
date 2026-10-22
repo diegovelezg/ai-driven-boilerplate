@@ -10,17 +10,10 @@ export interface CustomerOrderItem {
   quantity: number;
   /** Precio unitario pagado (minor units) o null. Tal cual en items_json. */
   unitPrice?: number | null;
-  /** Ventana (start/end) o null: pauta, turno, reserva… Ver lib/item-context.ts. */
-  ventana?: string | null;
-  /** Lo que escribió el cliente (comentario/nota) o null. */
-  clienteDijo?: string | null;
-  /** Sobre qué es la línea (contenido IA o catálogo) o null. */
+  /** Sobre qué es la línea (contenido de la key elegida en settings) o null. */
   contiene?: string | null;
+  /** Categoría del contenido o null. Solo key elegida en settings. */
   categoria?: string | null;
-  /** Resto de metadata (texto corto/número), sanitizado. */
-  detalles?: Record<string, string | number>;
-  /** Material aprobado (booleano *approved) o null. */
-  aprobado?: boolean | null;
 }
 
 export interface CustomerOrder {
@@ -131,7 +124,7 @@ export async function loadCustomerOrdersAndRfm(
     })),
   );
   // 1 sola query de contenido para todas las líneas (ver lib/item-context.ts).
-  // Keys del mapa del tenant (settings → metadata_map); sin mapa, todo a detalles.
+  // Solo fluye la key elegida en settings (contiene/categoria); sin key, nulls.
   const { resolveItemKeys } = await import("@/lib/metadata-map");
   const itemKeys = await resolveItemKeys(customer.store_id as string).catch(() => null);
   const enrichedFlat = await enrichOrderItems(customer.store_id as string, rawPerOrder.flat(), itemKeys ?? undefined);

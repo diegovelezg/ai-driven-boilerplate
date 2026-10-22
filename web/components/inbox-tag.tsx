@@ -65,9 +65,9 @@ const STATUS_META: Record<string, InboxTagMeta> = {
     tip: "Gestionada: ya tiene borrador en Review.",
   },
   pending_review: {
-    label: "por aprobar",
+    label: "por contactar",
     className: "bg-muted text-muted-foreground",
-    tip: "Por aprobar: nada se envía sin tu visto bueno.",
+    tip: "Por contactar: nada se envía sin tu visto bueno.",
   },
   approved: {
     label: "aprobada",

@@ -352,13 +352,13 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
 }
 
 /** Rescata un mensaje rechazado/cancelado (rejected → pending_review).
- *  Nada desaparece: vuelve a Mensajes por aprobar. */
+ *  Nada desaparece: vuelve a Clientes por contactar. */
 export function RescueButton({ id, onRescue }: { id: string; onRescue: Op }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   return (
     <span className="flex items-center gap-2">
-      <AppTooltip tip="Rescata el mensaje: vuelve a Mensajes por aprobar.">
+      <AppTooltip tip="Rescata el mensaje: vuelve a Clientes por contactar.">
         <span className="inline-flex items-center">
           <Button
             size="sm"

@@ -722,7 +722,7 @@ export default async function DashboardPage({
             ? undefined
             : hasMotor
               ? pending > 0
-                ? `Nada nuevo hoy; ${formatNumber(pending)} por aprobar en Review.`
+                ? `Nada nuevo hoy; ${formatNumber(pending)} clientes por contactar en Review.`
                 : "Ningún mensaje necesario hoy; la vigilancia sigue."
               : atRisk > 0
                 ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
@@ -1056,7 +1056,7 @@ export default async function DashboardPage({
                     <PenLine className="size-4" aria-hidden />
                   </span>
                   <span className="underline underline-offset-4">
-                    <strong>{formatNumber(pending)}</strong> mensaje{pending === 1 ? "" : "s"} por aprobar
+                    <strong>{formatNumber(pending)}</strong> cliente{pending === 1 ? "" : "s"} por contactar
                   </span>
                 </Link>
               </li>

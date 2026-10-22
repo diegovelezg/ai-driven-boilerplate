@@ -292,9 +292,8 @@ async function composeDraftCopy(
       is_test: o.is_test === true,
     }),
   )).slice(0, 5);
-  // Historial legible: fecha corta + ubicaciones reales (sin "x0", sin moneda).
-  // Enriquecido con item-context (misma forma para cualquier negocio):
-  // contiene/categoría/ventana/clienteDijo/detalles solo si existen (sin nulls ruidosos).
+  // Historial legible: fecha corta + contenido de la key elegida en settings
+  // (contiene/categoría). Nada de otras keys: sin contenido, solo títulos.
   const { enrichOrderItems } = await import("@/lib/item-context");
   const { resolveItemKeys } = await import("@/lib/metadata-map");
   const rawPerOrder = real.map((o) =>
@@ -343,12 +342,6 @@ async function composeDraftCopy(
     const extras: string[] = [];
     for (const it of items.slice(0, 2)) {
       if (it.contiene) extras.push(`contiene "${it.contiene}"${it.categoria ? ` [${it.categoria}]` : ""}`);
-      if (it.ventana) extras.push(`periodo ${it.ventana}`);
-      if (it.aprobado === true) extras.push(`material aprobado`);
-      else if (it.aprobado === false) extras.push(`material pendiente de aprobación`);
-      if (it.clienteDijo) extras.push(`cliente dijo: "${it.clienteDijo.slice(0, 120)}"`);
-      const det = Object.entries(it.detalles ?? {}).map(([k, v]) => `${k}: ${v}`).join(", ");
-      if (det) extras.push(det);
     }
     return `- ${f} (${iso}): ${titles || noun.empty}${extras.length > 0 ? ` — ${extras.join("; ")}` : ""}`;
   });
@@ -405,14 +398,17 @@ async function composeDraftCopy(
   // hoy ni se leía en el brief: se trae del Prioritized o de customers.
   // Sube antes del juez (#23): el veredicto reusable lo necesita.
   let companyName = (s.companyName ?? "").trim() || null;
-  if (!companyName) {
+  let ordersCount: number | null = null;
+  {
     const { data: cRow } = await db
       .from("customers")
-      .select("company_name")
+      .select("company_name,orders_count")
       .eq("id", s.customer_id)
       .maybeSingle();
     const cn = (cRow as Record<string, unknown> | null)?.company_name;
-    if (typeof cn === "string" && cn.trim()) companyName = cn.trim().slice(0, 120);
+    if (!companyName && typeof cn === "string" && cn.trim()) companyName = cn.trim().slice(0, 120);
+    const oc = (cRow as Record<string, unknown> | null)?.orders_count;
+    ordersCount = typeof oc === "number" && Number.isFinite(oc) ? oc : null;
   }
   const marcas: string[] = [];
   const categorias: string[] = [];
@@ -424,25 +420,13 @@ async function composeDraftCopy(
   const quien = companyName ?? marcas[0] ?? categorias[0] ?? null;
 
   // Puerta de contactabilidad (#9, #23, #25.6): el juez razona una vez sobre
-  // contenido + ventanas + hoy y devuelve reusable. La ventana sale del
-  // enriquecido genérico ("A→B" | "A" | null), nunca de keys crudas.
-  // Hito 2: recibe {catalog, ventana_tipica} para no vetar lo normal.
-  const splitVentana = (v: string | null): { dateStart: string | null; dateEnd: string | null } => {
-    if (!v) return { dateStart: null, dateEnd: null };
-    const [a, b] = v.split("→");
-    return { dateStart: a?.trim() || null, dateEnd: (b?.trim() || a?.trim()) ?? null };
-  };
-  const judgeItems: JudgeItem[] = enrichedFlat.map((en) => {
-    const w = splitVentana(en.ventana);
-    return {
-      title: en.title,
-      contiene: en.contiene,
-      categoria: en.categoria,
-      clienteDijo: en.clienteDijo,
-      dateStart: w.dateStart,
-      dateEnd: w.dateEnd,
-    };
-  });
+  // el contenido + hoy y devuelve reusable. Sin ventanas de metadata (no
+  // fluyen): la ventana típica del negocio la pone el brain.
+  const judgeItems: JudgeItem[] = enrichedFlat.map((en) => ({
+    title: en.title,
+    contiene: en.contiene,
+    categoria: en.categoria,
+  }));
   const todayIso = new Date().toISOString().slice(0, 10);
   const verdict = await judgeContactability({
     firstName,
@@ -450,6 +434,7 @@ async function composeDraftCopy(
     objetivo,
     daysSince: days,
     todayIso,
+    comprasPrevias: ordersCount,
     items: judgeItems,
     catalog: stamp.catalog ?? null,
     ventanaTipicaDias: stamp.brain?.ventanaMedianaDias ?? null,
@@ -488,26 +473,26 @@ async function composeDraftCopy(
   // Brief condicional (#23): si reusable=false, el pasado solo reconoce.
   // Nunca ordenar continuidad en modo identidad: esa era la raíz del caso
   // Patricia (CONTENIDO + jugada habitual vs PROHIBIDO del SYSTEM).
-  // Hito 1 (#25.1): ventana concreta + ticket + aprobado dirigen la jugada.
-  const flatForHist = perOrderForHist.flat();
-  const lastVentanaStr = flatForHist.find((it) => it.ventana)?.ventana ?? null;
-  const lastW = splitVentana(lastVentanaStr);
-  const anyApproved = flatForHist.some((it) => it.aprobado === true);
-  const anyPending = flatForHist.some((it) => it.aprobado === false);
-  const durFromLast = (() => {
-    if (lastW.dateStart && lastW.dateEnd) {
-      const d = (Date.parse(lastW.dateEnd) - Date.parse(lastW.dateStart)) / 86_400_000;
-      if (Number.isFinite(d) && d >= 0 && d <= 60) return Math.round(d);
-    }
-    return stamp.brain?.ventanaMedianaDias ?? 4;
-  })();
+  // Hito 1 (#25.1): ventana concreta + ticket dirigen la jugada.
+  // SSOT compras (órdenes Medusa, no metadata): ritmo propio del cliente =
+  // mediana de gaps entre sus compras reales; fallback típica del negocio.
+  const gaps: number[] = [];
+  for (let i = 0; i + 1 < real.length; i++) {
+    const a = Date.parse(String(real[i]?.placed_at ?? ""));
+    const b = Date.parse(String(real[i + 1]?.placed_at ?? ""));
+    if (Number.isFinite(a) && Number.isFinite(b) && a >= b) gaps.push(Math.round((a - b) / 86_400_000));
+  }
+  gaps.sort((x, y) => x - y);
+  const gapMed = gaps.length > 0 ? gaps[Math.floor(gaps.length / 2)] : null;
+  const durFromLast = gapMed ?? stamp.brain?.ventanaMedianaDias ?? 4;
   const sugStart = new Date(`${todayIso}T12:00:00`);
   sugStart.setDate(sugStart.getDate() + 6);
   const sugEnd = new Date(sugStart);
   sugEnd.setDate(sugEnd.getDate() + Math.max(0, durFromLast));
   const sugStartIso = sugStart.toISOString().slice(0, 10);
   const sugEndIso = sugEnd.toISOString().slice(0, 10);
-  const sugLine = `Ventana sugerida (concreta, como su última pauta): ${fechaCorta(sugStartIso) ?? sugStartIso} → ${fechaCorta(sugEndIso) ?? sugEndIso} (${sugStartIso}→${sugEndIso}). Última pauta ${lastW.dateStart ? `${fechaCorta(lastW.dateStart) ?? lastW.dateStart}→${fechaCorta(lastW.dateEnd ?? lastW.dateStart ?? "") ?? lastW.dateEnd}` : lastF ?? "sin fecha"}${anyApproved ? " con material aprobado" : anyPending ? " (material pendiente entonces)" : ""}${ticketClienteTxt != null ? ` · ticket típico suyo ~${ticketClienteTxt}` : ""}.`;
+  const ritmoTxt = gapMed != null ? `cada ~${gapMed}d como tus compras` : stamp.brain?.ventanaMedianaDias != null ? `típica del negocio ~${stamp.brain.ventanaMedianaDias}d` : null;
+  const sugLine = `Ventana sugerida${ritmoTxt ? ` (${ritmoTxt})` : ""}: ${fechaCorta(sugStartIso) ?? sugStartIso} → ${fechaCorta(sugEndIso) ?? sugEndIso} (${sugStartIso}→${sugEndIso}). Última compra ${lastF ?? "sin fecha"}${ticketClienteTxt != null ? ` · ticket típico suyo ~${ticketClienteTxt}` : ""}.`;
   const mode = briefMode(verdict.reusable);
   const basePatron =
     topCat && topCat[1] >= 2

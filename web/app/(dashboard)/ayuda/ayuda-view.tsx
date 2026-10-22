@@ -298,7 +298,7 @@ const SECTIONS: Section[] = [
       {
         id: "s-review",
         title: "Review Inbox",
-        text: "Tres colas: mensajes por aprobar, clientes en riesgo y empresas por contactar (Prospector). Todo lo que requiere tu visto bueno vive aquí.",
+        text: "Tres colas: clientes por contactar, clientes en riesgo y empresas por contactar (Prospector). Todo lo que requiere tu visto bueno vive aquí.",
         href: "/review",
         hrefLabel: "Abrir Review",
       },
