@@ -151,7 +151,15 @@ export async function approveActionAction(id: string): Promise<ReviewOp> {
   // y lo reintenta el dispatcher. WhatsApp sigue manual (wa.me).
   const send = await trySendApprovedEmail(id);
   if (send.sent) return { ok: true, message: send.message };
-  if (send.message === "No es email." || send.message === "Ya procesada por otro lado.") return base;
+  // WhatsApp es manual (wa.me): aprobar solo abre la cola, el humano envía
+  // desde su número y marca "Ya lo envié". Dejarlo explícito en el mensaje.
+  if (send.message === "No es email." || send.message === "Ya procesada por otro lado.") {
+    const { data: chRow } = await getSupabase().from("proposed_actions").select("channel").eq("id", id).maybeSingle();
+    if (String((chRow as Record<string, unknown> | null)?.channel ?? "") === "whatsapp") {
+      return { ok: true, message: "Aprobada. Envía desde WhatsApp y marca Ya lo envié." };
+    }
+    return base;
+  }
   if (send.disposition === "skip") return { ok: true, message: `Aprobada. ${send.message}` };
   return { ok: true, message: `Aprobada, pero no se pudo enviar: ${send.message} Queda en cola para el dispatcher.` };
 }
@@ -160,15 +168,16 @@ export async function rejectActionAction(id: string): Promise<ReviewOp> {
   return setActionStatus(id, "rejected");
 }
 
-/** Cancela un envío aún no salido (approved → rejected, solo si
- *  dispatched_at es null). */
+/** Cancela un envío aún no salido (approved → pending_review, solo si
+ *  dispatched_at es null): vuelve a Mensajes por aprobar. Si ya no te
+ *  interesa, descártalo desde pendientes. */
 export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
   const { data, error } = await getSupabase()
     .from("proposed_actions")
-    // Revocar limpia approved_by/at: la fila pasa a rejected y no debe
+    // Revocar limpia approved_by/at: la fila vuelve a pendiente y no debe
     // seguir mostrando quién la había aprobado (issue #19 Paso 1).
-    .update({ status: "rejected", approved_by: null, approved_at: null })
+    .update({ status: "pending_review", approved_by: null, approved_at: null })
     .eq("id", id)
     .eq("status", "approved")
     .is("dispatched_at", null)
@@ -178,7 +187,27 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
     return { ok: false, message: "Ya enviado o inexistente: nada que cancelar." };
   }
   revalidatePath("/review");
-  return { ok: true, message: "Envío cancelado: no saldrá." };
+  return { ok: true, message: "Envío cancelado: vuelve a pendientes." };
+}
+
+/** Reabre un mensaje rechazado/cancelado (rejected → pending_review):
+ *  "rescatar si te arrepentiste" — vuelve a Mensajes por aprobar sin
+ *  duplicar. Solo si aún no salió (dispatched_at null). */
+export async function reopenActionAction(id: string): Promise<ReviewOp> {
+  if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const { data, error } = await getSupabase()
+    .from("proposed_actions")
+    .update({ status: "pending_review" })
+    .eq("id", id)
+    .eq("status", "rejected")
+    .is("dispatched_at", null)
+    .select("id");
+  if (error) return { ok: false, message: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, message: "Ya reabierto o inexistente: nada que rescatar." };
+  }
+  revalidatePath("/review");
+  return { ok: true, message: "Rescatado: vuelve a Mensajes por aprobar." };
 }
 
 /** Da de baja a un cliente en un canal (issue #13): nunca más enviable por

@@ -16,8 +16,7 @@ import {
   DataTableTh,
 } from "@/components/data-table";
 import type { EditableCustomer } from "@/lib/customers-db";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { CustomerDrawer } from "./customers/customer-drawer";
 
 export interface AttentionItem {

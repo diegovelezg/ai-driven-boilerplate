@@ -18,7 +18,7 @@ import {
   type SearchHit,
 } from "@/lib/retrieval";
 import { advanceRun, finishRun, type RunStatus, formatRunError } from "@/lib/background";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("prospect");
@@ -149,7 +149,7 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>, 
   const db = getSupabase();
   const { data: top, error } = await db
     .from("customers")
-    .select("id,email,customer_type,orders_count,total_spent,country")
+    .select("id,email,customer_type,orders_count,total_spent,country,currency")
     .eq("store_id", storeId)
     .gt("orders_count", 0)
     .order("total_spent", { ascending: false })
@@ -159,10 +159,19 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>, 
   const rows = allRows.filter((r) => inScope({ country: r.country, id: r.id }, scope)).slice(0, 20);
   if (rows.length < 3) return null;
   const b2b = rows.filter((r) => String(r.customer_type ?? "") === "B2B").length;
+  // Mediana en la moneda dominante (nunca mezclar PEN+MXN en un promedio).
+  const curVotes = new Map<string, number>();
+  for (const r of rows) {
+    const c = String(r.currency ?? "").trim().toUpperCase();
+    if (c) curVotes.set(c, (curVotes.get(c) ?? 0) + 1);
+  }
+  const topCur = [...curVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   const tickets = rows
+    .filter((r) => !topCur || String(r.currency ?? "").toUpperCase() === topCur)
     .map((r) => Number(r.total_spent ?? 0) / Math.max(1, Number(r.orders_count ?? 1)))
     .sort((a, b) => a - b);
-  const median = Math.round(tickets[Math.floor(tickets.length / 2)] / 100);
+  const medianMinor = tickets.length > 0 ? tickets[Math.floor(tickets.length / 2)] : 0;
+  const medianTxt = formatMoney(Math.round(medianMinor), topCur);
   // País moda de los top (el lead hereda geografía, no TLD).
   const countryVotes = new Map<string, number>();
   for (const r of rows) {
@@ -198,14 +207,14 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>, 
     const marcas = (brain?.topMarcas ?? []).slice(0, 5).map((m) => m.marca).filter(Boolean);
     const voz = (brain?.vozCliente ?? []).filter((w) => w.length >= 5 && !/^(desde|hasta|entre)$/.test(w)).slice(0, 6);
     const repite = (brain?.patronesRepite?.topRepeatTitles ?? []).slice(0, 3).map((t) => t.title).filter(Boolean);
-    const p80 = brain?.ticketP80 != null ? ` · p80 S/ ${formatNumber(Math.round(brain.ticketP80 / 100))}` : "";
+    const p80 = brain?.ticketP80 != null ? ` · p80 ${formatMoney(brain.ticketP80, brain.ticketCurrency)}` : "";
     if (tops.length > 0 || cats.length > 0) {
       txLines.push(`Lo que más se vende (activos): ${tops.join(" · ") || "—"}${cats.length > 0 ? ` · líneas ${cats.join(", ")}` : ""}`);
     }
     if (marcas.length > 0) txLines.push(`Marcas que ya anuncian contigo: ${marcas.join(", ")} (busca pares: distribuidores, competencia, complementos)`);
     if (voz.length > 0) txLines.push(`Vocabulario de tus anuncios: ${voz.join(", ")}`);
     if (repite.length > 0) txLines.push(`Pantallas que más repiten compra: ${repite.join(" · ")}`);
-    if (brain?.ticketP50 != null || brain?.ticketP80 != null) txLines.push(`Ticket tienda p50 ~S/ ${formatNumber(Math.round((brain.ticketP50 ?? 0) / 100))}${p80}`);
+    if (brain?.ticketP50 != null || brain?.ticketP80 != null) txLines.push(`Ticket tienda p50 ~${formatMoney(brain.ticketP50 ?? 0, brain.ticketCurrency)}${p80}`);
   } catch {
     txLines = [];
   }
@@ -228,7 +237,7 @@ async function buildAutoIcp(storeId: string, profile?: Record<string, unknown>, 
     `Negocio: ${String(p.vertical_detected ?? p.description ?? "ecommerce").toString().slice(0, 200)}`,
     `Comprador ideal: ${String(p.buyer_type ?? "").toString().slice(0, 160) || "negocios que ya compraron y gastaron más"}`,
     geoLine,
-    `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~S/ ${formatNumber(median)}${topCountry ? ` · país moda ${topCountry}` : ""}`,
+    `Evidencia top-20: ${formatNumber(b2b)}/20 son B2B · ticket mediano ~${medianTxt}${topCountry ? ` · país moda ${topCountry}` : ""}`,
     industries.length > 0 ? `Industrias top en tus mejores (1 query por industria, no las mezcles): ${[...new Set(industries)].slice(0, 5).join(" | ")}` : null,
     ...txLines,
     goodLine,

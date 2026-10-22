@@ -351,6 +351,48 @@ export function RevokeButton({ id, onRevoke }: { id: string; onRevoke: Op }) {  
   );
 }
 
+/** Rescata un mensaje rechazado/cancelado (rejected → pending_review).
+ *  Nada desaparece: vuelve a Mensajes por aprobar. */
+export function RescueButton({ id, onRescue }: { id: string; onRescue: Op }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  return (
+    <span className="flex items-center gap-2">
+      <AppTooltip tip="Rescata el mensaje: vuelve a Mensajes por aprobar.">
+        <span className="inline-flex items-center">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const r = await onRescue(id);
+                toast.add({
+                  title: r.ok ? "Rescatado" : "No se pudo rescatar",
+                  description: r.message,
+                  type: r.ok ? "success" : "error",
+                });
+                router.refresh();
+              } catch (e) {
+                toast.add({
+                  title: "No se pudo rescatar",
+                  description: e instanceof Error ? e.message : "Error inesperado.",
+                  type: "error",
+                });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Rescatando…" : "Rescatar"}
+          </Button>
+        </span>
+      </AppTooltip>
+    </span>
+  );
+}
+
 /** Marca un aprobado-WhatsApp como enviado manual (flujo wa.me). */
 export function MarkSentButton({ id, onMarkSent }: { id: string; onMarkSent: Op }) {  const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -543,17 +585,16 @@ export function DraftActions({
   const [busy, setBusy] = useState<null | "approve" | "reject" | "switch">(null);
   const approve = async () => {
     if (busy) return;
-    let win: Window | null = null;
+    // WhatsApp se abre EN el gesto del clic (síncrono): abrir un blank y
+    // redirigirlo tras el `await` lo bloquea el navegador y deja la pestaña
+    // en blanco. Si el approve falla, el tab ya abierto es inofensivo
+    // (texto prellenado, nada se envía solo).
     if (channel === "whatsapp" && wameUrl) {
-      win = window.open("", "_blank", "noopener");
+      window.open(wameUrl, "_blank", "noopener");
     }
     setBusy("approve");
     try {
       const r = await onApprove(id);
-      if (win) {
-        if (r.ok && wameUrl) win.location.href = wameUrl;
-        else win.close();
-      }
       toast.add({
         title: r.ok ? "Aprobado" : "No se pudo aprobar",
         description: r.message,
@@ -562,7 +603,6 @@ export function DraftActions({
       setBusy(null);
       router.refresh();
     } catch (e) {
-      win?.close();
       const message = e instanceof Error ? e.message : "Error";
       toast.add({ title: "No se pudo aprobar", description: message, type: "error" });
       setBusy(null);
@@ -575,7 +615,7 @@ export function DraftActions({
     try {
       const r = await onReject(id);
       toast.add({
-        title: r.ok ? "Rechazado" : "No se pudo rechazar",
+        title: r.ok ? "Descartado" : "No se pudo descartar",
         description: r.message,
         type: r.ok ? "success" : "error",
       });
@@ -583,7 +623,7 @@ export function DraftActions({
       router.refresh();
     } catch (e) {
       const message = e instanceof Error ? e.message : "Error";
-      toast.add({ title: "No se pudo rechazar", description: message, type: "error" });
+      toast.add({ title: "No se pudo descartar", description: message, type: "error" });
       setBusy(null);
       router.refresh();
     }
@@ -620,6 +660,8 @@ export function DraftActions({
       router.refresh();
     }
   };
+  const isWa = channel === "whatsapp";
+  const approveLabel = isWa ? "Abrir en WhatsApp" : "Aprobar y enviar";
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <span className="flex items-center gap-2">
@@ -629,10 +671,10 @@ export function DraftActions({
           ) : channel === "email" ? (
             <Mail className="size-4" aria-label="Email" />
           ) : null}
-          {busy === "approve" ? "Aprobando…" : "Aprobar"}
+          {busy === "approve" ? (isWa ? "Abriendo…" : "Enviando…") : approveLabel}
         </Button>
         <Button size="sm" variant="outline" disabled={busy !== null} onClick={reject}>
-          {busy === "reject" ? "Rechazando…" : "Rechazar"}
+          {busy === "reject" ? "Descartando…" : "Descartar"}
         </Button>
       </span>
       {canSwitch && (

@@ -16,8 +16,7 @@ import {
 import { ChannelTag, KindTag, ScoreTag, StatusTag, TodayTag } from "@/components/inbox-tag";
 import { toast } from "@/components/ui/toast";
 import { SectionLoading } from "@/components/section-loading";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { COPYWRITER_GEN } from "@/lib/copywriter-gen";
 import { useBackgroundOrNull } from "@/components/background-status";
 import {
@@ -27,6 +26,7 @@ import {
   markDispatchedAction,
   markLeadContactedAction,
   proposeSingleAction,
+  reopenActionAction,
   reopenLeadAction,
   reopenSignalAction,
   regenerateStaleDraftsAction,
@@ -38,7 +38,7 @@ import {
   triggerProspectAction,
   updateDraftContentAction,
 } from "@/lib/review-actions";
-import { DismissButton, DraftActions, EditableDraft, MarkContactedButton, MarkSentButton, ProspectButton, RedactButton, RegenerateButton, ReopenButton, RevokeButton } from "./review-buttons";
+import { DismissButton, DraftActions, EditableDraft, MarkContactedButton, MarkSentButton, ProspectButton, RedactButton, RegenerateButton, ReopenButton, RescueButton, RevokeButton } from "./review-buttons";
 import { PROSPECT_LEAD_CAP, PROSPECT_PAUSED_HINT, PROSPECT_B2B_ONLY_HINT } from "@/lib/prospect-cap";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterToggleButton } from "@/components/filter-button";
@@ -240,6 +240,7 @@ function SignalSustento({
 export function ReviewLists({
   actions,
   approvedActions = [],
+  rejectedActions = [],
   leads,
   /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
   approvedLeads = [],
@@ -267,6 +268,8 @@ export function ReviewLists({
   actions: ActionRow[];
   /** Aprobadas aún no enviadas: visibles para poder revocarlas. */
   approvedActions?: ActionRow[];
+  /** Rechazadas/canceladas: visibles para rescatar si te arrepentiste. */
+  rejectedActions?: ActionRow[];
   leads: LeadRow[];
   /** Aprobados legacy aún no contactados: "Contactado" los cierra. */
   approvedLeads?: LeadRow[];
@@ -305,6 +308,8 @@ export function ReviewLists({
   );
   /** Sub-filtro de la pestaña leads: nada desaparece, se filtra arriba. */
   const [leadFilter, setLeadFilter] = useState<"pending" | "contacted" | "discarded">("pending");
+  /** Sub-filtro de mensajes: mismo patrón que leads (nada desaparece). */
+  const [actionFilter, setActionFilter] = useState<"pending" | "approved" | "rejected">("pending");
   /** Búsqueda libre local (empresa/dominio/url/contacto/motivo). */
   const [leadQuery, setLeadQuery] = useState("");
   const q = leadQuery.trim().toLowerCase();
@@ -448,17 +453,35 @@ export function ReviewLists({
             />
           }
         />
-        {!isB2B && actions.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              disabled={batchBusy || selected.size === 0}
-              onClick={() => void approveSelected()}
-            >
-              {batchBusy ? "Aprobando…" : `Aprobar seleccionados (${formatNumber(selected.size)})`}
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {!filtered && (
+            <>
+              <FilterToggleButton active={actionFilter === "pending"} onClick={() => setActionFilter("pending")}>
+                Pendientes ({formatNumber(actions.length)})
+              </FilterToggleButton>
+              <FilterToggleButton active={actionFilter === "approved"} onClick={() => setActionFilter("approved")}>
+                Por enviar ({formatNumber(approvedActions.length)})
+              </FilterToggleButton>
+              <FilterToggleButton active={actionFilter === "rejected"} onClick={() => setActionFilter("rejected")}>
+                Descartados ({formatNumber((rejectedActions ?? []).length)})
+              </FilterToggleButton>
+            </>
+          )}
+          {(filtered || actionFilter === "pending") && !isB2B && actions.some((a) => a.channel === "email") && (
+            <span className="ml-auto">
+              <Button
+                size="sm"
+                disabled={batchBusy || selected.size === 0}
+                onClick={() => void approveSelected()}
+              >
+                <Mail className="size-4" aria-hidden />
+                {batchBusy ? "Enviando…" : `Aprobar y enviar seleccionados (${formatNumber(selected.size)})`}
+              </Button>
+            </span>
+          )}
+        </div>
+        {(filtered || actionFilter === "pending") && (
+          <>
         {actions.length === 0 &&
           (liveKinds.has("copywriter") ? (
             <AppCardState>
@@ -482,7 +505,7 @@ export function ReviewLists({
             onHeaderClick={() => void openDrawer(a.customerId)}
             title={
               <span className="flex min-w-0 items-center gap-2">
-                {!isB2B && (
+                {!isB2B && a.channel === "email" && (
                   <input
                     type="checkbox"
                     checked={selected.has(a.id)}
@@ -576,13 +599,18 @@ export function ReviewLists({
             </AppCard>
           );
         })}
-        {approvedActions.length > 0 && (
+          </>
+        )}
+        {!filtered && actionFilter === "approved" && (
           <div className="mt-2 flex flex-col gap-4">
             <SectionHeading
               title={`Aprobadas por enviar (${formatNumber(approvedActions.length)})`}
               hint="Los emails salieron al aprobar; WhatsApp es manual. Cancela aquí si alguno ya no va."
               tone="emerald"
             />
+            {approvedActions.length === 0 && (
+              <AppCardState>Sin aprobadas por enviar.</AppCardState>
+            )}
             {approvedActions.map((a) => (
               <AppCard
                 key={a.id}
@@ -642,6 +670,45 @@ export function ReviewLists({
                     <RevokeButton id={a.id} onRevoke={revokeApprovalAction} />
                   </span>
                 }
+                contentClassName="flex flex-col gap-3"
+              >
+                {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}
+                <p className="whitespace-pre-wrap text-[13px]">{a.body}</p>
+              </AppCard>
+            ))}
+          </div>
+        )}
+        {!filtered && actionFilter === "rejected" && (
+          <div className="mt-2 flex flex-col gap-4">
+            <SectionHeading
+              title={`Descartados (${formatNumber((rejectedActions ?? []).length)})`}
+              hint="Nada se pierde: rescata el que quieras devolver a Mensajes por aprobar."
+              tone="amber"
+            />
+            {(rejectedActions ?? []).length === 0 && (
+              <AppCardState>Sin descartados: lo que descartes aparece aquí y se puede rescatar.</AppCardState>
+            )}
+            {(rejectedActions ?? []).map((a) => (
+              <AppCard
+                key={a.id}
+                tone="amber"
+                onHeaderClick={() => void openDrawer(a.customerId)}
+                title={
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate">{a.name}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      · {a.email}
+                    </span>
+                  </span>
+                }
+                action={
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <TodayTag value={a.created_at} />
+                    <ChannelTag value={a.channel} />
+                    <KindTag value={a.kind} />
+                  </span>
+                }
+                footer={<RescueButton id={a.id} onRescue={reopenActionAction} />}
                 contentClassName="flex flex-col gap-3"
               >
                 {a.subject && <p className="text-[13px] font-medium">{a.subject}</p>}

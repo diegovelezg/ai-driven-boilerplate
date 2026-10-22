@@ -1,7 +1,7 @@
 import { AppCard } from "@/components/app-card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import type { FinanceKpis, MonthBucket, RescateBucket, RetentionKpis } from "@/lib/finance";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber, formatPercentPoints } from "@/lib/format";
+import { formatMoney, formatNumber, formatPercentPoints } from "@/lib/format";
 
 function Delta({ pct }: { pct: number | null }) {
   if (pct === null)
@@ -16,10 +16,10 @@ function Delta({ pct }: { pct: number | null }) {
 }
 
 /**
- * El chart del dashboard: ventas (línea) + órdenes (barras).
- * Con rescate (ciclo calibrado) se fusiona el 1+2: barras = rescatado,
- * línea sólida = ventas, línea punteada = en juego — las tres en plata,
- * misma escala, misma moneda. SVG hecho a mano, sin deps.
+ * Dos charts sleek, una escala cada uno (nunca se mezclan):
+ * 1. Facturación: ventas (línea) + órdenes (barras).
+ * 2. Recupero: en juego (punteada) + rescatado (barras), misma escala
+ *    → el gap es la fuga. SVG hecho a mano, sin ejes Y.
  */
 function Trend({
   buckets,
@@ -31,148 +31,240 @@ function Trend({
   currency: string | null;
 }) {
   const W = 600;
-  // Chart más bajo: antes H=150 (≈288px de alto en desktop). Con H=112
-  // queda ≈215px y conserva el aire de las etiquetas y del legend.
-  const H = 112;
-  const BASE = H - 18;
-  const TOP = 18;
+  const H = 96;
+  const BASE = H - 16;
+  const TOP = 10;
   const PLOT_H = BASE - TOP;
   const PAD = 8;
   const fused = rescate && rescate.length === buckets.length ? rescate : null;
-  const moneyMax = Math.max(
-    1,
-    ...buckets.map((b) => b.salesMinor),
-    ...(fused ? fused.flatMap((b) => [b.enJuegoMinor, b.rescatadoMinor]) : []),
-  );
+  const salesMax = Math.max(1, ...buckets.map((b) => b.salesMinor));
+  const juegoMax = fused
+    ? Math.max(1, ...fused.flatMap((b) => [b.enJuegoMinor, b.rescatadoMinor]))
+    : 1;
   const maxOrders = Math.max(...buckets.map((b) => b.orders), 1);
   const slot = (W - PAD * 2) / buckets.length;
-  const barW = Math.min(18, slot * 0.4);
-  const yOf = (v: number) => BASE - (v / moneyMax) * PLOT_H;
-  const hOf = (v: number) => (v / moneyMax) * PLOT_H;
+  const barW = Math.min(14, slot * 0.35);
+  const ySales = (v: number) => BASE - (v / salesMax) * PLOT_H;
+  const yJuego = (v: number) => BASE - (v / juegoMax) * PLOT_H;
+  const hJuego = (v: number) => (v / juegoMax) * PLOT_H;
   const salesPts = buckets.map((b, i) => {
     const cx = PAD + slot * i + slot / 2;
-    return `${cx.toFixed(1)},${yOf(b.salesMinor).toFixed(1)}`;
+    return `${cx.toFixed(1)},${ySales(b.salesMinor).toFixed(1)}`;
   });
-  // Fugado = en juego − rescatado (nunca negativo). En el chart va como gap
-  // entre la línea punteada (en juego) y la barra verde (rescatado); el número
-  // exacto vive en el header y en el tooltip.
+  // Fugado = en juego − rescatado (nunca negativo). En el chart de recupero
+  // va como gap entre punteada y barra; el número exacto vive en el tooltip.
   const fugadoOf = (b: RescateBucket) => Math.max(0, b.enJuegoMinor - b.rescatadoMinor);
   const juegoPts = fused
     ? fused.map((b, i) => {
         const cx = PAD + slot * i + slot / 2;
-        return `${cx.toFixed(1)},${yOf(b.enJuegoMinor).toFixed(1)}`;
+        return `${cx.toFixed(1)},${yJuego(b.enJuegoMinor).toFixed(1)}`;
       })
     : null;
   const empty = buckets.every((b) => b.salesMinor === 0);
+  const xLabels = (keySuffix: string) => (
+    <>
+      {buckets.map((b, i) => {
+        const cx = PAD + slot * i + slot / 2;
+        return (
+          <text
+            key={`${keySuffix}-${b.key}`}
+            x={cx}
+            y={H - 4}
+            textAnchor="middle"
+            className="fill-muted-foreground opacity-50"
+            fontSize={8}
+          >
+            {b.label}
+          </text>
+        );
+      })}
+    </>
+  );
+  // SSOT tooltips (app-tooltip.tsx): prohibido `title=` nativo. El SVG solo
+  // dibuja; el hover vive en un overlay HTML con AppTooltip (shadcn).
+  // Último mes = en curso (parcial): se marca en el tip.
+  const ventasTip = (i: number) =>
+    `${buckets[i].label}${i === buckets.length - 1 ? " (en curso)" : ""}: ${formatMoney(buckets[i].salesMinor, currency)} · ${formatNumber(buckets[i].orders)} órdenes`;
+  const recuperoTip = (i: number) => {
+    const fv = fused?.[i];
+    if (!fv) return buckets[i].label;
+    const curso = i === buckets.length - 1 ? " (en curso)" : "";
+    return `${buckets[i].label}${curso}: en juego ${formatMoney(fv.enJuegoMinor, currency)} (${fv.origenEnJuego === "motor" ? "motor" : "histórico"}) · rescatado ${formatMoney(fv.rescatadoMinor, currency)} · fugado ${formatMoney(fugadoOf(fv), currency)} · ${formatNumber(buckets[i].orders)} órdenes (${formatMoney(buckets[i].salesMinor, currency)} vendidos)`;
+  };
+  const overlayCols = `repeat(${buckets.length}, minmax(0, 1fr))`;
   return (
-    <div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        role="img"
-        aria-label={
-          empty
-            ? "Sin ventas en los últimos 12 meses"
-            : fused
-              ? `Ventas, rescatado y fugado 12 meses: ${buckets.map((b, i) => `${b.label}: ${formatNumber(fused[i].enJuegoCount)} en juego`).join(", ")}`
-              : `Ventas 12 meses: ${buckets.map((b) => `${b.label} ${formatNumber(b.orders)}`).join(", ")}`
-        }
-      >
-        {buckets.map((b, i) => {
-          const cx = PAD + slot * i + slot / 2;
-          const fv = fused?.[i];
-          const base = BASE;
-          return (
-            <g key={b.key}>
-              {fused && fv ? (
-                <>
-                  <title>{`${b.label}: en juego ${formatMoney(fv.enJuegoMinor, currency)} (${fv.origenEnJuego === "motor" ? "motor" : "histórico"}) · rescatado ${formatMoney(fv.rescatadoMinor, currency)} · fugado ${formatMoney(fugadoOf(fv), currency)}`}</title>
-                  <rect
-                    x={cx - barW / 2}
-                    y={base - hOf(fv.rescatadoMinor)}
-                    width={barW}
-                    height={hOf(fv.rescatadoMinor)}
-                    rx={2}
-                    className="fill-emerald-500/70"
-                  />
-                </>
-              ) : (
-                <>
-                  <title>{`${b.label}: ${formatNumber(b.orders)} órdenes`}</title>
-                  <rect
-                    x={cx - barW / 2}
-                    y={base - (b.orders / maxOrders) * PLOT_H}
-                    width={barW}
-                    height={(b.orders / maxOrders) * PLOT_H}
-                    rx={2}
-                    className="fill-primary/20"
-                  />
-                </>
-              )}
-              <text
-                x={cx}
-                y={H - 5}
-                textAnchor="middle"
-                className="fill-muted-foreground opacity-60"
-                fontSize={8}
-              >
-                {fused ? `${b.label} · ${formatNumber(b.orders)} órd.` : b.label}
-                <title>{`${b.label}: ${formatNumber(b.orders)} órdenes`}</title>
-              </text>
-            </g>
-          );
-        })}
-        {!empty && (
-          <polyline
-            points={salesPts.join(" ")}
-            fill="none"
-            className="stroke-primary"
-            strokeWidth={1.25}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        )}
-        {!empty &&
-          salesPts.map((_, i) => {
-            const cx = PAD + slot * i + slot / 2;
-            return <circle key={i} cx={cx} cy={yOf(buckets[i].salesMinor)} r={1.5} className="fill-primary" />;
-          })}
-        {fused && !empty && juegoPts && (
-          <polyline
-            points={juegoPts.join(" ")}
-            fill="none"
-            className="stroke-amber-500"
-            strokeWidth={1.25}
-            strokeDasharray="4 3"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        )}
-      </svg>
-      <div className="mt-1.5 flex items-center gap-4 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span aria-hidden className="inline-block h-0.5 w-4 bg-primary" /> Ventas
-        </span>
-        {fused ? (
-          <>
+    <div className="flex flex-col gap-5">
+      <div>
+        <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+          <span>Facturación</span>
+          <span className="flex items-center gap-3">
             <span className="flex items-center gap-1">
-              <span
-                aria-hidden
-                className="inline-block h-0 w-4 border-t-2 border-dashed border-amber-500"
-              />{" "}
-              En juego
+              <span aria-hidden className="inline-block h-0.5 w-3 bg-primary" /> Ventas
             </span>
             <span className="flex items-center gap-1">
-              <span aria-hidden className="inline-block h-3 w-2 rounded-sm bg-emerald-500/70" />{" "}
-              Rescatado
+              <span aria-hidden className="inline-block h-2 w-1.5 rounded-sm bg-primary/20" /> Órdenes
             </span>
-          </>
-        ) : (
-          <span className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-3 w-2 rounded-sm bg-primary/20" /> Órdenes
           </span>
-        )}
+        </div>
+        <div className="relative">
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="w-full"
+            role="img"
+            aria-label={
+              empty
+                ? "Sin ventas en los últimos 12 meses"
+                : `Ventas 12 meses: ${buckets.map((b) => `${b.label} ${formatMoney(b.salesMinor, currency)}`).join(", ")}`
+            }
+          >
+            {buckets.map((b, i) => {
+              const cx = PAD + slot * i + slot / 2;
+              return (
+                <rect
+                  key={b.key}
+                  x={cx - barW / 2}
+                  y={BASE - (b.orders / maxOrders) * PLOT_H}
+                  width={barW}
+                  height={(b.orders / maxOrders) * PLOT_H}
+                  rx={2}
+                  className="fill-primary/15"
+                />
+              );
+            })}
+            {xLabels("v")}
+            {!empty && salesPts.length > 1 && (
+              <polyline
+                points={salesPts.slice(0, -1).join(" ")}
+                fill="none"
+                className="stroke-primary"
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            )}
+            {!empty && salesPts.length > 1 && (
+              <polyline
+                points={salesPts.slice(-2).join(" ")}
+                fill="none"
+                className="stroke-primary opacity-60"
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            )}
+            {!empty &&
+              salesPts.map((pt, i) => {
+                const [cx, cy] = pt.split(",").map(Number);
+                const isCurrent = i === salesPts.length - 1;
+                return (
+                  <circle
+                    key={`vs-${buckets[i].key}`}
+                    cx={cx}
+                    cy={cy}
+                    r={isCurrent ? 2.5 : 2}
+                    className={isCurrent ? "fill-background stroke-primary" : "fill-primary"}
+                    strokeWidth={isCurrent ? 1.5 : 0}
+                  />
+                );
+              })}
+          </svg>
+          <div
+            className="absolute inset-x-2 top-0 bottom-4 grid"
+            style={{ gridTemplateColumns: overlayCols }}
+          >
+            {buckets.map((b, i) => (
+              <AppTooltip key={`vt-${b.key}`} tip={ventasTip(i)}>
+                <span className="block h-full w-full" />
+              </AppTooltip>
+            ))}
+          </div>
+        </div>
       </div>
+      {fused && juegoPts && (
+        <div>
+          <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>Recupero</span>
+            <span className="flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <span aria-hidden className="inline-block h-0.5 w-3 bg-amber-500" /> En juego
+              </span>
+              <span className="flex items-center gap-1">
+                <span aria-hidden className="inline-block h-2 w-1.5 rounded-sm bg-emerald-500/60" />{" "}
+                Rescatado
+              </span>
+            </span>
+          </div>
+          <div className="relative">
+            <svg
+              viewBox={`0 0 ${W} ${H}`}
+              className="w-full"
+              role="img"
+              aria-label={`En juego y rescatado 12 meses: ${buckets.map((b, i) => `${b.label}: ${formatMoney(fused[i].rescatadoMinor, currency)} rescatado`).join(", ")}`}
+            >
+              {buckets.map((b, i) => {
+                const cx = PAD + slot * i + slot / 2;
+                const fv = fused[i];
+                return (
+                  <rect
+                    key={b.key}
+                    x={cx - barW / 2}
+                    y={BASE - hJuego(fv.rescatadoMinor)}
+                    width={barW}
+                    height={hJuego(fv.rescatadoMinor)}
+                    rx={2}
+                    className="fill-emerald-500/60"
+                  />
+                );
+              })}
+              {xLabels("r")}
+              <polyline
+                points={juegoPts.slice(0, -1).join(" ")}
+                fill="none"
+                className="stroke-amber-500"
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              {juegoPts.length > 1 && (
+                <polyline
+                  points={juegoPts.slice(-2).join(" ")}
+                  fill="none"
+                  className="stroke-amber-500 opacity-60"
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+              )}
+              {juegoPts.map((pt, i) => {
+                const [cx, cy] = pt.split(",").map(Number);
+                const isCurrent = i === juegoPts.length - 1;
+                return (
+                  <circle
+                    key={`ej-${buckets[i].key}`}
+                    cx={cx}
+                    cy={cy}
+                    r={isCurrent ? 2.5 : 2}
+                    className={isCurrent ? "fill-background stroke-amber-500" : "fill-amber-500"}
+                    strokeWidth={isCurrent ? 1.5 : 0}
+                  />
+                );
+              })}
+            </svg>
+            <div
+              className="absolute inset-x-2 top-0 bottom-4 grid"
+              style={{ gridTemplateColumns: overlayCols }}
+            >
+              {buckets.map((b, i) => (
+                <AppTooltip key={`rt-${b.key}`} tip={recuperoTip(i)}>
+                  <span className="block h-full w-full" />
+                </AppTooltip>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -330,8 +422,8 @@ export function FinanceStrip({
               return "";
             })()}
             {fused && cycleDays !== null
-              ? `Verde = rescatado; el gap con la línea punteada (en juego, ciclo ~${formatNumber(cycleDays)}d) es tu fuga. `
-              : ""}
+              ? `Recupero: verde = rescatado; el gap con la línea (en juego, ciclo ~${formatNumber(cycleDays)}d) es tu fuga. Tramo punteado = mes en curso. `
+              : "Tramo punteado = mes en curso (parcial). "}
             {organicosEnAuto !== null && organicosEnAuto > 0
               ? `${formatNumber(organicosEnAuto)} volverán solos y no les escribimos. `
               : ""}

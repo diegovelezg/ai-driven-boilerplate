@@ -5,8 +5,8 @@
 import { getSupabase } from "@/lib/supabase";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { createLogger } from "@/lib/log";
-import { isRealDbOrder } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { isRealDbOrder } from "@/lib/canonical";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { sessionize } from "@/lib/retention-model";
 
 const log = createLogger("analyst");
@@ -239,7 +239,6 @@ export async function runAnalyst(
     if (converted > 0) {
       try {
         const { data: st } = await db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
-        const { formatMoney } = await import("@/lib/medusa");
         const cur = ((st ?? {}) as Record<string, unknown>).shop_currency as string | null ?? null;
         summary = `${formatNumber(converted)} ${converted === 1 ? "volvió" : "volvieron"} · ${formatMoney(Math.round(revenueMinor), cur)} recuperado`;
       } catch {

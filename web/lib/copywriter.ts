@@ -12,7 +12,7 @@ import { createLogger } from "@/lib/log";
 import { getStoreProfile, type CatalogType } from "@/lib/store-profiles";
 import { getLlmConfig } from "@/lib/ai/llm-config";
 import { completeJson } from "@/lib/retrieval";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { briefMode, identityJugada, identityPatron } from "@/lib/judge-brief";
 
 const log = createLogger("copywriter");
@@ -246,7 +246,7 @@ async function buildSystem(storeId: string): Promise<{
     ? `Activos que sí se pueden proponer (top ventas activas): ${topActivos.length > 0 ? topActivos.join(" · ") : "sin top"}.`
       + `${vertical ? ` Capacidad general: ${vertical}.` : ""}`
       + `${brain.ventanaMedianaDias != null ? ` Ventana típica: ~${brain.ventanaMedianaDias}d.` : ""}`
-      + `${brain.ticketP50 != null ? ` Ticket típico: ${brain.ticketP50}.` : ""}`
+      + `${brain.ticketP50 != null ? ` Ticket típico: ${formatMoney(brain.ticketP50, brain.ticketCurrency)}.` : ""}`
       + ` PROHIBIDO proponer inactivos/descatalogados (no están en la lista) o inventar disponibilidad.`
     : `${vertical ? `Capacidad general: ${vertical}. ` : ""}PROHIBIDO proponer inactivos/descatalogados o inventar disponibilidad.`;
   return {
@@ -284,7 +284,7 @@ async function composeDraftCopy(
     .eq("customer_id", s.customer_id)
     .order("placed_at", { ascending: false })
     .limit(10);
-  const { isRealDbOrder } = await import("@/lib/medusa");
+  const { isRealDbOrder } = await import("@/lib/canonical");
   const real = (((orders ?? []) as Array<Record<string, unknown>>).filter((o) =>
     isRealDbOrder({
       status: typeof o.status === "string" ? o.status : null,
@@ -332,7 +332,6 @@ async function composeDraftCopy(
   });
   const noun = briefNoun(stamp.catalog);
   // Ticket del cliente (respaldo concreto, no comodín). Minor units → mayor.
-  const { formatMoney } = await import("@/lib/medusa");
   const ticketVals = real.map((o) => Number(o.total_amount ?? 0)).filter((n) => n > 0);
   const ticketClienteMinor = ticketVals.length > 0 ? Math.round(ticketVals.reduce((a, b) => a + b, 0) / ticketVals.length) : null;
   const ticketClienteTxt = ticketClienteMinor != null ? formatMoney(ticketClienteMinor, (real[0]?.currency as string | null) ?? stamp.brain?.ticketCurrency ?? null) : null;

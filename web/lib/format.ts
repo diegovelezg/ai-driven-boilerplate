@@ -1,8 +1,16 @@
-// Formato numérico único del sitio.
+// Formato numérico único del sitio (SSOT).
 // Regla: separador de miles ".", separador decimal "," y 0 decimales por defecto.
 // Todo valor numérico visible debe pasar por estos helpers (no formatear a mano).
+//
+// Unidades: los montos de la DB/API viajan en MINOR units (céntimos) y
+// `formatMoney` divide ÷100. Nunca pasar soles/pesos ya divididos.
+// Ratio vs puntos: `formatPercent` recibe ratio 0–1, `formatPercentPoints`
+// recibe 0–100. No intercambiar.
 
-const LOCALE = "es-ES";
+/** Locale de formateo. `es-ES` ≡ `es-PE` en agrupación/decimal ("."/","); se
+ *  fija `es-ES` por disponibilidad garantizada en ICU de Node. Los símbolos de
+ *  moneda son manuales (ver CURRENCY_SYMBOLS), no `Intl.Currency`. */
+export const FORMAT_LOCALE = "es-ES";
 
 type NumberFormatOptions = {
   minimumFractionDigits?: number;
@@ -15,7 +23,7 @@ function formatter(min: number, max: number): Intl.NumberFormat {
   const key = `${min}:${max}`;
   const cached = formatters.get(key);
   if (cached) return cached;
-  const created = new Intl.NumberFormat(LOCALE, {
+  const created = new Intl.NumberFormat(FORMAT_LOCALE, {
     useGrouping: true,
     minimumFractionDigits: min,
     maximumFractionDigits: max,
@@ -26,35 +34,43 @@ function formatter(min: number, max: number): Intl.NumberFormat {
 
 /** 1234567.89 → "1.234.568" (0 decimales por defecto). */
 export function formatNumber(
-  value: number | null | undefined,
+  value: number | string | null | undefined,
   options: NumberFormatOptions = {},
 ): string {
   if (value === null || value === undefined) return "—";
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return "—";
-  const min = options.minimumFractionDigits ?? 0;
-  const max = Math.max(min, options.maximumFractionDigits ?? 0);
+  const min = Math.max(0, Math.floor(options.minimumFractionDigits ?? 0));
+  const max = Math.max(min, Math.floor(options.maximumFractionDigits ?? 0));
   return formatter(min, max).format(n);
 }
 
 /** Igual que formatNumber pero siempre con la cantidad de decimales indicada. */
-export function formatDecimal(value: number | null | undefined, decimals = 0): string {
+export function formatDecimal(value: number | string | null | undefined, decimals = 0): string {
+  const d = Math.max(0, Math.floor(decimals));
   return formatNumber(value, {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: d,
+    maximumFractionDigits: d,
   });
 }
 
-/** Ratio 0–1 → "87%" (0 decimales por defecto). */
-export function formatPercent(ratio: number | null | undefined, decimals = 0): string {
+/** Ratio 0–1 → "87%" (0 decimales por defecto). No-finito → "—" (sin "%"). */
+export function formatPercent(ratio: number | string | null | undefined, decimals = 0): string {
   if (ratio === null || ratio === undefined) return "—";
-  return formatDecimal(ratio * 100, decimals) + "%";
+  const n = Number(ratio);
+  if (!Number.isFinite(n)) return "—";
+  const out = formatDecimal(n * 100, decimals);
+  return out === "—" ? "—" : `${out}%`;
 }
 
 /** Porcentaje ya expresado en base 100: 87.4 → "87%". */
-export function formatPercentPoints(value: number | null | undefined, decimals = 0): string {
+export function formatPercentPoints(
+  value: number | string | null | undefined,
+  decimals = 0,
+): string {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
-  return formatDecimal(value, decimals) + "%";
+  const out = formatDecimal(value, decimals);
+  return out === "—" ? "—" : `${out}%`;
 }
 
 /** Símbolos de moneda habituales; el resto cae al código ISO. */
@@ -73,10 +89,24 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
 /**
  * Minor units → moneda legible. Conserva el símbolo y aplica el formato único.
  * Ej.: formatMoney(36461777, "PEN") → "S/ 364.618".
+ * Ej. con céntimos: formatMoney(1999, "PEN", 2) → "S/ 19,99".
+ * Monto no-finito/null → "—" (sin símbolo). Moneda null/vacía → PEN (default
+ * histórico de la tienda); desconocida → código ISO.
  */
-export function formatMoney(amountMinor: number, currency: string | null): string {
-  const code = (currency ?? "PEN").toUpperCase();
-  const amount = Math.round(Number(amountMinor) / 100);
+export function formatMoney(
+  amountMinor: number | string | null | undefined,
+  currency: string | null | undefined,
+  decimals = 0,
+): string {
+  if (amountMinor === null || amountMinor === undefined) return "—";
+  const minor = Number(amountMinor);
+  if (!Number.isFinite(minor)) return "—";
+  const code = (currency ?? "").trim().toUpperCase() || "PEN";
   const symbol = CURRENCY_SYMBOLS[code] ?? code;
-  return `${symbol} ${formatNumber(amount)}`;
+  const d = Math.max(0, Math.floor(decimals));
+  const major = minor / 100;
+  const body =
+    d === 0 ? formatNumber(Math.round(major)) : formatDecimal(major, d);
+  if (body === "—") return "—";
+  return `${symbol} ${body}`;
 }

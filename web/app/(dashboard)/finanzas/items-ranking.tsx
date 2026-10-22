@@ -3,8 +3,7 @@
 import { useState } from "react";
 import { AppCard } from "@/components/app-card";
 import type { RankedItem } from "@/lib/finance";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 
 const INITIAL_VISIBLE = 5;
 

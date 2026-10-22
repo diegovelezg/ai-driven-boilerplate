@@ -133,11 +133,27 @@ export async function medusaLogin(
   return token as string;
 }
 
+/** JWT (3 segmentos con puntos) vs api_token v1 (hex sin puntos).
+ *  El api_token v1 vale en `x-medusa-access-token` y, según el OAS v1, también
+ *  como `Bearer`; el JWT solo vale como `Bearer` (mandarlo en `x-` lo rompería). */
+function isJwtToken(t: string): boolean {
+  return t.split(".").length === 3;
+}
+
 async function adminGet(url: string, token: string, path: string) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (isJwtToken(token)) {
+    headers.Authorization = `Bearer ${token}`;
+  } else {
+    // api_token personal v1 (by-the-book server-to-server): no caduca, solo se
+    // revoca cambiándolo. Se manda en ambos headers que la docu v1 acepta.
+    headers.Authorization = `Bearer ${token}`;
+    headers["x-medusa-access-token"] = token;
+  }
   let res: Response;
   try {
     res = await fetch(`${baseUrl(url)}${path}`, {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers,
       cache: "no-store",
       // Sin timeout la UI se queda colgada (botón atascado). 60s sobra en LAN.
       signal: AbortSignal.timeout(60_000),
@@ -150,6 +166,34 @@ async function adminGet(url: string, token: string, path: string) {
   }
   if (!res.ok) throw new Error(`Medusa ${res.status}: ${await parseError(res)}`);
   return res.json();
+}
+
+/**
+ * Asegura el api_token personal v1 (by-the-book para sync server-to-server):
+ * con el JWT recién logueado lee el user id (`GET /admin/auth`), genera un
+ * token hex y lo guarda vía `POST /admin/users/:id {api_token}`. Sin acceso
+ * al VPS ni a la GUI: todo por API pública. Si falla, el caller sigue con JWT.
+ */
+export async function medusaEnsureV1ApiToken(url: string, jwt: string): Promise<string> {
+  const me = (await adminGet(url, jwt, "/admin/auth")) as {
+    user?: { id?: string };
+    id?: string;
+  };
+  const userId = me?.user?.id ?? me?.id;
+  if (!userId) throw new Error("Medusa: no se pudo resolver el user id (/admin/auth sin user)");
+  const { randomBytes } = await import("node:crypto");
+  const apiToken = randomBytes(32).toString("hex");
+  const res = await fetch(`${baseUrl(url)}/admin/users/${userId}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${jwt}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: apiToken }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) throw new Error(`Medusa ${res.status}: ${await parseError(res)}`);
+  // Verifica que el token nuevo autentica como api_token (x-header).
+  await adminGet(url, apiToken, "/admin/auth");
+  return apiToken;
 }
 
 export async function testMedusa(
@@ -391,4 +435,5 @@ export function medusaProductToCanonical(
 }
 
 // El formato vive en un único módulo (`lib/format`): miles "." y decimales ",".
+// Re-export solo por compat legacy: el código nuevo importa de `@/lib/format`.
 export { formatMoney } from "@/lib/format";

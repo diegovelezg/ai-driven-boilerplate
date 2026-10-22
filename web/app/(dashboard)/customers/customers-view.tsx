@@ -19,8 +19,8 @@ import {
   DataTableTh,
   SortHeaderButton,
 } from "@/components/data-table";
-import { formatMoney, type CanonicalCustomer } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import type { CanonicalCustomer } from "@/lib/medusa";
+import { formatMoney, formatNumber } from "@/lib/format";
 import type {
   CustomerFilters,
   CustomersSortDir,

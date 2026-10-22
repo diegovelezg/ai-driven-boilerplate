@@ -15,8 +15,7 @@ import {
 import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
 import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { MergeButton } from "./merge-button";

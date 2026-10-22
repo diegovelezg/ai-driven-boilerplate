@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rankItems } from "@/lib/finance";
-import { formatMoney } from "@/lib/medusa";
+import { formatMoney } from "@/lib/format";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = (p: string) => readFileSync(join(root, p), "utf-8");
@@ -154,13 +154,15 @@ describe("moneda intra-vista (nunca PEN+MXN)", () => {
     assert.match(formatMoney(36461777, "PEN"), /364[., ]?618/);
   });
 
-  it("get_top_products devuelve view_currency + nota de minor units", () => {
+  it("get_top_products devuelve view_currency + display SSOT verbatim", () => {
     const t = tools();
     const i = t.indexOf('"get_top_products"');
     const block = t.slice(i, i + 6000);
     assert.match(block, /view_currency/);
-    assert.match(block, /minor units/);
+    assert.match(block, /revenue_display/);
+    assert.match(block, /ya formateado/);
     assert.match(block, /isRealDbOrder/);
+    assert.match(t, /verbatim/);
   });
 });
 

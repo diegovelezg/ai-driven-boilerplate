@@ -44,8 +44,7 @@ import { reopenCustomerSignalAction } from "@/lib/review-actions";
 import { reenrichDomainAction } from "@/lib/enrich-actions";
 import { useBackground } from "@/components/background-status";
 import type { EditableCustomer, ManualField } from "@/lib/customers-db";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber, formatPercent, formatPercentPoints } from "@/lib/format";
+import { formatMoney, formatNumber, formatPercent, formatPercentPoints } from "@/lib/format";
 import type {
   CustomerOrder,
   CustomerRfm,

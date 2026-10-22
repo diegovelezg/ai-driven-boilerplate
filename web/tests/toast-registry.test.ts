@@ -44,6 +44,7 @@ const INSTANT = new Set([
   "switchChannelAction",
   "updateDraftContentAction",
   "revokeApprovalAction",
+  "reopenActionAction",
   "optOutCustomerAction",
   "optInCustomerAction",
   "getDrawerCustomerAction",

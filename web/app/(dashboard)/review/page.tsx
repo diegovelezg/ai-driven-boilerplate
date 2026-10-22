@@ -43,6 +43,8 @@ export default async function ReviewPage({
   let actions: ActionRow[] = [];
   /** Aprobadas aún no enviadas (invisibles hasta hoy: solo se listaba pending). */
   let approvedActions: ActionRow[] = [];
+  /** Rechazadas/canceladas recientes: nada desaparece, se rescatan con Reabrir. */
+  let rejectedActions: ActionRow[] = [];
   let leads: LeadRow[] = [];
   /** Aprobados aún no contactados: "Ya lo contacté" los cierra. */
   let approvedLeads: LeadRow[] = [];
@@ -74,7 +76,7 @@ export default async function ReviewPage({
         // señales filtran por sus customers; leads no tienen país (van todos).
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketLabel = scope?.market ? displayMarket(scope.market) : null;
-        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { data: dl, error: dlErr }, { data: br }] =
+        const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: ar, error: arErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { data: dl, error: dlErr }, { data: br }] =
           await Promise.all([
             (async () => {
               const aq = applyScopeFilter(
@@ -98,6 +100,17 @@ export default async function ReviewPage({
                 scope,
               );
               return aq.order("created_at", { ascending: true }).limit(30);
+            })(),
+            (async () => {
+              const aq = applyScopeFilter(
+                db
+                  .from("proposed_actions")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .eq("store_id", storeId)
+                  .eq("status", "rejected"),
+                scope,
+              );
+              return aq.order("created_at", { ascending: false }).limit(20);
             })(),
             applyScopeFilter(
               db
@@ -155,6 +168,7 @@ export default async function ReviewPage({
           ]);
         if (aErr) throw new Error(`Actions read: ${aErr.message}`);
         if (apErr) throw new Error(`Approved read: ${apErr.message}`);
+        if (arErr) throw new Error(`Rejected read: ${arErr.message}`);
         if (lErr) throw new Error(`Leads read: ${lErr.message}`);
         if (alErr) throw new Error(`Approved leads read: ${alErr.message}`);
         if (clErr) throw new Error(`Contacted leads read: ${clErr.message}`);
@@ -208,6 +222,7 @@ export default async function ReviewPage({
         };
         actions = ((a ?? []) as Array<Record<string, unknown>>).map(toActionRow);
         approvedActions = ((ap ?? []) as Array<Record<string, unknown>>).map(toActionRow);
+        rejectedActions = ((ar ?? []) as Array<Record<string, unknown>>).map(toActionRow);
         // Sustento del motor: última predicción por cliente + última orden real.
         // Un join en JS sobre dos queries bulk (sin N+1).
         try {
@@ -542,6 +557,7 @@ export default async function ReviewPage({
             key={`${sp.market ?? ""}|${sp.actionIds ?? ""}|${sp.leadIds ?? ""}|${sp.signalIds ?? ""}`}
             actions={actions}
             approvedActions={approvedActions}
+            rejectedActions={rejectedActions}
             leads={leads}
             approvedLeads={approvedLeads}
             contactedLeads={contactedLeads}

@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
 import { isRealDbOrder } from "@/lib/medusa";
+import { formatMoney } from "@/lib/format";
 import { rankItems } from "@/lib/finance";
 import { domainFromEmail } from "@/lib/domains";
 import { applyScopeFilter, chunkIds, effectiveScopeFilter, isLargeIdScope, type MarketScope } from "@/lib/markets";
@@ -68,6 +69,21 @@ function finishMergedPage(merged: Map<string, Record<string, unknown>>, total: n
 }
 
 /**
+ * Totales por moneda ya formateados (SSOT `lib/format`, es-PE).
+ * El LLM usa el display verbatim en el chat; los minor crudos son solo
+ * para comparar/ordenar, nunca los divide ni formatea él.
+ */
+function moneyByCurrency(map: Record<string, number>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(map).map(([cur, v]) => [cur, formatMoney(v, cur)]),
+  );
+}
+
+/** Regla display para descripciones/notes de tools con dinero. */
+const DISPLAY_RULE =
+  "Cifras *_display ya formateadas (SSOT es-PE): úsalas verbatim en el chat; los minor crudos son solo para comparar/ordenar, nunca los dividas ni formatees tú.";
+
+/**
  * Tools del agente generalista de retención. Ámbito tienda (resumen, señales,
  * acciones, buscar customer) + ámbito ficha (perfil, compras/RFM, empresa)
  * + loop de retención como tools (scout/strategist/copywriter/dispatcher/
@@ -92,7 +108,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const summary = new FunctionTool({
     name: "get_store_summary",
     description:
-      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos, compradores y FACTURACIÓN BRUTA por tipo y moneda: revenue_by_type), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency), señales abiertas y acciones pendientes. Para 'qué tipo de cliente vale más' usa revenue_by_type (B2B vs B2C por moneda). NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats.",
+      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos, compradores y FACTURACIÓN BRUTA por tipo y moneda: revenue_by_type + revenue_by_type_display), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency + revenue_by_currency_display), señales abiertas y acciones pendientes. Para 'qué tipo de cliente vale más' usa revenue_by_type_display (B2B vs B2C por moneda). NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -173,7 +189,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         b2b_buyers: b2bBuyers,
         b2c_buyers: b2cBuyers,
         revenue_by_currency: revenue,
+        revenue_by_currency_display: moneyByCurrency(revenue),
         revenue_by_type: revenueByType,
+        revenue_by_type_display: Object.fromEntries(
+          Object.entries(revenueByType).map(([t, byCur]) => [t, moneyByCurrency(byCur)]),
+        ),
         open_signals: openSignals ?? 0,
         pending_actions: pendingActions ?? 0,
         truncated,
@@ -188,7 +208,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const recovery = new FunctionTool({
     name: "get_recovery_stats",
     description:
-      "ÚNICA fuente de 'cuánto recuperamos': revenue_attributed medido por el analyst (clientes que volvieron tras acción, ventana según arquetipo). Devuelve rescatado del mes calendario actual y de últimos 30d + nº de conversiones. Si es 0/vacío, NO sustituyas con ventas: di 'aún sin recupero medido'.",
+      "ÚNICA fuente de 'cuánto recuperamos': revenue_attributed medido por el analyst (clientes que volvieron tras acción, ventana según arquetipo). Devuelve rescatado del mes calendario actual y de últimos 30d + nº de conversiones (con gemelos *_display ya formateados). Si es 0/vacío, NO sustituyas con ventas: di 'aún sin recupero medido'. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -249,15 +269,19 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           break;
         }
       }
+      const { resolveShopCurrency } = await import("@/lib/store-profiles");
+      const cur = marketCurrency ?? ((await resolveShopCurrency(storeId).catch(() => null)) ?? null);
       return {
         recovered_this_month: Math.round(recoveredMonth),
+        recovered_this_month_display: formatMoney(Math.round(recoveredMonth), cur),
         converted_this_month: convertedMonth,
         recovered_30d: Math.round(recovered30d),
+        recovered_30d_display: formatMoney(Math.round(recovered30d), cur),
         converted_30d: converted30d,
         measured_actions: measured,
         total_measured: totalMeasured ?? measured,
         truncated,
-        note: "Solo revenue_attributed (retención medida). La facturación bruta de get_store_summary NUNCA es recupero.",
+        note: "Solo revenue_attributed (retención medida). La facturación bruta de get_store_summary NUNCA es recupero. " + DISPLAY_RULE,
       };
     },
   });
@@ -499,7 +523,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const find = new FunctionTool({
     name: "find_customer",
     description:
-      "Busca un customer por email, nombre, teléfono o empresa —incluida la empresa enriquecida (nombre, industria, descripción/qué es, sede, dominio)— o por lo que compra/contrata (marca/categoría, ej. 'fisioterapia', 'K-pop', 'muebles') y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta). Ej.: 'PUCP', 'universidad', 'educación superior'.",
+      "Busca un customer por email, nombre, teléfono o empresa —incluida la empresa enriquecida (nombre, industria, descripción/qué es, sede, dominio)— o por lo que compra/contrata (marca/categoría, ej. 'fisioterapia', 'K-pop', 'muebles') y devuelve su id para enfocar la conversación (úsalo si te nombran a alguien sin ficha abierta). Ej.: 'PUCP', 'universidad', 'educación superior'. El gasto va en total_spent_display (ya formateado). " + DISPLAY_RULE,
     parameters: z.object({ q: z.string().min(2) }),
     execute: async ({ q }: { q: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -509,7 +533,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const fq = withMarket(
         getSupabase()
           .from("customers")
-          .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+          .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent,currency")
           .eq("store_id", storeId)
           .or(`email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},company_name.ilike.${like}`),
         "id",
@@ -544,7 +568,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           const dq = withMarket(
             db
               .from("customers")
-              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent,currency")
               .eq("store_id", storeId)
               .like("email", `%@${escD}`),
             "id",
@@ -567,7 +591,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           const ccq = withMarket(
             db
               .from("customers")
-              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent")
+              .select("id,email,first_name,last_name,phone,company_name,orders_count,total_spent,currency")
               .eq("store_id", storeId)
               .in("id", ids),
             "id",
@@ -586,7 +610,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       // Recall truncado por diseño (top-5): se declara para no presentar como total.
       // find_customer es búsqueda por relevancia, no censo: total_count=null
       // documenta la excepción al envelope (la regla N de M no aplica aquí).
-      return { items: rows, returned_count: rows.length, total_count: null, truncated: false, note: "Top-5 por relevancia; puede haber más coincidencias." };
+      const withDisplay = rows.map((r) => ({
+        ...r,
+        total_spent_display: formatMoney(Number(r.total_spent ?? 0), (r.currency as string | null) ?? null),
+      }));
+      return { items: withDisplay, returned_count: withDisplay.length, total_count: null, truncated: false, note: "Top-5 por relevancia; puede haber más coincidencias. " + DISPLAY_RULE };
     },
   });
 
@@ -690,7 +718,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const profile = new FunctionTool({
     name: "get_customer_profile",
     description:
-      "Ficha del customer en contexto: nombre, email, teléfono, empresa (efectiva: manual > Medusa > enriquecida), tipo (B2B/B2C), compras y gasto. Si la empresa viene del enriquecimiento, incluye industria y descripción (qué es). Úsala para identidad.",
+      "Ficha del customer en contexto: nombre, email, teléfono, empresa (efectiva: manual > Medusa > enriquecida), tipo (B2B/B2C), compras y gasto (total_spent_display ya formateado). Si la empresa viene del enriquecimiento, incluye industria y descripción (qué es). Úsala para identidad. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!customerId) return noCustomer;
@@ -738,6 +766,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         customer_type: (c.customer_type as string) ?? null,
         orders_count: Number(c.orders_count ?? 0),
         total_spent: Number(c.total_spent ?? 0),
+        total_spent_display: formatMoney(Number(c.total_spent ?? 0), (c.currency as string | null) ?? null),
         currency: (c.currency as string) ?? null,
         created_at: (c.created_at as string) ?? null,
       };
@@ -747,7 +776,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const orders = new FunctionTool({
     name: "get_customer_orders",
     description:
-      "Historial de compras del customer en contexto (más reciente primero) con ítems, hechos temporales (recencia, frecuencia, gasto, ticket, ciclo esperado sobre historial completo) y predicción. Devuelve envelope {orders, summary, prediction, totalOrders, truncated}. Pasa limit (1-30, default 10) y offset para paginar; si truncated=true hay más historial.",
+      "Historial de compras del customer en contexto (más reciente primero) con ítems, hechos temporales (recencia, frecuencia, gasto, ticket, ciclo esperado sobre historial completo) y predicción. Totales con gemelo *_display ya formateado. Devuelve envelope {orders, summary, prediction, totalOrders, truncated}. Pasa limit (1-30, default 10) y offset para paginar; si truncated=true hay más historial. " + DISPLAY_RULE,
     parameters: z.object({
       limit: z.number().int().min(1).max(30).optional(),
       offset: z.number().int().min(0).max(10000).optional(),
@@ -758,6 +787,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const off = offset ?? 0;
       const result = await loadCustomerOrdersAndRfm(customerId, n, off);
       if (!result) return { error: "Customer no encontrado." };
+      const cur = result.summary.currency ?? null;
+      const ordersWithDisplay = result.orders.map((o) => ({
+        ...o,
+        total_display: formatMoney(o.total, o.currency),
+        items: o.items.map((it) => ({
+          ...it,
+          unit_price_display: it.unitPrice == null ? null : formatMoney(it.unitPrice, o.currency),
+        })),
+      }));
       const { data: pred } = await getSupabase()
         .from("customer_predictions")
         .select("model,p_recompra_h,p_low,p_high,horizon_days,expected_days,p25_days,p75_days,ticket_esperado_minor,valor_esperado_minor,decision,confidence,as_of")
@@ -766,7 +804,25 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         .order("model_version", { ascending: false })
         .limit(1)
         .maybeSingle();
-      return { ...result, prediction: pred ?? null };
+      const p = (pred ?? null) as Record<string, unknown> | null;
+      return {
+        ...result,
+        orders: ordersWithDisplay,
+        summary: {
+          ...result.summary,
+          monetary_display: formatMoney(result.summary.monetary, cur),
+          avg_ticket_display: formatMoney(result.summary.avgTicket, cur),
+        },
+        prediction: p
+          ? {
+              ...p,
+              ticket_esperado_display:
+                p.ticket_esperado_minor == null ? null : formatMoney(Number(p.ticket_esperado_minor), cur),
+              valor_esperado_display:
+                p.valor_esperado_minor == null ? null : formatMoney(Number(p.valor_esperado_minor), cur),
+            }
+          : null,
+      };
     },
   });
 
@@ -867,7 +923,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const topProducts = new FunctionTool({
     name: "get_top_products",
     description:
-      "Ranking de lo que más vende: agrupa orders.items_json por título en la moneda de la vista (nunca mezcla PEN+MXN). Solo compras reales (no test ni canceladas). Si te piden 'qué es lo que más vendemos' usa esta tool, no get_store_summary.",
+      "Ranking de lo que más vende: agrupa orders.items_json por título en la moneda de la vista (nunca mezcla PEN+MXN). Solo compras reales (no test ni canceladas). Cada ítem trae revenueMinor crudo + revenue_display ya formateado. Si te piden 'qué es lo que más vendemos' usa esta tool, no get_store_summary. " + DISPLAY_RULE,
     parameters: z.object({
       limit: z.number().int().min(1).max(20).optional(),
       sort: z.enum(["revenue", "quantity", "orders"]).optional(),
@@ -946,7 +1002,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           }
         }
         const all = [...byKey.values()].sort((a, b) => b.revenueMinor - a.revenueMinor);
-        const pickAll = all.slice(0, n);
+        const withDisplay = all.map((g) => ({ ...g, revenue_display: formatMoney(g.revenueMinor, g.currency) }));
+        const pickAll = withDisplay.slice(0, n);
         const pick =
           sort === "quantity"
             ? [...pickAll].sort((a, b) => b.quantity - a.quantity)
@@ -961,7 +1018,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           truncated: ordersTruncated || byKey.size > pick.length,
           view_currency: viewCurrency,
           note_truncated: ordersTruncated ? "Muestra parcial: órdenes mayores al CAP 20k; ranking parcial." : null,
-          note: "Sin moneda de vista: ranking por (título, moneda) con rótulo por fila, nunca se suman PEN+MXN. Montos en minor units (céntimos): dividir /100.",
+          note: "Sin moneda de vista: ranking por (título, moneda) con rótulo por fila, nunca se suman PEN+MXN. " + DISPLAY_RULE,
         };
       }
       const { top, bottom } = rankItems(
@@ -969,11 +1026,14 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         viewCurrency,
         n,
       );
+      const withRevenueDisplay = <T extends { revenueMinor: number }>(rows: T[]): (T & { revenue_display: string })[] =>
+        rows.map((r) => ({ ...r, revenue_display: formatMoney(r.revenueMinor, viewCurrency) }));
+      const topWithDisplay = withRevenueDisplay(top);
       const pick = sort === "quantity"
-        ? [...top].sort((a, b) => b.quantity - a.quantity)
+        ? [...topWithDisplay].sort((a, b) => b.quantity - a.quantity)
         : sort === "orders"
-          ? [...top].sort((a, b) => b.orders - a.orders)
-          : top;
+          ? [...topWithDisplay].sort((a, b) => b.orders - a.orders)
+          : topWithDisplay;
       // total_count = títulos distintos intra-moneda (no el largo de la ventana).
       // Sin viewCurrency (todas) no se filtra por moneda.
       const seen = new Set<string>();
@@ -989,13 +1049,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const totalCount = seen.size;
       return {
         items: pick,
-        bottom,
+        bottom: withRevenueDisplay(bottom),
         total_count: totalCount,
         returned_count: pick.length,
         truncated: ordersTruncated || totalCount > pick.length,
         view_currency: viewCurrency,
         note_truncated: ordersTruncated ? "Muestra parcial: órdenes mayores al CAP 20k; ranking parcial." : null,
-        note: "Entre lo vendido (sin feed de productos no se ven items con cero ventas). Montos en minor units (céntimos): dividir /100.",
+        note: "Entre lo vendido (sin feed de productos no se ven items con cero ventas). " + DISPLAY_RULE,
       };
     },
   });
@@ -1087,7 +1147,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const productSummary = new FunctionTool({
     name: "get_product_summary",
     description:
-      "Ficha del producto en foco: identidad (título, estado, handle) y ventas por moneda desde product_stats (cantidades, montos, 30d/90d, compradores, última venta). Úsala antes de afirmar cualquier cifra de ESTE ítem; para comparar con el resto usa get_top_products.",
+      "Ficha del producto en foco: identidad (título, estado, handle) y ventas por moneda desde product_stats (cantidades, montos con gemelo *_display ya formateado, 30d/90d, compradores, última venta). Úsala antes de afirmar cualquier cifra de ESTE ítem; para comparar con el resto usa get_top_products. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -1123,14 +1183,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           currency: String(s.currency ?? ""),
           qty_all: Number(s.qty_all ?? 0),
           revenue_all: Number(s.revenue_all ?? 0),
+          revenue_all_display: formatMoney(Number(s.revenue_all ?? 0), String(s.currency ?? "")),
           qty_30d: Number(s.qty_30d ?? 0),
           qty_90d: Number(s.qty_90d ?? 0),
           revenue_30d: Number(s.revenue_30d ?? 0),
+          revenue_30d_display: formatMoney(Number(s.revenue_30d ?? 0), String(s.currency ?? "")),
           buyers_all: Number(s.buyers_all ?? 0),
           last_sold_at: (s.last_sold_at as string | null) ?? null,
         })),
         view_currency: marketCurrency ?? (shopCurrency ? shopCurrency.toUpperCase() : null),
-        note: "Montos en minor units (céntimos): dividir /100. Sin product_stats = sin ventas registradas.",
+        note: "Sin product_stats = sin ventas registradas. " + DISPLAY_RULE,
       };
     },
   });
@@ -1142,7 +1204,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const productMovements = new FunctionTool({
     name: "get_product_movements",
     description:
-      "Últimos movimientos del producto en foco (más reciente primero): fecha, cantidad, precio, monto y metadata de ESA compra (ventana, lo que dijo el cliente, detalles, contiene, categoría). Pasa limit (1-15, default 5) y offset para paginar. Devuelve envelope {items, total_count, returned_count, truncated}: total_count=null (historial abierto); si truncated, dilo ('te muestro N, hay más').",
+      "Últimos movimientos del producto en foco (más reciente primero): fecha, cantidad, precio y monto con gemelos *_display ya formateados, y metadata de ESA compra (ventana, lo que dijo el cliente, detalles, contiene, categoría). Pasa limit (1-15, default 5) y offset para paginar. Devuelve envelope {items, total_count, returned_count, truncated}: total_count=null (historial abierto); si truncated, dilo ('te muestro N, hay más'). " + DISPLAY_RULE,
     parameters: z.object({
       limit: z.number().int().min(1).max(15).optional(),
       offset: z.number().int().min(0).max(10000).optional(),
@@ -1219,7 +1281,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
               placed_at: (o.placed_at as string | null) ?? null,
               qty,
               unit_price: unitPrice ?? 0,
+              unit_price_display: formatMoney(unitPrice ?? 0, cur),
               revenue,
+              revenue_display: formatMoney(revenue, cur),
               currency: cur,
               meta: null,
             });
@@ -1297,7 +1361,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         scanned_orders: scanned,
         view_currency: viewCurrency,
         note_truncated: truncated ? "Ventana escaneada: puede haber más historial; no afirmes el total." : null,
-        note: "Montos en minor units (céntimos): dividir /100. Meta = metadata DE ESA COMPRA, no del ítem.",
+        note: "Meta = metadata DE ESA COMPRA, no del ítem. " + DISPLAY_RULE,
       };
     },
   });
@@ -1309,7 +1373,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const productBuyers = new FunctionTool({
     name: "get_product_buyers",
     description:
-      "Top compradores del producto en foco (nombre, email, empresa, cantidad y monto). Pasa limit (1-20, default 5) y offset para paginar ('los otros 5' = mismo limit + offset 5). Devuelve envelope {items, total_count, returned_count, truncated, stats_stale}: total_count = compradores distintos reales; si truncated=true dilo ('te muestro N de M') y nunca afirmes que viste a todos; si stats_stale=true, product_stats está desactualizado.",
+      "Top compradores del producto en foco (nombre, email, empresa, cantidad y monto con revenue_display ya formateado). Pasa limit (1-20, default 5) y offset para paginar ('los otros 5' = mismo limit + offset 5). Devuelve envelope {items, total_count, returned_count, truncated, stats_stale}: total_count = compradores distintos reales; si truncated=true dilo ('te muestro N de M') y nunca afirmes que viste a todos; si stats_stale=true, product_stats está desactualizado. " + DISPLAY_RULE,
     parameters: z.object({
       limit: z.number().int().min(1).max(20).optional(),
       offset: z.number().int().min(0).max(10000).optional(),
@@ -1409,7 +1473,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const scoped = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
       const statsStale = scoped ? null : (stats ?? []).length === 0 ? total > 0 : statsTotal !== total;
       const ranked = rankedAll.slice(off, off + n);
-      let items: Array<Record<string, unknown>> = ranked.map((r) => ({ ...r, email: "", name: "Sin nombre", company: null }));
+      let items: Array<Record<string, unknown>> = ranked.map((r) => ({
+        ...r,
+        revenue_display: formatMoney(r.revenue, r.currency || null),
+        email: "",
+        name: "Sin nombre",
+        company: null,
+      }));
       if (ranked.length > 0) {
         const cq = withMarket(
           db
@@ -1429,6 +1499,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           const name = c ? [c.first_name, c.last_name].filter(Boolean).join(" ") : "";
           return {
             ...r,
+            revenue_display: formatMoney(r.revenue, r.currency || null),
             email: c ? String(c.email ?? "") : "",
             name: name || "Sin nombre",
             company: c && c.company_name ? String(c.company_name) : null,
@@ -1453,7 +1524,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         stats_stale: statsStale,
         null_country_count: nullCountryCount ?? null,
         note_truncated: hitCap ? "Muestra parcial: universo mayor al CAP escaneado." : truncated ? `Te muestro ${items.length} de ${total}: pide offset ${off + items.length} para los siguientes.` : null,
-        note: "Montos en minor units (céntimos): dividir /100.",
+        note: DISPLAY_RULE,
       };
     },
   });

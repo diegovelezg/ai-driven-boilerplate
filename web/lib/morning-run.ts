@@ -11,6 +11,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { hasConflict } from "@/lib/background";
 import { createLogger } from "@/lib/log";
+import { formatMoney } from "@/lib/format";
 
 const log = createLogger("morning");
 
@@ -102,10 +103,9 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
       await saveTenantBrain(sid, brain);
       let ticketTxt: string | null = null;
       try {
-        const { formatMoney } = await import("@/lib/medusa");
         ticketTxt = brain.ticketP50 != null ? formatMoney(brain.ticketP50, brain.ticketCurrency) : null;
       } catch {
-        ticketTxt = brain.ticketP50 != null ? String(Math.round(brain.ticketP50 / 100)) : null;
+        ticketTxt = null;
       }
       await finishRun(runId, {
         status: "done",

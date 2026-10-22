@@ -3,8 +3,7 @@
 import { useState } from "react";
 import { AppCard } from "@/components/app-card";
 import type { EditableCustomer } from "@/lib/customers-db";
-import { formatMoney } from "@/lib/medusa";
-import { formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { CustomerDrawer } from "../customers/customer-drawer";
 
 export function TopCustomers({
