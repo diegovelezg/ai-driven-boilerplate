@@ -13,7 +13,10 @@
 # - schema: aplica las migraciones pendientes en orden + tracking en
 #   public.schema_migrations (se crea si no existe). Idempotente: las ya
 #   aplicadas se omiten, y un fallo hace rollback y se reintenta en la próxima
-#   pasada (--single-transaction -v ON_ERROR_STOP=1).
+#   pasada (--single-transaction -v ON_ERROR_STOP=1). Al final avisa a
+#   PostgREST (NOTIFY pgrst) para recargar el schema-cache sin reinicios.
+#   En el VPS corre solo vía hook pre-push (push con migraciones las aplica
+#   antes; si falla, el push se bloquea). A mano solo como fallback.
 # - status: solo lectura. Compara *.sql locales contra el tracking e imprime
 #   las pendientes (exit 1 si hay). Usar en el checklist de release (§8) y
 #   como gate antes de desplegar la web.
@@ -113,6 +116,13 @@ cmd_schema() {
     db_query "INSERT INTO public.schema_migrations (filename) VALUES ('$name');"
     n_applied=$((n_applied + 1))
   done
+  if [ "$n_applied" -gt 0 ]; then
+    # PostgREST cachea el esquema: avisarle evita el clásico
+    # `Could not find the table ... in the schema cache` sin reiniciar
+    # la sub-app `rest` (ver docs/coolify.md §4). Best-effort: no tumba.
+    db_query "NOTIFY pgrst, 'reload schema';" >/dev/null 2>&1 || true
+    echo "schema: NOTIFY pgrst 'reload schema' enviado."
+  fi
   echo "schema: $n_applied aplicadas, $n_skipped omitidas."
 }
 

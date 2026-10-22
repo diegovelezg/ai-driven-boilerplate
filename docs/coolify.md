@@ -198,13 +198,29 @@ DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh data <public-data.sql>
 DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify     # esperado: stores=1 customers=953 orders=699 merchant_users=1 auth.users=1 auth.identities=1
 ```
 
-Tras `schema` con DDL (tablas/columnas nuevas): **reiniciar la sub-app
-`rest`** en Coolify (o `NOTIFY pgrst, 'reload schema'`). PostgREST cachea el
-esquema: sin reload la app sigue viendo `Could not find the table ... in the
-schema cache` aunque la tabla ya exista (pasó el 2026-10-21 con `products`).
+Tras `schema` con DDL (tablas/columnas nuevas): el propio script ya envía
+`NOTIFY pgrst, 'reload schema'` (PostgREST recarga sin reinicios). Si aun así
+la app responde `Could not find the table ... in the schema cache`, reiniciar
+la sub-app `rest` en Coolify (pasó el 2026-10-21 con `products`, antes del
+NOTIFY automático).
 Gate en runtime por si se omite este paso: el worker falla en rojo al
 arrancar (`DB detrás del código...`, ver `web/lib/schema-guard.ts`) y
 `/api/health` lo expone como `schemaOk/schemaGaps`.
+
+### Auto-migración al hacer push (hook, sin secrets)
+
+El push que lleve migraciones nuevas las aplica al VPS **antes** de subir el
+código; si falla, el push se bloquea. Setup (una vez por clon):
+
+```bash
+./scripts/install-hooks.sh   # enlaza scripts/hooks/pre-push en .git/hooks/
+```
+
+Usa tu `DB_CONTAINER`/`VPS_IP` de siempre (los mismos del modo manual, nada
+nuevo que guardar). Si el push no toca `supabase/migrations/`, no hace nada.
+Nota: corre al hacer **push**, no en cada commit — es cuando el código sale
+de tu máquina. Si fusionas desde la web de GitHub (ahí no hay hook), corre
+`retain-apply.sh schema` a mano esa vez.
 
 Notas:
 
