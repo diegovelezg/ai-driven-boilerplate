@@ -353,6 +353,7 @@ export interface CanonicalProduct {
   handle: string | null;
   platformStatus: string | null;
   variants: Array<{
+    id: string | null;
     sku: string | null;
     title: string;
     quantity: number;
@@ -368,6 +369,7 @@ export function medusaProductToCanonical(
   const title = (p.title as string | undefined)?.trim();
   if (!id || !title) return null;
   const variants = ((p.variants as Array<Record<string, unknown>> | undefined) ?? []).map((v) => ({
+    id: (v.id as string | undefined) ?? null,
     sku: (v.sku as string | undefined) ?? null,
     title: String(v.title ?? ""),
     quantity: Number(v.inventory_quantity ?? 0),

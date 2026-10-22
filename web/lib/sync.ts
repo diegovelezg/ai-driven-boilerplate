@@ -419,6 +419,44 @@ export async function syncStoreFromPlatform(
 
   // 6. Upsert orders (solo las de customers conocidos).
   await report(4, "Guardando orders");
+  const strOrNull = (v: unknown): string | null => {
+    const t = typeof v === "string" ? v.trim() : "";
+    return t ? t : null;
+  };
+  // IDs que Medusa sí expone en el line-item (v1: variant_id + variant.product_id;
+  // v2: product_id/product_handle/variant_sku). Se persisten para joinear por ID
+  // en vez de por título exacto (frágil: "cdra." vs "cdra"). Campos ausentes = null.
+  const itemIds = (i: Record<string, unknown>) => {
+    const variant = (i.variant as Record<string, unknown> | undefined) ?? undefined;
+    const product = (i.product as Record<string, unknown> | undefined) ?? undefined;
+    const variantProduct =
+      (variant?.product as Record<string, unknown> | undefined) ?? undefined;
+    return {
+      variant_id:
+        strOrNull(i.variant_id ?? i.variantId ?? variant?.id) ?? null,
+      product_id:
+        strOrNull(
+          i.product_id ??
+            i.productId ??
+            product?.id ??
+            variant?.product_id ??
+            variantProduct?.id,
+        ) ?? null,
+      product_handle:
+        strOrNull(
+          i.product_handle ??
+            i.productHandle ??
+            product?.handle ??
+            variantProduct?.handle,
+        ) ?? null,
+      product_title:
+        strOrNull(i.product_title ?? product?.title ?? variantProduct?.title) ??
+        null,
+      variant_sku:
+        strOrNull(i.variant_sku ?? i.sku ?? variant?.sku) ?? null,
+      variant_title: strOrNull(i.variant_title ?? variant?.title) ?? null,
+    };
+  };
   const itemsByOrderId = new Map(
     rawOrders.map((o) => [
       String(o.id ?? ""),
@@ -426,6 +464,7 @@ export async function syncStoreFromPlatform(
         title: String(i.title ?? ""),
         quantity: Number(i.quantity ?? 0),
         unit_price: Number(i.unit_price ?? 0),
+        ...itemIds(i),
         // Captura tonta: metadata crudo del line_item (cualquier key según
         // el tipo de negocio). Null si no hay. La interpretación
         // (LLM) va en enrich, no aquí.

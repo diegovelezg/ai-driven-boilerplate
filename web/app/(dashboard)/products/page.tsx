@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
-import { listProductsWithStats, normProductTitle, type ProductWithStats } from "@/lib/product-stats";
+import { listProductsWithStats, normProductTitleLoose, type ProductWithStats } from "@/lib/product-stats";
 import { displayMarket, resolveMarketScope } from "@/lib/markets";
 import { isRealDbOrder } from "@/lib/medusa";
 import { ProductsList } from "./products-list";
@@ -84,7 +84,7 @@ export default async function ProductsPage({
               const in30 = Number.isFinite(age) && age <= 30 * DAY_MS;
               const placed = typeof o.placed_at === "string" ? o.placed_at : null;
               for (const it of (Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [])) {
-                const t = normProductTitle(String(it.title ?? ""));
+                const t = normProductTitleLoose(String(it.title ?? ""));
                 if (!t || t === "—") continue;
                 const qty = Number(it.quantity ?? 0);
                 if (!(qty > 0)) continue;
@@ -106,7 +106,7 @@ export default async function ProductsPage({
           // título). Sin esto, ambas filas duplican las mismas cifras.
           const seenTitle = new Set<string>();
           rows = rows.map((r) => {
-            const k = normProductTitle(r.title);
+            const k = normProductTitleLoose(r.title);
             if (seenTitle.has(k)) {
               return { ...r, currency: viewCurrency, qty_all: 0, revenue_all: 0, qty_30d: 0, buyers_all: 0, last_sold_at: null };
             }
