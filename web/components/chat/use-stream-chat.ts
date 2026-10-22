@@ -3,6 +3,7 @@
 import { useCallback, useState } from "react";
 import { postChatStream } from "./sse";
 import type { ChatArtifact, ChatMessage } from "./types";
+import { createChatId } from "./types";
 
 /**
  * Estado + streaming para todo chat SSE (store y ficha).
@@ -21,13 +22,16 @@ export function useStreamChat(opts: {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Trabajo en curso del orquestador ("Scout vigilando…"); null = genérico. */
+  const [status, setStatus] = useState<string | null>(null);
 
   const ask = useCallback(
     async (text: string) => {
       const q = text.trim();
       if (!q || pending) return;
       setError(null);
-      const next: ChatMessage[] = [...messages, { role: "user", content: q }];
+      setStatus(null);
+      const next: ChatMessage[] = [...messages, { id: createChatId(), role: "user", content: q }];
       setMessages(next);
       setInput("");
       setPending(true);
@@ -37,6 +41,7 @@ export function useStreamChat(opts: {
           body: buildBody(next),
           setMessages,
           onArtifact,
+          onStatus: setStatus,
         });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Falló el chat.");
@@ -51,8 +56,9 @@ export function useStreamChat(opts: {
     setMessages([]);
     setError(null);
     setInput("");
+    setStatus(null);
     onArtifact?.(null);
   }, [onArtifact]);
 
-  return { messages, setMessages, input, setInput, pending, error, ask, clear };
+  return { messages, setMessages, input, setInput, pending, error, status, ask, clear };
 }

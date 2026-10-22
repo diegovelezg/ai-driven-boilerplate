@@ -25,6 +25,11 @@ function sse(text: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 }
 
+/** El cliente pinta `tool` como "pensando" descriptivo (mapa en status-labels). */
+function statusSse(tool: string): string {
+  return `data: ${JSON.stringify({ status: { tool } })}\n\n`;
+}
+
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -124,8 +129,13 @@ export async function POST(
         })) {
           if (event.author !== CUSTOMER_AGENT_NAME || event.content?.role !== "model") continue;
           for (const part of event.content.parts ?? []) {
-            const text = (part as { text?: string }).text;
-            if (text) send(sse(text));
+            const p = part as { text?: string; functionCall?: { name?: string } };
+            // Tool en curso → "pensando" descriptivo (los tokens apagan el estado).
+            if (p.functionCall?.name) {
+              send(statusSse(p.functionCall.name));
+              continue;
+            }
+            if (p.text) send(sse(p.text));
           }
         }
       } catch (e) {

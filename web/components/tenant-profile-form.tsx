@@ -320,6 +320,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
               storeId={storeId}
               onConfirm={handleChatConfirm}
               onBusyChange={setChatBusy}
+              disabled
             />
           </div>
         </AppCard>

@@ -124,11 +124,17 @@ export function SettingsForm({
   secretsInDb,
   storeId,
   contentReady,
+  contentMapped,
+  contentKey,
 }: {
   defaults: SafeStoreConnections;
   secretsInDb?: boolean;
   storeId: string | null;
   contentReady?: boolean;
+  /** Mapeo de Contenido ya guardado (el paso 4 cuenta como completo). */
+  contentMapped?: boolean;
+  /** Key elegida como contenido, para el detalle del resumen. */
+  contentKey?: string | null;
 }) {
   // Wizard: 1 Plataforma → 2 Conexión → 3 Conectar → 4 Contenido.
   // tstep 0 = resumen (ya conectado). Un solo <form>: los paneles inactivos
@@ -231,9 +237,15 @@ export function SettingsForm({
       },
       {
         label: "Contenido",
-        detail: contentReady ? "Listo para mapear" : "Espera al sync",
+        detail: contentMapped
+          ? contentKey
+            ? `Mapeado: ${contentKey}`
+            : "Mapeado (sin campo de contenido)"
+          : contentReady
+            ? "Listo para mapear"
+            : "Espera al sync",
         step: 4,
-        done: false,
+        done: !!contentMapped,
       },
     ];
     return (
@@ -306,6 +318,47 @@ export function SettingsForm({
             ))}
           </ul>
         </AppCard>
+      </div>
+    );
+  }
+
+  // Paso 4 fuera de la card de Ecommerce: Contenido es su propia sección
+  // con su propia card (anidarla dentro rompía la jerarquía visual).
+  // Sin <form> aquí: el mapeo guarda con su propio botón.
+  if (tstep === 4) {
+    return (
+      <div className="flex w-full flex-col gap-4">
+        <Steps
+          steps={STEPS}
+          current={tstep - 1}
+          onGo={!locked ? (i) => setTstep(i + 1) : undefined}
+        />
+        {contentReady && storeId ? (
+          <MetadataMapForm storeId={storeId} onSaved={goSummary} />
+        ) : (
+          <AppCard
+            tone="primary"
+            title="Contenido"
+            description="Qué campo trae lo que hay que entender."
+          >
+            <AppCardState>
+              Terminando la sincronización…{" "}
+              <button
+                type="button"
+                className="underline underline-offset-4"
+                onClick={() => router.refresh()}
+              >
+                recargar
+              </button>{" "}
+              para mapear el contenido.
+            </AppCardState>
+          </AppCard>
+        )}
+        <div>
+          <Button type="button" variant="outline" onClick={goSummary}>
+            Volver al resumen
+          </Button>
+        </div>
       </div>
     );
   }
@@ -384,11 +437,6 @@ export function SettingsForm({
                   {pending ? "Conectando…" : "Guardar y conectar"}
                 </Button>
               </>
-            )}
-            {tstep === 4 && (
-              <Button type="button" variant="outline" onClick={goSummary}>
-                Volver al resumen
-              </Button>
             )}
           </span>
         }
@@ -553,24 +601,6 @@ export function SettingsForm({
               ? "Vamos a entrar a Medusa, guardar solo el token y lanzar la primera sincronización (clientes, pedidos y catálogo)."
               : "Shopify aún no sincroniza: este paso queda pendiente."}
           </p>
-        </div>
-
-        <div hidden={tstep !== 4} className="flex flex-col gap-4">
-          {contentReady && storeId ? (
-            <MetadataMapForm storeId={storeId} />
-          ) : (
-            <AppCardState>
-              Terminando la sincronización…{" "}
-              <button
-                type="button"
-                className="underline underline-offset-4"
-                onClick={() => router.refresh()}
-              >
-                recargar
-              </button>{" "}
-              para mapear el contenido.
-            </AppCardState>
-          )}
         </div>
       </AppCard>
       </form>

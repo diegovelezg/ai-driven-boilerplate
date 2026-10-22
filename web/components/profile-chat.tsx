@@ -35,6 +35,18 @@ const MODEL_LABEL: Record<string, string> = {
   hybrid: "Híbrido · ambos",
 };
 
+/** Sin SSE aquí (server actions): etapas rotadas por tiempo mientras trabaja. */
+const INVESTIGATING_STAGES = [
+  "Investigando tu web…",
+  "Cruzando tus datos reales…",
+  "Afinando la propuesta…",
+];
+const GENERATING_STAGES = [
+  "Generando tu perfil profundo…",
+  "Cruzando ciclo y arquetipo…",
+  "Cerrando el paso 2…",
+];
+
 const GREETING =
   "Cuéntame qué vendes y a quién. Si tienes web, pégala que la investigo yo.";
 
@@ -49,6 +61,7 @@ export function ProfileChat({
   storeId,
   onConfirm,
   onBusyChange,
+  disabled = false,
 }: {
   storeId: string | null;
   onConfirm: (
@@ -57,6 +70,8 @@ export function ProfileChat({
     info?: { criticVerdict: "accept" | "reject"; criticReasons: string[] },
   ) => void;
   onBusyChange?: (busy: boolean) => void;
+  /** Perfil ya completado: input y propuesta bloqueados hasta Editar. */
+  disabled?: boolean;
 }) {
   // Vacío inicial a propósito: el empty state del shell (título + ejemplos
   // tocables) es lo que invita a conversar; pre-sembrar el saludo lo mataba.
@@ -77,9 +92,20 @@ export function ProfileChat({
     onBusyChange?.(chatBusy);
   }, [chatBusy, onBusyChange]);
 
+  // Rotación descriptiva por etapa (sin SSE en server actions).
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    if (!chatBusy) return;
+    setStage(0);
+    const t = setInterval(() => setStage((s) => s + 1), 4000);
+    return () => clearInterval(t);
+  }, [chatBusy]);
+  const stages = deepBusy ? GENERATING_STAGES : INVESTIGATING_STAGES;
+  const stageLabel = chatBusy ? stages[stage % stages.length] : null;
+
   const send = async (text: string) => {
     const trimmed = text.trim().slice(0, 2000);
-    if (!trimmed || busy || deepBusy) return;
+    if (!trimmed || busy || deepBusy || disabled) return;
     const next: ChatMsg[] = [...msgs, { role: "user", content: trimmed }];
     // Placeholder vacío: el shell pinta la burbuja con los 3 puntos mientras
     // el agente investiga web + LLM (~11s). Sin esto solo quedaba un texto
@@ -112,7 +138,7 @@ export function ProfileChat({
   // y avanzar con SU salida. Si el set falla, se confirma lo investigado
   // diciéndolo explícito (degradación declarada, no silenciosa).
   const confirm = async () => {
-    if (!proposal || !canConfirm || deepBusy) return;
+    if (!proposal || !canConfirm || deepBusy || disabled) return;
     const desc = fullDescription();
     if (!storeId) {
       onConfirm(proposal, elaborate(desc, proposal));
@@ -205,13 +231,19 @@ export function ProfileChat({
       .join("\n");
 
   // El shell habla user/assistant: agent → assistant solo para pintar.
-  const display: ChatMessage[] = msgs.map((m) => ({
+  const display: ChatMessage[] = msgs.map((m, i) => ({
+    id: `profile-${i}`,
     role: m.role === "user" ? "user" : "assistant",
     content: m.content,
   }));
 
   return (
     <div className="flex flex-col gap-2">
+      {disabled && (
+        <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          Perfil completado. Pulsa Editar para describir un cambio.
+        </p>
+      )}
       <ChatShell
         className="max-h-96 rounded-lg border border-input"
         messages={display}
@@ -220,9 +252,15 @@ export function ProfileChat({
         onAsk={(t) => void send(t)}
         pending={busy || deepBusy}
         error={null}
+        status={stageLabel}
+        disabled={disabled}
         emptyTitle="Describe tu negocio"
         emptySubtitle={GREETING}
-        placeholder="Ej. Vendo café a oficinas por suscripción, mi web es mitostaduria.pe…"
+        placeholder={
+          disabled
+            ? "Perfil completado — pulsa Editar para cambiarlo…"
+            : "Ej. Vendo café a oficinas por suscripción, mi web es mitostaduria.pe…"
+        }
         inputAriaLabel="Describe tu negocio"
         thinkingLabel="Investigando…"
         belowMessages={
@@ -251,7 +289,7 @@ export function ProfileChat({
                     type="button"
                     size="sm"
                     className="mt-2"
-                    disabled={!canConfirm || deepBusy}
+                    disabled={!canConfirm || deepBusy || disabled}
                     onClick={() => void confirm()}
                   >
                     {deepBusy

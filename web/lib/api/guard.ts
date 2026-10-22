@@ -1,8 +1,8 @@
 // Guard compartido de las rutas `app/api/customers/[id]/*` + settings actions.
 // Centraliza: exigir Supabase configurado, extraer `:id` (Next 16: promesa),
 // exigir sesión (401) y membresía por tenant vía `merchant_users` (403).
-// Tolerante a legacy: si el usuario no tiene NINGUNA membresía (single-tenant
-// pre-migración), se permite — el aislamiento aplica cuando hay membresías.
+// Multiuser por tenant: cualquier miembro ve todo su tenant; sin membresía
+// no hay acceso (sin bypass legacy).
 import "server-only";
 import { isSupabaseConfigured } from "@/lib/supabase";
 
@@ -57,8 +57,7 @@ export async function userStoreIds(userId: string): Promise<string[]> {
 }
 
 /**
- * Exige membresía a `storeId`. Legacy-tolerante: si el usuario no tiene
- * ninguna membresía (deploy single-tenant sin merchant_users), permite.
+ * Exige membresía a `storeId`. Sin membresías no hay acceso (403).
  * Devuelve null si ok, o `Response` 403 listo para retornar.
  */
 export async function requireStoreMember(
@@ -68,7 +67,6 @@ export async function requireStoreMember(
   if (!user) return null; // auth no configurada (dev): sin check
   if (!storeId) return Response.json({ error: "Falta store." }, { status: 400 });
   const stores = await userStoreIds(user.id).catch(() => [] as string[]);
-  if (stores.length === 0) return null; // legacy: sin membresías, permite
   if (stores.includes(storeId)) return null;
   return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
 }

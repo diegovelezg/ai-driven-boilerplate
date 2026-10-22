@@ -22,7 +22,7 @@ export function ProductChat({
   market: string | null;
 }) {
   const buildBody = useCallback((messages: ChatMessage[]) => ({ messages, marketId: market }), [market]);
-  const { messages, input, setInput, pending, error, ask } = useStreamChat({
+  const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
     url: `/api/products/${productId}/chat`,
     buildBody,
   });
@@ -35,6 +35,7 @@ export function ProductChat({
       onAsk={(t) => void ask(t)}
       pending={pending}
       error={error}
+      status={status}
       suggestions={SUGGESTED}
       emptyTitle="Pregunta por este ítem"
       emptySubtitle="Leo sus ventas y compradores para responder."

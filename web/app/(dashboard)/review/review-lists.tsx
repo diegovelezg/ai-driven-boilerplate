@@ -293,7 +293,6 @@ export function ReviewLists({
   dismissedSignals = [],
   visible,
   runningKinds = [],
-  marketLabel = null,
   /** ?market= activo: el botón prospecta segmentado a ese mercado. */
   marketId = null,
   customerDomains = null,
@@ -328,7 +327,6 @@ export function ReviewLists({
   dismissedSignals?: SignalRow[];
   visible: { actions: boolean; leads: boolean; signals: boolean };
   runningKinds?: string[];
-  marketLabel?: string | null;
   /** ?market= activo: el botón prospecta segmentado a ese mercado. */
   marketId?: string | null;
   /** null = sin verificar (canvas): se omite el check de duplicado. */

@@ -275,7 +275,6 @@ export function FinanceStrip({
   kpis,
   currency,
   recoveredMinor,
-  marketLabel = null,
   /** undefined = no se intentó (clásico ventas+órdenes); null = sin ciclo (clásico + nudge);
    *  array = fusionado 1+2 en el mismo chart. */
   rescate,
@@ -293,7 +292,6 @@ export function FinanceStrip({
   /** Ingreso atribuido a recuperación (para el % sobre ventas 30d).
    *  Omitido = se oculta la línea (p. ej. en /finanzas, que no lo consulta). */
   recoveredMinor?: number;
-  marketLabel?: string | null;
   rescate?: RescateBucket[] | null;
   cycleDays?: number | null;
   /** Segunda fila de KPIs (retención). undefined = no se muestra. */
@@ -310,7 +308,7 @@ export function FinanceStrip({
         title={
           <span className="flex items-center gap-1.5">
             <span aria-hidden className="size-1.5 rounded-full bg-emerald-500" />
-            Salud del negocio · últimos 12 meses{marketLabel ? ` · ${marketLabel}` : ""}
+            Salud del negocio · últimos 12 meses
           </span>
         }
         contentClassName="flex flex-col gap-4"
@@ -431,7 +429,6 @@ export function FinanceStrip({
             {rescate === null
               ? "Sin ciclo calibrado: enseña tu negocio en Settings para ver en juego vs rescatado. "
               : ""}
-            Montos en {(currency ?? "PEN").toUpperCase()}; otras monedas van aparte.
           </p>
         </AppCard>
       </section>

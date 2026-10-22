@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { toast } from "@/components/ui/toast";
@@ -10,7 +11,8 @@ import type { MetadataKeyInfo } from "@/lib/metadata-map";
 /** Contenido + roles por forma: el merchant confirma qué campo trae el
  *  contenido (uno solo) y qué roles propone el motor (fecha/nota/variante).
  *  Sin presets por tenant: solo forma + confirmación humana. */
-export function MetadataMapForm({ storeId }: { storeId: string }) {
+export function MetadataMapForm({ storeId, onSaved }: { storeId: string; onSaved?: () => void }) {
+  const router = useRouter();
   const [keys, setKeys] = useState<MetadataKeyInfo[] | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
@@ -80,6 +82,11 @@ export function MetadataMapForm({ storeId }: { storeId: string }) {
         description: r.message,
         type: r.ok ? "success" : "error",
       });
+      // Flujo terminado: vuelve al resumen (Contenido ✓) con datos frescos.
+      if (r.ok) {
+        onSaved?.();
+        router.refresh();
+      }
     } catch (e) {
       toast.add({
         title: "No se pudo guardar",

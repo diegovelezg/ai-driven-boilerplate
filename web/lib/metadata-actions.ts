@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import {
   getMetadataMap,
   saveMetadataMap,
@@ -51,6 +52,7 @@ export async function saveMetadataMapAction(
     const denied = await denyStore(storeId);
     if (denied) return { ok: false, message: denied };
     await saveMetadataMap(storeId, map);
+    revalidatePath("/settings");
     return { ok: true, message: "Mapeo guardado. El motor lo usa desde la próxima lectura." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };

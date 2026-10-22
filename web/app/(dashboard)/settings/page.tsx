@@ -5,6 +5,7 @@ import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { getPendingProposal } from "@/lib/profile-recalibrate/service";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { requireMyStoreAccess } from "@/lib/tenant";
 import { SettingsTabs, type SettingsTab } from "./settings-tabs";
 
 export const instant = false;
@@ -46,11 +47,18 @@ export default async function SettingsPage({
   // Seguridad: al cliente solo viajan booleanos has* (nunca los secretos en
   // plaintext por el Flight payload). Los valores reales solo viven en server.
   const safeDefaults = toSafeConnections(defaults);
-  const storeId =
+  const resolvedId =
     isSupabaseConfigured() && defaults.medusaUrl
       ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
       : null;
-  const [profile, signals, proposal, secretsInDb] = storeId
+  // Multiuser por tenant: la conexión legacy es global; sin membresía no se
+  // muestra ni se edita nada de otro tenant.
+  const storeId =
+    resolvedId && (await requireMyStoreAccess(resolvedId).catch(() => null)) === false
+      ? null
+      : resolvedId;
+  const accessDenied = Boolean(resolvedId && !storeId);
+  const [profile, signals, proposal, secretsInDb, savedMap] = storeId
     ? await Promise.all([
         getStoreProfile(storeId).catch(() => null),
         getProfileSignals(storeId).catch(() => null),
@@ -67,8 +75,11 @@ export default async function SettingsPage({
             return (data?.length ?? 0) > 0;
           })
           .catch(() => false),
+        import("@/lib/metadata-map")
+          .then((m) => m.getMetadataMap(storeId))
+          .catch(() => null),
       ])
-    : [null, null, null, false];
+    : [null, null, null, false, null];
   const suggestion = suggestArchetype(signals);
   // Contenido solo con conexión exitosa y datos: tienda resuelta + token +
   // al menos 1 orden sincronizada (si no, el scan no tiene de dónde leer).
@@ -152,18 +163,26 @@ export default async function SettingsPage({
         title="Settings"
         description="Conecta tu tienda, calibra tu negocio y revisa lo que aprendió el motor."
       />
+      {accessDenied ? (
+        <p className="text-sm text-muted-foreground">
+          Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.
+        </p>
+      ) : (
       <SettingsTabs
         key={initialTab}
         defaults={safeDefaults}
         secretsInDb={secretsInDb}
         storeId={storeId}
         contentReady={contentReady}
+        contentMapped={savedMap !== null}
+        contentKey={savedMap?.content ?? null}
         profile={profile}
         suggestion={suggestion}
         motor={motorCard}
         proposal={proposal}
         initialTab={initialTab}
       />
+      )}
     </div>
   );
 }

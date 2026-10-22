@@ -5,10 +5,11 @@ import { PageHeader } from "@/components/page-header";
 import { SectionHeading } from "@/components/section-heading";
 import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
 import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
-import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
+import { applyScopeFilter, resolveMarketScope } from "@/lib/markets";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { displayStoreName, getActiveStore, type TenantStore } from "@/lib/tenant";
+import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
+import { connection } from "next/server";
 import { FinanceStrip } from "../finance-strip";
 import { ItemsRanking } from "./items-ranking";
 import { TopCustomers } from "./top-customers";
@@ -28,6 +29,9 @@ export default async function FinanzasPage({
 }: {
   searchParams: Promise<{ store?: string; market?: string }>;
 }) {
+  // Request-time: usa Date.now()/new Date() en el render (Cache Components
+  // no lo difiere con `instant = false`; ver nota en app/(dashboard)/page.tsx).
+  await connection();
   if (!isSupabaseConfigured()) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
@@ -47,7 +51,7 @@ export default async function FinanzasPage({
   let stores: TenantStore[] = [];
   let active: TenantStore | null = null;
   try {
-    const resolved = await getActiveStore(sp.store);
+    const resolved = await getMyActiveStore(sp.store);
     stores = resolved.stores;
     active = resolved.active;
   } catch (e) {
@@ -65,6 +69,8 @@ export default async function FinanzasPage({
     );
   }
   if (stores.length === 0 || !active) {
+    const myIds = await getMyStoreIds().catch(() => null);
+    const noAccess = Array.isArray(myIds) && myIds.length === 0;
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
         <PageHeader
@@ -74,13 +80,17 @@ export default async function FinanzasPage({
         />
         <AppCard
           footer={
-            <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
-              Ir a Settings
-            </Button>
+            noAccess ? undefined : (
+              <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
+                Ir a Settings
+              </Button>
+            )
           }
         >
           <p className="text-[13px] text-muted-foreground">
-            Conecta tu tienda para ver tus finanzas.
+            {noAccess
+              ? "Tu usuario no tiene tiendas asignadas. Pide a tu admin que te agregue en merchant_users."
+              : "Conecta tu tienda para ver tus finanzas."}
           </p>
         </AppCard>
       </div>
@@ -275,14 +285,12 @@ export default async function FinanzasPage({
   const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
   const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
 
-  const marketLabel = scope.market ? displayMarket(scope.market) : null;
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Dinero y retención"
         title={`Finanzas · ${displayStoreName(active)}`}
-        description={`Ventas, órdenes y ticket por mes${marketLabel ? ` · viendo ${marketLabel}` : ` en ${(viewCurrency ?? "PEN").toUpperCase()}`}. Otras monedas van aparte.${dataPartial ? ` · muestra parcial (CAP ${formatNumber(20000)})` : ""}`}
+        description={`Ventas, órdenes y ticket por mes${dataPartial ? ` · muestra parcial (CAP ${formatNumber(20000)})` : ""}`}
       />
 
       {error && (
@@ -295,7 +303,6 @@ export default async function FinanzasPage({
           kpis={kpis}
           currency={viewCurrency}
           recoveredMinor={recoveredMinor}
-          marketLabel={marketLabel}
           rescate={rescate}
           cycleDays={cycleDays}
           retention={retention ?? undefined}

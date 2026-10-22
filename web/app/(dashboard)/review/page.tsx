@@ -18,9 +18,9 @@ import { resolveContact } from "@/lib/comms/contact";
 import { buildWaMeUrl } from "@/lib/comms/whatsapp/wame";
 import {
   applyScopeFilter,
-  displayMarket,
   resolveMarketScope,
 } from "@/lib/markets";
+import { requireMyStoreAccess } from "@/lib/tenant";
 
 export const instant = false;
 
@@ -73,7 +73,6 @@ export default async function ReviewPage({
   /** Dominios que ya son customers (para el check “no es cliente actual”). */
   const customerDomains = new Set<string>();
   let shopCurrency: string | null = null;
-  let marketLabel: string | null = null;
   let ultimaCompraLabel = "última compra";
   let isB2BReview = true;
   /** Gate del botón prospectar: solo B2B (fail-open en error; el backend veta). */
@@ -84,12 +83,13 @@ export default async function ReviewPage({
       const storeId = await resolveStoreId(conn.medusaUrl);
       if (!storeId) {
         error = "Tienda aún sin sincronizar.";
+      } else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+        error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
         const db = getSupabase();
         // Filtro global por país/mercado (?market= del header). Acciones y
         // señales filtran por sus customers; leads no tienen país (van todos).
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
-        marketLabel = scope?.market ? displayMarket(scope.market) : null;
         const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: ar, error: arErr }, { data: ds, error: dsErr }, { count: dsTotal, error: dsCountErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { count: clTotal, error: clCountErr }, { data: dl, error: dlErr }, { data: br }] =
           await Promise.all([
             (async () => {
@@ -517,11 +517,14 @@ export default async function ReviewPage({
       error = e instanceof Error ? e.message : "DB read failed";
     }
     // Gate B2B del botón (best-effort; el backend veta igual).
+    // Sin acceso al tenant no se resuelve elegibilidad (no filtrar datos).
     try {
-      const sid = conn.medusaUrl ? await resolveStoreId(conn.medusaUrl).catch(() => null) : null;
-      if (sid) {
-        const { prospectEligibility } = await import("@/lib/prospect");
-        prospectEligible = (await prospectEligibility(sid)).eligible;
+      if (!error) {
+        const sid = conn.medusaUrl ? await resolveStoreId(conn.medusaUrl).catch(() => null) : null;
+        if (sid && (await requireMyStoreAccess(sid).catch(() => null)) !== false) {
+          const { prospectEligibility } = await import("@/lib/prospect");
+          prospectEligible = (await prospectEligibility(sid)).eligible;
+        }
       }
     } catch {
       prospectEligible = true;
@@ -567,7 +570,7 @@ export default async function ReviewPage({
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Bandeja de entrada"
-        title={`Review${marketLabel ? ` · ${marketLabel}` : ""}`}
+        title="Review"
         description="Mensajes, señales y empresas: todo lo que necesita tu decisión."
         badge={
           inboxTotal > 0 ? (
@@ -627,7 +630,6 @@ export default async function ReviewPage({
             dismissedSignals={dismissedSignals}
             visible={{ actions: showActions, leads: showLeads, signals: showSignals }}
             runningKinds={[...runningKinds]}
-            marketLabel={marketLabel}
             marketId={sp.market ?? null}
             customerDomains={[...customerDomains]}
             shopCurrency={shopCurrency}

@@ -1,5 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { getActiveStore } from "@/lib/tenant";
+import { getMyActiveStore } from "@/lib/tenant";
 import { applyScopeFilter, resolveMarketScope } from "@/lib/markets";
 
 /**
@@ -14,10 +14,10 @@ export async function GET(req: Request) {
   }
   const url = new URL(req.url);
   const sp = url.searchParams;
-  let stores: Awaited<ReturnType<typeof getActiveStore>>["stores"] = [];
-  let active: Awaited<ReturnType<typeof getActiveStore>>["active"] = null;
+  let stores: Awaited<ReturnType<typeof getMyActiveStore>>["stores"] = [];
+  let active: Awaited<ReturnType<typeof getMyActiveStore>>["active"] = null;
   try {
-    const resolved = await getActiveStore(sp.get("store"));
+    const resolved = await getMyActiveStore(sp.get("store"));
     stores = resolved.stores;
     active = resolved.active;
   } catch (e) {

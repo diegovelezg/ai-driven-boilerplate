@@ -40,7 +40,14 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
   // (no bloquea el login si falla; se omite si hay run en curso).
   scheduleSyncOnLogin();
   if (next.startsWith("/") && !next.startsWith("//")) redirect(next);
-  const { data } = await supabase.from("merchant_users").select("store_id").limit(1).maybeSingle();
+  // Multiuser: el destino es la primera membresía del usuario (RLS ya filtra
+  // a sus tenants; cualquier miembro ve todo su tenant).
+  const { data } = await supabase
+    .from("merchant_users")
+    .select("store_id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
   const storeId = data?.store_id as string | undefined;
   redirect(storeId ? `/?store=${storeId}` : "/");
 }

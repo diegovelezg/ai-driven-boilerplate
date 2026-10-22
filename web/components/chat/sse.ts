@@ -1,16 +1,21 @@
 import type { ChatArtifact, ChatMessage } from "./types";
+import { createChatId } from "./types";
+import { toolStatusLabel } from "./status-labels";
 
 interface SseEvent {
   choices?: Array<{ delta?: { content?: string } }>;
   artifact?: ChatArtifact;
+  status?: { tool?: string };
 }
 
-/** Extrae tokens OpenAI-style (`data: {choices[0].delta.content}`) y
- *  artefactos (`data: {artifact}`) de un stream SSE. */
+/** Extrae tokens OpenAI-style (`data: {choices[0].delta.content}`),
+ *  artefactos (`data: {artifact}`) y estados (`data: {status: {tool}}`)
+ *  de un stream SSE. */
 async function consumeSseStream(
   res: Response,
   onToken: (token: string) => void,
   onArtifact?: (artifact: ChatArtifact) => void,
+  onStatus?: (tool: string) => void,
 ): Promise<void> {
   if (!res.body) throw new Error(`HTTP ${res.status}`);
   const reader = res.body.getReader();
@@ -32,6 +37,9 @@ async function consumeSseStream(
           const json = JSON.parse(payload) as SseEvent;
           const token = json.choices?.[0]?.delta?.content;
           if (token) onToken(token);
+          if (typeof json.status?.tool === "string" && json.status.tool && onStatus) {
+            onStatus(json.status.tool);
+          }
           if (json.artifact && onArtifact) {
             const rows = Array.isArray(json.artifact.data) ? json.artifact.data.length : 1;
             console.debug(
@@ -65,8 +73,10 @@ export async function postChatStream(opts: {
   body: unknown;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   onArtifact?: (artifact: ChatArtifact) => void;
+  /** Etiqueta descriptiva del trabajo en curso ("Scout vigilando…"). */
+  onStatus?: (label: string | null) => void;
 }): Promise<void> {
-  const { url, body, setMessages, onArtifact } = opts;
+  const { url, body, setMessages, onArtifact, onStatus } = opts;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -79,8 +89,14 @@ export async function postChatStream(opts: {
   }
   if (!res.ok || !res.body) throw new Error(await errorMessage(res, "HTTP"));
 
-  setMessages((m) => [...m, { role: "assistant", content: "" }]);
-  const appendToken = (token: string) =>
+  setMessages((m) => [...m, { id: createChatId(), role: "assistant", content: "" }]);
+  // El primer token apaga el "pensando": el trabajo ya es respuesta visible.
+  let statusCleared = false;
+  const appendToken = (token: string) => {
+    if (!statusCleared) {
+      statusCleared = true;
+      onStatus?.(null);
+    }
     setMessages((m) => {
       if (m.length === 0) return m;
       const copy = [...m];
@@ -88,8 +104,9 @@ export async function postChatStream(opts: {
       copy[copy.length - 1] = { ...last, role: "assistant", content: last.content + token };
       return copy;
     });
+  };
   try {
-    await consumeSseStream(res, appendToken, onArtifact);
+    await consumeSseStream(res, appendToken, onArtifact, (tool) => onStatus?.(toolStatusLabel(tool)));
   } catch (e) {
     // Sin tokens todavía: quitar el placeholder vacío para no dejar burbuja colgada.
     setMessages((m) =>

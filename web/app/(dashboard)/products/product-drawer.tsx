@@ -2,7 +2,6 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Bot, ChevronDown, Package, ShoppingBag, Users, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SortHeaderButton, type SortDir } from "@/components/data-table";
 import { DrawerShell } from "@/components/drawer-shell";
@@ -119,7 +118,7 @@ function ResumenTab({ summary, detail }: { summary: ProductWithStats; detail: Pr
   );
 }
 
-function MovimientosTab({ detail, marketLabel, summary }: { detail: ProductDetailDTO | null; marketLabel: string | null; summary: ProductWithStats }) {
+function MovimientosTab({ detail, summary }: { detail: ProductDetailDTO | null; summary: ProductWithStats }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [sortKey, setSortKey] = useState<"date" | "qty" | "price" | "revenue">("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -175,7 +174,7 @@ function MovimientosTab({ detail, marketLabel, summary }: { detail: ProductDetai
   const paged = rows.slice((safePage - 1) * DRAWER_PAGE_SIZE, safePage * DRAWER_PAGE_SIZE);
 
   if (detail.movements.length === 0) {
-    return <p className="text-[13px] text-muted-foreground">Sin ventas registradas para este ítem{marketLabel ? " en este market" : ""}.</p>;
+    return <p className="text-[13px] text-muted-foreground">Sin ventas registradas para este ítem.</p>;
   }
   // La lista trae TODOS los movimientos de lo escaneado (paginados de 20 en
   // 20): su suma sí es comparable con "Cant." de la tabla. Solo difiere si el
@@ -407,9 +406,6 @@ export function ProductDrawer({
           >
             {summary.is_active ? "activo" : "inactivo"}
           </span>
-          {detail?.marketLabel && (
-            <Badge variant="secondary" className="font-normal">{detail.marketLabel}</Badge>
-          )}
         </>
       }
       tabs={[...drawerTabs]}
@@ -430,10 +426,10 @@ export function ProductDrawer({
             <div className="flex flex-col gap-3">
               <SectionHeading
                 title="Movimientos"
-                hint={detail?.marketLabel ? `De este market${detail.currency ? ` (${detail.currency})` : ""} · clic para ver el contenido de esa línea` : "Clic para ver el contenido de esa línea"}
+                hint="Clic para ver el contenido de esa línea"
                 tone="sky"
               />
-              <MovimientosTab detail={detail} marketLabel={detail?.marketLabel ?? null} summary={summary} />
+              <MovimientosTab detail={detail} summary={summary} />
             </div>
           )}
           {tab === "clientes" && !error && (

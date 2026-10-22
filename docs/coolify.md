@@ -221,7 +221,11 @@ Notas:
 
 ## 5. Usuario login
 
-`merchant_users` local está vacío: recrear el usuario y linkearlo.
+`merchant_users` linkea cada login con sus tiendas (multiuser por tenant:
+cualquier miembro ve todo su tenant). La migración
+`20261102000000_merchant_users_bootstrap` asigna automáticamente las tiendas
+existentes a usuarios sin membresía; si un user ve "Sin acceso a esta
+tienda", alta manual:
 
 Opción A (UI): Studio → Authentication → Users → Create user
 (`diegovelezg@gmail.com` + clave), luego SQL editor:

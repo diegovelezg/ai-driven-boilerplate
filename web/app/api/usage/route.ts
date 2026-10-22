@@ -1,5 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { listStores, pickRequestedStore } from "@/lib/tenant";
+import { listMyStores, pickRequestedStore } from "@/lib/tenant";
 
 /**
  * GET /api/usage?store=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD&process=
@@ -16,8 +16,8 @@ export async function GET(req: Request) {
   const to = url.searchParams.get("to");
   const process = url.searchParams.get("process");
 
-  const stores = await listStores().catch((e) => {
-    console.log(`[api/usage] listStores fallo: ${e instanceof Error ? e.message : "?"}`);
+  const stores = await listMyStores().catch((e) => {
+    console.log(`[api/usage] listMyStores fallo: ${e instanceof Error ? e.message : "?"}`);
     return [];
   });
   const store = pickRequestedStore(stores, storeParam);

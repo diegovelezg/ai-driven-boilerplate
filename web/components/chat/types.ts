@@ -1,6 +1,16 @@
 export interface ChatMessage {
+  id: string;
   role: "user" | "assistant";
   content: string;
+}
+
+/** IDs estables para MessageScrollerItem (anclaje/scroll del nativo). */
+export function createChatId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `msg-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  }
 }
 
 /** Dato estructurado de una tool (list_actions, list_signals, list_leads,

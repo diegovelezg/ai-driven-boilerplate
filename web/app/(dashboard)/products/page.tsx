@@ -6,12 +6,14 @@ import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
 import { listProductsWithStats, normProductTitleLoose, type ProductWithStats } from "@/lib/product-stats";
-import { displayMarket, resolveMarketScope } from "@/lib/markets";
+import { resolveMarketScope } from "@/lib/markets";
 import { isRealDbOrder } from "@/lib/medusa";
+import { requireMyStoreAccess } from "@/lib/tenant";
 import { ProductsList } from "./products-list";
 import { ProductsSearch } from "./products-search";
 import { ProductsEstadoSelect } from "./products-estado-select";
 import { SyncButton } from "../customers/sync-button";
+import { connection } from "next/server";
 
 export const instant = false;
 
@@ -22,6 +24,9 @@ export default async function ProductsPage({
 }: {
   searchParams: Promise<{ q?: string; estado?: string; market?: string }>;
 }) {
+  // Request-time: usa Date.now() en el render (Cache Components no lo
+  // difiere con `instant = false`; ver nota en app/(dashboard)/page.tsx).
+  await connection();
   const conn = await readConnections();
   const connected = Boolean(conn.medusaUrl && conn.medusaToken);
   const dbReady = isSupabaseConfigured();
@@ -35,7 +40,6 @@ export default async function ProductsPage({
   let truncated = false;
   let error: string | null = null;
   let synced = false;
-  let marketLabel: string | null = null;
   let dataPartial = false;
 
   if (connected && dbReady) {
@@ -43,11 +47,12 @@ export default async function ProductsPage({
       const storeId = await resolveStoreId(conn.medusaUrl);
       if (!storeId) {
         error = "Tienda aún sin sincronizar. Presiona Sincronizar.";
+      } else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+        error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
         synced = true;
         // Filtro global ?market= (mismo scope que Finanzas/Customers).
         const scope = await resolveMarketScope(storeId, marketParam).catch(() => null);
-        marketLabel = scope?.market ? displayMarket(scope.market) : null;
         const res = await listProductsWithStats(storeId);
         rows = res.rows;
         total = res.total;
@@ -146,8 +151,8 @@ export default async function ProductsPage({
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Catálogo del tenant"
-        title={`Catálogo${marketLabel ? ` · ${marketLabel}` : ""}`}
-        description={`Qué ofrece el negocio y qué se mueve${marketLabel ? " en este market" : ""}. Solo lectura: sin gestión de catálogo.${dataPartial ? " Muestra parcial (CAP 20k órdenes)." : ""}`}
+        title="Catálogo"
+        description={`Qué ofrece el negocio y qué se mueve. Solo lectura: sin gestión de catálogo.${dataPartial ? " Muestra parcial (CAP 20k órdenes)." : ""}`}
         right={synced ? <SyncButton /> : undefined}
       />
 

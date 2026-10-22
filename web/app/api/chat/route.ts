@@ -41,6 +41,11 @@ function artifactSse(tool: string, data: unknown, query: unknown): string {
   return `data: ${JSON.stringify({ artifact: { tool, data: rows, query: query ?? null } })}\n\n`;
 }
 
+/** El cliente pinta `tool` como "pensando" descriptivo (mapa en status-labels). */
+function statusSse(tool: string): string {
+  return `data: ${JSON.stringify({ status: { tool } })}\n\n`;
+}
+
 export async function POST(req: Request) {
   if (!isSupabaseConfigured()) {
     return Response.json({ error: "Supabase no configurado." }, { status: 500 });
@@ -158,8 +163,12 @@ export async function POST(req: Request) {
               send(sse(p.text));
               continue;
             }
-            if (p.functionCall && ARTIFACT_TOOLS.includes(p.functionCall.name ?? "")) {
-              callArgs[p.functionCall.name as string] = p.functionCall.args ?? null;
+            if (p.functionCall?.name) {
+              // El cliente lo pinta como "pensando" descriptivo.
+              send(statusSse(p.functionCall.name));
+              if (ARTIFACT_TOOLS.includes(p.functionCall.name)) {
+                callArgs[p.functionCall.name as string] = p.functionCall.args ?? null;
+              }
               continue;
             }
             // Resultado de tool de datos (role "user", autor = agente) →

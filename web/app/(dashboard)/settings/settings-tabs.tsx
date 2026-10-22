@@ -33,6 +33,8 @@ export function SettingsTabs({
   secretsInDb,
   storeId,
   contentReady,
+  contentMapped,
+  contentKey,
   profile,
   suggestion,
   motor,
@@ -44,6 +46,10 @@ export function SettingsTabs({
   storeId: string | null;
   /** Conexión exitosa con datos: solo entonces se mapea el contenido. */
   contentReady?: boolean;
+  /** El merchant ya guardó el mapeo de Contenido (explícito, incluso "Ninguno"). */
+  contentMapped?: boolean;
+  /** Key elegida como contenido (null = "Ninguno" explícito o sin mapear). */
+  contentKey?: string | null;
   profile: StoreProfile | null;
   suggestion: Suggestion;
   motor: MotorSummary | null;
@@ -100,7 +106,7 @@ export function SettingsTabs({
             hint="Medusa como origen de clientes y pedidos. Solo se guarda el token, nunca el password."
             tone="primary"
           />
-          <SettingsForm defaults={defaults} secretsInDb={secretsInDb} storeId={storeId} contentReady={contentReady} />
+          <SettingsForm defaults={defaults} secretsInDb={secretsInDb} storeId={storeId} contentReady={contentReady} contentMapped={contentMapped} contentKey={contentKey} />
         </section>
       )}
 

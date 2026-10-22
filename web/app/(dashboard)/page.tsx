@@ -23,7 +23,8 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { applyScopeFilter, resolveMarketScope, withMarketParam, type MarketScope } from "@/lib/markets";
 import {
   displayStoreName,
-  getActiveStore,
+  getMyActiveStore,
+  getMyStoreIds,
   type TenantStore,
 } from "@/lib/tenant";
 import { TeamPulse } from "./team-pulse";
@@ -33,6 +34,7 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import { avgTicket, getRankedMira } from "@/lib/mira";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { approverLabel, dispatchedOutcome } from "@/lib/action-trace";
+import { connection } from "next/server";
 
 export const instant = false;
 
@@ -128,6 +130,12 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<{ store?: string; market?: string }>;
 }) {
+  // Request-time: la page usa Date.now()/new Date() (ago, weekAgoIso,
+  // dayStart, nextWindowDate, needsRecheck) y Cache Components no lo difiere
+  // con `instant = false` — sin esto, el prerender falla con
+  // blocking-prerender-current-time. El connection() del layout no cubre
+  // a la page (cada segmento se valida por separado).
+  await connection();
   const dbReady = isSupabaseConfigured();
   const sp = await searchParams;
 
@@ -147,7 +155,7 @@ export default async function DashboardPage({
   let active: StoreRow | null = null;
   let storesError: string | null = null;
   try {
-    const resolved = await getActiveStore(sp.store);
+    const resolved = await getMyActiveStore(sp.store);
     stores = resolved.stores;
     active = resolved.active;
   } catch (e) {
@@ -164,17 +172,26 @@ export default async function DashboardPage({
     );
   }
   if (stores.length === 0 || !active) {
+    // Sin tiendas visibles: o aún no hay sync, o el user no tiene membresía.
+    // Se distingue para no mandar a Settings a quien solo necesita alta en
+    // `merchant_users` (ver `docs/coolify.md` §5 / migración bootstrap).
+    const myIds = await getMyStoreIds().catch(() => null);
+    const noAccess = Array.isArray(myIds) && myIds.length === 0;
     return (
       <div className="flex w-full flex-col gap-6 p-6">
         <h1 className="text-lg font-semibold tracking-tight">Overview</h1>
         <AppCard
           footer={
-            <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
-              Ir a Settings
-            </Button>
+            noAccess ? undefined : (
+              <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
+                Ir a Settings
+              </Button>
+            )
           }
         >
-          Conecta tu tienda para empezar a recuperar clientes.
+          {noAccess
+            ? "Tu usuario no tiene tiendas asignadas. Pide a tu admin que te agregue en merchant_users."
+            : "Conecta tu tienda para empezar a recuperar clientes."}
         </AppCard>
       </div>
     );
@@ -507,7 +524,7 @@ export default async function DashboardPage({
         seenCust.add(cid0);
         const d = String(r.decision ?? "");
         // Con filtro de mercado el market es el universo también en conteos:
-        // sin esto el héroe cuenta MX bajo un header "viendo PE · PEN"
+        // sin esto el héroe cuenta MX bajo el selector PE · PEN
         // mientras Finanzas suma solo PE (45 vs 44).
         const cur = (r.currency as string | null) ?? null;
         const inView =

@@ -1,6 +1,13 @@
 // Tenant activo (SSOT). Orden: ?store=uuid validado en stores > conexión
 // legacy (.data/connections.json) > primera tienda. Sin cookie todavía:
 // la persistencia entre páginas llega en Fase 1 con el selector global.
+//
+// Multiuser por tenant: las lecturas SSR usan service_role (bypassa RLS),
+// así que el aislamiento se enforcea en esta capa filtrando por membresía
+// (`merchant_users`). `listStores`/`getActiveStore` = sin filtro (workers y
+// contextos sin sesión). `listMyStores`/`getMyActiveStore` = filtrado por el
+// usuario actual vía cliente RLS (cualquier miembro del tenant ve todo el
+// tenant, y solo sus tenants).
 import { resolveStoreId } from "@/lib/customers-db";
 import { readConnections } from "@/lib/store";
 import { getSupabase } from "@/lib/supabase";
@@ -112,4 +119,93 @@ export function displayStoreName(s: { name: string | null; shop_url: string }): 
     // shop_url sin protocolo: se muestra tal cual
   }
   return s.shop_url;
+}
+
+/** IDs de tiendas del usuario actual (vía RLS: `merchant_users_self_read`).
+ *  null = auth no configurada (dev local sin login: sin scoping).
+ *  [] = autenticado sin membresías (sin acceso a ningún tenant). */
+export async function getMyStoreIds(): Promise<string[] | null> {
+  let configured = false;
+  try {
+    const { isUserAuthConfigured } = await import("@/lib/supabase-server");
+    configured = isUserAuthConfigured();
+  } catch {
+    return null;
+  }
+  if (!configured) return null;
+  try {
+    const { createServerSupabase } = await import("@/lib/supabase-server");
+    const supabase = await createServerSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    const { data } = await supabase
+      .from("merchant_users")
+      .select("store_id")
+      .eq("user_id", user.id);
+    return ((data ?? []) as Array<Record<string, unknown>>)
+      .map((r) => String(r.store_id ?? ""))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** ¿El usuario actual pertenece a `storeId`? null = sin auth (dev: permite). */
+export async function requireMyStoreAccess(storeId: string): Promise<boolean | null> {
+  const ids = await getMyStoreIds().catch(() => null);
+  if (ids === null) return null;
+  return ids.includes(storeId);
+}
+
+/** Tiendas visibles para el usuario actual. Fuera de membresía no se lista
+ *  nada (el ?store= hostil se ignora aguas abajo en `getMyActiveStore`). */
+export async function listMyStores(requestedId?: string | null): Promise<TenantStore[]> {
+  const ids = await getMyStoreIds().catch(() => null);
+  if (ids === null) return listStores(requestedId);
+  if (ids.length === 0) return [];
+  const db = getSupabase();
+  if (requestedId) {
+    if (!ids.includes(requestedId)) return listMyStores();
+    const { data: one } = await db
+      .from("stores")
+      .select("id,name,shop_url,platform,shop_currency")
+      .eq("id", requestedId)
+      .maybeSingle();
+    if (one) {
+      const r = one as Record<string, unknown>;
+      return [{
+        id: String(r.id),
+        name: (r.name as string | null) ?? null,
+        shop_url: String(r.shop_url ?? ""),
+        platform: String(r.platform ?? ""),
+        shop_currency: String(r.shop_currency ?? "PEN"),
+      }];
+    }
+    return [];
+  }
+  const { data, error } = await db
+    .from("stores")
+    .select("id,name,shop_url,platform,shop_currency")
+    .in("id", ids)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Stores read: ${error.message}`);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: String(r.id),
+    name: (r.name as string | null) ?? null,
+    shop_url: String(r.shop_url ?? ""),
+    platform: String(r.platform ?? ""),
+    shop_currency: String(r.shop_currency ?? "PEN"),
+  }));
+}
+
+/** `getActiveStore` filtrado por membresía: ?store= fuera del tenant se
+ *  ignora (fallback a la primera tienda del usuario, nunca a la ajena). */
+export async function getMyActiveStore(
+  requestedId: string | null | undefined,
+): Promise<{ stores: TenantStore[]; active: TenantStore | null }> {
+  const stores = await listMyStores();
+  if (stores.length === 0) return { stores, active: null };
+  const picked = requestedId ? (stores.find((s) => s.id === requestedId) ?? null) : null;
+  if (picked) return { stores, active: picked };
+  return { stores, active: stores[0] };
 }

@@ -48,9 +48,8 @@ async function requireSettingsUser(): Promise<{ id: string; email: string | null
 }
 
 /**
- * Membresía por tenant, legacy-tolerante: si el usuario no tiene ninguna
- * membresía (single-tenant pre-migración), permite. Si tiene y no incluye
- * `storeId`, deniega. Sin `storeId` (tienda nueva) permite la creación.
+ * Membresía por tenant: sin membresía a `storeId` no hay acceso.
+ * Sin `storeId` (tienda nueva) permite la creación.
  */
 async function denyWithoutMembership(
   storeId: string | null,

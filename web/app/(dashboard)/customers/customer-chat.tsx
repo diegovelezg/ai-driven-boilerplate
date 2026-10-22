@@ -25,7 +25,7 @@ export function CustomerChat({
   onInitialSent?: () => void;
 }) {
   const buildBody = useCallback((messages: ChatMessage[]) => ({ messages }), []);
-  const { messages, input, setInput, pending, error, ask } = useStreamChat({
+  const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
     url: `/api/customers/${dbId}/chat`,
     buildBody,
   });
@@ -57,6 +57,7 @@ export function CustomerChat({
       onAsk={(t) => void ask(t)}
       pending={pending}
       error={error}
+      status={status}
       suggestions={SUGGESTED}
       emptyTitle="Pregunta por este customer"
       emptySubtitle="Leo su ficha y su historial de compras para responder."

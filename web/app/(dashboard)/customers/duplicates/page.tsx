@@ -14,10 +14,11 @@ import {
 } from "@/components/data-table";
 import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
-import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
+import { resolveMarketScope, withMarketParam } from "@/lib/markets";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { requireMyStoreAccess } from "@/lib/tenant";
 import { MergeButton } from "./merge-button";
 import { MergeAllBar } from "./merge-all-button";
 
@@ -35,15 +36,15 @@ export default async function DuplicatesPage({
   let groups: Awaited<ReturnType<typeof findDuplicateGroups>> = [];
   let error: string | null = null;
   let marketId: string | null = null;
-  let marketLabel: string | null = null;
   if (ready) {
     try {
       const storeId = await resolveStoreId(conn.medusaUrl);
       if (!storeId) error = "Tienda sin sincronizar.";
-      else {
+      else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+        error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
+      } else {
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketId = scope?.market?.id ?? null;
-        marketLabel = scope?.market ? displayMarket(scope.market) : null;
         groups = await findDuplicateGroups(storeId, scope);
       }
     } catch (e) {
@@ -57,7 +58,7 @@ export default async function DuplicatesPage({
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Calidad de datos"
-        title={`Posibles duplicados${marketLabel ? ` · ${marketLabel}` : ""}`}
+        title="Posibles duplicados"
         description={`${formatNumber(groups.length)} email${groups.length === 1 ? "" : "s"} con más de una ficha${extraRows > 0 ? ` · ${formatNumber(extraRows)} fila${extraRows === 1 ? "" : "s"} extra` : ""}. Solo lectura.`}
         right={
           <Button

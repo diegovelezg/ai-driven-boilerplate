@@ -17,7 +17,8 @@ import { readConnections } from "@/lib/store";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { pendingDomains } from "@/lib/enrich";
 import { countDuplicateEmails } from "@/lib/duplicates";
-import { displayMarket, resolveMarketScope, withMarketParam } from "@/lib/markets";
+import { resolveMarketScope, withMarketParam } from "@/lib/markets";
+import { requireMyStoreAccess } from "@/lib/tenant";
 import { formatNumber } from "@/lib/format";
 import { CustomersView } from "./customers-view";
 import { EnrichmentControls } from "./enrichment-controls";
@@ -60,7 +61,6 @@ export default async function CustomersPage({
   let duplicateCount = 0;
   let shopCurrency: string | null = null;
   let marketId: string | null = null;
-  let marketLabel: string | null = null;
   let preds: Record<string, CustomerPredictionLite> = {};
   let ventana7: { n: number; sumaMinor: number } | null = null;
   let seguimiento: { n: number; sumaMinor: number } | null = null;
@@ -71,13 +71,14 @@ export default async function CustomersPage({
       const storeId = await resolveStoreId(conn.medusaUrl);
       if (!storeId) {
         error = "Tienda aún sin sincronizar. Presiona Sincronizar.";
+      } else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+        error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
         synced = true;
         // Filtro global por país/mercado (?market= del header).
         // NULL-comodín: los sin compras se ven en todo filtro.
         const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         marketId = scope?.market?.id ?? null;
-        marketLabel = scope?.market ? displayMarket(scope.market) : null;
         pendingCount = (await pendingDomains(storeId, scope).catch(() => [])).length;
         duplicateCount = await countDuplicateEmails(storeId, scope).catch(() => 0);
         const { resolveCloseWatchP } = await import("@/lib/store-profiles");
@@ -128,7 +129,7 @@ export default async function CustomersPage({
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Cartera de clientes"
-        title={`Customers${marketLabel ? ` · ${marketLabel}` : ""}`}
+        title="Customers"
         description="Cada cliente, su ritmo de recompra y el valor en juego."
         right={
           <span className="flex flex-wrap items-center gap-2">

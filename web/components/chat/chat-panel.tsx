@@ -20,7 +20,7 @@ const SUGGESTION_POOL = [
   "¿Qué leads nuevos encontró el prospector?",
   "¿Quién entra en ventana esta semana?",
   "Muéstrame borradores de WhatsApp pendientes",
-  "¿Cuál es la facturación bruta por moneda?",
+  "¿Cuál es la facturación bruta?",
   "¿Cuántos compradores vs customers tenemos?",
   "¿Cuánto recupero atribuido llevamos en 30 días?",
   "¿Quiénes están en primera recompra sin volver?",
@@ -57,7 +57,7 @@ export function ChatPanel({
     (messages: ChatMessage[]) => ({ storeId, messages, marketId }),
     [storeId, marketId],
   );
-  const { messages, input, setInput, pending, error, ask } = useStreamChat({
+  const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
     url: "/api/chat",
     buildBody,
     onArtifact,
@@ -78,6 +78,7 @@ export function ChatPanel({
       onAsk={(t) => void ask(t)}
       pending={pending}
       error={error}
+      status={status}
       suggestions={suggestions}
       onShuffleSuggestions={() => setNonce((n) => n + 1)}
       emptyTitle="Pregunta a tu equipo de agentes"
