@@ -10,6 +10,7 @@
 // Fail-open: si el juez falla (llave, red, JSON roto), se redacta igual y el
 // ranking determinista manda. La puerta nunca vacía la cola por infra.
 import { createLogger } from "@/lib/log";
+import { formatNumber } from "@/lib/format";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
 import { parseJudgeResponse } from "@/lib/judge-brief";
 
@@ -58,9 +59,9 @@ export interface JudgeDossier {
 function buildJudgeDossier(d: JudgeDossier): string {
   const lines = [
     `Cliente: ${d.firstName}${d.companyName ? ` — ${d.companyName}` : ""} (objetivo ${d.objetivo})`,
-    `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince ?? "?"}. Compras previas: ${d.comprasPrevias ?? "?"}.`,
+    `Hoy: ${d.todayIso}. Días sin comprar: ${d.daysSince == null ? "?" : formatNumber(d.daysSince)}. Compras previas: ${d.comprasPrevias == null ? "?" : formatNumber(d.comprasPrevias)}.`,
     ...(d.catalog ? [`Negocio: ${d.catalog}.`] : []),
-    ...(d.ventanaTipicaDias != null ? [`Ventana típica del negocio: ~${d.ventanaTipicaDias}d (no vetar lo normal).`] : []),
+    ...(d.ventanaTipicaDias != null ? [`Ventana típica del negocio: ~${formatNumber(d.ventanaTipicaDias)}d (no vetar lo normal).`] : []),
     `Historial pasado (no es la oferta; no vetes por fechas):`,
   ];
   for (const it of d.items.slice(0, 6)) {

@@ -74,7 +74,7 @@ describe("SSOT formato numérico", () => {
   it("no hay símbolos de moneda a mano fuera del SSOT", () => {
     const bad: string[] = [];
     // `S/ ${`, `US$`, `MX$`… literales: la moneda sale de formatMoney.
-    const re = /(S\/|US\$|MX\$|COP\$|CLP\$|ARS\$|R\$|€|£)\s*(\$\{|"|`)/;
+    const re = /(S\/|US\$|MX\$|COP\$|CLP\$|ARS\$|R\$|€|£)\s*(\$\{|"|'|`)/;
     for (const f of files) {
       const r = rel(f);
       if (r === SSOT || r.startsWith("tests/")) continue;
@@ -89,7 +89,9 @@ describe("SSOT formato numérico", () => {
 
   it("ningún tool/prompt le pide al LLM dividir minor units", () => {
     const bad: string[] = [];
-    const re = /dividir \/100|minor units \/100/;
+    // Cubre "dividir /100", "divide por 100", "divídelo entre 100" y menciones
+    // "minor units …/100". El SSOT divide (lib/format.ts) y está excluido.
+    const re = /div[ií]d\w*\s+(por|entre|\/)\s*100|minor units[^\n]{0,60}\/ ?100/;
     for (const f of files) {
       const r = rel(f);
       if (r === SSOT || r.startsWith("tests/")) continue;
@@ -106,14 +108,19 @@ describe("SSOT formato numérico", () => {
     const src = readFileSync(join(ROOT, "lib/adk/tools/retain-tools.ts"), "utf8");
     for (const twin of [
       "revenue_by_currency_display",
+      "revenue_by_type_display",
       "recovered_this_month_display",
+      "recovered_30d_display",
       "total_spent_display",
       "revenue_display",
       "revenue_all_display",
+      "revenue_30d_display",
       "unit_price_display",
       "total_display",
       "monetary_display",
       "avg_ticket_display",
+      "ticket_esperado_display",
+      "valor_esperado_display",
     ]) {
       assert.ok(src.includes(twin), `falta gemelo display ${twin} en retain-tools.ts`);
     }
@@ -126,9 +133,12 @@ describe("SSOT formato numérico", () => {
   it("META = solo la key elegida en settings (cero heurísticas)", () => {
     const ctx = readFileSync(join(ROOT, "lib/item-context.ts"), "utf8");
     // Sin derivación de otras keys: ni ventana, ni citado, ni detalles, ni aprobado.
-    for (const banned of ["rawItemContext", "PROSE_MIN", "clienteDijo", "aprobado", "detalles", "ventana"]) {
+    // (Substrings con contexto —no "ventana" suelto— para no chocar con
+    // ventanaTipicaDias/ventanaMedianaDias legítimos en otros módulos.)
+    for (const banned of ["rawItemContext", "PROSE_MIN", "clienteDijo", "aprobado", "detalles"]) {
       assert.ok(!ctx.includes(banned), `item-context.ts aún deriva '${banned}' de otras keys`);
     }
+    assert.ok(!/[. ]ventana\b|ventana\s*:|dateStart|dateEnd/.test(ctx), "item-context.ts aún arma ventanas de metadata");
     assert.ok(ctx.includes("REGLA DURA"), "item-context.ts debe declarar la regla settings-only");
     // Enriquecido mínimo: título + cantidad + contenido de la key elegida.
     for (const f of ["contiene", "categoria"]) {

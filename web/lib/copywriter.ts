@@ -330,10 +330,20 @@ async function composeDraftCopy(
     return f.length > 0 ? f : arr.slice(0, 1);
   });
   const noun = briefNoun(stamp.catalog);
-  // Ticket del cliente (respaldo concreto, no comodín). Minor units → mayor.
-  const ticketVals = real.map((o) => Number(o.total_amount ?? 0)).filter((n) => n > 0);
+  // Ticket del cliente (respaldo concreto, no comodín). Minor units, misma
+  // moneda: sin filtrar se mezclaría PEN+MXN en un promedio mal rotulado.
+  const ticketCurVotes = new Map<string, number>();
+  for (const o of real) {
+    const c = String(o.currency ?? "").trim().toUpperCase();
+    if (c) ticketCurVotes.set(c, (ticketCurVotes.get(c) ?? 0) + 1);
+  }
+  const ticketCur = [...ticketCurVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  const ticketVals = real
+    .filter((o) => !ticketCur || String(o.currency ?? "").toUpperCase() === ticketCur)
+    .map((o) => Number(o.total_amount ?? 0))
+    .filter((n) => n > 0);
   const ticketClienteMinor = ticketVals.length > 0 ? Math.round(ticketVals.reduce((a, b) => a + b, 0) / ticketVals.length) : null;
-  const ticketClienteTxt = ticketClienteMinor != null ? formatMoney(ticketClienteMinor, (real[0]?.currency as string | null) ?? stamp.brain?.ticketCurrency ?? null) : null;
+  const ticketClienteTxt = ticketClienteMinor != null ? formatMoney(ticketClienteMinor, ticketCur ?? stamp.brain?.ticketCurrency ?? null) : null;
   const histLines = real.map((o, oi) => {
     const iso = String(o.placed_at ?? "?").slice(0, 10);
     const f = fechaCorta(String(o.placed_at ?? "")) ?? iso;
@@ -491,7 +501,7 @@ async function composeDraftCopy(
   sugEnd.setDate(sugEnd.getDate() + Math.max(0, durFromLast));
   const sugStartIso = sugStart.toISOString().slice(0, 10);
   const sugEndIso = sugEnd.toISOString().slice(0, 10);
-  const ritmoTxt = gapMed != null ? `cada ~${gapMed}d como tus compras` : stamp.brain?.ventanaMedianaDias != null ? `típica del negocio ~${stamp.brain.ventanaMedianaDias}d` : null;
+  const ritmoTxt = gapMed != null ? `cada ~${formatNumber(gapMed)}d como tus compras` : stamp.brain?.ventanaMedianaDias != null ? `típica del negocio ~${formatNumber(stamp.brain.ventanaMedianaDias)}d` : null;
   const sugLine = `Ventana sugerida${ritmoTxt ? ` (${ritmoTxt})` : ""}: ${fechaCorta(sugStartIso) ?? sugStartIso} → ${fechaCorta(sugEndIso) ?? sugEndIso} (${sugStartIso}→${sugEndIso}). Última compra ${lastF ?? "sin fecha"}${ticketClienteTxt != null ? ` · ticket típico suyo ~${ticketClienteTxt}` : ""}.`;
   const mode = briefMode(verdict.reusable);
   const basePatron =

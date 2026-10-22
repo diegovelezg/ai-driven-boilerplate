@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { formatNumber } from "@/lib/format";
+import { formatDecimal, formatNumber } from "@/lib/format";
 
-/** Compacta 1200 -> "1.2K", 2300000 -> "2.3M". */
+/** Compacta 1200 -> "1,2K", 2300000 -> "2,3M" (es-PE: decimal ","). */
 function compact(n: number): string {
   const short = (v: number, suffix: string) => {
-    const s = v.toFixed(1);
-    return `${s.endsWith(".0") ? s.slice(0, -2) : s}${suffix}`;
+    const s = formatDecimal(v, 1);
+    return `${s.endsWith(",0") ? s.slice(0, -2) : s}${suffix}`;
   };
   if (n >= 1_000_000) return short(n / 1_000_000, "M");
   if (n >= 1_000) return short(n / 1_000, "K");
