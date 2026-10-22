@@ -84,7 +84,11 @@ export default async function ProductsPage({
               const in30 = Number.isFinite(age) && age <= 30 * DAY_MS;
               const placed = typeof o.placed_at === "string" ? o.placed_at : null;
               for (const it of (Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [])) {
-                const t = normProductTitleLoose(String(it.title ?? ""));
+                // Igual que el sync: la línea puede traer product_title distinto
+                // de title (variante/rename). Antes solo se miraba title y esas
+                // ventas se perdían en la tabla con ?market=.
+                const raw = String(it.product_title ?? it.title ?? "");
+                const t = normProductTitleLoose(raw);
                 if (!t || t === "—") continue;
                 const qty = Number(it.quantity ?? 0);
                 if (!(qty > 0)) continue;

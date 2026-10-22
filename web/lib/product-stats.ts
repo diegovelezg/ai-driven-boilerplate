@@ -30,25 +30,27 @@ export function normProductTitleLoose(t: string): string {
     .replace(/\s+/g, " ");
 }
 
-export interface ProductStatsSummary {
-  rows: number;
-  matchedProducts: number;
-  unmatchedTitles: number;
-  /** Top no-matcheados por revenue (para afinar norm, no para UI). */
-  topUnmatched: Array<{ title: string; revenue: number; currency: string }>;
+export interface ProductPidIndex {
+  bySourceId: Map<string, string>;
+  byHandle: Map<string, string>;
+  byVariantId: Map<string, string>;
+  bySku: Map<string, string>;
+  byTitle: Map<string, string>;
+  byTitleLoose: Map<string, string>;
 }
 
-/** Recalcula product_stats del tenant. Upsert-only por (product_id, currency). */
-export async function computeProductStats(storeId: string): Promise<ProductStatsSummary> {
-  const db = getSupabase();
-  const now = Date.now();
+type ProductIndexRow = {
+  id?: unknown;
+  title?: unknown;
+  handle?: unknown;
+  source_id?: unknown;
+  variants_json?: unknown;
+};
 
-  const { data: prods, error: pErr } = await db
-    .from("products")
-    .select("id,title,handle,source_id,variants_json")
-    .eq("store_id", storeId)
-    .limit(5000);
-  if (pErr) throw new Error(`Products read: ${pErr.message}`);
+/** Índice first-wins (igual que el sync): ID > variante > handle > sku > título exacto > título loose. */
+export function buildProductPidIndex(
+  prods: Array<Record<string, unknown> | ProductIndexRow>,
+): ProductPidIndex {
   const bySourceId = new Map<string, string>();
   const byHandle = new Map<string, string>();
   const byVariantId = new Map<string, string>();
@@ -73,31 +75,63 @@ export async function computeProductStats(storeId: string): Promise<ProductStats
     const kl = normProductTitleLoose(String(prod.title ?? ""));
     if (kl && !byTitleLoose.has(kl)) byTitleLoose.set(kl, pid);
   }
-  const strId = (v: unknown): string | null => {
-    const s = typeof v === "string" ? v.trim() : "";
-    return s ? s : null;
-  };
-  // Prioridad: product_id → variant_id → handle → sku → título exacto → título loose.
+  return { bySourceId, byHandle, byVariantId, bySku, byTitle, byTitleLoose };
+}
+
+const strId = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s ? s : null;
+};
+
+/** Prioridad: product_id → variant_id → handle → sku → título exacto → título loose. */
+export function resolveProductPid(
+  index: ProductPidIndex,
+  it: Record<string, unknown>,
+): string | null {
+  const pid = strId(it.product_id);
+  if (pid && index.bySourceId.has(pid)) return index.bySourceId.get(pid)!;
+  const vid = strId(it.variant_id);
+  if (vid && index.byVariantId.has(vid)) return index.byVariantId.get(vid)!;
+  const handle = strId(it.product_handle)?.toLowerCase();
+  if (handle && index.byHandle.has(handle)) return index.byHandle.get(handle)!;
+  const sku = strId(it.variant_sku)?.toLowerCase();
+  if (sku && index.bySku.has(sku)) return index.bySku.get(sku)!;
+  const pt = normProductTitle(String(it.product_title ?? ""));
+  if (pt && index.byTitle.has(pt)) return index.byTitle.get(pt)!;
+  const ptl = normProductTitleLoose(String(it.product_title ?? ""));
+  if (ptl && index.byTitleLoose.has(ptl)) return index.byTitleLoose.get(ptl)!;
+  const title = normProductTitle(String(it.title ?? ""));
+  if (title && index.byTitle.has(title)) return index.byTitle.get(title)!;
+  const loose = normProductTitleLoose(String(it.title ?? ""));
+  if (loose && index.byTitleLoose.has(loose)) return index.byTitleLoose.get(loose)!;
+  return null;
+}
+
+export interface ProductStatsSummary {
+  rows: number;
+  matchedProducts: number;
+  unmatchedTitles: number;
+  /** Top no-matcheados por revenue (para afinar norm, no para UI). */
+  topUnmatched: Array<{ title: string; revenue: number; currency: string }>;
+}
+
+/** Recalcula product_stats del tenant. Upsert-only por (product_id, currency). */
+export async function computeProductStats(storeId: string): Promise<ProductStatsSummary> {
+  const db = getSupabase();
+  const now = Date.now();
+
+  const { data: prods, error: pErr } = await db
+    .from("products")
+    .select("id,title,handle,source_id,variants_json")
+    .eq("store_id", storeId)
+    .limit(5000);
+  if (pErr) throw new Error(`Products read: ${pErr.message}`);
+  const pidIndex = buildProductPidIndex(
+    (prods ?? []) as Array<Record<string, unknown>>,
+  );
   // Los items viejos (sin IDs, pre-fix) caen al fallback por título.
-  const resolvePid = (it: Record<string, unknown>): string | null => {
-    const pid = strId(it.product_id);
-    if (pid && bySourceId.has(pid)) return bySourceId.get(pid)!;
-    const vid = strId(it.variant_id);
-    if (vid && byVariantId.has(vid)) return byVariantId.get(vid)!;
-    const handle = strId(it.product_handle)?.toLowerCase();
-    if (handle && byHandle.has(handle)) return byHandle.get(handle)!;
-    const sku = strId(it.variant_sku)?.toLowerCase();
-    if (sku && bySku.has(sku)) return bySku.get(sku)!;
-    const pt = normProductTitle(String(it.product_title ?? ""));
-    if (pt && byTitle.has(pt)) return byTitle.get(pt)!;
-    const ptl = normProductTitleLoose(String(it.product_title ?? ""));
-    if (ptl && byTitleLoose.has(ptl)) return byTitleLoose.get(ptl)!;
-    const title = normProductTitle(String(it.title ?? ""));
-    if (title && byTitle.has(title)) return byTitle.get(title)!;
-    const loose = normProductTitleLoose(String(it.title ?? ""));
-    if (loose && byTitleLoose.has(loose)) return byTitleLoose.get(loose)!;
-    return null;
-  };
+  const resolvePid = (it: Record<string, unknown>): string | null =>
+    resolveProductPid(pidIndex, it);
 
   interface Agg {
     qtyAll: number; qty30: number; qty90: number;

@@ -3,7 +3,11 @@
 // (autoritativo); los movimientos se acotan al market (?market=) cuando se pide.
 import { getSupabase } from "@/lib/supabase";
 import { isRealDbOrder } from "@/lib/medusa";
-import { normProductTitle } from "@/lib/product-stats";
+import {
+  buildProductPidIndex,
+  normProductTitle,
+  resolveProductPid,
+} from "@/lib/product-stats";
 import { EMPTY_KEYS, resolveItemKeys } from "@/lib/metadata-map";
 import { enrichOrderItems } from "@/lib/item-context";
 import { displayMarket, resolveMarketScope } from "@/lib/markets";
@@ -35,14 +39,10 @@ export interface ProductDetailMovement {
   unitPrice: number;
   revenue: number;
   currency: string | null;
-  /** Metadata custom DE ESA COMPRA (línea del pedido), no del ítem en general. */
+  /** Contenido de ESA línea (key elegida en settings): contiene/categoría o null. Ninguna otra key fluye. */
   meta: {
-    ventana: string | null;
-    clienteDijo: string | null;
-    detalles: Record<string, string>;
     contiene: string | null;
     categoria: string | null;
-    aprobado?: boolean | null;
   } | null;
 }
 
@@ -61,11 +61,15 @@ export interface ProductDetailDTO {
   buyers: ProductDetailBuyer[];
   marketLabel: string | null;
   currency: string | null;
+  /** Conteo honesto en lo escaneado (la lista los trae todos, paginados en UI). */
+  totalMatchedMovements: number;
+  totalMatchedQty: number;
+  scannedOrders: number;
+  scanTruncated: boolean;
 }
 
 const MOVEMENT_PAGE = 500;
 const MOVEMENT_SCAN_CAP = 3000;
-const MOVEMENT_WANT = 15;
 const META_LINES_CAP = 40;
 
 export async function loadProductDetail(
@@ -97,10 +101,29 @@ export async function loadProductDetail(
     .eq("product_id", productId)
     .limit(20);
 
+  // Mismo criterio que el sync (product_stats): ID > variante > handle > sku >
+  // título exacto > título loose. El drawer antes solo comparaba `title`
+  // estricto y perdía ventas que la tabla sí cuenta (puntuación, tildes,
+  // renombres, líneas con product_title distinto).
+  const { data: prods } = await db
+    .from("products")
+    .select("id,title,handle,source_id,variants_json")
+    .eq("store_id", storeId)
+    .limit(5000);
+  const pidIndex = buildProductPidIndex(
+    (prods ?? []) as Array<Record<string, unknown>>,
+  );
+  const indexed = pidIndex.byTitle.has(normTitle) ||
+    [...pidIndex.byTitleLoose.values()].includes(productId) ||
+    (prods ?? []).some((r) => String((r as Record<string, unknown>).id ?? "") === productId);
+
   const movements: ProductDetailMovement[] = [];
   const metaLines: Array<{ title: string; quantity: number; metadata?: unknown; oi: number }> = [];
   const buyerAgg = new Map<string, Map<string, { qty: number; revenue: number }>>();
   let scanned = 0;
+  let totalMatchedMovements = 0;
+  let totalMatchedQty = 0;
+  let scanTruncated = false;
   for (let off = 0; ; off += MOVEMENT_PAGE) {
     let oq = db
       .from("orders")
@@ -128,7 +151,13 @@ export async function loadProductDetail(
       let unitPrice: number | null = null;
       const matched: Array<{ title: string; quantity: number; metadata?: unknown }> = [];
       for (const it of items) {
-        if (normProductTitle(String(it.title ?? "")) !== normTitle) continue;
+        // Mismo match que computeProductStats; si el catálogo truncó el índice
+        // (5000) y este producto quedó fuera, fallback al título estricto.
+        const resolved = resolveProductPid(pidIndex, it);
+        const isMine = resolved
+          ? resolved === productId
+          : !indexed && normProductTitle(String(it.title ?? "")) === normTitle;
+        if (!isMine) continue;
         const q = Number(it.quantity ?? 0);
         if (!(q > 0)) continue;
         const up = Number(it.unit_price ?? 0);
@@ -138,6 +167,9 @@ export async function loadProductDetail(
         matched.push({ title: String(it.title ?? ""), quantity: q, metadata: it.metadata });
       }
       if (qty > 0) {
+        // Conteo honesto en lo escaneado (la lista los trae todos).
+        totalMatchedMovements += 1;
+        totalMatchedQty += qty;
         const cid = typeof o.customer_id === "string" ? o.customer_id : null;
         if (cid) {
           let perCur = buyerAgg.get(cid);
@@ -149,7 +181,9 @@ export async function loadProductDetail(
           perCur.set(curKey, b);
         }
       }
-      if (qty > 0 && movements.length < MOVEMENT_WANT) {
+      // La lista trae TODOS los movimientos de lo escaneado (la UI los pagina
+      // de 20 en 20). El enriquecimiento de metadata sí va topado a 40 líneas.
+      if (qty > 0) {
         const oi = movements.length;
         movements.push({
           placedAt: (o.placed_at as string | null) ?? null,
@@ -164,11 +198,9 @@ export async function loadProductDetail(
           metaLines.push({ ...m, oi });
         }
       }
-      if (movements.length >= MOVEMENT_WANT && metaLines.length >= META_LINES_CAP) break;
     }
     if (orows.length < MOVEMENT_PAGE) break;
-    if (scanned >= MOVEMENT_SCAN_CAP) break;
-    if (movements.length >= MOVEMENT_WANT && metaLines.length >= META_LINES_CAP) break;
+    if (scanned >= MOVEMENT_SCAN_CAP) { scanTruncated = true; break; }
   }
 
   // Top compradores del ítem (de lo escaneado): moneda principal por comprador.
@@ -198,7 +230,7 @@ export async function loadProductDetail(
     });
   }
 
-  // Metadata POR COMPRA: se enriquece cada línea y se agrupa por movimiento.
+  // Contenido POR LÍNEA (solo key elegida en settings): se enriquece cada línea y se agrupa por movimiento.
   if (metaLines.length > 0) {
     const keys = await resolveItemKeys(storeId).catch(() => EMPTY_KEYS);
     const enriched = await enrichOrderItems(storeId, metaLines, keys).catch(() => []);
@@ -213,33 +245,13 @@ export async function loadProductDetail(
     for (const [oi, list] of byOi) {
       const mv = movements[oi];
       if (!mv) continue;
-      const detalles: Record<string, string> = {};
-      const ventanas = new Set<string>();
-      const dijo: string[] = [];
       let contiene: string | null = null;
       let categoria: string | null = null;
-      let aprobado: boolean | null = null;
       for (const e of list) {
-        for (const [k, v] of Object.entries(e.detalles)) {
-          if (!(k in detalles)) detalles[k] = String(v);
-        }
-        if (e.ventana) ventanas.add(e.ventana);
-        if (e.clienteDijo && !dijo.includes(e.clienteDijo)) dijo.push(e.clienteDijo);
         if (!contiene && e.contiene) contiene = e.contiene;
         if (!categoria && e.categoria) categoria = e.categoria;
-        if (aprobado === null && e.aprobado !== null) aprobado = e.aprobado;
       }
-      const hasAny = Object.keys(detalles).length > 0 || ventanas.size > 0 || dijo.length > 0 || !!contiene || !!categoria || aprobado !== null;
-      mv.meta = hasAny
-        ? {
-            ventana: [...ventanas].join(" · ") || null,
-            clienteDijo: dijo.join(" / ").slice(0, 400) || null,
-            detalles,
-            contiene,
-            categoria,
-            aprobado,
-          }
-        : null;
+      mv.meta = contiene || categoria ? { contiene, categoria } : null;
     }
   }
 
@@ -269,6 +281,10 @@ export async function loadProductDetail(
       buyers,
       marketLabel,
       currency: viewCurrency,
+      totalMatchedMovements,
+      totalMatchedQty,
+      scannedOrders: scanned,
+      scanTruncated,
     },
   };
 }

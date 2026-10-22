@@ -119,7 +119,7 @@ function ResumenTab({ summary, detail }: { summary: ProductWithStats; detail: Pr
   );
 }
 
-function MovimientosTab({ detail, marketLabel }: { detail: ProductDetailDTO | null; marketLabel: string | null }) {
+function MovimientosTab({ detail, marketLabel, summary }: { detail: ProductDetailDTO | null; marketLabel: string | null; summary: ProductWithStats }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [sortKey, setSortKey] = useState<"date" | "qty" | "price" | "revenue">("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -147,11 +147,8 @@ function MovimientosTab({ detail, marketLabel }: { detail: ProductDetailDTO | nu
       if (!q) return true;
       const hay = [
         m.placedAt ?? "",
-        ...Object.entries(m.meta?.detalles ?? {}).flatMap(([k, v]) => [k, v]),
-        m.meta?.ventana ?? "",
         m.meta?.contiene ?? "",
         m.meta?.categoria ?? "",
-        m.meta?.clienteDijo ?? "",
       ].join(" ").toLowerCase();
       return hay.includes(q);
     });
@@ -180,8 +177,23 @@ function MovimientosTab({ detail, marketLabel }: { detail: ProductDetailDTO | nu
   if (detail.movements.length === 0) {
     return <p className="text-[13px] text-muted-foreground">Sin ventas registradas para este ítem{marketLabel ? " en este market" : ""}.</p>;
   }
+  // La lista trae TODOS los movimientos de lo escaneado (paginados de 20 en
+  // 20): su suma sí es comparable con "Cant." de la tabla. Solo difiere si el
+  // escaneo topó el CAP o si hay filtro de búsqueda activo.
+  const visibleQty = rows.reduce((s, m) => s + m.qty, 0);
+  const matchedTotal = detail.totalMatchedMovements ?? rows.length;
+  const matchedQty = detail.totalMatchedQty ?? visibleQty;
+  const scanTruncated = detail.scanTruncated ?? false;
+  const searching = rows.length !== detail.movements.length;
   return (
     <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground tabular-nums">
+        {formatNumber(matchedTotal)} movimientos en lo escaneado
+        ({formatNumber(detail.scannedOrders ?? 0)} órdenes) · Suma: {formatNumber(matchedQty)}
+        {" "}· Total histórico (tabla): {formatNumber(summary.qty_all)}
+        {scanTruncated ? " · escaneo topado (CAP 3k): hay más fuera de lo escaneado" : ""}
+        {searching ? ` · Viendo ${formatNumber(rows.length)} filtrados (suman ${formatNumber(visibleQty)})` : ""}.
+      </p>
       <DrawerSearch value={query} onChange={setQuery} placeholder="Buscar en movimientos…" />
       <DrawerTable>
         <DrawerTableHeader>
@@ -222,29 +234,13 @@ function MovimientosTab({ detail, marketLabel }: { detail: ProductDetailDTO | nu
               {expanded === i && m.meta && (
                 <DrawerTableRow className="bg-muted/20">
                   <DrawerTableTd colSpan={5}>
-                    <p className="mb-1.5 text-[11px] tracking-wide text-muted-foreground uppercase">Metadata de esa compra</p>
+                    <p className="mb-1.5 text-[11px] tracking-wide text-muted-foreground uppercase">Contenido (key elegida en settings)</p>
                     <div className="flex flex-col gap-1.5 text-[13px]">
                       {m.meta.contiene && (
                         <p><span className="text-muted-foreground">Contiene: </span>{m.meta.contiene}</p>
                       )}
                       {m.meta.categoria && (
                         <p><span className="text-muted-foreground">Categoría: </span>{m.meta.categoria}</p>
-                      )}
-                      {m.meta.ventana && (
-                        <p><span className="text-muted-foreground">Ventana: </span>{m.meta.ventana}</p>
-                      )}
-                      {Object.keys(m.meta.detalles).length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {Object.entries(m.meta.detalles).map(([k, v]) => (
-                            <span key={k} className="rounded-md bg-background px-2 py-0.5 ring-1 ring-border/60">
-                              <span className="text-muted-foreground">{k}: </span>
-                              <span className="font-medium">{v}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {m.meta.clienteDijo && (
-                        <p className="rounded-lg bg-background/60 px-2.5 py-1.5 text-muted-foreground italic">“{m.meta.clienteDijo}”</p>
                       )}
                     </div>
                   </DrawerTableTd>
@@ -433,11 +429,11 @@ export function ProductDrawer({
           {tab === "movimientos" && !error && (
             <div className="flex flex-col gap-3">
               <SectionHeading
-                title="Últimos movimientos"
-                hint={detail?.marketLabel ? `De este market${detail.currency ? ` (${detail.currency})` : ""} · clic para ver la metadata de esa compra` : "Clic para ver la metadata de esa compra"}
+                title="Movimientos"
+                hint={detail?.marketLabel ? `De este market${detail.currency ? ` (${detail.currency})` : ""} · clic para ver el contenido de esa línea` : "Clic para ver el contenido de esa línea"}
                 tone="sky"
               />
-              <MovimientosTab detail={detail} marketLabel={detail?.marketLabel ?? null} />
+              <MovimientosTab detail={detail} marketLabel={detail?.marketLabel ?? null} summary={summary} />
             </div>
           )}
           {tab === "clientes" && !error && (
