@@ -87,6 +87,9 @@ export interface ActionRow {
   /** Issue #19: auditoría de aprobación (null = sin registro, pre-migración). */
   approvedBy?: string | null;
   approvedAt?: string | null;
+  /** Quién descartó el borrador y cuándo (null = previo al tracking). */
+  rejectedBy?: string | null;
+  rejectedAt?: string | null;
   /** Solo Enviados: cuándo salió y cuánto revenue atribuyó el analyst. */
   dispatchedAt?: string | null;
   revenueMinor?: number | null;
@@ -117,6 +120,12 @@ export interface LeadRow {
   created_at: string;
   icp_score: number | null;
   reason: string | null;
+  /** Quién decidió (aprobó/descartó) y cuándo; null = previo al tracking. */
+  decidedBy?: string | null;
+  decidedAt?: string | null;
+  /** Quién lo marcó contactado y cuándo. */
+  contactedBy?: string | null;
+  contactedAt?: string | null;
   evidence: {
     queries?: string[];
     contacts?: {
@@ -148,6 +157,9 @@ export interface SignalRow {
   /** ISO de creación de la señal (tag "Hoy"; null = sin fecha). */
   createdAt?: string | null;
   customerId?: string;
+  /** Quién descartó la señal y cuándo (null = previo al tracking). */
+  closedBy?: string | null;
+  closedAt?: string | null;
   /** Días sin comprar (parseado del motivo; null = otros tipos). */
   daysSince?: number | null;
   ordersCount?: number | null;
@@ -757,6 +769,12 @@ export function ReviewLists({
                     </span>
                   </span>
                 }
+                description={
+                  <span className="tabular-nums">
+                    Descartado por {approverLabel(a.rejectedBy)}
+                    {a.rejectedAt ? ` · ${a.rejectedAt.slice(0, 10)}` : ""}
+                  </span>
+                }
                 action={
                   <span className="flex flex-wrap items-center gap-1.5">
                     <TodayTag value={a.created_at} />
@@ -1118,6 +1136,10 @@ export function ReviewLists({
                 {l.contact ? (
                   <span className="text-xs text-muted-foreground">✓ {l.contact}</span>
                 ) : null}
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  Contactado por {approverLabel(l.contactedBy)}
+                  {l.contactedAt ? ` · ${l.contactedAt.slice(0, 10)}` : ""}
+                </span>
               </AppCard>
             ))}
             {q === "" && (
@@ -1160,6 +1182,10 @@ export function ReviewLists({
                 <a href={l.url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">
                   {l.url}
                 </a>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  Descartado por {approverLabel(l.decidedBy)}
+                  {l.decidedAt ? ` · ${l.decidedAt.slice(0, 10)}` : ""}
+                </span>
               </AppCard>
             ))}
           </div>
@@ -1240,6 +1266,10 @@ export function ReviewLists({
                       <span className="tabular-nums">score {formatNumber(s.score)}</span>
                     ) : null}
                     {s.reason ? <span className="basis-full">{s.reason}</span> : null}
+                    <span className="basis-full tabular-nums">
+                      Descartado por {approverLabel(s.closedBy)}
+                      {s.closedAt ? ` · ${s.closedAt.slice(0, 10)}` : ""}
+                    </span>
                   </span>
                 }
                 action={<ReopenButton id={s.id} onReopen={reopenSignalAction} />}

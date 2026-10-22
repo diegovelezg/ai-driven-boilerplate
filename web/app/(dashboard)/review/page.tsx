@@ -119,7 +119,7 @@ export default async function ReviewPage({
               const aq = applyScopeFilter(
                 db
                   .from("proposed_actions")
-                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
+                  .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,rejected_by,rejected_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "rejected"),
                 scope,
@@ -153,7 +153,7 @@ export default async function ReviewPage({
             applyScopeFilter(
               db
                 .from("proposed_leads")
-                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
                 .eq("status", "pending_review"),
               scope,
@@ -165,7 +165,7 @@ export default async function ReviewPage({
             applyScopeFilter(
               db
                 .from("proposed_leads")
-                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
                 .eq("status", "approved"),
               scope,
@@ -177,7 +177,7 @@ export default async function ReviewPage({
             applyScopeFilter(
               db
                 .from("proposed_leads")
-                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
                 .eq("status", "contacted"),
               scope,
@@ -197,7 +197,7 @@ export default async function ReviewPage({
             applyScopeFilter(
               db
                 .from("proposed_leads")
-                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,evidence_json")
+                .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
                 .in("status", ["rejected", "discarded"]),
               scope,
@@ -269,6 +269,8 @@ export default async function ReviewPage({
             generator: ((r.evidence_json as Record<string, unknown> | null)?.generator as string | null) ?? null,
             approvedBy: (r.approved_by as string | null) ?? null,
             approvedAt: (r.approved_at as string | null) ?? null,
+            rejectedBy: (r.rejected_by as string | null) ?? null,
+            rejectedAt: (r.rejected_at as string | null) ?? null,
             dispatchedAt: (r.dispatched_at as string | null) ?? null,
             revenueMinor: r.revenue_attributed == null ? null : Number(r.revenue_attributed),
             wameUrl,
@@ -357,6 +359,10 @@ export default async function ReviewPage({
           created_at: String(r.created_at ?? ""),
           icp_score: r.icp_score == null ? null : Number(r.icp_score),
           reason: (r.reason as string | null) ?? null,
+          decidedBy: (r.decided_by as string | null) ?? null,
+          decidedAt: (r.decided_at as string | null) ?? null,
+          contactedBy: (r.contacted_by as string | null) ?? null,
+          contactedAt: (r.contacted_at as string | null) ?? null,
           evidence: (r.evidence_json as LeadRow["evidence"]) ?? null,
         });
         leads = ((l ?? []) as Array<Record<string, unknown>>).map(toLeadRow);
@@ -410,7 +416,7 @@ export default async function ReviewPage({
           const dq = applyScopeFilter(
             db
               .from("churn_signals")
-              .select("id,customer_id,kind,objective,score,reason,status,created_at,customers(email,first_name,last_name)")
+              .select("id,customer_id,kind,objective,score,reason,status,created_at,closed_by,closed_at,customers(email,first_name,last_name)")
               .eq("store_id", storeId)
               .eq("status", "dismissed"),
             scope,
@@ -430,6 +436,8 @@ export default async function ReviewPage({
               name: [c.first_name, c.last_name].filter(Boolean).join(" ") || email,
               createdAt: (r.created_at as string | null) ?? null,
               customerId: String(r.customer_id ?? ""),
+              closedBy: (r.closed_by as string | null) ?? null,
+              closedAt: (r.closed_at as string | null) ?? null,
             };
           });
         } catch {

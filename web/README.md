@@ -7,7 +7,7 @@ Dashboard merchant + sync multi-tenant de ecommerce (Medusa hoy, Shopify/Woo stu
 
 - Next.js 16 (App Router) + React 19 + TailwindCSS 4 + shadcn/ui
 - Supabase local (Postgres + PostgREST) vía CLI + Docker; misma migración corre en cloud
-  (54 migraciones en `supabase/migrations/`, ~28 tablas)
+  (56 migraciones en `supabase/migrations/`, ~28 tablas)
 - Medusa v1/v2 en modo **solo lectura** (ver `lib/connectors/medusa.ts`, detalle en `lib/medusa.ts`)
 - Conectores centralizados en `lib/connectors/` (ver `## Conectores ecommerce`)
 - ADK `@google/adk@^2.3.0` (`LlmAgent` + 22 tools en `lib/adk/`), modelos en
@@ -65,7 +65,7 @@ Punto centralizado `lib/connectors/`:
 
 ## Modelo de datos (implementado, no solo Fase 1)
 
-Fuente de verdad: `supabase/migrations/*.sql` (54 archivos, 2026-10-16 → 2026-11-01).
+Fuente de verdad: `supabase/migrations/*.sql` (56 archivos, 2026-10-16 → 2026-11-01).
 Tablas clave:
 
 - Tenant/sync: `stores` (unique `platform+shop_url`), `channels`, `market_regions`,

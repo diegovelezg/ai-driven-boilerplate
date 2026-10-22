@@ -71,7 +71,7 @@ Mapeo:
 **Existe (motor + UI completos, no solo Fase 1):**
 
 - **Conector Medusa** en modo solo lectura: sincroniza `customers`, `orders`, `products`,
-  `channels`, `market_regions` a Supabase (54 migraciones en `supabase/migrations/`).
+  `channels`, `market_regions` a Supabase (56 migraciones en `supabase/migrations/`).
   Punto centralizado `web/lib/connectors/` (`getConnector(platform)` +
   `syncStoreFromPlatform()`); Shopify/Woo lanzan `sin-backend` (agregar = 1 archivo + 1 línea).
 - **Motor probabilístico de recompra `retention:v3:episodes-mixture`** (`web/lib/retention-model.ts`

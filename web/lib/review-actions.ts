@@ -40,12 +40,14 @@ async function resolveApprover(): Promise<string | null> {
 
 async function setActionStatus(id: string, status: "approved" | "rejected"): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const now = new Date().toISOString();
   // Al rechazar (o revocar vía status) se limpia el aprobador: una fila que
-  // vuelve a no-aprobada no debe mostrar un aprobador viejo.
+  // vuelve a no-aprobada no debe mostrar un aprobador viejo. El rechazo sí
+  // deja su propio sello (quién/cuándo).
   const patch =
     status === "approved"
-      ? { status, approved_by: await resolveApprover(), approved_at: new Date().toISOString() }
-      : { status, approved_by: null, approved_at: null };
+      ? { status, approved_by: await resolveApprover(), approved_at: now, rejected_by: null, rejected_at: null }
+      : { status, approved_by: null, approved_at: null, rejected_by: await resolveApprover(), rejected_at: now };
   const { error } = await getSupabase()
     .from("proposed_actions")
     .update(patch)
@@ -58,9 +60,10 @@ async function setActionStatus(id: string, status: "approved" | "rejected"): Pro
 
 async function setLeadStatus(id: string, status: "approved" | "rejected"): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const now = new Date().toISOString();
   const { error } = await getSupabase()
     .from("proposed_leads")
-    .update({ status })
+    .update({ status, decided_by: await resolveApprover(), decided_at: now })
     .eq("id", id)
     .eq("status", "pending_review");
   if (error) return { ok: false, message: error.message };
@@ -114,7 +117,7 @@ async function trySendApprovedEmail(
         .from("proposed_actions")
         .update({
           status: "skipped",
-          evidence_json: { ...ev0, skip: { code: gate.code, reason: gate.message, at: new Date().toISOString() } },
+          evidence_json: { ...ev0, skip: { code: gate.code, reason: gate.message, at: new Date().toISOString(), by: (await resolveApprover()) ?? "system" } },
         })
         .eq("id", id)
         .eq("status", "approved");
@@ -135,7 +138,7 @@ async function trySendApprovedEmail(
     .update({
       status: "dispatched",
       dispatched_at: new Date().toISOString(),
-      evidence_json: { ...prev, sent_via: "approve" },
+      evidence_json: { ...prev, sent_via: "approve", sent_by: (await resolveApprover()) ?? "system" },
     })
     .eq("id", id)
     .eq("status", "approved")
@@ -173,11 +176,28 @@ export async function rejectActionAction(id: string): Promise<ReviewOp> {
  *  interesa, descártalo desde pendientes. */
 export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const { data, error } = await getSupabase()
+  const db = getSupabase();
+  const { data: prev } = await db
+    .from("proposed_actions")
+    .select("evidence_json")
+    .eq("id", id)
+    .eq("status", "approved")
+    .is("dispatched_at", null)
+    .maybeSingle();
+  if (!prev) return { ok: false, message: "Ya enviado o inexistente: nada que cancelar." };
+  const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const now = new Date().toISOString();
+  const { data, error } = await db
     .from("proposed_actions")
     // Revocar limpia approved_by/at: la fila vuelve a pendiente y no debe
-    // seguir mostrando quién la había aprobado (issue #19 Paso 1).
-    .update({ status: "pending_review", approved_by: null, approved_at: null })
+    // seguir mostrando quién la había aprobado (issue #19 Paso 1). Quién
+    // revocó queda en evidence (no es estado terminal).
+    .update({
+      status: "pending_review",
+      approved_by: null,
+      approved_at: null,
+      evidence_json: { ...prevEv, revoke: { at: now, by: await resolveApprover() } },
+    })
     .eq("id", id)
     .eq("status", "approved")
     .is("dispatched_at", null)
@@ -195,9 +215,24 @@ export async function revokeApprovalAction(id: string): Promise<ReviewOp> {
  *  duplicar. Solo si aún no salió (dispatched_at null). */
 export async function reopenActionAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const { data, error } = await getSupabase()
+  const db = getSupabase();
+  const { data: prev } = await db
     .from("proposed_actions")
-    .update({ status: "pending_review" })
+    .select("evidence_json")
+    .eq("id", id)
+    .eq("status", "rejected")
+    .is("dispatched_at", null)
+    .maybeSingle();
+  if (!prev) return { ok: false, message: "Ya reabierto o inexistente: nada que rescatar." };
+  const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const { data, error } = await db
+    .from("proposed_actions")
+    .update({
+      status: "pending_review",
+      rejected_by: null,
+      rejected_at: null,
+      evidence_json: { ...prevEv, reopen: { at: new Date().toISOString(), by: await resolveApprover() } },
+    })
     .eq("id", id)
     .eq("status", "rejected")
     .is("dispatched_at", null)
@@ -555,9 +590,10 @@ export async function rejectLeadAction(id: string): Promise<ReviewOp> {
  *  sin reinyectar: no vuelve a pendientes ni se repropone (dedupe por URL). */
 export async function markLeadContactedAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
+  const now = new Date().toISOString();
   const { data, error } = await getSupabase()
     .from("proposed_leads")
-    .update({ status: "contacted" })
+    .update({ status: "contacted", contacted_by: await resolveApprover(), contacted_at: now })
     .eq("id", id)
     .in("status", ["pending_review", "approved"])
     .select("id");
@@ -573,9 +609,23 @@ export async function markLeadContactedAction(id: string): Promise<ReviewOp> {
  *  "contactar igual" — vuelve a pendientes sin duplicar (dedupe por URL). */
 export async function reopenLeadAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const { data, error } = await getSupabase()
+  const db = getSupabase();
+  const { data: prev } = await db
     .from("proposed_leads")
-    .update({ status: "pending_review" })
+    .select("evidence_json")
+    .eq("id", id)
+    .in("status", ["rejected", "discarded"])
+    .maybeSingle();
+  if (!prev) return { ok: false, message: "Ya reabierto o inexistente: nada que reabrir." };
+  const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const { data, error } = await db
+    .from("proposed_leads")
+    .update({
+      status: "pending_review",
+      decided_by: null,
+      decided_at: null,
+      evidence_json: { ...prevEv, reopen: { at: new Date().toISOString(), by: await resolveApprover() } },
+    })
     .eq("id", id)
     .in("status", ["rejected", "discarded"])
     .select("id");
@@ -599,19 +649,22 @@ export async function dismissSignalAction(id: string, reason?: string | null): P
     .maybeSingle();
   const prevEv =
     (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const now = new Date().toISOString();
+  const by = await resolveApprover();
   const { error } = await db
     .from("churn_signals")
     .update({
       status: "dismissed",
-      closed_at: new Date().toISOString(),
+      closed_at: now,
+      closed_by: by,
       evidence_json: cleanReason
         ? {
           ...prevEv,
           dismiss: {
             reason: cleanReason,
             label: DISMISS_REASON_LABEL[cleanReason],
-            at: new Date().toISOString(),
-            by: await resolveApprover(),
+            at: now,
+            by,
           },
         }
         : prevEv,
@@ -656,9 +709,23 @@ export async function getCustomerSignalAction(
  *  closed_at para no arrastrar el descarte viejo. */
 export async function reopenSignalAction(id: string): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const { data, error } = await getSupabase()
+  const db = getSupabase();
+  const { data: prev } = await db
     .from("churn_signals")
-    .update({ status: "open", closed_at: null })
+    .select("evidence_json")
+    .eq("id", id)
+    .eq("status", "dismissed")
+    .maybeSingle();
+  if (!prev) return { ok: false, message: "Ya reabierta o inexistente: nada que reabrir." };
+  const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
+  const { data, error } = await db
+    .from("churn_signals")
+    .update({
+      status: "open",
+      closed_at: null,
+      closed_by: null,
+      evidence_json: { ...prevEv, reopen: { at: new Date().toISOString(), by: await resolveApprover() } },
+    })
     .eq("id", id)
     .eq("status", "dismissed")
     .select("id");

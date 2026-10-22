@@ -2,7 +2,7 @@
 
 > **Estado:** documento vivo, refleja `main` a 2026-10-22. Ya no es visión: el loop
 > scout→strategist→copywriter→dispatcher→analyst corre en prod vía worker + cron Coolify,
-> con motor probabilístico `retention:v3:episodes-mixture` y 54 migraciones aplicadas.
+> con motor probabilístico `retention:v3:episodes-mixture` y 56 migraciones aplicadas.
 > Ver `README.md` raíz para posicionamiento y `web/README.md` para operación diaria.
 
 ## 1. High-Level Architecture Diagram (real)
@@ -159,7 +159,7 @@ Analyst: sesioniza post-envío (moneda tienda), 1 sesión→1ª acción vigente,
 
 ## 5. Database Schema (PostgreSQL, Supabase — fuente real)
 
-> Fuente de verdad: `supabase/migrations/*.sql` (54 archivos). El modelo Prisma de abajo
+> Fuente de verdad: `supabase/migrations/*.sql` (56 archivos). El modelo Prisma de abajo
 > es ilustrativo; el DDL real es SQL directo.
 
 Tablas (28): `stores, channels, market_regions, customers, orders, products,
