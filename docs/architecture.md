@@ -1,391 +1,215 @@
-# AI Retention Engine — Blueprint de arquitectura (referencia)
+# AI Retention Engine — Blueprint de arquitectura (implementado)
 
-> **Estado:** documento de referencia/visión, no contrato de implementación.
-> La parte de ecommerce (Medusa) corresponde a la **Fase 1 ya implementada**; el RFM
-> existe a nivel lectura (quintiles + ciclo esperado en ficha, `web/lib/customer-data.ts`)
-> y el perfilado del tenant tiene set propio (`web/lib/profiling/`); **aún no existe**
-> la mitad escritura (cron RFM, `CustomerMarketStats`, `churn_risk_view`,
-> clasificación B2B/B2C total, acciones propuestas, ADK, canvas).
-> Ver el `README.md` raíz para el posicionamiento y el MVP actual.
+> **Estado:** documento vivo, refleja `main` a 2026-10-22. Ya no es visión: el loop
+> scout→strategist→copywriter→dispatcher→analyst corre en prod vía worker + cron Coolify,
+> con motor probabilístico `retention:v3:episodes-mixture` y 54 migraciones aplicadas.
+> Ver `README.md` raíz para posicionamiento y `web/README.md` para operación diaria.
 
-## 1. High-Level Architecture Diagram
+## 1. High-Level Architecture Diagram (real)
 
 ```
 +-------------------------------------------------------------------------+
 |                          INGESTION LAYER (MODULAR)                      |
-|                                                                         |
-|  +--------------------+    +--------------------+    +---------------+  |
-|  |   Medusa v2 API    |    |  Shopify Webhook   |    |  WooCommerce  |  |
-|  | (Subscriber Module)|    |     (Future)       |    |   (Future)    |  |
-+--+---------+----------+----+---------+----------+----+-------+-------+--+
-             |                         |                       |
-             +-------------------------+-----------------------+
-                                       |
-                                       v
+|  +--------------------+   +--------------------+   +---------------+    |
+|  | Medusa v2 API REAL |   | Shopify STUB       |   | Woo STUB      |    |
+|  | login JWT v1/v2    |   | sin backend        |   | sin backend   |    |
++--+---------+----------+---+---------+----------+---+-------+-------+--+
+             |                        |                        |
+             +------------------------+------------------------+
+                                      |
+                                      v
 +-------------------------------------------------------------------------+
-|                  CORE BACKEND & PIPELINE (Node.js/NestJS)               |
-|                                                                         |
-|  [ Event Bus / Ingestion Queue ] (Redis + BullMQ)                       |
-|         |                                                               |
-|         v                                                               |
-|  [ Domain & Archetype Classifier ]                                      |
-|    - Checks domain against free email list (RFC/Disposable/Webmail)     |
-|    - Tags account: IS_B2C (False) or IS_B2B (True)                      |
-|         |                                                               |
-|         +----------------------------------+                            |
-|         |                                  |                            |
-|         v (If B2C)                         v (If B2B)                   |
-|  [ RFM & Predictive Engine ]        [ Firecrawl Deep Scraper ]          |
-|    - Recency/Frequency/Monetary       - Fetches company home & about    |
-|    - Repurchase cycle intervals       - Extracts industry & scale       |
-|    - LTV projection                   - Stores in Firmographic Record   |
-|         |                                  |                            |
-|         +-----------------+----------------+                            |
-|                           |                                             |
-|                           v                                             |
-|             [ PostgreSQL + Prisma ORM ]                                 |
-+---------------------------+---------------------------------------------+
-                            |
-                            v
+|              SYNC + MORNING PIPELINE (web/worker.ts, sin cola)          |
+|  sync (runSyncOnce, slot atómico/store)                                 |
+|   → enrichment → brain → regenerate(stale) → [foto si sync cambió]     |
+|   → scout → strategist → copywriter(10) → prospect(B2B-only)            |
+|  background_runs = cinta por paso (claimRunSlot, best-effort)           |
++--------------------------------+----------------------------------------+
+                                 |
+                                 v
 +-------------------------------------------------------------------------+
-|                    AI AGENT & DECISION GENERATOR                        |
-|                                                                         |
-|  - Daily Cron Job / Triggered Events                                    |
-|  - Context Builder: Assembles Customer Stats + Store Catalog            |
-|  - LLM Inference (Claude 3.5 Sonnet / OpenAI GPT-4o)                    |
-|  - Generates Pending Action Objects (Stored in DB as `PENDING_REVIEW`)  |
-+---------------------------+---------------------------------------------+
-                            |
-                            v
+|              CORE MATEMÁTICO: RETENTION v3 + MIRA + CALIBRACIÓN         |
+|  retention-model: LogNormal bayesiano + censura, A renovación / B 2ª    |
+|  compra, sessionize<1d → episodeize(tenant) → mezcla K ritmos EM+BIC    |
+|  decide v4 → customer_predictions (foto diaria) → scout abre señales    |
+|  mira ordena por valor_esperado/score → strategist objetiva             |
+|  tune 30d: tenant_model_params (WFO, trust-region, fail-open legacy)    |
++--------------------------------+----------------------------------------+
+                                 |
+                                 v
++-------------------------------------------------------------------------+
+|                   AI AGENT & DECISION GENERATOR                         |
+|  TenantBrain diario (store_profiles.brain_json, 1 query/corrida)        |
+|  Copywriter v16 + Juez contactabilidad v5 (veto 24h auditado, skip,     |
+|  no resucita usos únicos) → proposed_actions PENDING_REVIEW             |
+|  Prospect v6 (ICP manual/auto + SearXNG + pool similar + gate contacto) |
+|  LLM: RoutedLlm primario→fallback (OpenAI/Anthropic/Gemini),            |
+|  metering en llm_usage por store/proceso/modelo                         |
++--------------------------------+----------------------------------------+
+                                 |
+                                 v
 +-------------------------------------------------------------------------+
 |                   ACTION REVIEW & DISPATCH ENGINE                       |
-|                                                                         |
-|  - Merchant Dashboard (Next.js 14 App Router + TailwindCSS)             |
-|  - On Approval:                                                         |
-|      * WhatsApp -> Meta Cloud API / Twilio                              |
-|      * Email    -> Resend API / SendGrid                                |
+|  Review inbox (actions/leads/signals) — HITL obligatorio                |
+|  Dispatcher: sello fresco + gate pre-send (opt-out, recompra, juez)     |
+|   → email SendGrid REAL; WhatsApp RETENIDO sin proveedor (issue #4)     |
+|  Analyst: 1 orden=1 atribución → revenue_attributed → cierra señal      |
+|  Chat ADK (22 tools, envelope) + Next.js 16 dashboard                   |
 +-------------------------------------------------------------------------+
 ```
 
-## 2. Ingestion Module: ecommerce connectors (Medusa hoy)
+## 2. Ingestion Module: ecommerce connectors (Medusa real)
 
-> **Estado implementado:** punto centralizado en `web/lib/connectors/`
-> (`types.ts` + `medusa.ts` + `index.ts:getConnector(platform)`). `web/lib/sync.ts`
-> orquesta contra esa interfaz (`syncStoreFromPlatform(platform, …)`; `syncStoreFromMedusa`
-> queda como wrapper compat). `web/lib/medusa.ts` conserva la API v1/v2 + tipos
-> canónicos; futuros conectores (Shopify/Woo/tupantalla) agregan
-> `web/lib/connectors/<platform>.ts` + 1 línea en el registro, sin tocar el sync.
-> Visión multi-plataforma abajo; Medusa como primera fuente.
+> Implementado en `web/lib/connectors/` (`types.ts` + `medusa.ts` + `index.ts:getConnector`).
+> `web/lib/sync.ts` orquesta (`syncStoreFromPlatform`, 6 fases); `syncStoreFromMedusa` wrapper.
+> `web/lib/sync-runner.ts:runSyncOnce` con slot atómico; `web/worker.ts` lo corre por tienda.
 
-### Medusa Subscribers
+Medusa (único real): login JWT v1/v2, `regions` → `market_regions`,
+`sales_channel` → `channels`, customers/orders/products raw → canónicos, upsert +
+tombstones + `product_stats`. Shopify/Woo: `ConnectorNotImplementedError` explícito.
 
-We register subscribers listening to key Medusa events:
-
-- `order.placed`: Ingests cart items, customer email, billing/shipping address, total amount.
-- `customer.created`: Ingests contact information and company name fields.
-- `order.updated`: Tracks returns, cancellations, and fulfillment status.
-
-### Event Payload Normalization
-
-All incoming payloads from Medusa, Shopify, or WooCommerce are normalized into an internal canonical event:
+`CanonicalOrderEvent` (vigente, `docs/architecture` original §2 se mantiene):
 
 ```ts
 interface CanonicalOrderEvent {
   source: 'medusa' | 'shopify' | 'woocommerce';
-  sourceOrderId: string;
-  storeId: string; // canonical Store id (tenant)
-  channel: { sourceId: string; name: string }; // sales_channel / publication
+  sourceOrderId: string; storeId: string;
+  channel: { sourceId: string; name: string };
   market: { sourceId: string; name: string; currency: string; countries: string[] };
-  customer: {
-    id: string;
-    email: string;
-    firstName?: string;
-    lastName?: string;
-    phone?: string;
-    companyName?: string;
-  };
-  items: Array<{
-    sku: string;
-    title: string;
-    quantity: number;
-    unitPrice: number;
-  }>;
-  totalAmount: number; // minor units, original currency
-  currency: string; // original currency (never mixed across currencies)
-  country?: string; // ISO2 from shipping/billing, best-effort (often null on digital goods)
-  createdAt: Date;
+  customer: { id: string; email: string; firstName?: string; lastName?: string;
+              phone?: string; companyName?: string; };
+  items: Array<{ sku: string; title: string; quantity: number; unitPrice: number }>;
+  totalAmount: number; currency: string; country?: string; createdAt: Date;
 }
 ```
 
-Mapping:
+País canónico (`resolveOrderCountry`, medusa v1/v2 + shopify): shipping/billing →
+`market.countries` si único → nombre market si ISO2 → `null`. Moda por customer en
+`customers.country`; writers desnormalizan en señales/acciones para filtro `?market=` por ISO2.
 
-- Medusa `order.region` → `market` (`source='medusa_region'`), `order.sales_channel` → `channel`. `countries` comes from `/admin/regions` (often `[]` — currency is the reliable axis).
-- Shopify `presentmentCurrency + country` → `market` (`source='shopify_market'`, `market_id` inferred via `country → Market` when absent), `order.sourceName/app` → `channel`.
-- País canónico por orden (`resolveOrderCountry` en `web/lib/medusa.ts`, general
-  medusa v1/v2 + shopify): `shipping/billing country_code` → `market.countries`
-  si es único → nombre del market si es ISO2 (`"PE"`, `"MX"`) → `null`.
-  El sync guarda la moda por customer (`customers.country`) y los writers la
-  desnormalizan en `churn_signals`/`proposed_actions` para el filtro global
-  `?market=` (siempre por ISO2, nunca por miles de IDs).
+## 3. Data Classification & Enrichment Pipeline (implementado)
 
-## 3. Data Classification & Enrichment Pipeline
+- **B2B vs B2C**: dominio vs lista ~4.500 webmails + `companyName`; `isB2B` por lado
+  (issue #21 parcial: display + prospect gate, decisión aún no parte por lado).
+- **Enriquecimiento**: `domains` + `enrichment_runs`, `pendingDomains` → `runEnrichment`
+  (SearXNG rescue + scrape), industria/escala a `CustomerFirmographic`-like en `domains`;
+  brief sectorial cacheado; `vertical_profiles`.
+- **Perfilador tenant** (`web/lib/profiling/` + `store_profiles`): investigator/sector/
+  synthesizer/critic aislados, taxonomía Shopify, arquetipo
+  (`ARCHETYPE_RULE_VERSION=v1:…`), vigilante mensual + recalibración HITL (#6),
+  `brain_json` mínimo diario (#25 Hito 1).
 
-### Step 1: B2B vs. B2C Classification
+## 4. Core Mathematical Engines (implementado, no RFM)
 
-- **Domain Extraction:** Extract root domain from `customer.email`.
-- **Free-Provider Match:** Cross-reference against an offline lookup of ~4,500 free webmail domains (gmail.com, yahoo.com, outlook.com, regional domains like uol.com.br, etc.).
-- **Classification Rule:**
-  - If domain in webmail list AND companyName is blank → Tag: B2C.
-  - If custom domain OR explicit tax/company ID exists → Tag: B2B.
+RFM por quintiles quedó como lectura legacy en ficha; el motor vigente es probabilístico.
 
-### Step 2: B2B Enrichment (Firecrawl Worker)
+### Retention v3 `retention:v3:episodes-mixture` (`web/lib/retention-model.ts`, `web/lib/retention.ts`)
 
-If tagged as B2B, a job is pushed to the BullMQ enrichment queue:
+- `sessionize()`: órdenes <1d = 1 intención de pago (no 1 compra).
+- `episodeize()`: ventana `episodeGapDays` aprendida por tenant (issue #27, ya en `main`).
+- Grilla bayesiana LogNormal + censura; Modelo A `renovacion` (F≥2) / B `segunda_compra` (F=1).
+- Mezcla K ritmos EM+BIC (`mix1:lognormal-em`, K≤4, pertenencia blanda, censura).
+- `decideFromAxes()` `v4:nodormido-exception`: `elegibilidad > dormido > actuar/vigilar`
+  (+ `revision_humana` → `vip_care` en scout).
+- Salida: upsert `customer_predictions` (`store,customer,as_of` día,
+  `p_recompra_h, decision, ticket, valor_esperado, bandas, decil`).
+- Calibración: `tenant_model_params` (WFO 3 orígenes, horizonte 3×H≤180d, Brier+logLoss,
+  margen 2·SE, trust-region Δμ≤0.5/Δσ≤0.2), `band-calibrate` + `close-watch-calibrate`
+  cada 30d; lector fail-open a legacy.
 
-- Firecrawl scrapes `https://{customer_domain}` (extracting markdown of Homepage and About Us).
-- Mini-LLM prompt extracts:
-  - Company vertical/industry.
-  - Business type (e.g., distributor, retail shop, corporate end-user).
-  - Estimated scale.
-- Payload is saved to `CustomerFirmographic` table.
+### Scout `scout:v2:retention` (`web/lib/scout.ts`)
 
-## 4. Core Mathematical Engines: RFM & Repurchase Interval
+Solo `actuar|revision_humana` abren señal (`vip_care` si revision_humana);
+`score=p_recompra_h`; reason `sin comprar hace {t}d (ciclo ~{c}d, p25–p75)` parseable;
+dedup 1 cliente=1 viva; `prioritized` no se pisa; `actioned` sin borrador se reabre.
 
-### 1. RFM Calculation (Run asynchronously every 24h)
+### Mira (SSOT lectura, `web/lib/mira.ts:getRankedMira`)
 
-For every customer `i`:
+Join `signals(open|prioritized)` + customers + última acción + última predicción.
+Orden `valor_esperado desc → score → p`; separa `rows` (moneda tienda) / `foreign`.
+Veto juez TTL 24h. Consumida por strategist/copywriter/Hoy/Review.
 
-- Recency (`R_i`): Days since latest `order.placed`.
-- Frequency (`F_i`): Total count of completed orders.
-- Monetary (`M_i`): Total net spend across all orders.
+### Strategist `strategist:v2:retention` (`web/lib/strategist.ts`)
 
-Quintile distribution (`1` to `5`) is assigned across the store's customer base:
+`objective()`: `≥3 órdenes + ≥p80 + top-activo → vip_care`; `segunda_compra|≤1 → winback`;
+resto `nurture`. p80 intra-moneda; `evidence_json` preserva scout.
 
-```text
-Score_i = Concat(R_tier, F_tier, M_tier)
-```
+### Copywriter `copywriter:v16:identidad-estructural` + Juez `contactability:v5` (`web/lib/copywriter.ts`, `contactability.ts`, `judge-brief.ts`)
 
-- `555` → Champions / VIPs.
-- `511` → New Promising Customers.
-- `155` → Can't Lose Them (High spend, long inactive time).
-- `111` → Lost / Hibernating.
+Por `prioritized` top-mira sin `busySignal/busyCustomer`: historial 5 órdenes +
+`item-context/metadata-map`, juez (veto=skip auditado), brief `continuidad|identidad`,
+`proposer_draft` primario→fallback, controles (banned-phrases, ancla identidad,
+wa≤450/body≤800, email 400–750). Inserta `pending_review` + señal→`actioned`. Nunca envía.
+`runStaleRefresh(limit 10)`: re-redacta stale a GEN vigente (#26 implementado).
 
-### 2. Expected Repurchase Delta
+### Prospect `prospect:v6:market-scores` (`web/lib/prospect.ts`)
 
-For customers with `F >= 2`:
+Gate B2B-only; ICP manual o auto (top-20 + brain + feedback); queries LLM →
+SearXNG → scrape → score vs ICP + pool similar + retrieval top-3 + gate contacto +
+`SCORE_MIN=0.5` + tope 2/industria → dedupe → `proposed_leads pending_review`.
 
-```text
-Δt_avg = (1 / (N - 1)) * Σ(t_{k+1} - t_k)
-```
+### Dispatcher + Analyst (`web/lib/dispatcher.ts`, `analyst.ts`, `pre-send.ts`)
 
-If `(Current Date - t_last) > Δt_avg × 1.25`, trigger "Churn Risk" signal.
+Dispatcher: sello fresco (`generator==COPYWRITER_GEN`), 1/cliente/corrida,
+`checkPreSendGate` (opt-out, recompra, duplicado, dismissed, no-enviable → `skipped/held`);
+email SendGrid real; WhatsApp retenido; stub marca dispatched sin proveedor.
+Analyst: sesioniza post-envío (moneda tienda), 1 sesión→1ª acción vigente, escribe
+`revenue_attributed` solo con conversión o ventana cerrada, cierra señal;
+`attributionBySlice()` 90d por canal/objetivo/decisión.
 
-## 5. Database Schema (PostgreSQL / Prisma Core Entities)
+## 5. Database Schema (PostgreSQL, Supabase — fuente real)
 
-> Fuente de verdad implementada: `supabase/migrations/20261016000000_phase1_multitenant.sql`
-> (SQL directo, sin Prisma). El modelo Prisma de abajo es el blueprint; Fase 1 = `stores`,
-> `channels`, `market_regions`, `customers`, `orders`. Fase 2 = `customer_market_stats` + RFM.
+> Fuente de verdad: `supabase/migrations/*.sql` (54 archivos). El modelo Prisma de abajo
+> es ilustrativo; el DDL real es SQL directo.
 
-```prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+Tablas (28): `stores, channels, market_regions, customers, orders, products,
+product_stats, item_content, customer_predictions, churn_signals, proposed_actions,
+proposed_leads, background_runs, domains, enrichment_runs, customer_aliases,
+media_captions, store_profiles, vertical_profiles, profile_snapshots, profile_proposals,
+tenant_model_params, opt_outs, llm_usage, conversations, messages, merchant_users,
+store_secrets, store_secret_audits, jobs` (+ `start_run_if_free()`).
 
-enum CustomerType {
-  B2C
-  B2B
-}
+Claves: `stores(platform,shop_url)` único; `customers(source)` ecommerce-upsert/local-intacto;
+`orders` moneda original + `channel/market/country/is_test`; `customer_predictions`
+`(store,customer,as_of)` + `model_version`; `churn_signals(status,objective,evidence_json)`;
+`proposed_actions(status,evidence_json.generator,approved_by)`; `background_runs(kind,scope)`.
 
-enum ActionStatus {
-  PENDING_REVIEW
-  APPROVED
-  REJECTED
-  DISPATCHED
-  FAILED
-}
+## 6. Technology Stack (real)
 
-enum OutreachChannel {
-  EMAIL
-  WHATSAPP
-}
-
-enum CustomerSource {
-  ecommerce // synced from platform, upsert-only (never deleted)
-  local     // created in-app, untouched by sync
-}
-
-// Tenant = one connected store (Medusa URL or Shopify domain).
-// merchantId reserved for multi-user; null = single-merchant instance.
-model Store {
-  id           String   @id @default(uuid())
-  merchantId   String?
-  platform     String   // medusa | shopify | woocommerce
-  shopUrl      String   // canonical connection key
-  name         String?
-  shopCurrency String   @default("PEN")
-  channels     Channel[]
-  markets      MarketRegion[]
-  customers    Customer[]
-  orders       Order[]
-  createdAt    DateTime @default(now())
-
-  @@unique([platform, shopUrl])
-}
-
-// Canonical sales channel: Medusa sales_channel / Shopify publication.
-model Channel {
-  id       String  @id @default(uuid())
-  storeId  String
-  store    Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  source   String  // medusa_sales_channel | shopify_channel
-  sourceId String  // sc_xxx / gid://shopify/Publication/...
-  name     String
-  orders   Order[]
-
-  @@unique([storeId, source, sourceId])
-}
-
-// Canonical commercial zone + currency: Medusa region / Shopify market.
-// Currency is the reliable axis (countries[] is often empty — e.g. digital goods).
-model MarketRegion {
-  id        String   @id @default(uuid())
-  storeId   String
-  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  source    String   // medusa_region | shopify_market
-  sourceId  String   // reg_xxx / gid://shopify/Market/...
-  name      String
-  currency  String   // PEN, USD, MXN
-  countries String[] // ISO2, best-effort
-  orders    Order[]
-
-  @@unique([storeId, source, sourceId])
-}
-
-model Customer {
-  id               String                 @id @default(uuid())
-  storeId          String
-  store            Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  externalId       String?                // Medusa/Shopify customer ID (null = local-only)
-  source           CustomerSource         @default(ecommerce)
-  email            String                 @index
-  phone            String?
-  firstName        String?
-  lastName         String?
-  customerType     CustomerType           @default(B2C)
-  // Global RFM only valid in shopCurrency (see CustomerMarketStats + totalShopCurrency).
-  rfmScore         String?                // e.g. "554"
-  recencyDays      Int?
-  frequencyCount   Int                    @default(0)
-  totalMonetary    Decimal                @default(0.0) @db.Decimal(12, 2)
-  avgIntervalDays  Float?
-  lastOrderAt      DateTime?
-  firmographic     CustomerFirmographic?
-  orders           Order[]
-  actions          ProposedAction[]
-  marketStats      CustomerMarketStats[]
-  externalCreatedAt DateTime?
-  lastSyncedAt     DateTime?
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-
-  @@unique([storeId, externalId])
-}
-
-model CustomerFirmographic {
-  id              String    @id @default(uuid())
-  customerId      String    @unique
-  customer        Customer  @relation(fields: [customerId], references: [id])
-  domain          String
-  companyName     String?
-  industry        String?
-  businessModel   String?   // Wholesaler, Retailer, Agency
-  summaryRaw      String?   @db.Text
-  scrapedAt       DateTime  @default(now())
-}
-
-model Order {
-  id                String    @id @default(uuid())
-  externalOrderId   String    @unique
-  storeId           String
-  store             Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customerId        String
-  customer          Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  channelId         String?
-  channel           Channel?  @relation(fields: [channelId], references: [id])
-  marketId          String?
-  market            MarketRegion? @relation(fields: [marketId], references: [id])
-  totalAmount       Decimal   @db.Decimal(12, 2) // minor units, ORIGINAL currency
-  currency          String    // original currency — never aggregated across currencies
-  totalShopCurrency Decimal?  @db.Decimal(12, 2) // normalized to Store.shopCurrency (Fase 2)
-  country           String?   // shipping/billing ISO2, best-effort
-  itemsJson         Json      // Normalized array of line items
-  placedAt          DateTime
-}
-
-// Fase 2 (RFM engine): actionable RFM lives here, per market/currency.
-// Mixing S/349 PEN with $610 USD in one score produces wrong copy/pricing.
-model CustomerMarketStats {
-  id             String        @id @default(uuid())
-  customerId     String
-  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  marketId       String?
-  market         MarketRegion? @relation(fields: [marketId], references: [id])
-  currency       String
-  frequencyCount Int           @default(0)
-  totalMonetary  Decimal       @db.Decimal(12, 2)
-  recencyDays    Int?
-  rfmScore       String?
-  lastOrderAt    DateTime?
-
-  @@unique([customerId, marketId, currency])
-}
-
-model ProposedAction {
-  id              String        @id @default(uuid())
-  customerId      String
-  customer        Customer      @relation(fields: [customerId], references: [id])
-  reasoning       String        // "Customer hasn't reordered their monthly coffee beans in 35 days."
-  channel         OutreachChannel
-  subject         String?
-  body            String        @db.Text
-  status          ActionStatus  @default(PENDING_REVIEW)
-  dispatchedAt    DateTime?
-  revenueAttributed Decimal?    @db.Decimal(12, 2)
-  createdAt       DateTime      @default(now())
-}
-```
-
-**Phased implementation:** Fase 1 (migration `0001`): `stores`, `channels`, `market_regions`, `customers`, `orders` (raw currency + FKs, no conversion). Fase 2 (RFM engine): `customer_market_stats` + `totalShopCurrency` conversion + views `churn_risk_view` / `rfm_summary`.
-
-## 6. Technology Stack
-
-- **Runtime & Framework:** Node.js 22 with Next.js (latest, App Router, TypeScript end-to-end). API routes act as a thin proxy; all intelligence lives in ADK.
-- **UI:** shadcn/ui + TailwindCSS (merchant dashboard, chat, canvas).
-- **Database & Auth:** Supabase (PostgreSQL + Auth + Realtime). Read models via Supabase client; views `churn_risk_view` / `rfm_summary` with RLS per merchant.
-- **Queue / Job Scheduling:** Upstash Redis + QStash/BullMQ (event ingestion, daily RFM cron, Firecrawl scraping tasks).
-- **Deep Scraping:** Firecrawl API (clean markdown extraction).
-- **AI Orchestration:** [ADK for TypeScript](https://github.com/google/adk-js) (`@google/adk`, Node 22). `LlmAgent` with Zod-validated function tools over Supabase views/tables. Dev/test via `@google/adk-devtools` (`adk web`, `adk run`). No Vercel AI SDK.
-- **Outbound Channels:**
-  - **Email:** Resend API (clean developer experience, high deliverability).
-  - **WhatsApp:** Meta Cloud API or Twilio WhatsApp Business API.
+- **Runtime:** Node 22 + Next.js 16 (App Router, TS). API routes = proxy fino; inteligencia en
+  `lib/` + ADK.
+- **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Customers, Review, Finanzas, Products, Settings, Ayuda).
+- **DB/Auth:** Supabase (Postgres + Auth + Realtime). RLS por `is_store_member`.
+- **Scheduler/Worker:** sin cola: `web/worker.ts` one-shot (`--once --kinds=sync,morning`) +
+  Scheduled Task Coolify diario 11:00 UTC + daemon dev `WORKER_SCHEDULE=1`. `jobs` retirada
+  (artefacto, no programar sobre ella); slot vía `start_run_if_free`.
+- **Scraping/búsqueda:** SearXNG (service Coolify) + Crawlee/cheerio (`procps` en runner).
+- **AI:** `@google/adk@^2.3.0` (`LlmAgent` + Zod tools sobre Supabase). Dev/test vía
+  `@google/adk-devtools`. Sin Vercel AI SDK. Modelos en `web/config/llm_models.json`.
+- **Outbound:** Email Resend/SendGrid real; WhatsApp Meta/Twilio pendiente (#4).
 
 ```bash
 npm install @google/adk
 npm install -D @google/adk-devtools
 ```
 
-## 7. Chat + Canvas (ADK)
+## 7. Chat + Review (ADK, implementado)
 
-- **Chat:** conversational layer over customers, RFM, orders and `ProposedAction`. The Next.js frontend talks to the ADK agent directly (its API/SSE); Next.js API routes are only a thin proxy.
-- **Agent tools (read-only by default):** `listChurnRisk`, `rfmBreakdown`, `getCustomer`, `listActions`, `draftCampaign`. `approveAction`/`dispatch` require explicit merchant confirmation.
-- **Canvas:** renders agent artifacts next to the chat — `chart` (RFM/churn), `table` (customer segments), `actionDraft` (editable campaign copy before approval). One editable draft at a time (artifact pattern).
-- **Persistence:** Supabase tables `conversations` + `messages`; generated drafts stay as `ProposedAction` rows with `PENDING_REVIEW`.
+- **Chat:** `lib/adk/agents/customer-agent.ts` (`customer_chat`), instrucción ES
+  (tienda/ficha/producto, recupero≠ventas, envelope `{items,total_count,returned,truncated}`,
+  approve solo con confirmación). Rutas `app/api/chat`, `products/[id]/chat`, `customers/[id]/chat`.
+- **Tools (22, `lib/adk/tools/retain-tools.ts`):** `get_store_summary, get_recovery_stats,
+  list_signals, list_actions, approve_actions, reject_actions, find_customer,
+  filter_customers, get_customer_profile, get_customer_orders, get_customer_firmographics,
+  list_leads, start_prospect_run, get_top_products, start_scout_run, start_strategist_run,
+  start_copywriter_run, start_dispatcher_run, start_analyst_run, get_product_summary,
+  get_product_movements, get_product_buyers` (con `limit/offset`, `total=distincts`,
+  `truncated` honesto tras fix #28 parcial + #17).
+- **Review (no canvas):** inbox 3 tabs actions/leads/signals (`app/(dashboard)/review`),
+  con sustento predicción+última orden, wa.me, cambio canal, veto visible.
+  Persistencia: `conversations` + `messages`; borradores = `proposed_actions PENDING_REVIEW`.
 
-## 8. Metering LLM por tenant (issue #15)
+## 8. Metering LLM por tenant (issue #15, implementado base)
 
-- **Tabla:** `llm_usage` (`supabase/migrations/20261020000003_llm_usage.sql`), una fila por llamada con `store_id` obligatorio + `process/provider/model/prompt/completion/total/reasoning/latency/used_fallback/success`. RLS: lectura por `is_store_member(store_id)`; escritura solo `service_role` desde server. Vista `llm_usage_daily` para agregados por día/proceso/modelo.
-- **Wrapper:** `web/lib/ai/usage.ts` — `parseChatUsage` tolera OpenAI/DeepSeek (`usage.prompt_tokens/...`), Anthropic (`input_tokens/output_tokens`) y Gemini (`usageMetadata`); devuelve `null` sin conteo. `logLlmUsage` nunca lanza (warn si falta `store_id` o Supabase) y se llama fire-and-forget.
-- **Dónde se loguea:** no-streaming JSON (`profiling/llm.ts`, `ai/investigate.ts`, `ai/enrich.ts`, `retrieval.ts` via `meter`, `contactability.ts`, `verticals.ts`, `copywriter.ts` proceso `proposer_draft`, `prospect.ts` proceso `prospect_scan`, `profiling/pipeline.ts` + `synthesizer/critic`) y adaptadores ADK (`adk/models/openai-compatible.ts`, `anthropic.ts` via `config.storeId/process` desde `customer-agent.ts`). Fallback loguea solo la fila del modelo que respondió con `used_fallback=true` (sin doble conteo). Sin `usage` real no se inventa: no hay fila (el `success=false` con 0 queda para fase 2).
-- **Lectura:** `GET /api/usage?store=<uuid>&from=&to=&process=` agrega `llm_usage` (RLS aplica); pill informativo en el header (`usage-pill.tsx`, total hoy + histórico, sin link).
-- **Fuera de alcance:** `ai/decisions.ts` (Decisions API: devuelve `answers` con probabilidades, sin `usage`/tokens — no hay qué medir) y backfill histórico (solo forward). `llm_usage_daily` existe para futuros agregados; la ruta agrega en código.
+- **Tabla:** `llm_usage` (`20261020000003`), 1 fila/llamada con `store_id` + 
+...[truncated 911 chars]

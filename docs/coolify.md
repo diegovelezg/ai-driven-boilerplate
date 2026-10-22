@@ -107,7 +107,7 @@ resuelve por wildcard sin pedir DNS):
 ## 3. Application web (Git + Dockerfile)
 
 Coolify → New → Application → Public Repository:
-`https://github.com/diegovelezg/retention-ai-engine`, rama `main`.
+`https://github.com/diegovelezg/retain-engine-ai`, rama `main`.
 
 - Build Pack: `Dockerfile`. Base Directory: `/web`. Dockerfile Location: `/Dockerfile`. Port: `3000`.
 - Dominio: `https://retention.papelitosdecolor.com`.
