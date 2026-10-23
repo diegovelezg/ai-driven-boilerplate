@@ -3,11 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PREFIXES = ["/login", "/api/auth"];
 
-/** Refresca la sesión Supabase con las cookies del request (runtime edge). */
+/** Patrón oficial Supabase SSR + Next: refresca sesión y devuelve el usuario. */
 async function updateAuthSession(request: NextRequest) {
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anon) return NextResponse.next({ request });
+  if (!url || !anon) return { response: NextResponse.next({ request }), user: null };
   let response = NextResponse.next({ request });
   const supabase = createServerClient(url, anon, {
     cookies: {
@@ -23,8 +23,8 @@ async function updateAuthSession(request: NextRequest) {
       },
     },
   });
-  await supabase.auth.getUser();
-  return response;
+  const { data } = await supabase.auth.getUser();
+  return { response, user: data.user ?? null };
 }
 
 /** Refresca sesión; redirige a /login si no hay usuario (salvo login/API auth).
@@ -32,20 +32,17 @@ async function updateAuthSession(request: NextRequest) {
  *  JSON en vez de redirect (los fetch del dashboard esperan JSON). */
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const response = await updateAuthSession(request);
+  const { response, user } = await updateAuthSession(request);
   if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return response;
   }
-  const hasSession = Boolean(
-    request.cookies.getAll().some((c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token")),
-  );
   if (pathname.startsWith("/api/")) {
-    if (!hasSession) {
+    if (!user) {
       return NextResponse.json({ error: "No autenticado." }, { status: 401 });
     }
     return response;
   }
-  if (!hasSession) {
+  if (!user) {
     const login = request.nextUrl.clone();
     login.pathname = "/login";
     login.searchParams.set("next", pathname);

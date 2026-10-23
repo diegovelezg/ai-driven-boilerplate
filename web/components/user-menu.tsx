@@ -105,18 +105,19 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
         <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={pending}
-          onClick={(e) => {
-            e.preventDefault();
+          onClick={() => {
             if (signingOutRef.current) return;
             signingOutRef.current = true;
             startSignOut(async () => {
+              // By the book Next.js: la action hace signOut + redirect("/login").
+              // redirect() viaja como NEXT_REDIRECT y el router navega solo:
+              // no se captura, no se hace window.location, no hay signOut
+              // duplicado en browser (la cookie la limpia la action vía Set-Cookie).
               try {
                 await signOutAction();
               } catch (err) {
-                // redirect() de la action viaja como digest NEXT_REDIRECT:
-                // no es un fallo, es la navegación a /login en curso.
                 const digest = err instanceof Error ? (err as { digest?: unknown }).digest : null;
-                if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) return;
+                if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) throw err;
                 signingOutRef.current = false;
                 toast.add({
                   title: "No se pudo cerrar sesión",
