@@ -44,6 +44,10 @@ export interface MiraRow {
   /** Modelo del motor (renovacion|segunda_compra). Issue #11: strategist
    *  decide winback por sesiones/modelo, no por orders_count. */
   model?: string | null;
+  /** Corte de origen si la señal viene de backfill (ventana previa).
+   *  Vive en `churn_signals.evidence_json.recovered_from` (ISO día).
+   *  Solo vale con formato fecha; lo demás se ignora. */
+  recoveredFrom?: string | null;
   /** Veredicto del juez de contactabilidad (issue #16 Fase 1): vive en
    *  `churn_signals.evidence_json.contactability`. `eligible===false` →
    *  la fila no debe ofrecer `Redactar` (veto estable con motivo), salvo
@@ -326,6 +330,10 @@ export async function getRankedMira(
       expectedDays: pred?.expectedDays ?? null,
       valorEsperadoMinor: pred?.valor ?? null,
       model: pred?.model ?? null,
+      recoveredFrom: (() => {
+        const raw = (r.evidence_json as Record<string, unknown> | null)?.recovered_from;
+        return typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+      })(),
       contactability: parseContactability((r.evidence_json as Record<string, unknown> | null) ?? null),
     };
   });

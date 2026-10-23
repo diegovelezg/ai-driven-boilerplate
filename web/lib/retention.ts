@@ -194,6 +194,10 @@ export async function runRetentionModel(
   const contactWindowDays = Math.min(14, Math.floor(horizon / 2));
   const contactSince = new Date(asOfMs - contactWindowDays * DAY_MS).toISOString();
   const dismissSince = new Date(asOfMs - 30 * DAY_MS).toISOString();
+  // Cota superior = fin del día del corte: en backfill (asOf histórico) los
+  // envíos/dismiss posteriores al corte no deben suprimir la foto vieja.
+  // En corridas normales es no-op (no hay dispatched_at futuro).
+  const asOfEndIso = new Date(Date.parse(dayIso) + DAY_MS).toISOString();
   // dispatched_at reciente
   for (let from = 0; ; from += 1000) {
     const { data, error } = await db
@@ -202,6 +206,7 @@ export async function runRetentionModel(
       .eq("store_id", storeId)
       .not("dispatched_at", "is", null)
       .gte("dispatched_at", contactSince)
+      .lt("dispatched_at", asOfEndIso)
       .order("dispatched_at", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + 999);
@@ -228,6 +233,7 @@ export async function runRetentionModel(
       .eq("store_id", storeId)
       .eq("status", "dismissed")
       .gte("closed_at", dismissSince)
+      .lt("closed_at", asOfEndIso)
       .order("closed_at", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + 999);

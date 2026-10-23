@@ -82,10 +82,19 @@ export async function runStrategist(
         model: r.model ?? null,
         currency: r.currency ?? null,
         decision: r.decision ?? null,
-      }) satisfies OpenSignal & { decision: string | null });
+        recoveredFrom: r.recoveredFrom ?? null,
+      }) satisfies OpenSignal & { decision: string | null; recoveredFrom: string | null });
     const withPred = rows.filter((r) => r.decision !== null);
     if (withPred.length > 0) {
-      rows = rows.filter((r) => r.decision === "actuar" || r.decision === "revision_humana");
+      // Excepción backfill: la recuperada de ventana previa entra aunque el
+      // motor hoy diga dormido/vigilar (la nota va en el motivo; el humano
+      // decide). Sin canal o contactado reciente no entra nadie.
+      rows = rows.filter(
+        (r) =>
+          r.decision !== "sin_canal" &&
+          r.decision !== "contactado_reciente" &&
+          (r.decision === "actuar" || r.decision === "revision_humana" || r.recoveredFrom != null),
+      );
     }
     // Uno por cliente (issue #9): el ranking ya viene ordenado, se queda la
     // primera señal de cada customer. Dos priorizadas del mismo cliente

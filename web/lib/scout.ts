@@ -5,6 +5,7 @@
 // (y `revision_humana` como `vip_care`) abren señal, con score = pRecompraH.
 // Corre en background con `background_runs` kind `scout`.
 import { getSupabase } from "@/lib/supabase";
+import { isRealDbOrder } from "@/lib/canonical";
 import { advanceRun, finishRun, setRunTotal, type RunStatus, formatRunError } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { formatNumber } from "@/lib/format";
@@ -197,14 +198,56 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         const pred = predByCust.get(c.id) ?? null;
         const { data: existing } = await db
           .from("churn_signals")
-          .select("id,kind,score,status")
+          .select("id,kind,score,status,evidence_json")
           .eq("store_id", storeId)
           .eq("customer_id", c.id)
           .in("status", ["open", "prioritized", "actioned"])
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        const prev = (existing ?? null) as { id: string; kind: string | null; score: number | null; status: string } | null;
+        const prev = (existing ?? null) as {
+          id: string;
+          kind: string | null;
+          score: number | null;
+          status: string;
+          evidence_json?: Record<string, unknown> | null;
+        } | null;
+        // Backfill: la recuperada de ventana previa no la cierra el scout
+        // (el motor hoy puede decir dormido; el cierre lo hace el humano o
+        // el analyst al convertir). La nota vive en el motivo.
+        let prevRecovered =
+          typeof prev?.evidence_json?.recovered_from === "string" &&
+          /^\d{4}-\d{2}-\d{2}/.test(prev.evidence_json.recovered_from as string);
+        if (prevRecovered && prev) {
+          // Salida: si volvió solo después del recupero (orden real), la
+          // señal cumplió y se cierra como cualquier otra.
+          try {
+            const recFrom = String(
+              (prev.evidence_json as Record<string, unknown>).recovered_from,
+            ).slice(0, 10);
+            const { data: recent } = await db
+              .from("orders")
+              .select("placed_at,status,payment_status,is_test")
+              .eq("store_id", storeId)
+              .eq("customer_id", c.id)
+              .gt("placed_at", `${recFrom}T00:00:00.000Z`)
+              .order("placed_at", { ascending: false })
+              .limit(50);
+            const cameBack = ((recent ?? []) as Array<Record<string, unknown>>).some((o) =>
+              isRealDbOrder({
+                status: (o.status as string | null) ?? null,
+                payment_status: (o.payment_status as string | null) ?? null,
+                is_test: Boolean(o.is_test),
+              }),
+            );
+            if (cameBack) {
+              prevRecovered = false;
+              log(`run ${runId} ${c.email || c.id} recuperada cumplida (volvió solo): se cierra`);
+            }
+          } catch {
+            // Fail-open: si el chequeo falla, se preserva.
+          }
+        }
         // Anti-duplicado por customer (issue #9): un cliente = una señal viva.
         // Se conserva la más reciente (prev) y se cierran las demás
         // open/prioritized, esté gestionada o no. Antes solo se limpiaba con
@@ -264,7 +307,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
           if (prev.status === "prioritized") {
             const actionablePri =
               pred?.decision === "actuar" || pred?.decision === "revision_humana";
-            if (!actionablePri) {
+            if (!actionablePri && !prevRecovered) {
               const { error } = await db
                 .from("churn_signals")
                 .update({ status: "closed", closed_at: new Date().toISOString() })
@@ -322,7 +365,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
             if (error) throw new Error(`Signal insert: ${error.message}`);
             created += 1;
           }
-        } else if (prev) {
+        } else if (prev && !prevRecovered) {
           // Ya no es accionable (vigilar/orgánico/dormido/suprimido o sin
           // predicción): la señal abierta ya no aplica.
           const { error } = await db
@@ -346,7 +389,7 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
       for (let off = 0; ; off += 1000) {
         const { data: opage, error: oErr } = await db
           .from("churn_signals")
-          .select("id,customer_id")
+          .select("id,customer_id,evidence_json")
           .eq("store_id", storeId)
           .in("status", ["open", "prioritized"])
           .order("id", { ascending: true })
@@ -383,7 +426,15 @@ export async function runScout(runId: string, storeId: string): Promise<void> {
         if (busyTruncated) {
           log(`run ${runId} huérfanas omitidas: busySet truncado, no se cierra a ciegas`);
         } else {
-          const stale = noPred.filter((r) => !busySet.has(String(r.id ?? "")));
+          const stale = noPred
+            .filter((r) => !busySet.has(String(r.id ?? "")))
+            // Backfill: la huérfana recuperada no la tumba el barrido (mismo
+            // formato que mira/strategist: fecha ISO).
+            .filter((r) => {
+              const ev = (r.evidence_json as Record<string, unknown> | null) ?? null;
+              const rec = ev?.recovered_from;
+              return typeof rec !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(rec);
+            });
           for (const r of stale) {
             const { error } = await db
               .from("churn_signals")
