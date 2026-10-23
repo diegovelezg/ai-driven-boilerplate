@@ -172,21 +172,38 @@ export async function readConnections(storeId?: string | null): Promise<StoreCon
     const db = await getStoreSecrets(sid).catch(() => null);
     const { getStoreConnFields } = await import("@/lib/store-secrets");
     const fields = await getStoreConnFields(sid).catch(() => null);
-    if (!db && !fields) return json;
+    // Tenant explícito (login multiuser): nunca caer al JSON global (sería
+    // credencial cross-tenant). Sin fila en DB → conn vacía (`sin-conexion`).
+    const explicit = storeId != null;
+    if (!db && !fields) {
+      if (!explicit) return json;
+      return {
+        ...json,
+        medusaUrl: "",
+        medusaEmail: "",
+        wooStore: "",
+        medusaToken: "",
+        shopifyToken: "",
+        wooConsumerKey: "",
+        wooConsumerSecret: "",
+        emailApiKey: "",
+      };
+    }
     // Overlay: el secreto DB manda SOLO si no es vacío; si la tienda existe
     // en DB pero aún sin fila (migración pendiente), se conserva el JSON.
     // medusa_url/email también viven cifrados en DB en prod (el JSON local
     // es efímero en contenedores); el JSON queda como fallback dev.
+    // Con tenant explícito no hay fallback al JSON: DB manda o vacío.
     return {
       ...json,
-      medusaUrl: fields?.medusa_url || json.medusaUrl,
-      medusaEmail: fields?.medusa_email || json.medusaEmail,
-      wooStore: fields?.woo_store || json.wooStore,
-      medusaToken: overlaySecret(json.medusaToken, db?.medusa_token ?? ""),
-      shopifyToken: overlaySecret(json.shopifyToken, db?.shopify_token ?? ""),
-      wooConsumerKey: overlaySecret(json.wooConsumerKey, db?.woo_consumer_key ?? ""),
-      wooConsumerSecret: overlaySecret(json.wooConsumerSecret, db?.woo_consumer_secret ?? ""),
-      emailApiKey: overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
+      medusaUrl: explicit ? (fields?.medusa_url ?? "") : (fields?.medusa_url || json.medusaUrl),
+      medusaEmail: explicit ? (fields?.medusa_email ?? "") : (fields?.medusa_email || json.medusaEmail),
+      wooStore: explicit ? (fields?.woo_store ?? "") : (fields?.woo_store || json.wooStore),
+      medusaToken: explicit ? (db?.medusa_token ?? "") : overlaySecret(json.medusaToken, db?.medusa_token ?? ""),
+      shopifyToken: explicit ? (db?.shopify_token ?? "") : overlaySecret(json.shopifyToken, db?.shopify_token ?? ""),
+      wooConsumerKey: explicit ? (db?.woo_consumer_key ?? "") : overlaySecret(json.wooConsumerKey, db?.woo_consumer_key ?? ""),
+      wooConsumerSecret: explicit ? (db?.woo_consumer_secret ?? "") : overlaySecret(json.wooConsumerSecret, db?.woo_consumer_secret ?? ""),
+      emailApiKey: explicit ? (db?.email_api_key ?? "") : overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
     };
   } catch {
     return json;

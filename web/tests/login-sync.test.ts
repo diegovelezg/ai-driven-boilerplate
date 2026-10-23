@@ -49,7 +49,7 @@ describe("shouldSyncOnLogin", () => {
     );
   });
 
-  it("omite con sync done reciente (throttle 15 min)", () => {
+  it("omite con sync done reciente (throttle 12h, cron dueño del full)", () => {
     assert.deepEqual(
       shouldSyncOnLogin(MEDUSA_OK, {
         supabaseConfigured: true,
@@ -60,12 +60,34 @@ describe("shouldSyncOnLogin", () => {
     );
   });
 
-  it("dispara con sync done viejo (>15 min)", () => {
+  it("omite con sync de hace 1h (5 users espaciados no hacen 5 fulls)", () => {
     assert.deepEqual(
       shouldSyncOnLogin(MEDUSA_OK, {
         supabaseConfigured: true,
         hasRunningRun: false,
         lastSyncDoneAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      }),
+      { sync: false, reason: "sync-reciente" },
+    );
+  });
+
+  it("omite con timestamp corrupto (fail-closed, el cron cubre el full)", () => {
+    assert.deepEqual(
+      shouldSyncOnLogin(MEDUSA_OK, {
+        supabaseConfigured: true,
+        hasRunningRun: false,
+        lastSyncDoneAt: "no-fecha",
+      }),
+      { sync: false, reason: "sync-reciente" },
+    );
+  });
+
+  it("dispara con sync done viejo (>12h)", () => {
+    assert.deepEqual(
+      shouldSyncOnLogin(MEDUSA_OK, {
+        supabaseConfigured: true,
+        hasRunningRun: false,
+        lastSyncDoneAt: new Date(Date.now() - 13 * 60 * 60_000).toISOString(),
       }),
       { sync: true, reason: "ok" },
     );
