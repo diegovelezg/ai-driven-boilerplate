@@ -56,7 +56,8 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
     .filter(Boolean);
   if (memberIds.length > 1) log(`login multi-membresía (${memberIds.length}): sync solo ${memberIds[0]}`);
   const storeId = memberIds[0] as string | undefined;
-  scheduleSyncOnLogin(storeId ?? null);
+  const userId = (await supabase.auth.getUser().catch(() => ({ data: { user: null } }))).data.user?.id ?? null;
+  scheduleSyncOnLogin(storeId ?? null, userId);
   const dest = pickSafeNext(next, memberIds) ?? (storeId ? `/?store=${storeId}` : "/");
   redirect(dest);
 }
@@ -100,12 +101,14 @@ function pickSafeNext(next: string, memberIds: string[]): string | null {
  * comparten throttle+slot, no hacen N fulls.
  * @param targetStoreId tienda del usuario (primera membresía). Null = legacy
  * single-merchant (se resuelve por URL como antes).
+ * @param userId id auth del usuario (solo para el log de decisiones, nullable).
  */
-function scheduleSyncOnLogin(targetStoreId?: string | null): void {
+function scheduleSyncOnLogin(targetStoreId?: string | null, userId?: string | null): void {
   after(async () => {
     try {
       const supabaseConfigured = isSupabaseConfigured();
       const { planLoginSync } = await import("@/lib/login-plan");
+      const { recordLoginDecision, buildLoginRecord } = await import("@/lib/login-decisions");
       const plan = await planLoginSync(targetStoreId ?? null, {
         readConnections: (sid) => readConnections(sid),
         resolveStoreId: (url) => resolveStoreId(url),
@@ -119,9 +122,15 @@ function scheduleSyncOnLogin(targetStoreId?: string | null): void {
       });
       if (plan.omitReason) {
         log(`login sync omitido store=${targetStoreId} (${plan.omitReason})`);
+        await recordLoginDecision(buildLoginRecord(plan, targetStoreId ?? null, userId ?? null));
         return;
       }
       const { conn, probeStoreId, running, decision, storeId } = plan;
+      // Decisión explícita a DB (debug multi-tenant) + log a consola/archivo.
+      // Sin esto, "¿por qué no sincronizó?" solo existía en `.data/sync.log`
+      // efímero: en prod era imposible responderlo por tienda.
+      // `sync` = full decidido, no ejecutado ni morning (ver buildLoginRecord).
+      await recordLoginDecision(buildLoginRecord(plan, targetStoreId ?? null, userId ?? null));
       if (!storeId) {
         log(`login sync omitido store=${probeStoreId ?? "?"} (${decision.reason})`);
         return;
@@ -151,7 +160,24 @@ function scheduleSyncOnLogin(targetStoreId?: string | null): void {
       }
       return;
     } catch (e) {
-      log(`login sync omitido store=${targetStoreId ?? "?"}: ${e instanceof Error ? e.message : "error"}`);
+      const msg = e instanceof Error ? e.message : "error";
+      log(`login sync omitido store=${targetStoreId ?? "?"}: ${msg}`);
+      // El fallo más interesante (plan no computable) también va a DB,
+      // no solo a consola efímera. Best-effort: nunca lanza.
+      try {
+        const { recordLoginDecision } = await import("@/lib/login-decisions");
+        await recordLoginDecision({
+          storeId: targetStoreId ?? null,
+          userId: userId ?? null,
+          sync: false,
+          reason: "plan-error",
+          hasRunning: false,
+          lastSyncDoneAt: null,
+          omitDetail: msg.slice(0, 300),
+        });
+      } catch {
+        // Ya logueado arriba; el login sigue.
+      }
     }
   });
 }
