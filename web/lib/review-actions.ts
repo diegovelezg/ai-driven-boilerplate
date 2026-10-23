@@ -218,12 +218,33 @@ export async function reopenActionAction(id: string): Promise<ReviewOp> {
   const db = getSupabase();
   const { data: prev } = await db
     .from("proposed_actions")
-    .select("evidence_json")
+    .select("evidence_json,store_id,customer_id,signal_id")
     .eq("id", id)
     .eq("status", "rejected")
     .is("dispatched_at", null)
     .maybeSingle();
   if (!prev) return { ok: false, message: "Ya reabierto o inexistente: nada que rescatar." };
+  // Anti-duplicado: si el cliente o la señal ya tiene otro borrador vivo
+  // (el copywriter redactó uno nuevo mientras este estaba descartado),
+  // rescatar crearía el duplicado. Se veta con mensaje honesto.
+  try {
+    const prow = (prev ?? {}) as Record<string, unknown>;
+    const orParts = [`customer_id.eq.${String(prow.customer_id ?? "")}`];
+    if (prow.signal_id) orParts.push(`signal_id.eq.${String(prow.signal_id)}`);
+    const { data: live } = await db
+      .from("proposed_actions")
+      .select("id")
+      .eq("store_id", String(prow.store_id ?? ""))
+      .in("status", ["pending_review", "approved"])
+      .neq("id", id)
+      .or(orParts.join(","))
+      .limit(1);
+    if ((live ?? []).length > 0) {
+      return { ok: false, message: "Ya tiene un borrador en Review: rescatar este lo duplicaría." };
+    }
+  } catch {
+    // El veto es best-effort: si el chequeo falla, se rescata igual.
+  }
   const prevEv = (((prev ?? {}) as Record<string, unknown>).evidence_json as Record<string, unknown> | null) ?? {};
   const { data, error } = await db
     .from("proposed_actions")

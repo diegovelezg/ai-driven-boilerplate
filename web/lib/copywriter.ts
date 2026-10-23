@@ -132,6 +132,11 @@ export { briefMode, identityJugada, identityPatron } from "@/lib/judge-brief";
  *  (omisión auditada, no fallo), pero por opt-out en vez de pertinencia. */
 class OptOutSkip extends Error {}
 
+/** Otro borrador vivo apareció entre el chequeo y el insert (rescate manual,
+ *  corrida concurrente): omitir sin fallar. Sin esto, dos pendientes del
+ *  mismo cliente o la misma señal conviven y Review los muestra duplicados. */
+class DuplicateSkip extends Error {}
+
 /** "sin comprar hace 219d (media 60d, 2 compras, ciclo arquetipo)" → partes.
  *  Acepta también el formato retention:v1
  *  "sin comprar hace 38d (ciclo ~30d, vuelve típicamente entre 25–37d)". */
@@ -611,6 +616,34 @@ async function composeDraftCopy(
   return { channel, body, subject, verdict };
 }
 
+/** Re-chequeo justo antes de mutar: si entre el filtro inicial y el insert
+ *  (LLM de ~30s en medio) apareció otro borrador vivo del mismo cliente o
+ *  la misma señal (rescate manual, corrida concurrente), se omite en vez de
+ *  duplicar. `excludeActionId` es el propio stale en refresh (se reemplaza). */
+async function assertNoLiveDraft(
+  db: Db,
+  storeId: string,
+  s: { signalId: string | null; customerId: string },
+  excludeActionId?: string | null,
+): Promise<void> {
+  const orParts = [`customer_id.eq.${s.customerId}`];
+  if (s.signalId) orParts.push(`signal_id.eq.${s.signalId}`);
+  const { data, error } = await db
+    .from("proposed_actions")
+    .select("id")
+    .eq("store_id", storeId)
+    .in("status", ["pending_review", "approved"])
+    .or(orParts.join(","))
+    .limit(2);
+  if (error) throw new Error(`Live draft recheck: ${error.message}`);
+  const hit = ((data ?? []) as Array<Record<string, unknown>>).find(
+    (r) => String(r.id ?? "") !== (excludeActionId ?? ""),
+  );
+  if (hit) {
+    throw new DuplicateSkip("Ya tiene un borrador en Review (otra señal o rescate concurrente).");
+  }
+}
+
 /** Persiste UN borrador (insert + señal a actioned). Usado por el bulk y el single. */
 async function draftForSignal(
   db: Db,
@@ -635,6 +668,9 @@ async function draftForSignal(
   if (await isOptedOut(storeId, s.customer_id, channel)) {
     throw new OptOutSkip(`baja del destinatario en ${channel} (opt-out)`);
   }
+  // Re-chequeo anti-duplicado justo antes del insert (el LLM tardó ~30s:
+  // un rescate manual o una corrida concurrente pudo crear otro vivo).
+  await assertNoLiveDraft(db, storeId, { signalId: s.id, customerId: s.customer_id });
   const { error: insErr } = await db.from("proposed_actions").insert({
     store_id: storeId,
     customer_id: s.customer_id,
@@ -880,6 +916,9 @@ export async function runCopywriter(
         } else if (e instanceof ContactabilitySkip) {
           skipped += 1;
           log(`run ${runId} ${s.email || s.customer_id} omitido (juez): ${e.message}`);
+        } else if (e instanceof DuplicateSkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (duplicado): ${e.message}`);
         } else {
           failed += 1;
           log(`run ${runId} ${s.email || s.customer_id} ERROR ${e instanceof Error ? e.message : e}`);
@@ -1201,6 +1240,10 @@ export async function runStaleRefresh(
           log(`run ${runId} ${s.email || s.customer_id} omitido (señal ya no viva)`);
           continue;
         }
+        // Re-chequeo anti-duplicado (un rescate manual o el bulk concurrente
+        // pudo crear otro vivo mientras el LLM redactaba; p.id se excluye
+        // porque es el propio stale que se reemplaza).
+        await assertNoLiveDraft(db, storeId, { signalId: s.id, customerId: s.customer_id }, p.id);
         // Borrar-tras-redactar-OK por id (no tumba un aprobado concurrente:
         // el eq pending_review deja el aprobado intacto).
         const { error: delErr } = await db
@@ -1256,6 +1299,9 @@ export async function runStaleRefresh(
         } else if (e instanceof ContactabilitySkip) {
           skipped += 1;
           log(`run ${runId} ${s.email || s.customer_id} omitido (juez): ${e.message}`);
+        } else if (e instanceof DuplicateSkip) {
+          skipped += 1;
+          log(`run ${runId} ${s.email || s.customer_id} omitido (duplicado): ${e.message}`);
         } else {
           failed += 1;
           log(`run ${runId} ${s.email || s.customer_id} ERROR ${e instanceof Error ? e.message : e}`);
