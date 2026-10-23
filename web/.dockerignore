@@ -9,3 +9,19 @@ storage
 .env*
 coverage
 .git
+# No invalidan `COPY . .` del builder ni viajan al runner:
+# tests, docs, artefactos locales y tooling.
+tests
+*.md
+.fallow
+.fallowrc.json
+.vscode
+.idea
+*.tsbuildinfo
+next-env.d.ts
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+compose*.yml
+compose*.yaml

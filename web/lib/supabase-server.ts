@@ -26,7 +26,7 @@ export async function createServerSupabase() {
           try {
             store.set(name, value, options);
           } catch {
-            // Server Component: el middleware refresca la sesión.
+            // Server Component: el proxy refresca la sesión.
           }
         }
       },

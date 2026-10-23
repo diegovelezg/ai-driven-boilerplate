@@ -125,7 +125,11 @@ Coolify → New → Application → Public Repository:
   ```
 
 - `NEXT_PUBLIC_*` van **también como build-time** (Coolify: "Available at build
-  time"): se inlinan en el bundle en `npm run build`. Todo cambio de URL o de
+  time", y **solo esos dos**): se inlinan en el bundle en `npm run build`.
+  El resto de secretos (`SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`,
+  `DEEPSEEK_API_KEY`, `SEARXNG_*`, `COOLIFY_*`…) son **runtime-only** y NO se
+  declaran como Build Args — pasarlos invalida la caché de Docker en cada
+  rotación y expone secretos en el historial del build. Todo cambio de URL o de
   ANON_KEY exige **rebuild sin caché** de la web.
 - Entre service y application **siempre valor literal, nunca `${...}`**: las
   referencias no cruzan recursos y resuelven vacío (el worker queda sin key
@@ -150,16 +154,17 @@ Coolify → Scheduled Task contra el recurso `web`, todos los días 11:00 UTC
 
 * Name: `retention-daily`
 * Schedule: `0 11 * * *`
-* Command:
+* Command (binario directo, sin `npm`: un nivel menos de procesos y el
+  exit code es el real del worker, no el de npm):
 ```
-npm run worker -- --once --kinds=sync,morning
+./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning
 ```
 * Timeout: `3600` (el full secuencial de 3-5 tiendas con pasos LLM supera
   los 300s del default y la task lo mata a medias dejando solo la cabecera).
 * Container: el de la app `web`.
 
 ```
-npm run worker -- --once --kinds=sync,morning
+./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning
 ```
 
 Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot atómico
@@ -335,8 +340,13 @@ node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');co
   nativo) satura un VPS al límite. Antes de reintentar: `free -m`, nada de
   builds en paralelo, y parar stacks muertos (2026-10-21: había **5** stacks
   Supabase y solo `jpixillx` con datos; los otros 4 se paran en Coolify con
-  Stop —no delete— para no perder volúmenes). Si el container viejo sigue
-  vivo, un parche puntual vía `docker cp` (p. ej. `lib/` que el worker corre
+  Stop —no delete— para no perder volúmenes). Tras cada redeploy de la web,
+  el log avisa `Found orphan containers ... --remove-orphans`: el nombre del
+  container lleva timestamp y cada deploy deja uno huérfano que come disco
+  (cada deploy posterior es más lento). Limpiar en el VPS:
+  `docker container prune -f && docker image prune -f` (nunca `docker builder
+  prune` global ni tocar contenedores/volúmenes de otros proyectos, ver abajo).
+  Si el container viejo sigue vivo, un parche puntual vía `docker cp` (p. ej. `lib/` que el worker corre
   por `tsx`) desbloquea sin rebuild; el fix real entra en el próximo build.
 - No tocar contenedores, volúmenes, redes ni proxy de otros proyectos; no correr
   `docker builder prune` global.
@@ -352,7 +362,9 @@ node -e "(async()=>{const{createClient}=await import('@supabase/supabase-js');co
    detrás → `products` invisible + `para actuar hoy` 1 vs 2 por foto vieja).
    Si el release toca dependencias solo-node o `next.config.ts`:
    `npm run build && npm run check:bundle` (Crawlee bundleado en el SSR
-   tumba prospect solo en prod, sin síntoma en dev).
+   tumba prospect solo en prod, sin síntoma en dev). El `Running TypeScript`
+   (~17s) dentro del build es intencional: es la única puerta que impide
+   desplegar tipos rotos; no poner `ignoreBuildErrors` para "acelerar".
 1. Env Coolify al día (valores literales, §3) + redeploy.
 2. Rebuild **sin caché** si cambió `NEXT_PUBLIC_*` o la anon key.
 3. §6 verde: login 200, API 401, Studio 307, SearXNG ok, conteos `verify`.

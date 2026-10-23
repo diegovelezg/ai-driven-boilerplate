@@ -30,7 +30,7 @@ async function updateAuthSession(request: NextRequest) {
 /** Refresca sesión; redirige a /login si no hay usuario (salvo login/API auth).
  *  Las rutas /api/* (salvo /api/auth) exigen sesión: sin ella devuelven 401
  *  JSON en vez de redirect (los fetch del dashboard esperan JSON). */
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const response = await updateAuthSession(request);
   if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {

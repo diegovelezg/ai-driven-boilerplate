@@ -7,7 +7,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci
+# Cache BuildKit: los re-deploys sin cambio de lock reutilizan ~/.npm
+# en vez de re-descargar 1100+ paquetes (~40s en el log 2026-10-23).
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+# Deps solo-prod para el runner: lo que se copia a la imagen final.
+# Evita el patrón COPY-todo + `npm prune` (la layer de 1.1GB + whiteouts
+# ya quedaba grabada: 37s de COPY + 12.7s de export en el log 2026-10-23).
+FROM node:22-bookworm-slim AS prod-deps
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev \
+  && npm cache clean --force
 
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
@@ -29,9 +42,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Crawlee (scout/prospect) spawnea `ps` para sus snapshots de memoria
 # (@apify/ps-tree): la imagen slim no lo trae y el crawl muere con
 # `spawn ps ENOENT` (prospect en error 4 corridas seguidas, 2026-10-21).
+# Un solo RUN: un apt-update, una layer, y el usuario existe antes de usarlo
+# (el log 2026-10-23 mostró `addgroup ERROR: not found` por orden paralelo frágil).
 RUN apt-get update && apt-get install -y --no-install-recommends procps \
-  && rm -rf /var/lib/apt/lists/
-RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+  && rm -rf /var/lib/apt/lists/ \
+  && addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
@@ -43,21 +58,17 @@ COPY --from=builder /app/worker.ts ./worker.ts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/agent.ts ./agent.ts
-# Solo prod en la imagen final: poda devDeps (eslint/tailwind/supabase-CLI/
-# adk-devtools/typescript). `tsx` es dep prod (la usa el cron) y se conserva.
-COPY --from=deps /app/node_modules ./node_modules
-RUN npm prune --omit=dev
-# /app lo crea root y los COPY quedan root:root: sin esto, `nextjs` no puede
-# crear /app/.data (logs, .data/crawlee de Crawlee, fallback connections.json)
-# y la prospección revienta con `EACCES: permission denied, mkdir '/app/.data'`.
-RUN mkdir -p /app/.data/crawlee && chown -R nextjs:nodejs /app/.data
+# Solo prod, ya podado en su propio stage: COPY directo, sin `npm prune`
+# (shadcn/eslint/tailwind/supabase-CLI/adk-devtools/typescript quedan fuera;
+# `tsx` es dep prod —la usa el cron— y se conserva).
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --chown=nextjs:nodejs entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh \
+  && mkdir -p /app/.data/crawlee && chown -R nextjs:nodejs /app/.data
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-# El cron de prod (Scheduled Task Coolify, docs/coolify.md 3b) corre one-shot
-# dentro de esta misma imagen: `./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning`.
-# WORKER_MODE=1 → worker (solo dev/daemon local); si no, web Next.js.
-# Sin `npm`: un nivel menos de procesos anidados (sh → tsx → node en vez de
-# sh → npm → tsx → node). `exec`: PID1 es el proceso real y recibe el SIGTERM.
-CMD ["sh", "-c", "if [ \"$WORKER_MODE\" = \"1\" ]; then exec ./node_modules/.bin/tsx worker.ts; else exec node server.js; fi"]
+# Sin `sh -c` ni `npm` intermedios: ENTRYPOINT en forma exec, PID1 es el
+# proceso real (node o tsx) y recibe el SIGTERM directo.
+ENTRYPOINT ["/app/entrypoint.sh"]
