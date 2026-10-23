@@ -247,4 +247,39 @@ describe("scope fallback por IDs chunkeado (nunca URI too long)", () => {
     assert.match(mira, /isLargeIdScope\(scope\)/);
     assert.match(mira, /chunkIds\(/);
   });
+
+  it("get_inbox_summary chunkea como list_*: null=country IS NULL, chunks por customer_id", () => {
+    const t = tools();
+    const i = t.indexOf('"get_inbox_summary"');
+    assert.ok(i >= 0, "get_inbox_summary existe");
+    const next = t.indexOf("\n  const ", i + 20);
+    const block = t.slice(i, next > i ? next : i + 6000);
+    // NULL-comodín es country, no customer_id (leads ni tiene esa columna).
+    assert.match(block, /\.is\("country", null\)/);
+    assert.match(block, /\.in\("customer_id", c\)/);
+    assert.doesNotMatch(block, /\.is\("customer_id"/);
+    assert.doesNotMatch(block, /idCol \?\? "customer_id"/);
+  });
+});
+
+describe("writes del inbox con guarda + sello", () => {
+  it("dismiss_signals sella closed_by (tracking 20261103000000)", () => {
+    const t = tools();
+    const i = t.indexOf('"dismiss_signals"');
+    assert.ok(i >= 0, "dismiss_signals existe");
+    const next = t.indexOf("\n  const ", i + 20);
+    const block = t.slice(i, next > i ? next : i + 4000);
+    assert.match(block, /closed_by/);
+    assert.match(block, /revalidatePath\("\/review"\)/);
+  });
+
+  it("decide_lead discarded guarda rejected canónico y devuelve el efectivo", () => {
+    const t = tools();
+    const i = t.indexOf('"decide_lead"');
+    assert.ok(i >= 0, "decide_lead existe");
+    const next = t.indexOf("\n  const ", i + 20);
+    const block = t.slice(i, next > i ? next : i + 6000);
+    assert.match(block, /effective = "rejected"/);
+    assert.match(block, /status: effective/);
+  });
 });

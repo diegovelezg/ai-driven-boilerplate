@@ -128,6 +128,12 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const actCountQ = withMarket(
         db.from("proposed_actions").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review"),
       );
+      // Backlog completo del inbox (/review + badge): sin leads el chat cojea.
+      // Misma fuente que `app/api/inbox-count/route.ts` (leads con idCol null).
+      const leadCountQ = withMarket(
+        db.from("proposed_leads").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review"),
+        null,
+      );
       // Agregados (revenue + B2B/B2C): paginado completo en lotes, con flag si se capa.
       // PostgREST no suma por moneda: se pagina y se suma en JS sobre el universo.
       const PAGE = 1000;
@@ -176,8 +182,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           break;
         }
       }
-      const [{ count: totalCustomers }, { count: totalBuyers }, { count: openSignals }, { count: pendingActions }, { data: profile }] =
-        await Promise.all([baseCust, baseBuyers, sigCountQ, actCountQ,
+      const [{ count: totalCustomers }, { count: totalBuyers }, { count: openSignals }, { count: pendingActions }, { count: leadsPending }, { data: profile }] =
+        await Promise.all([baseCust, baseBuyers, sigCountQ, actCountQ, leadCountQ,
           db.from("store_profiles").select("business_model,industry,icp_description").eq("store_id", storeId).maybeSingle(),
         ]);
       const prof = (profile ?? {}) as Record<string, unknown>;
@@ -196,6 +202,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         ),
         open_signals: openSignals ?? 0,
         pending_actions: pendingActions ?? 0,
+        leads_pending: leadsPending ?? 0,
         truncated,
         note_truncated: truncated ? "Muestra parcial: universo mayor al CAP paginado; conteos exactos sí, revenue/desglose parciales." : null,
         icp: (prof.icp_description as string) ?? null,
@@ -401,8 +408,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const idList = ids ?? [];
         try {
           const db = getSupabase();
+          // Feed "¿qué enviamos, quién aprobó, volvió?" (page.tsx sentFeed):
+          // revenue_attributed + dispatched_at + approved_by viajan siempre.
           const baseSelect =
-            "id,customer_id,channel,subject,body,status,created_at,signal_id,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)";
+            "id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,approved_by,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)";
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const nullQ = (q: any): any => {
             let qq = q.eq("store_id", storeId).eq("status", st).is("country", null);
@@ -457,15 +466,39 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let aq = withMarket(
         getSupabase()
           .from("proposed_actions")
-          .select("id,customer_id,channel,subject,body,status,created_at,signal_id,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+          .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,approved_by,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
           .eq("store_id", storeId)
           .eq("status", status ?? "pending_review"),
       );
       if (channel) aq = aq.eq("channel", channel);
-      const { data, error } = await aq
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: true })
-        .limit(n);
+      let data: Array<Record<string, unknown>> | null = null;
+      let error: { message: string } | null = null;
+      {
+        const res = await aq
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .limit(n);
+        data = (res.data ?? []) as Array<Record<string, unknown>>;
+        error = (res.error ?? null) as { message: string } | null;
+      }
+      // Fallback sin approved_by: DBs aún sin la migración 20261022000000
+      // (mismo criterio que el feed sentFeed de page.tsx).
+      if (error && /approved_by/i.test(error.message)) {
+        let aq2 = withMarket(
+          getSupabase()
+            .from("proposed_actions")
+            .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+            .eq("store_id", storeId)
+            .eq("status", status ?? "pending_review"),
+        );
+        if (channel) aq2 = aq2.eq("channel", channel);
+        const res2 = await aq2
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
+          .limit(n);
+        data = (res2.data ?? []) as Array<Record<string, unknown>>;
+        error = (res2.error ?? null) as { message: string } | null;
+      }
       if (error) return { error: error.message };
       const rows = data ?? [];
       return {
@@ -518,6 +551,433 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       "Rechaza borradores pendientes (no se enviarán). SOLO después de confirmación explícita del merchant en esta conversación. Pasa los 'id' tal cual los devolvió list_actions (máx 20).",
     parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
     execute: async ({ ids }: { ids: string[] }) => setActionsStatus(ids, "rejected"),
+  });
+
+  const inboxSummary = new FunctionTool({
+    name: "get_inbox_summary",
+    description:
+      "Backlog TOTAL de /review con el mismo criterio que `app/api/inbox-count/route.ts` y el badge del sidebar: borradores pendientes + leads pendientes + señales abiertas/priorizadas (acumulado, sin filtro de fecha). Úsala para '¿qué hay por revisar?', '¿qué hago primero hoy?', '¿qué hay en el inbox?'. Cita `total` y cada parcial; nunca uses `returned_count`/`items.length` como total (ese es el bug 2-vs-N). Respeta el mercado activo.",
+    parameters: z.object({}),
+    execute: async () => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const db = getSupabase();
+      const countScoped = async (
+        table: "proposed_actions" | "proposed_leads" | "churn_signals",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        apply: (q: any) => any,
+        idCol: string | null = "customer_id",
+      ): Promise<number> => {
+        if (isLargeIdScope(marketScope)) {
+          // Rama chunkeada, mismo patrón que list_signals/list_actions:
+          // NULL-comodín = `country IS NULL` una vez + chunks `.in(customer_id)`
+          // sin OR-null. leads no tiene customer_id (idCol null): solo país
+          // null, igual que applyScopeFilter con ids y sin idCol.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const scoped = (q: any): any => apply(q.eq("store_id", storeId));
+          if (!idCol) {
+            const { count } = await scoped(
+              db.from(table).select("id", { count: "exact", head: true }),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ).is("country", null) as any;
+            return count ?? 0;
+          }
+          const { ids } = effectiveScopeFilter(marketScope);
+          const idList = ids ?? [];
+          const nullN = await scoped(
+            db.from(table).select("id", { count: "exact", head: true }),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ).is("country", null).then((r: any) => r.count ?? 0);
+          let total = nullN;
+          for (const c of chunkIds(idList)) {
+            const { count } = await scoped(
+              db.from(table).select("id", { count: "exact", head: true }),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ).in("customer_id", c) as any;
+            total += count ?? 0;
+          }
+          return total;
+        }
+        const q = withMarket(
+          apply(db.from(table).select("id", { count: "exact", head: true }).eq("store_id", storeId)),
+          idCol,
+        );
+        const { count, error } = await q;
+        if (error) throw new Error(error.message);
+        return count ?? 0;
+      };
+      try {
+        const [actions, leads, signals] = await Promise.all([
+          countScoped("proposed_actions", (q) => q.eq("status", "pending_review")),
+          countScoped("proposed_leads", (q) => q.eq("status", "pending_review"), null),
+          countScoped("churn_signals", (q) => q.in("status", ["open", "prioritized"])),
+        ]);
+        return {
+          actions,
+          leads,
+          signals,
+          total: actions + leads + signals,
+          note: "Mismo criterio que /api/inbox-count y el badge: acumulado sin filtro de fecha.",
+        };
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  });
+
+  const hoySnapshot = new FunctionTool({
+    name: "get_hoy_snapshot",
+    description:
+      "Héroe 'Hoy' del dashboard (foto del día del motor, `app/(dashboard)/page.tsx`): cuántos para actuar hoy, vigilar (cercano vs residual), valor en juego intra-moneda con gemelos *_display ya formateados, fotoVieja, próxima ventana y el top-1 (empieza por X). Úsala para '¿qué hago hoy?', '¿por quién empiezo?', '¿cuánto hay en juego?'. Cifras *_display verbatim; minor solo para comparar. " + DISPLAY_RULE,
+    parameters: z.object({}),
+    execute: async () => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const db = getSupabase();
+      try {
+        const { resolveShopCurrency, resolveCloseWatchP } = await import("@/lib/store-profiles");
+        const { isCloseWatch } = await import("@/lib/customer-predictions");
+        const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
+        const viewCur = marketCurrency ?? shopCurrency;
+        const closeWatchP = await resolveCloseWatchP(storeId).catch(() => 0.1);
+        const marketActive = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
+        const PRED_CAP = 5000;
+        const dayStart = new Date(
+          Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
+        ).toISOString();
+        const cols =
+          "customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,p_recompra_h,banda_p,p25_days,p75_days,confidence,as_of,model_version,evidence_json";
+        let predRows: Array<Record<string, unknown>> = [];
+        let fotoVieja = false;
+        {
+          const { data, error } = await db
+            .from("customer_predictions")
+            .select(cols)
+            .eq("store_id", storeId)
+            .gte("as_of", dayStart)
+            .order("as_of", { ascending: false })
+            .order("model_version", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(PRED_CAP);
+          if (error) return { error: error.message };
+          predRows = (data ?? []) as Array<Record<string, unknown>>;
+        }
+        if (predRows.length === 0) {
+          const { data, error } = await db
+            .from("customer_predictions")
+            .select(cols)
+            .eq("store_id", storeId)
+            .order("as_of", { ascending: false })
+            .order("model_version", { ascending: false })
+            .order("id", { ascending: true })
+            .limit(PRED_CAP);
+          if (error) return { error: error.message };
+          const rowsAll = (data ?? []) as Array<Record<string, unknown>>;
+          const maxAsOf = rowsAll.length > 0 ? String(rowsAll[0].as_of ?? "") : null;
+          predRows = maxAsOf ? rowsAll.filter((r) => String(r.as_of ?? "") === maxAsOf) : [];
+          if (maxAsOf && maxAsOf < dayStart) fotoVieja = true;
+        }
+        let actuar = 0;
+        let vigilar = 0;
+        let cercano = 0;
+        let residual = 0;
+        let auto = 0;
+        let valor = 0;
+        let low = 0;
+        let high = 0;
+        let debiles = 0;
+        let debilesCercano = 0;
+        const groups = { organico: 0, dormido: 0, contactado_reciente: 0, sin_canal: 0 };
+        const foreign = new Map<string, { n: number; value: number }>();
+        let nextIn: number | null = null;
+        const seenCust = new Set<string>();
+        const pByCust = new Map<string, number>();
+        for (const r of predRows) {
+          const cid0 = String(r.customer_id ?? "");
+          if (!cid0 || seenCust.has(cid0)) continue;
+          seenCust.add(cid0);
+          const d = String(r.decision ?? "");
+          const cur = (r.currency as string | null) ?? null;
+          const inView = viewCur === null || cur === null || cur.toUpperCase() === viewCur.toUpperCase();
+          if (marketActive && !inView) continue;
+          if (d === "actuar" || d === "revision_humana") actuar += 1;
+          else if (d === "vigilar") {
+            vigilar += 1;
+            const banda = (r.banda_p as string | null) ?? null;
+            const p = r.p_recompra_h == null ? null : Number(r.p_recompra_h);
+            const isCercano = isCloseWatch({ decision: d, bandaP: banda, pRecompraH: p }, closeWatchP);
+            if (isCercano) cercano += 1;
+            else residual += 1;
+            if ((r.confidence as string | null) === "baja" && isCercano) debilesCercano += 1;
+          } else auto += 1;
+          if ((r.confidence as string | null) === "baja" && (d === "actuar" || d === "revision_humana")) debiles += 1;
+          if (d === "organico") groups.organico += 1;
+          else if (d === "dormido") groups.dormido += 1;
+          else if (d === "contactado_reciente") groups.contactado_reciente += 1;
+          else if (d === "sin_canal") groups.sin_canal += 1;
+          const ev = (r.evidence_json as Record<string, unknown> | null) ?? {};
+          const t = ev.t_days == null ? null : Number(ev.t_days);
+          const p25 = r.p25_days == null ? null : Number(r.p25_days);
+          const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
+          const tk = r.ticket_esperado_minor == null ? null : Number(r.ticket_esperado_minor);
+          if (v !== null) pByCust.set(cid0, v);
+          if (d === "actuar" || d === "revision_humana") {
+            if (v !== null && tk !== null) {
+              if (inView) {
+                valor += v;
+                low += Number(r.p_low ?? 0) * tk;
+                high += Number(r.p_high ?? 0) * tk;
+              } else {
+                const code = (cur ?? "?").toUpperCase();
+                const g = foreign.get(code) ?? { n: 0, value: 0 };
+                g.n += 1;
+                g.value += v;
+                foreign.set(code, g);
+              }
+            } else if (v !== null && !inView) {
+              const code = (cur ?? "?").toUpperCase();
+              const g = foreign.get(code) ?? { n: 0, value: 0 };
+              g.n += 1;
+              g.value += v;
+              foreign.set(code, g);
+            }
+          }
+          if (d === "vigilar" && p25 !== null && t !== null) {
+            const diff = p25 - t;
+            if (diff > 0 && (nextIn === null || diff < nextIn)) nextIn = diff;
+          }
+        }
+        let nextWindowDate: string | null = null;
+        if (nextIn !== null) {
+          const dt = new Date(Date.now() + Math.ceil(nextIn) * 86_400_000);
+          nextWindowDate = dt.toISOString().slice(0, 10);
+        }
+        // Top-1 con el criterio único de la mira (mismo que Overview/Review).
+        let top1: Record<string, unknown> | null = null;
+        try {
+          const { getRankedMira } = await import("@/lib/mira");
+          const { rows } = await getRankedMira(storeId, 5, {
+            countries: marketScope.countries,
+            customerIds: marketScope.customerIds,
+            currency: marketActive ? (viewCur ?? null) : null,
+          });
+          const actionable = rows.filter(
+            (a) => a.decision === "actuar" || a.decision === "revision_humana" || (a.decision == null && (a.daysSince ?? 0) <= 365),
+          );
+          const first = actionable[0] ?? null;
+          if (first) {
+            const v = first.valorEsperadoMinor ?? pByCust.get(first.customerDbId) ?? null;
+            const name = [first.firstName, first.lastName].filter(Boolean).join(" ") || first.email;
+            top1 = {
+              name,
+              email: first.email,
+              customer_id: first.customerDbId,
+              valor_esperado_minor: v,
+              valor_esperado_display: v == null ? null : formatMoney(Math.round(v), first.currency ?? viewCur),
+              decision: first.decision ?? null,
+            };
+          }
+        } catch {
+          top1 = null;
+        }
+        return {
+          actuar,
+          vigilar,
+          cercano,
+          residual,
+          auto,
+          valor_esperado_minor: Math.round(valor),
+          valor_esperado_display: formatMoney(Math.round(valor), viewCur),
+          valor_low_display: formatMoney(Math.round(low), viewCur),
+          valor_high_display: formatMoney(Math.round(high), viewCur),
+          foto_vieja: fotoVieja,
+          next_window_date: nextWindowDate,
+          foreign: [...foreign.entries()].map(([code, g]) => ({ code, n: g.n, value: g.value })),
+          groups,
+          debiles,
+          debiles_cercano: debilesCercano,
+          top1,
+          view_currency: viewCur,
+          note: fotoVieja ? "Foto del día anterior (sin corrida hoy): conteos de la última foto, no de hoy." : null,
+        };
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  });
+
+  const runsStatus = new FunctionTool({
+    name: "get_runs_status",
+    description:
+      "Estado del loop (background_runs, `app/(dashboard)/page.tsx` runs/lastRun): qué corrió último por worker (scout/strategist/copywriter/dispatcher/analyst/prospect), qué sigue corriendo y qué vigiló hoy (summary). Úsala para '¿ya corrió scout?', '¿sigue corriendo?', '¿qué vigiló hoy?'.",
+    parameters: z.object({}),
+    execute: async () => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const db = getSupabase();
+      const N = 10;
+      const cols = "kind,label,status,summary,started_at,pulse_state";
+      const fetchRuns = async (selectCols: string) =>
+        db
+          .from("background_runs")
+          .select(selectCols)
+          .eq("store_id", storeId)
+          .order("started_at", { ascending: false })
+          .order("id", { ascending: true })
+          .limit(N);
+      let res = await fetchRuns(cols);
+      // Fallback sin pulse_state en DBs aún sin la migración 20261019000000.
+      if (res.error && /pulse_state/i.test(res.error.message)) {
+        res = await fetchRuns("kind,label,status,summary,started_at");
+      }
+      if (res.error) return { error: res.error.message };
+      const runs = ((res.data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => ({
+        kind: String(r.kind ?? ""),
+        label: String(r.label ?? ""),
+        status: String(r.status ?? ""),
+        summary: (r.summary as string | null) ?? null,
+        started_at: String(r.started_at ?? ""),
+        pulse_state: (r.pulse_state as string | null) ?? null,
+      }));
+      const lastRun = (kinds: string[]) => runs.find((r) => kinds.includes(r.kind)) ?? null;
+      return {
+        running: runs.filter((r) => r.status === "running"),
+        latest: {
+          scout: lastRun(["scout"]),
+          strategist: lastRun(["strategist"]),
+          copywriter: lastRun(["copywriter"]),
+          dispatcher: lastRun(["dispatcher"]),
+          analyst: lastRun(["analyst"]),
+          prospect: lastRun(["prospect"]),
+        },
+        runs,
+        note: "summary es el outcome humano del worker (qué vigiló/ordenó/redactó/envió/midió).",
+      };
+    },
+  });
+
+  const dismissSignals = new FunctionTool({
+    name: "dismiss_signals",
+    description:
+      "Descarta señales abiertas/priorizadas (el humano las juzga irrelevantes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_signals (máx 20).",
+    parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
+    execute: async ({ ids }: { ids: string[] }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const now = new Date().toISOString();
+      // closed_by existe (20261103000000): sin sesión resoluble en el agente
+      // queda null y la UI muestra "sin registro", nunca un nombre inventado.
+      const { data, error } = await getSupabase()
+        .from("churn_signals")
+        .update({ status: "dismissed", closed_at: now, closed_by: null })
+        .in("id", ids)
+        .eq("store_id", storeId)
+        .in("status", ["open", "prioritized"])
+        .select("id");
+      if (error) return { error: error.message };
+      const n = (data ?? []).length;
+      revalidatePath("/review");
+      return {
+        updated: n,
+        requested: ids.length,
+        status: "dismissed",
+        note: n < ids.length ? "Algunas ya no estaban abiertas (IDs inválidos o ya movidas)." : null,
+      };
+    },
+  });
+
+  const reopenSignals = new FunctionTool({
+    name: "reopen_signals",
+    description:
+      "Reabre señales descartadas (vuelven a la cola para contactar igual). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual (máx 20).",
+    parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
+    execute: async ({ ids }: { ids: string[] }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const { data, error } = await getSupabase()
+        .from("churn_signals")
+        .update({ status: "open", closed_at: null, closed_by: null })
+        .in("id", ids)
+        .eq("store_id", storeId)
+        .eq("status", "dismissed")
+        .select("id");
+      if (error) return { error: error.message };
+      const n = (data ?? []).length;
+      revalidatePath("/review");
+      return {
+        updated: n,
+        requested: ids.length,
+        status: "open",
+        note: n < ids.length ? "Algunas ya estaban reabiertas o no existen." : null,
+      };
+    },
+  });
+
+  const decideLead = new FunctionTool({
+    name: "decide_lead",
+    description:
+      "Cierra el loop de un lead (review sí puede, el chat también): approved (me interesa, vuelve a pendientes de contacto), contacted (ya lo contacté por mi cuenta), discarded (no me interesa) o reopen (rescata un descartado a pendientes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_leads (máx 20).",
+    parameters: z.object({
+      ids: z.array(z.string()).min(1).max(20),
+      decision: z.enum(["approved", "contacted", "discarded", "reopen"]),
+    }),
+    execute: async ({ ids, decision }: { ids: string[]; decision: string }) => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const db = getSupabase();
+      const now = new Date().toISOString();
+      let data: Array<Record<string, unknown>> | null = null;
+      let error: { message: string } | null = null;
+      // Estado efectivo en DB: discarded se guarda como rejected (canónico del
+      // GUI: rejectLeadAction; review agrupa rejected+discarded). Se devuelve
+      // el efectivo para no confundir con el enum del status.
+      let effective = decision;
+      if (decision === "approved") {
+        const r = await db
+          .from("proposed_leads")
+          .update({ status: "approved" })
+          .in("id", ids)
+          .eq("store_id", storeId)
+          .eq("status", "pending_review")
+          .select("id");
+        data = (r.data ?? []) as Array<Record<string, unknown>>;
+        error = (r.error ?? null) as { message: string } | null;
+      } else if (decision === "contacted") {
+        const r = await db
+          .from("proposed_leads")
+          .update({ status: "contacted", contacted_at: now })
+          .in("id", ids)
+          .eq("store_id", storeId)
+          .in("status", ["pending_review", "approved"])
+          .select("id");
+        data = (r.data ?? []) as Array<Record<string, unknown>>;
+        error = (r.error ?? null) as { message: string } | null;
+      } else if (decision === "discarded") {
+        effective = "rejected";
+        const r = await db
+          .from("proposed_leads")
+          .update({ status: "rejected" })
+          .in("id", ids)
+          .eq("store_id", storeId)
+          .eq("status", "pending_review")
+          .select("id");
+        data = (r.data ?? []) as Array<Record<string, unknown>>;
+        error = (r.error ?? null) as { message: string } | null;
+      } else {
+        const r = await db
+          .from("proposed_leads")
+          .update({ status: "pending_review" })
+          .in("id", ids)
+          .eq("store_id", storeId)
+          .in("status", ["rejected", "discarded"])
+          .select("id");
+        data = (r.data ?? []) as Array<Record<string, unknown>>;
+        error = (r.error ?? null) as { message: string } | null;
+      }
+      if (error) return { error: error.message };
+      const n = (data ?? []).length;
+      revalidatePath("/review");
+      return {
+        updated: n,
+        requested: ids.length,
+        status: effective,
+        note: n < ids.length ? "Algunos ya estaban movidos (IDs inválidos o estado distinto)." : null,
+      };
+    },
   });
 
   const find = new FunctionTool({
@@ -1509,5 +1969,5 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     },
   });
 
-  return [summary, recovery, signals, actions, approveActions, rejectActions, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...(productId ? [productSummary, productMovements, productBuyers] : []), ...loopTools];
+  return [summary, recovery, signals, actions, approveActions, rejectActions, inboxSummary, hoySnapshot, runsStatus, dismissSignals, reopenSignals, decideLead, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...(productId ? [productSummary, productMovements, productBuyers] : []), ...loopTools];
 }
