@@ -706,6 +706,13 @@ export default async function DashboardPage({
   const money = (n: number) => formatMoney(Math.round(n), viewCurrency);
   const storeName = displayStoreName(active);
   const reviewHref = withMarketParam("/review", scope.market?.id ?? null);
+  // Héroe = carga pendiente hoy (lo que espera tu decisión), no salida del
+  // motor: borradores por aprobar + empresas por contactar. El motor queda
+  // como contexto (vigilar/valor) y en el embudo.
+  const porRevisar = pending + leadsPending;
+  const revParts: string[] = [];
+  if (pending > 0) revParts.push(`${formatNumber(pending)} cliente${pending === 1 ? "" : "s"} por recuperar`);
+  if (leadsPending > 0) revParts.push(`${formatNumber(leadsPending)} empresa${leadsPending === 1 ? "" : "s"} por contactar`);
 
   const lastRun = (kinds: string[]): RunRow | null =>
     runs.find((r) => kinds.includes(r.kind)) ?? null;
@@ -724,26 +731,30 @@ export default async function DashboardPage({
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Tu operación de hoy"
-        pulse={hasMotor && hoyActuar > 0}
+        pulse={porRevisar > 0 || (hasMotor && hoyActuar > 0)}
         title={
-          hasMotor
-            ? hoyActuar > 0
-              ? `Hola, ${storeName} — ${formatNumber(hoyActuar)} ${hoyActuar === 1 ? "mensaje listo para aprobar" : "mensajes listos para aprobar"}`
-              : `Todo al día, ${storeName}`
-            : atRisk > 0
+          porRevisar > 0
+            ? `Hola, ${storeName} — ${formatNumber(porRevisar)} en tu inbox hoy`
+            : hasMotor
+              ? hoyActuar > 0
+                ? `Hola, ${storeName} — ${formatNumber(hoyActuar)} para actuar hoy`
+                : `Todo al día, ${storeName}`
+              : atRisk > 0
               ? `Hola, ${storeName} — hoy tienes ${formatNumber(atRisk)} ${atRisk === 1 ? "cliente" : "clientes"} por recuperar`
               : `Todo al día, ${storeName}`
         }
         description={
-          hasMotor && hoyActuar > 0
-            ? undefined
-            : hasMotor
-              ? pending > 0
-                ? `Nada nuevo hoy; ${formatNumber(pending)} clientes por contactar en Review.`
-                : "Ningún mensaje necesario hoy; la vigilancia sigue."
-              : atRisk > 0
-                ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
-                : "Ningún cliente vencido. Tu equipo IA sigue vigilando."
+          porRevisar > 0
+            ? `${revParts.join(" · ")}.`
+            : hasMotor && hoyActuar > 0
+              ? undefined
+              : hasMotor
+                ? pending > 0
+                  ? `Nada nuevo hoy; ${formatNumber(pending)} clientes por contactar en Review.`
+                  : "Ningún mensaje necesario hoy; la vigilancia sigue."
+                : atRisk > 0
+                  ? `${formatPercentPoints(riskPct)} de tus ${formatNumber(buyers)} compradores debería haber vuelto ya`
+                  : "Ningún cliente vencido. Tu equipo IA sigue vigilando."
         }
         right={
           stores.length > 1 ? (
@@ -891,7 +902,13 @@ export default async function DashboardPage({
               </span>
             }
           >
-            {hoyActuar > 0 ? (
+            {porRevisar > 0 ? (
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(porRevisar)}</span>
+                <span className="text-base">en tu inbox hoy</span>
+                <span className="text-xs text-muted-foreground tabular-nums">{revParts.join(" · ")}</span>
+              </div>
+            ) : hoyActuar > 0 ? (
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="text-4xl font-semibold tracking-tight tabular-nums">{formatNumber(hoyActuar)}</span>
                 <AppTooltip tip={DECISION_COPY.paraActuarHoy.tip} contentClassName="max-w-sm">
