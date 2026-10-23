@@ -39,7 +39,7 @@ async function morningAlreadyDone(storeId: string): Promise<boolean> {
 
 async function step(
   storeId: string,
-  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect" | "brain" | "regenerate",
+  kind: "enrichment" | "scout" | "strategist" | "copywriter" | "prospect" | "brain" | "regenerate" | "backfill",
   label: string,
   total: number,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -118,6 +118,36 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
     });
   } catch (e) {
     log(`brain omitido: ${e instanceof Error ? e.message : e}`);
+  }
+  // 0b-bis. Backfill de onboarding (una vez por tenant): si nunca hubo
+  // foto, reconstruye hoy-90/60/30 y recupera al inbox lo accionable que
+  // nunca volvió. Corre antes del gate de cadena-done y antes de la foto
+  // de hoy, para que el scout/strategist de esta misma corrida lo procesen.
+  // Re-correr es inocuo (fotos idempotentes, recupero omite lo gestionado).
+  try {
+    const { needsBackfill, runBackfillPhotos, recoverBacklog, BACKFILL_CUTS_DAYS } =
+      await import("@/lib/backfill");
+    const { finishRun } = await import("@/lib/background");
+    const fresh = await needsBackfill(storeId).catch(() => false);
+    if (fresh) {
+      await step(storeId, "backfill", "Ventana previa", BACKFILL_CUTS_DAYS.length, (runId, sid2) =>
+        (async () => {
+          const photos = await runBackfillPhotos(sid2);
+          const { recovered, skipped } = await recoverBacklog(sid2);
+          const detail = photos.map((p) => `${p.cut}:${p.actuar}`).join(",");
+          await finishRun(runId, {
+            status: "done",
+            processed: recovered,
+            failed: 0,
+            summary: `${recovered} recuperados de ventana previa (omitidos ${skipped}) [${detail}]`,
+            pulseState: recovered > 0 ? "needs" : "paused",
+          });
+          log(`backfill done recovered=${recovered} skipped=${skipped}`);
+        })(),
+      );
+    }
+  } catch (e) {
+    log(`backfill omitido: ${e instanceof Error ? e.message : e}`);
   }
   // 0b. Auto-refresh stale (#26): corre en CADA login aunque la cadena de
   // hoy ya esté done (como brain/enrichment, antes del gate). Solo
