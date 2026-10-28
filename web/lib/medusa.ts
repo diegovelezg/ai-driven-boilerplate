@@ -136,8 +136,22 @@ export async function medusaLogin(
 /** JWT (3 segmentos con puntos) vs api_token v1 (hex sin puntos).
  *  El api_token v1 vale en `x-medusa-access-token` y, según el OAS v1, también
  *  como `Bearer`; el JWT solo vale como `Bearer` (mandarlo en `x-` lo rompería). */
-function isJwtToken(t: string): boolean {
+export function isJwtToken(t: string): boolean {
   return t.split(".").length === 3;
+}
+
+/** Kind del token guardado (diagnóstico configura-una-vez v1).
+ *  `jwt` = temporal (~15min, causa del 401 recurrente); `api_token` = permanente. */
+export function medusaTokenKind(t: string): "empty" | "jwt" | "api_token" {
+  if (!t) return "empty";
+  return isJwtToken(t) ? "jwt" : "api_token";
+}
+
+/** ¿Es un fallo de auth Medusa (401/403/Unauthorized)? No se reintenta:
+ *  reintentar un token muerto solo retrasa el error y spamea el log. */
+export function isMedusaAuthError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return /Medusa\s+40[13]\b|Unauthorized/i.test(msg);
 }
 
 async function adminGet(url: string, token: string, path: string) {

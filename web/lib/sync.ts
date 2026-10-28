@@ -139,12 +139,34 @@ async function fetchConnectorRegions(
   return connector.listRegions(rawShopUrl, creds);
 }
 
+/** ¿Fallo de auth (401/403)? Duplica `isMedusaAuthError` sin importar
+ *  `lib/medusa` directo (barrera de conectores: este módulo programa contra
+ *  `@/lib/connectors`; el detalle Medusa vive en `connectors/medusa.ts`). */
+function isSyncAuthError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return /Medusa\s+40[13]\b|Unauthorized/i.test(msg);
+}
+
+/** JWT de Medusa = temporal (~15min). En v1 el guardado debe ser api_token
+ *  permanente; si llega un JWT aquí, es token viejo o provisioning fallido. */
+function isJwtTokenLocal(t: string): boolean {
+  return t.split(".").length === 3;
+}
+
+/** Mensaje accionable configura-una-vez para fallos de auth. */
+function withAuthHint(msg: string): string {
+  if (/Reconecta en Settings/.test(msg)) return msg;
+  return `${msg} · Reconecta en Settings (v1 genera api_token permanente, configura una vez)`;
+}
+
 async function fetchAll<T>(
   page: (offset: number, limit: number) => Promise<{ rows: T[]; count: number }>,
 ): Promise<T[]> {
   const limit = 100;
   // Reintento con backoff: 4 workers en paralelo pueden comerse un 429/5xx
   // transitorio de Medusa; sin esto un throttle tumba todo el sync.
+  // Auth (401/403) NO se reintenta: el token está muerto y reintentarlo solo
+  // retrasa el error accionable y spamea el log.
   const fetchPage = async (offset: number): Promise<{ rows: T[]; count: number }> => {
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -152,8 +174,13 @@ async function fetchAll<T>(
         return await page(offset, limit);
       } catch (e) {
         lastErr = e;
+        if (isSyncAuthError(e)) break;
         await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
+    }
+    if (isSyncAuthError(lastErr)) {
+      const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+      throw new Error(withAuthHint(msg));
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   };
@@ -197,6 +224,17 @@ export async function syncStoreFromPlatform(
   const shopUrl = normalizeShopUrl(rawShopUrl);
   // `version` solo tiene sentido en Medusa; el conector la normaliza (v2→v2, resto→v1).
   const resolvedVersion = opts.version ?? version ?? "v1";
+  // Configura-una-vez v1: un JWT aquí es token temporal viejo (expira ~15min
+  // y causa el 401 recurrente). Fallo rápido con mensaje accionable en vez de
+  // quemar 6 fases contra Medusa para terminar en el mismo 401.
+  if (platform === "medusa" && String(resolvedVersion).startsWith("v1")) {
+    const rawToken = typeof creds === "string" ? creds : creds.token;
+    if (rawToken && isJwtTokenLocal(rawToken)) {
+      throw new Error(
+        "Medusa 401: token temporal JWT detectado (expira ~15min) · Reconecta en Settings (v1 genera api_token permanente, configura una vez)",
+      );
+    }
+  }
   const now = new Date().toISOString();
   const report = (processed: number, current: string) => {
     log(`fase ${processed + 1}/${SYNC_TOTAL}: ${current}`);

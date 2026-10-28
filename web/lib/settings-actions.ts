@@ -154,14 +154,20 @@ export async function saveConnectionsAction(
     const jwt = await connector.authenticate(medusaUrl, { email, password, version });
     // v1 by-the-book server-to-server: el JWT expira (~15min); el api_token
     // personal no caduca. Se auto-provisiona con el JWT recién logueado (sin
-    // VPS ni GUI) y se guarda ESO en vez del JWT. Si falla, sigue con JWT.
+    // VPS ni GUI) y se guarda ESO en vez del JWT. Configura-una-vez: si el
+    // provisioning falla NO se guarda el JWT temporal (sería el 401
+    // recurrente "cada tanto"); se devuelve error para reintentar el guardado.
     let token = jwt;
     if (version === "v1") {
       try {
-        const { medusaEnsureV1ApiToken } = await import("@/lib/medusa");
+        const { medusaEnsureV1ApiToken, isJwtToken } = await import("@/lib/medusa");
         token = await medusaEnsureV1ApiToken(medusaUrl, jwt);
+        if (isJwtToken(token)) {
+          return { ok: false, message: "Login ok pero el token generado no es api_token permanente. Nada se guardó; reintenta." };
+        }
       } catch (e) {
-        console.error("[settings] api_token no provisionado, sigue JWT:", e instanceof Error ? e.message : e);
+        const detail = e instanceof Error ? e.message : String(e);
+        return { ok: false, message: `Login ok pero no se pudo generar api_token permanente: ${detail}. Nada se guardó (guardar el JWT temporal causaría 401 cada ~15min). Revisa que el usuario Medusa sea admin y reintenta.` };
       }
     }
     // Cross-tenant: si la tienda ya existe, exige membresía antes de rotar su token.
