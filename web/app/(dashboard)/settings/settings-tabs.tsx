@@ -117,7 +117,7 @@ export function SettingsTabs({
             hint="Canal por defecto y proveedor de envío. Solo se guarda la key, nunca se muestra completa."
             tone="sky"
           />
-          <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} />
+          <EmailSettingsForm defaults={defaults} secretsInDb={secretsInDb} storeId={storeId} />
         </section>
       )}
 

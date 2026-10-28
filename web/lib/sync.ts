@@ -133,24 +133,38 @@ async function fetchConnectorRegions(
   rawShopUrl: string,
   creds: TokenLike,
 ): Promise<RegionMap> {
-  const { marketsToRegions } = await import("@/lib/connectors/types");
-  const markets = await connector.listMarkets(rawShopUrl, creds);
-  if (markets.length > 0 || !connector.listRegions) return marketsToRegions(markets);
-  return connector.listRegions(rawShopUrl, creds);
+  // Primera llamada de red del sync (fase 1): si el token está muerto, el 401
+  // nace aquí, no en fetchAll. Se traduce al hint accionable en el borde.
+  try {
+    const { marketsToRegions } = await import("@/lib/connectors/types");
+    const markets = await connector.listMarkets(rawShopUrl, creds);
+    if (markets.length > 0 || !connector.listRegions) return marketsToRegions(markets);
+    return connector.listRegions(rawShopUrl, creds);
+  } catch (e) {
+    if (isSyncAuthError(e)) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(withAuthHint(msg));
+    }
+    throw e;
+  }
 }
 
 /** ¿Fallo de auth (401/403)? Duplica `isMedusaAuthError` sin importar
  *  `lib/medusa` directo (barrera de conectores: este módulo programa contra
- *  `@/lib/connectors`; el detalle Medusa vive en `connectors/medusa.ts`). */
+ *  `@/lib/connectors`; el detalle Medusa vive en `connectors/medusa.ts`).
+ *  Anclado al status líder: un 429/5xx con "unauthorized" en el body sí se reintenta. */
 function isSyncAuthError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e ?? "");
-  return /Medusa\s+40[13]\b|Unauthorized/i.test(msg);
+  return /^Medusa\s+40[13]\b/.test(msg.trim());
 }
 
 /** JWT de Medusa = temporal (~15min). En v1 el guardado debe ser api_token
  *  permanente; si llega un JWT aquí, es token viejo o provisioning fallido. */
-function isJwtTokenLocal(t: string): boolean {
-  return t.split(".").length === 3;
+function isJwtTokenLocal(t: unknown): boolean {
+  if (typeof t !== "string") return false;
+  const s = t.trim();
+  if (!s) return false;
+  return s.split(".").length === 3;
 }
 
 /** Mensaje accionable configura-una-vez para fallos de auth. */

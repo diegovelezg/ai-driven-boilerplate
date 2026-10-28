@@ -28,8 +28,10 @@ import type { DefaultChannel, EmailProvider, Platform, SafeStoreConnections } fr
  *  (Revocar → confirmar) y refresh para reflejar el estado real. */
 function SecretRevokeButton({
   secret,
+  storeId,
 }: {
   secret: RevocableSecret;
+  storeId?: string | null;
 }) {
   const [pending, start] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -58,7 +60,7 @@ function SecretRevokeButton({
         disabled={pending}
         onClick={() =>
           start(async () => {
-            const r = await revokeSecretAction(secret);
+            const r = await revokeSecretAction(secret, storeId ?? undefined);
             if (r.ok) {
               toast.add({ title: "Secreto revocado", description: r.message, type: "success" });
               setConfirming(false);
@@ -279,10 +281,10 @@ export function SettingsForm({
                 Editar conexión
               </Button>
               {platform === "medusa" && defaults.hasMedusaToken && (
-                <SecretRevokeButton secret="medusa_token" />
+                <SecretRevokeButton secret="medusa_token" storeId={storeId} />
               )}
               {platform === "shopify" && defaults.hasShopifyToken && (
-                <SecretRevokeButton secret="shopify_token" />
+                <SecretRevokeButton secret="shopify_token" storeId={storeId} />
               )}
             </span>
           }
@@ -371,6 +373,7 @@ export function SettingsForm({
         onGo={!locked ? (i) => setTstep(i + 1) : undefined}
       />
       <form ref={formRef} onSubmit={onSubmit} className="flex w-full flex-col gap-4">
+      <input type="hidden" name="storeId" value={storeId ?? ""} />
       <AppCard
         tone="primary"
         title="Ecommerce"
@@ -611,9 +614,11 @@ export function SettingsForm({
 export function EmailSettingsForm({
   defaults,
   secretsInDb,
+  storeId,
 }: {
   defaults: SafeStoreConnections;
   secretsInDb?: boolean;
+  storeId?: string | null;
 }) {
   const router = useRouter();
   // Guardado y prueba son instantáneos (sin corrida): el resultado va al
@@ -661,6 +666,7 @@ export function EmailSettingsForm({
   return (
     <div className="flex w-full flex-col gap-4">
       <form onSubmit={onSave} className="flex flex-col gap-4">
+        <input type="hidden" name="storeId" value={storeId ?? ""} />
         <AppCard
           tone="sky"
           title="Email transaccional"
@@ -704,7 +710,7 @@ export function EmailSettingsForm({
                   )}
                 </>
               )}
-              {defaults.hasEmailApiKey && <SecretRevokeButton secret="email_api_key" />}
+              {defaults.hasEmailApiKey && <SecretRevokeButton secret="email_api_key" storeId={storeId} />}
             </span>
           }
           contentClassName="flex flex-col gap-4"
@@ -804,6 +810,7 @@ export function EmailSettingsForm({
           description="Verifica que la key y el remitente funcionan antes de aprobar mensajes."
         >
           <form onSubmit={onTest} className="flex flex-col gap-3">
+            <input type="hidden" name="storeId" value={storeId ?? ""} />
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Input
                 name="emailTestTo"

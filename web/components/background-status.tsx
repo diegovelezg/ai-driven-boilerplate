@@ -55,6 +55,9 @@ const STALE_MS = 20 * 60 * 1000;
 const AUTO_HIDE_MS = 5000;
 const ERROR_HIDE_MS = 15000;
 const SUMMARY_MAX = 120;
+/** Errores con hint accionable (p.ej. 401 + "Reconecta en Settings"): cap
+ *  mayor para no decapitar el sufijo; el éxito sigue en 120. */
+const ERROR_DETAIL_MAX = 240;
 
 function readDismissed(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -239,10 +242,22 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     [activeRuns],
   );
 
-  const queue = useMemo(
-    () => runs.filter((r) => !dismissed.has(r.id)),
-    [runs, dismissed],
-  );
+  // Dedupe de terminados idénticos: getActiveRuns devuelve running + últimos
+  // 3 terminados, así que 3 syncs fallidos por la misma causa (p.ej. 3 logins
+  // con el token muerto) apilaban 3 toasts de error iguales. Se colapsa por
+  // (kind, status, error): misma causa = un solo toast (el más reciente).
+  // Los running nunca se colapsan (progreso vivo por id).
+  const queue = useMemo(() => {
+    const visible = runs.filter((r) => !dismissed.has(r.id));
+    const seen = new Set<string>();
+    return visible.filter((r) => {
+      if (r.status === "running") return true;
+      const key = [r.kind, r.status, r.errorCode ?? "", r.error ?? "", r.summary ?? ""].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [runs, dismissed]);
 
   // Sincroniza corridas → toasts (id estable = run.id: add crea, update
   // refresca progreso sin resetear timers de forma agresiva, close al
@@ -321,7 +336,7 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
                 : run.summary
                   ? `${run.summary}`
                   : "",
-              SUMMARY_MAX,
+              ERROR_DETAIL_MAX,
             );
       const options = {
         title: succeeded

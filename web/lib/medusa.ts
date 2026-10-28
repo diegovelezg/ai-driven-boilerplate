@@ -136,22 +136,27 @@ export async function medusaLogin(
 /** JWT (3 segmentos con puntos) vs api_token v1 (hex sin puntos).
  *  El api_token v1 vale en `x-medusa-access-token` y, según el OAS v1, también
  *  como `Bearer`; el JWT solo vale como `Bearer` (mandarlo en `x-` lo rompería). */
-export function isJwtToken(t: string): boolean {
-  return t.split(".").length === 3;
+export function isJwtToken(t: unknown): boolean {
+  if (typeof t !== "string") return false;
+  const s = t.trim();
+  if (!s) return false;
+  return s.split(".").length === 3;
 }
 
 /** Kind del token guardado (diagnóstico configura-una-vez v1).
  *  `jwt` = temporal (~15min, causa del 401 recurrente); `api_token` = permanente. */
-export function medusaTokenKind(t: string): "empty" | "jwt" | "api_token" {
-  if (!t) return "empty";
+export function medusaTokenKind(t: unknown): "empty" | "jwt" | "api_token" {
+  if (typeof t !== "string" || !t.trim()) return "empty";
   return isJwtToken(t) ? "jwt" : "api_token";
 }
 
-/** ¿Es un fallo de auth Medusa (401/403/Unauthorized)? No se reintenta:
- *  reintentar un token muerto solo retrasa el error y spamea el log. */
+/** ¿Es un fallo de auth Medusa (401/403)? No se reintenta:
+ *  reintentar un token muerto solo retrasa el error y spamea el log.
+ *  Anclado al status líder (`Medusa 401:`): un 429/5xx cuyo body mencione
+ *  "unauthorized" NO es auth y sí se reintenta. */
 export function isMedusaAuthError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e ?? "");
-  return /Medusa\s+40[13]\b|Unauthorized/i.test(msg);
+  return /^Medusa\s+40[13]\b/.test(msg.trim());
 }
 
 async function adminGet(url: string, token: string, path: string) {
@@ -160,8 +165,8 @@ async function adminGet(url: string, token: string, path: string) {
     headers.Authorization = `Bearer ${token}`;
   } else {
     // api_token personal v1 (by-the-book server-to-server): no caduca, solo se
-    // revoca cambiándolo. Se manda en ambos headers que la docu v1 acepta.
-    headers.Authorization = `Bearer ${token}`;
+    // revoca cambiándolo. Va SOLO en `x-medusa-access-token`: mandarlo también
+    // como `Bearer` lo rompería si el middleware lo valida primero como JWT.
     headers["x-medusa-access-token"] = token;
   }
   let res: Response;
@@ -186,7 +191,8 @@ async function adminGet(url: string, token: string, path: string) {
  * Asegura el api_token personal v1 (by-the-book para sync server-to-server):
  * con el JWT recién logueado lee el user id (`GET /admin/auth`), genera un
  * token hex y lo guarda vía `POST /admin/users/:id {api_token}`. Sin acceso
- * al VPS ni a la GUI: todo por API pública. Si falla, el caller sigue con JWT.
+ * al VPS ni a la GUI: todo por API pública. Si falla, lanza (el caller de
+ * settings NO guarda el JWT temporal: sería el 401 recurrente).
  */
 export async function medusaEnsureV1ApiToken(url: string, jwt: string): Promise<string> {
   const me = (await adminGet(url, jwt, "/admin/auth")) as {

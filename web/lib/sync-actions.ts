@@ -9,7 +9,6 @@ import { createLogger } from "@/lib/log";
 import { ensureStore } from "@/lib/sync";
 import { runSyncOnce } from "@/lib/sync-runner";
 import {
-  getLatestRun,
   hasConflict,
   type BackgroundRun,
 } from "@/lib/background";
@@ -50,6 +49,9 @@ export async function syncCustomersAction(): Promise<SyncState> {
     // Sin cola: se ejecuta en `after()` (la respuesta no espera).
     // `runSyncOnce` es idempotente por slot: si el cron lo está corriendo,
     // este reclama null y el `hasConflict` de arriba ya avisó.
+    // Se devuelve run:null a propósito: `getLatestRun` aquí leería la corrida
+    // ANTERIOR (el `after()` aún no reclamó slot) y el cliente seguiría un run
+    // rancio. La corrida real aparece vía el poll de la cinta (≤6s).
     after(() => {
       runSyncOnce(storeId, medusaUrl, {
         version: conn.medusaVersion || "v1",
@@ -58,7 +60,7 @@ export async function syncCustomersAction(): Promise<SyncState> {
       }).catch((e) => log(`run error ${e instanceof Error ? e.message : "error"}`));
     });
     revalidatePath("/customers");
-    return { ok: true, message: "Sincronización iniciada.", run: await getLatestRun(storeId) };
+    return { ok: true, message: "Sincronización iniciada (progreso abajo a la derecha).", run: null };
   } catch (e) {
     return {
       ok: false,

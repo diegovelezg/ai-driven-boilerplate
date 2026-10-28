@@ -41,16 +41,34 @@ function observedMedianGap(
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ tab?: string }>;
+  searchParams?: Promise<{ tab?: string; store?: string }>;
 }) {
-  const defaults = await readConnections();
+  const sp = searchParams ? await searchParams : null;
+  const requestedStore = sp?.store ?? null;
+  // Tenant activo (?store= validado + membresía); legacy: JSON global.
+  // Sin esto, con 2 tiendas o ?store= explícito la página mostraba/editaba
+  // el tenant del JSON en vez del activo.
+  let activeStoreId: string | null = null;
+  if (isSupabaseConfigured()) {
+    try {
+      const { getMyActiveStore } = await import("@/lib/tenant");
+      activeStoreId = (await getMyActiveStore(requestedStore).catch(() => null))?.active?.id ?? null;
+    } catch {
+      activeStoreId = null;
+    }
+  }
+  const globalDefaults = await readConnections();
+  const defaults = activeStoreId
+    ? await readConnections(activeStoreId).catch(() => globalDefaults)
+    : globalDefaults;
   // Seguridad: al cliente solo viajan booleanos has* (nunca los secretos en
   // plaintext por el Flight payload). Los valores reales solo viven en server.
   const safeDefaults = toSafeConnections(defaults);
   const resolvedId =
-    isSupabaseConfigured() && defaults.medusaUrl
+    activeStoreId ??
+    (isSupabaseConfigured() && defaults.medusaUrl
       ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
-      : null;
+      : null);
   // Multiuser por tenant: la conexión legacy es global; sin membresía no se
   // muestra ni se edita nada de otro tenant.
   const storeId =
@@ -152,7 +170,6 @@ export default async function SettingsPage({
       motorCard = null;
     }
   }
-  const sp = searchParams ? await searchParams : null;
   const rawTab = sp?.tab;
   const initialTab: SettingsTab =
     rawTab === "email" || rawTab === "negocio" || rawTab === "motor" || rawTab === "tienda" ? rawTab : "negocio";

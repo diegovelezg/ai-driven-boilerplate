@@ -10,7 +10,6 @@ import { isSupabaseConfigured } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
 import { ensureStore, normalizeShopUrl } from "@/lib/sync";
 import {
-  getLatestRun,
   hasConflict,
   type BackgroundRun,
 } from "@/lib/background";
@@ -62,7 +61,9 @@ async function denyWithoutMembership(
     const denied = await requireStoreMember(storeId, user);
     return denied ? "Sin acceso a esta tienda." : null;
   } catch {
-    return null;
+    // Fail-closed en mutaciones: si no se pudo verificar la membresía,
+    // se deniega en vez de permitir (el dev sin auth ya salió arriba).
+    return "No se pudo verificar acceso a esta tienda. Reintenta.";
   }
 }
 
@@ -83,6 +84,9 @@ export async function saveConnectionsAction(
   if (user && "error" in user) return { ok: false, message: user.error };
   const platform = (String(formData.get("platform") ?? "medusa") || "medusa") as Platform;
   const prev = await readConnections();
+  // Hint de tenant desde el form (?store= activo). Evita que el `prev` global
+  // (JSON de otra tienda) autorice o contamine al tenant que se está viendo.
+  const formStoreId = String(formData.get("storeId") ?? "").trim() || null;
 
   // La plataforma está fijada mientras haya credenciales guardadas (el
   // selector viaja deshabilitado + hidden input). Rechazo de defensa ante
@@ -95,7 +99,25 @@ export async function saveConnectionsAction(
     // Preset sin backend (Shopify/Woo hoy): se guarda sin validar contra la
     // plataforma. Agregar backend = registrar el conector en
     // `connectors/index.ts`; este archivo no se toca.
-    const denied = await denyWithoutMembership(await resolveConnStoreId(prev.medusaUrl), user);
+    // Base por tenant: con storeId explícito (?store= activo) se parte de SUS
+    // secretos si ya tiene fila en DB; si aún no tiene nada, legacy global
+    // (evita borrar el JSON en dev / fallar en tiendas nuevas sin fila).
+    const explicitBase = formStoreId
+      ? await readConnections(formStoreId).catch(() => null)
+      : null;
+    const presetBase =
+      explicitBase &&
+      (explicitBase.medusaUrl ||
+        explicitBase.medusaToken ||
+        explicitBase.shopifyToken ||
+        explicitBase.wooConsumerKey ||
+        explicitBase.emailApiKey)
+        ? explicitBase
+        : prev;
+    const denied = await denyWithoutMembership(
+      formStoreId ?? (await resolveConnStoreId(prev.medusaUrl)),
+      user,
+    );
     if (denied) return { ok: false, message: denied };
     if (platform === "woocommerce") {
       const wooStore = String(formData.get("wooStore") ?? "").trim();
@@ -103,12 +125,12 @@ export async function saveConnectionsAction(
       const wooConsumerSecret = String(formData.get("wooConsumerSecret") ?? "").trim();
       try {
         await writeConnections({
-          ...prev,
+          ...presetBase,
           platform,
-          wooStore: wooStore || prev.wooStore,
+          wooStore: wooStore || presetBase.wooStore,
           // Vacío = conservar (los inputs deshabilitados no se envían).
-          wooConsumerKey: wooConsumerKey || prev.wooConsumerKey,
-          wooConsumerSecret: wooConsumerSecret || prev.wooConsumerSecret,
+          wooConsumerKey: wooConsumerKey || presetBase.wooConsumerKey,
+          wooConsumerSecret: wooConsumerSecret || presetBase.wooConsumerSecret,
         });
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };
@@ -120,11 +142,11 @@ export async function saveConnectionsAction(
     const shopifyToken = String(formData.get("shopifyToken") ?? "").trim();
     try {
       await writeConnections({
-        ...prev,
+        ...presetBase,
         platform,
-        shopifyStore: shopifyStore || prev.shopifyStore,
+        shopifyStore: shopifyStore || presetBase.shopifyStore,
         // Vacío = conservar (los inputs deshabilitados no se envían).
-        shopifyToken: shopifyToken || prev.shopifyToken,
+        shopifyToken: shopifyToken || presetBase.shopifyToken,
       });
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : "No se pudo guardar." };
@@ -170,12 +192,29 @@ export async function saveConnectionsAction(
         return { ok: false, message: `Login ok pero no se pudo generar api_token permanente: ${detail}. Nada se guardó (guardar el JWT temporal causaría 401 cada ~15min). Revisa que el usuario Medusa sea admin y reintenta.` };
       }
     }
-    // Cross-tenant: si la tienda ya existe, exige membresía antes de rotar su token.
-    const denied = await denyWithoutMembership(await resolveConnStoreId(medusaUrl), user);
+    // Cross-tenant: si la tienda ya existe, exige membresía antes de rotar
+    // su token. El destino es la tienda de la URL (canónico); el hint del
+    // form solo vale para tiendas aún no creadas (sin fila que resolver).
+    const destStoreId = (await resolveConnStoreId(medusaUrl)) ?? formStoreId;
+    const denied = await denyWithoutMembership(destStoreId, user);
     if (denied) return { ok: false, message: denied };
+    // Base por tenant: si la tienda ya tiene fila en DB, se parte de SUS
+    // secretos (no de los del JSON global de otra tienda). Sin fila, legacy.
+    const destBase = destStoreId
+      ? await readConnections(destStoreId).catch(() => null)
+      : null;
+    const base =
+      destBase &&
+      (destBase.medusaUrl ||
+        destBase.medusaToken ||
+        destBase.shopifyToken ||
+        destBase.wooConsumerKey ||
+        destBase.emailApiKey)
+        ? destBase
+        : prev;
     try {
       await writeConnections({
-        ...prev,
+        ...base,
         platform,
         medusaUrl,
         medusaVersion: version,
@@ -188,7 +227,7 @@ export async function saveConnectionsAction(
     const result = await connector.testConnection(medusaUrl, token, version);
     revalidatePath("/settings");
     revalidatePath("/customers");
-    if (!result.ok) return { ok: false, message: `Login ok, pero falla lectura: ${result.error}` };
+    if (!result.ok) return { ok: false, message: `Token guardado, pero falla lectura: ${result.error} · Revisa permisos del usuario Medusa.` };
     // Sync en background con corrida visible (MO único: toda mutación larga
     // va a la cinta de toasts). Antes bloqueaba el submit segundos sin
     // progreso; el cliente envuelve en `bg.start` y el toast lo sigue.
@@ -211,6 +250,9 @@ export async function saveConnectionsAction(
     }
     // Sin cola: ejecución directa en `after()` (la respuesta no espera).
     // `runSyncOnce` reclama slot atómico y escribe la cinta visible.
+    // Se devuelve run:null a propósito: `getLatestRun` aquí leería la corrida
+    // ANTERIOR (el `after()` aún no reclamó slot) y el cliente seguiría un run
+    // rancio. La corrida real aparece vía el poll de la cinta (≤6s).
     const { runSyncOnce } = await import("@/lib/sync-runner");
     after(() => {
       runSyncOnce(storeId, medusaUrl, {
@@ -222,7 +264,7 @@ export async function saveConnectionsAction(
     return {
       ok: true,
       message: `Medusa ${version} conectado: ${result.store} · sync en curso (progreso abajo a la derecha).`,
-      run: await getLatestRun(storeId).catch(() => null),
+      run: null,
     };
   } catch (e) {
     return { ok: false, message: `Medusa falla: ${e instanceof Error ? e.message : "error"}` };
@@ -246,22 +288,40 @@ export async function saveEmailAction(
   if (provider !== "none" && !from) {
     return { ok: false, message: "Falta remitente (from)" };
   }
+  const formStoreId = String(formData.get("storeId") ?? "").trim() || null;
   const prev = await readConnections();
+  // Con storeId explícito (?store= activo) la key a conservar y la membresía
+  // se resuelven contra ESE tenant; sin él, legacy global. Si el tenant aún
+  // no tiene fila en DB (explicit vacío), se conserva el legacy.
+  const explicitBase = formStoreId
+    ? await readConnections(formStoreId).catch(() => null)
+    : null;
+  const targetBase =
+    explicitBase &&
+    (explicitBase.medusaUrl ||
+      explicitBase.medusaToken ||
+      explicitBase.emailApiKey ||
+      explicitBase.emailFrom)
+      ? explicitBase
+      : prev;
   // Sin key nueva no se reutiliza la de otro proveedor: cambiar de
   // proveedor exige su propia key (el selector viaja bloqueado con key
   // guardada; esto cubre el POST manipulado).
-  if (!apiKey && provider !== "none" && prev.emailApiKey && provider !== prev.emailProvider) {
+  if (!apiKey && provider !== "none" && targetBase.emailApiKey && provider !== targetBase.emailProvider) {
     return { ok: false, message: "Indica la API key del nuevo proveedor (no se reutiliza la anterior)." };
   }
-  const denied = await denyWithoutMembership(await resolveConnStoreId(prev.medusaUrl), user);
+  const denied = await denyWithoutMembership(
+    formStoreId ?? (await resolveConnStoreId(prev.medusaUrl)),
+    user,
+  );
   if (denied) return { ok: false, message: denied };
   try {
     await writeConnections({
-      ...prev,
+      ...targetBase,
       emailProvider: provider,
       emailFrom: from,
       // Vacío = conservar la guardada (el input viene con placeholder, no con valor).
-      emailApiKey: apiKey ? apiKey.trim() : prev.emailApiKey,
+      emailApiKey: apiKey ? apiKey.trim() : targetBase.emailApiKey,
       defaultChannel,
     });
   } catch (e) {
@@ -287,8 +347,14 @@ export async function testEmailAction(
   if (user && "error" in user) return { ok: false, message: user.error };
   const to = String(formData.get("emailTestTo") ?? "").trim();
   if (!to || !to.includes("@")) return { ok: false, message: "Indica un destino válido para la prueba" };
-  const conn = await readConnections();
-  const denied = await denyWithoutMembership(await resolveConnStoreId(conn.medusaUrl), user);
+  const formStoreId = String(formData.get("storeId") ?? "").trim() || null;
+  const conn = formStoreId
+    ? await readConnections(formStoreId).catch(() => readConnections())
+    : await readConnections();
+  const denied = await denyWithoutMembership(
+    formStoreId ?? (await resolveConnStoreId(conn.medusaUrl)),
+    user,
+  );
   if (denied) return { ok: false, message: denied };
   if (conn.emailProvider === "none" || !conn.emailApiKey || !conn.emailFrom) {
     return { ok: false, message: "Guarda primero proveedor, from y API key" };
@@ -323,17 +389,36 @@ export type RevocableSecret = "medusa_token" | "shopify_token" | "woo_consumer_k
  * y limpia el fallback JSON. Sin DB/key, limpia solo el JSON (dev).
  * El password de Medusa nunca se guarda (solo token post-login).
  */
-export async function revokeSecretAction(secret: RevocableSecret): Promise<SaveState> {
+export async function revokeSecretAction(secret: RevocableSecret, storeIdArg?: string | null): Promise<SaveState> {
   const user = await requireSettingsUser();
   if (user && "error" in user) return { ok: false, message: user.error };
   const conn = await readConnectionsJsonSafe();
-  let storeId: string | null = null;
-  if (isSupabaseConfigured() && conn.medusaUrl) {
+  // storeId explícito (?store= activo) manda: revoca ESE tenant, no el del
+  // JSON global. Sin él, legacy: JSON → tienda única en DB.
+  const explicitStoreId = String(storeIdArg ?? "").trim() || null;
+  let storeId: string | null = explicitStoreId;
+  if (!storeId && isSupabaseConfigured() && conn.medusaUrl) {
     try {
       const { resolveStoreId } = await import("@/lib/customers-db");
       storeId = await resolveStoreId(conn.medusaUrl).catch(() => null);
     } catch {
       storeId = null;
+    }
+  }
+  // JSON vacío en prod (efímero entre redeploys): si hay UNA sola tienda
+  // medusa en DB, revoca ahí en vez de reportar éxito falso solo en JSON.
+  if (!storeId && isSupabaseConfigured()) {
+    try {
+      const { getSupabase } = await import("@/lib/supabase");
+      const { data } = await getSupabase()
+        .from("stores")
+        .select("id")
+        .eq("platform", "medusa")
+        .limit(2);
+      const rows = (data ?? []) as Array<{ id: string }>;
+      if (rows.length === 1) storeId = rows[0].id;
+    } catch {
+      // Sigue al JSON como fallback.
     }
   }
   const denied = await denyWithoutMembership(storeId, user);
