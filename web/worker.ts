@@ -33,14 +33,29 @@ async function runStore(storeId: string, kinds: string[] | undefined): Promise<v
       log(`store=${storeId} sin conexión, omitido`);
       return;
     }
-    const runId = await runSyncOnce(storeId, target.shopUrl, {
-      version: target.version,
-      token: target.token,
-      platform: target.platform,
-      withMorning: wantMorning,
-    });
-    // null = slot ocupado (lo cubre la corrida en curso): omitido, no fallo.
-    log(`store=${storeId} sync run=${runId ?? "omitido (en curso)"}`);
+    try {
+      const runId = await runSyncOnce(storeId, target.shopUrl, {
+        version: target.version,
+        token: target.token,
+        platform: target.platform,
+        withMorning: wantMorning,
+      });
+      // null = slot ocupado (lo cubre la corrida en curso): omitido, no fallo.
+      log(`store=${storeId} sync run=${runId ?? "omitido (en curso)"}`);
+    } catch (e) {
+      // El sync falló (p. ej. Medusa 401 por token temporal): el morning no
+      // depende del feed, corre igual con la BD cacheada para no perder el
+      // día (scout/strategist/copywriter/prospect). Se relanza el error para
+      // que la task siga marcada en rojo por el sync.
+      const msg = e instanceof Error ? e.message : "error";
+      if (wantMorning) {
+        log(`store=${storeId} sync error (${msg}); morning sigue con BD cacheada`);
+        const { runMorningPipeline } = await import("@/lib/morning-run");
+        await runMorningPipeline(storeId);
+        log(`store=${storeId} morning done (tras sync fallido)`);
+      }
+      throw e;
+    }
     return;
   }
   if (wantMorning) {
