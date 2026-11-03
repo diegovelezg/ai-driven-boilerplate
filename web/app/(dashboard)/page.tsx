@@ -28,6 +28,7 @@ import {
   type TenantStore,
 } from "@/lib/tenant";
 import { TeamPulse } from "./team-pulse";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { DECISION_COPY } from "@/lib/decision-copy";
 import { type AttentionItem } from "./attention-table";
 import { AppTooltip } from "@/components/ui/app-tooltip";
@@ -729,6 +730,9 @@ export default async function DashboardPage({
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      {/* Héroe reactivo: revalida el server render cada 60s y al volver a
+          la pestaña (pipeline/cron cambian los datos con el tab abierto). */}
+      <AutoRefresh ms={60_000} />
       <PageHeader
         eyebrow="Tu operación de hoy"
         pulse={porRevisar > 0 || (hasMotor && hoyActuar > 0)}
