@@ -18,7 +18,10 @@ Dashboard merchant + sync multi-tenant de ecommerce (Medusa hoy, Shopify/Woo stu
 
 ```bash
 # 1. Stack local (una vez; deja API :54321 y Studio :54323)
-npx supabase start        # desde la raíz del repo
+# La CLI de Supabase ya no va en package.json (146MB en cada build Docker):
+# una vez por máquina `npm i -g supabase`, luego `supabase` directo.
+# (Sin global, `npx -y supabase start` también vale.)
+npx -y supabase start        # desde la raíz del repo
 
 # 2. Env (una vez)
 # web/.env.local con SUPABASE_URL=http://127.0.0.1:54321,

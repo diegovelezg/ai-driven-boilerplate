@@ -1,29 +1,41 @@
 # web — Dockerfile prod para Coolify (deploy único con compose raíz).
 # Node 22 exigido por supabase-js/better-sqlite3/mikro-orm/kysely (>=22);
 # @google/adk no pinea engines y es compatible.
-FROM node:22-bookworm-slim AS deps
+#
+# Reglas de este archivo (2026-11-03: un build frío tardó ~55min y colgó el
+# VPS con la swap llena):
+# - UN solo `apt-get` (stage `base`): 3 apt-get en paralelo + 2 `npm ci`
+#   contra red saturaban un VPS sin RAM.
+# - UN solo `npm ci` con red (stage `deps`). `prod-deps` deriva por COPY +
+#   `npm prune` local, sin descargar nada.
+# - Sin devDeps inútiles en el lock: la CLI `supabase` (146MB) y `shadcn`
+#   salieron de package.json (local: `npm i -g supabase`, `npx shadcn`).
+#   `adk-devtools` se queda: `.bin/adk` apunta ahí (`npm run adk` local).
+FROM node:22-bookworm-slim AS base
 WORKDIR /app
-# better-sqlite3 (vía crawlee) compila nativo con node-gyp: necesita toolchain.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json ./
+# Un solo apt: toolchain (better-sqlite3 vía crawlee compila nativo con
+# node-gyp) + procps (Crawlee spawnea `ps` para snapshots de memoria;
+# sin esto prospect muere con `spawn ps ENOENT`, 2026-10-21).
+# Un solo RUN: una layer, y el usuario existe antes de usarlo
+# (el log 2026-10-23 mostró `addgroup ERROR: not found` por orden frágil).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ procps \
+  && rm -rf /var/lib/apt/lists/ \
+  && addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+
+FROM base AS deps
 # Cache BuildKit: los re-deploys sin cambio de lock reutilizan ~/.npm
-# en vez de re-descargar 1100+ paquetes (~40s en el log 2026-10-23).
-RUN --mount=type=cache,target=/root/.npm npm ci
-
-# Deps solo-prod para el runner: lo que se copia a la imagen final.
-# Evita el patrón COPY-todo + `npm prune` (la layer de 1.1GB + whiteouts
-# ya quedaba grabada: 37s de COPY + 12.7s de export en el log 2026-10-23).
-FROM node:22-bookworm-slim AS prod-deps
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
+# en vez de re-descargar. --no-audit/--no-fund: el audit no aporta en build.
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev \
-  && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
-FROM node:22-bookworm-slim AS builder
-WORKDIR /app
+# Deps solo-prod para el runner: deriva de `deps` por COPY + prune local
+# (sin red). NO otro `npm ci`: dos installs en paralelo colgaron el VPS.
+FROM base AS prod-deps
+COPY package.json package-lock.json ./
+COPY --from=deps /app/node_modules ./node_modules
+RUN npm prune --omit=dev
+
+FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* se inlinan en el build → Coolify debe pasarlas como Build Args
@@ -35,18 +47,10 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runner
+FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-# Crawlee (scout/prospect) spawnea `ps` para sus snapshots de memoria
-# (@apify/ps-tree): la imagen slim no lo trae y el crawl muere con
-# `spawn ps ENOENT` (prospect en error 4 corridas seguidas, 2026-10-21).
-# Un solo RUN: un apt-update, una layer, y el usuario existe antes de usarlo
-# (el log 2026-10-23 mostró `addgroup ERROR: not found` por orden paralelo frágil).
-RUN apt-get update && apt-get install -y --no-install-recommends procps \
-  && rm -rf /var/lib/apt/lists/ \
-  && addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
@@ -58,8 +62,8 @@ COPY --from=builder /app/worker.ts ./worker.ts
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/agent.ts ./agent.ts
-# Solo prod, ya podado en su propio stage: COPY directo, sin `npm prune`
-# (shadcn/eslint/tailwind/supabase-CLI/adk-devtools/typescript quedan fuera;
+# Solo prod, ya podado en su propio stage: COPY directo
+# (eslint/tailwind/typescript quedan fuera;
 # `tsx` es dep prod —la usa el cron— y se conserva).
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --chown=nextjs:nodejs entrypoint.sh /app/entrypoint.sh
