@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
 import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
 import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
@@ -287,6 +288,7 @@ export default async function FinanzasPage({
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <AutoRefresh ms={60_000} />
       <PageHeader
         eyebrow="Dinero y retención"
         title={`Finanzas · ${displayStoreName(active)}`}

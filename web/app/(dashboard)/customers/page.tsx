@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
+import { AutoRefresh } from "@/components/auto-refresh";
 import type { CustomerFilters, CustomerPredictionLite, EditableCustomer } from "@/lib/customers-db";
 import {
   getPredictionsMap,
@@ -127,6 +128,7 @@ export default async function CustomersPage({
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-8 p-6 md:p-8">
+      <AutoRefresh ms={60_000} />
       <PageHeader
         eyebrow="Cartera de clientes"
         title="Customers"

@@ -3,6 +3,7 @@ import { formatNumber } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
+import { AutoRefresh } from "@/components/auto-refresh";
 import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured, getSupabase } from "@/lib/supabase";
 import { resolveStoreId } from "@/lib/customers-db";
@@ -576,6 +577,7 @@ export default async function ReviewPage({
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <AutoRefresh ms={60_000} />
       <PageHeader
         eyebrow="Bandeja de entrada"
         title="Review"
