@@ -209,6 +209,28 @@ npm install -D @google/adk-devtools
   con sustento predicción+última orden, wa.me, cambio canal, veto visible.
   Persistencia: `conversations` + `messages`; borradores = `proposed_actions PENDING_REVIEW`.
 
+## 9. Reactividad UI (polling hoy; Realtime como mejora futura)
+
+- **Hoy (2026-11-03):** las vistas son server render por request (`await connection()`),
+  así que un tab abierto es una foto fija. Reactividad vía polling, sin realtime:
+  `<AutoRefresh/>` (`web/components/auto-refresh.tsx`: `router.refresh()` cada 60s +
+  al volver al tab, sin solapar, conservando estado cliente) en Hoy, Review, Customers,
+  Finanzas y Products. `HealthSection` ya polleaba `/api/health` cada 15s y
+  `BackgroundStatus` refresca al aquietarse una corrida (falla con tab oculto:
+  el navegador estrangula los intervalos — por eso existe `AutoRefresh`).
+  Settings/Duplicados/Ayuda quedan fuera: solo cambian por acción del usuario
+  (ya revalidan con `revalidatePath`).
+- **Mejora futura (solo si el polling duele: muchos usuarios concurrentes o
+  necesidad de frescura de segundos):** migrar a Supabase Realtime
+  (`postgres_changes` → `router.refresh()`). Tablas candidatas, solo las que
+  cambian fuera de la sesión (pipeline/cron): `proposed_actions`,
+  `proposed_leads`, `churn_signals`, `customer_predictions`, `background_runs`
+  (progreso en vivo), `customers`, `orders`, `products`. Requisitos previos:
+  (1) añadirlas a la publicación `supabase_realtime` (+ `REPLICA IDENTITY FULL`
+  donde importe update/delete); (2) verificar RLS `SELECT` para `authenticated`
+  canal por canal (Realtime la respeta); (3) un hook cliente único con
+  reconexión. Regla: polling hasta que duela.
+
 ## 8. Metering LLM por tenant (issue #15, implementado base)
 
 - **Tabla:** `llm_usage` (`20261020000003`), 1 fila/llamada con `store_id` + 
