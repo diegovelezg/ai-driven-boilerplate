@@ -55,16 +55,16 @@ function mergeChunkPage(
   for (const r of (rows ?? [])) if (!merged.has(String(r.id))) merged.set(String(r.id), r);
 }
 
-/** Recorta el top `n` por `created_at` desc con el sobre de paginado estándar. */
-function finishMergedPage(merged: Map<string, Record<string, unknown>>, total: number, n: number) {
+/** Recorta el top `n` con `offset` por `created_at` desc con el sobre de paginado estándar. */
+function finishMergedPage(merged: Map<string, Record<string, unknown>>, total: number, n: number, off = 0) {
   const rows = [...merged.values()]
     .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
-    .slice(0, n);
+    .slice(off, off + n);
   return {
     items: rows,
     total_count: total,
     returned_count: rows.length,
-    truncated: total > rows.length,
+    truncated: total > off + rows.length,
   };
 }
 
@@ -296,21 +296,27 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const signals = new FunctionTool({
     name: "list_signals",
     description:
-      "Señales del scout (quién debería haber recomprado, con motivo). Insumo interno del loop, no vocabulario del merchant: para sus preguntas usa las decisiones del motor (filter_customers: actuar, vigilar…) y responde en el chat. Si el merchant pide una cantidad ('los 3 primeros', 'dame 5'), pásala en 'limit' (1-20, default 10).",
+      "Señales del scout (quién debería haber recomprado, con motivo). Insumo interno del loop, no vocabulario del merchant: para sus preguntas usa las decisiones del motor (filter_customers: actuar, vigilar…) y responde en el chat. Si el merchant pide una cantidad ('los 3 primeros', 'dame 5'), pásala en 'limit' (1-20, default 10). Sin panel lateral (solo actions/leads/filter abren Review a la derecha). Paginación con 'offset' (default 0).",
     parameters: z.object({
       status: z.enum(["open", "prioritized", "actioned", "closed", "dismissed"]).optional(),
       limit: z.number().int().min(1).max(20).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
     }),
-    execute: async ({ status, limit }: { status?: string; limit?: number }) => {
+    execute: async ({ status, limit, offset }: { status?: string; limit?: number; offset?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const wanted = status ? [status] : ["open", "prioritized"];
       const n = limit ?? 10;
+      const off = offset ?? 0;
       // Scope fallback grande (market sin países + miles de IDs): un solo
       // `.in(miles de UUIDs)` revienta la URL. Rama null una vez + un
-      // top-N por chunk, merge en JS (dedupe por id, orden created_at desc).
+      // top-(offset+n) por chunk, merge en JS (dedupe por id, orden created_at
+      // desc) y UN solo slice global en finishMergedPage. Cada chunk trae
+      // desde 0: si trajera .range(off,off+n) el offset se aplicaría dos
+      // veces (una por chunk, otra global) y saltaría filas con off>0.
       if (isLargeIdScope(marketScope)) {
         const { ids } = effectiveScopeFilter(marketScope);
         const idList = ids ?? [];
+        const want = off + n;
         try {
           const db = getSupabase();
           const baseSelect =
@@ -331,7 +337,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
               .is("country", null)
               .order("created_at", { ascending: false })
               .order("id", { ascending: true })
-              .limit(n),
+              .range(0, want - 1),
           ]);
           if (nullTop.error) return { error: nullTop.error.message };
           let total = nullCount;
@@ -354,13 +360,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
                 .in("customer_id", c)
                 .order("created_at", { ascending: false })
                 .order("id", { ascending: true })
-                .limit(n),
+                .range(0, want - 1),
             ]);
             if (ce) return { error: ce.message };
             total += cc ?? 0;
             mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
           }
-          return finishMergedPage(merged, total, n);
+          return finishMergedPage(merged, total, n, off);
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) };
         }
@@ -378,14 +384,24 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const { data, error } = await sq
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
-        .limit(n);
+        .range(off, off + n - 1);
       if (error) return { error: error.message };
       const rows = data ?? [];
+      // total_count honesto (issue #30): si el count falló, null + nota.
+      if (count == null) {
+        return {
+          items: rows,
+          total_count: null,
+          returned_count: rows.length,
+          truncated: null,
+          note: "Total no disponible (count falló): hay más, pide offset.",
+        };
+      }
       return {
         items: rows,
-        total_count: count ?? rows.length,
+        total_count: count,
         returned_count: rows.length,
-        truncated: (count ?? rows.length) > rows.length,
+        truncated: count > off + rows.length,
       };
     },
   });
@@ -393,15 +409,17 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const actions = new FunctionTool({
     name: "list_actions",
     description:
-      "Acciones propuestas (mensajes WhatsApp/email). Por defecto las pendientes de revisión del humano. Si el merchant pide una cantidad ('los 3 primeros') pásala en 'limit' (1-20, default 10); si pide un canal ('solo WhatsApp'), pásalo en 'channel'.",
+      "Acciones propuestas (mensajes WhatsApp/email). Por defecto las pendientes de revisión del humano. Si el merchant pide una cantidad ('los 3 primeros') pásala en 'limit' (1-20, default 10); 'channel' SOLO existe en esta lista (señales/leads no filtran por canal). Paginación con 'offset' (default 0). Cada fila trae revenue_attributed + revenue_attributed_display (SSOT es-PE, verbatim). Escrituras (approve/reject) son globales a la tienda, no filtran por market.",
     parameters: z.object({
       status: z.enum(["pending_review", "approved", "rejected", "dispatched", "failed"]).optional(),
       limit: z.number().int().min(1).max(20).optional(),
       channel: z.enum(["whatsapp", "email"]).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
     }),
-    execute: async ({ status, limit, channel }: { status?: string; limit?: number; channel?: string }) => {
+    execute: async ({ status, limit, channel, offset }: { status?: string; limit?: number; channel?: string; offset?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const n = limit ?? 10;
+      const off = offset ?? 0;
       const st = status ?? "pending_review";
       if (isLargeIdScope(marketScope)) {
         const { ids } = effectiveScopeFilter(marketScope);
@@ -431,7 +449,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           const nullTop = await nullQ(db.from("proposed_actions").select(baseSelect))
             .order("created_at", { ascending: false })
             .order("id", { ascending: true })
-            .limit(n);
+            .range(0, off + n - 1);
           if (nullTop.error) return { error: nullTop.error.message };
           let total = nullCount;
           const merged = new Map<string, Record<string, unknown>>();
@@ -443,13 +461,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
               chunkQ(db.from("proposed_actions").select(baseSelect), c)
                 .order("created_at", { ascending: false })
                 .order("id", { ascending: true })
-                .limit(n),
+                .range(0, off + n - 1),
             ]);
             if (ce) return { error: ce.message };
             total += cc ?? 0;
             mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
           }
-          return finishMergedPage(merged, total, n);
+          return finishMergedPage(merged, total, n, off);
         } catch (e) {
           return { error: e instanceof Error ? e.message : String(e) };
         }
@@ -477,7 +495,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const res = await aq
           .order("created_at", { ascending: false })
           .order("id", { ascending: true })
-          .limit(n);
+          .range(off, off + n - 1);
         data = (res.data ?? []) as Array<Record<string, unknown>>;
         error = (res.error ?? null) as { message: string } | null;
       }
@@ -495,22 +513,37 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const res2 = await aq2
           .order("created_at", { ascending: false })
           .order("id", { ascending: true })
-          .limit(n);
+          .range(off, off + n - 1);
         data = (res2.data ?? []) as Array<Record<string, unknown>>;
         error = (res2.error ?? null) as { message: string } | null;
       }
       if (error) return { error: error.message };
-      const rows = data ?? [];
+      const { resolveShopCurrency: resolveShopCurrencyActions } = await import("@/lib/store-profiles");
+      const shopCurActions = ((await resolveShopCurrencyActions(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
+      const rows = (data ?? []).map((r) => ({
+        ...r,
+        revenue_attributed_display:
+          r.revenue_attributed == null ? null : formatMoney(Number(r.revenue_attributed), shopCurActions),
+      }));
+      if (count == null) {
+        return {
+          items: rows,
+          total_count: null,
+          returned_count: rows.length,
+          truncated: null,
+          note: "Total no disponible (count falló): hay más, pide offset.",
+        };
+      }
       return {
         items: rows,
-        total_count: count ?? rows.length,
+        total_count: count,
         returned_count: rows.length,
-        truncated: (count ?? rows.length) > rows.length,
+        truncated: count > off + rows.length,
       };
     },
   });
 
-  /** Escritura con guarda: solo filas pending de ESTA tienda cambian. */
+  /** Escritura con guarda: solo filas pending de ESTA tienda cambian. Global-a-tienda (issue #30): no filtra por market. */
   async function setActionsStatus(
     ids: string[],
     status: "approved" | "rejected",
@@ -540,7 +573,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const approveActions = new FunctionTool({
     name: "approve_actions",
     description:
-      "Aprueba borradores pendientes para que el dispatcher pueda enviarlos. SOLO después de confirmación explícita del merchant en esta conversación (p.ej. 'sí, aprueba los 3'). Pasa los 'id' tal cual los devolvió list_actions (máx 20). Nunca apruebes sin que te lo confirmen.",
+      "Aprueba borradores pendientes para que el dispatcher pueda enviarlos. SOLO después de confirmación explícita del merchant en esta conversación (p.ej. 'sí, aprueba los 3'). Pasa los 'id' tal cual los devolvió list_actions (máx 20). Global-a-tienda: no filtra por market. Nunca apruebes sin que te lo confirmen.",
     parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
     execute: async ({ ids }: { ids: string[] }) => setActionsStatus(ids, "approved"),
   });
@@ -548,7 +581,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const rejectActions = new FunctionTool({
     name: "reject_actions",
     description:
-      "Rechaza borradores pendientes (no se enviarán). SOLO después de confirmación explícita del merchant en esta conversación. Pasa los 'id' tal cual los devolvió list_actions (máx 20).",
+      "Rechaza borradores pendientes (no se enviarán). SOLO después de confirmación explícita del merchant en esta conversación. Pasa los 'id' tal cual los devolvió list_actions (máx 20). Global-a-tienda: no filtra por market.",
     parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
     execute: async ({ ids }: { ids: string[] }) => setActionsStatus(ids, "rejected"),
   });
@@ -789,14 +822,18 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           valor_low_display: formatMoney(Math.round(low), viewCur),
           valor_high_display: formatMoney(Math.round(high), viewCur),
           foto_vieja: fotoVieja,
+          foto_truncated: predRows.length >= PRED_CAP,
           next_window_date: nextWindowDate,
-          foreign: [...foreign.entries()].map(([code, g]) => ({ code, n: g.n, value: g.value })),
+          foreign: [...foreign.entries()].map(([code, g]) => ({ code, n: g.n, value: g.value, value_display: formatMoney(Math.round(g.value), code) })),
           groups,
           debiles,
           debiles_cercano: debilesCercano,
           top1,
           view_currency: viewCur,
-          note: fotoVieja ? "Foto del día anterior (sin corrida hoy): conteos de la última foto, no de hoy." : null,
+          market_active: marketActive,
+          truncated: predRows.length >= PRED_CAP,
+          note_truncated: predRows.length >= PRED_CAP ? "Muestra parcial: predicciones mayores al CAP 5000; conteos parciales." : null,
+          note: fotoVieja ? "Foto del día anterior (sin corrida hoy): conteos de la última foto, no de hoy. Si foto_vieja=true di 'foto de ayer', nunca 'hoy'." : null,
         };
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
@@ -856,7 +893,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const dismissSignals = new FunctionTool({
     name: "dismiss_signals",
     description:
-      "Descarta señales abiertas/priorizadas (el humano las juzga irrelevantes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_signals (máx 20).",
+      "Descarta señales abiertas/priorizadas (el humano las juzga irrelevantes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_signals (máx 20). Global-a-tienda: no filtra por market.",
     parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
     execute: async ({ ids }: { ids: string[] }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -885,7 +922,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const reopenSignals = new FunctionTool({
     name: "reopen_signals",
     description:
-      "Reabre señales descartadas (vuelven a la cola para contactar igual). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual (máx 20).",
+      "Reabre señales descartadas (vuelven a la cola para contactar igual). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual (máx 20). Global-a-tienda: no filtra por market.",
     parameters: z.object({ ids: z.array(z.string()).min(1).max(20) }),
     execute: async ({ ids }: { ids: string[] }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -911,7 +948,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const decideLead = new FunctionTool({
     name: "decide_lead",
     description:
-      "Cierra el loop de un lead (review sí puede, el chat también): approved (me interesa, vuelve a pendientes de contacto), contacted (ya lo contacté por mi cuenta), discarded (no me interesa) o reopen (rescata un descartado a pendientes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_leads (máx 20).",
+      "Cierra el loop de un lead (review sí puede, el chat también): approved (me interesa, vuelve a pendientes de contacto), contacted (ya lo contacté por mi cuenta), discarded (no me interesa; se guarda como rejected canónico y status devuelve 'rejected') o reopen (rescata un descartado a pendientes). SOLO después de confirmación explícita del merchant. Pasa los 'id' tal cual los devolvió list_leads (máx 20). Global-a-tienda: no filtra por market.",
     parameters: z.object({
       ids: z.array(z.string()).min(1).max(20),
       decision: z.enum(["approved", "contacted", "discarded", "reopen"]),
@@ -1302,14 +1339,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const leads = new FunctionTool({
     name: "list_leads",
     description:
-      "Leads propuestos por el prospector (negocios parecidos al ICP, con score, motivo, contacto público y RRSS en evidence_json.contacts). Por defecto los pendientes de revisión del humano. País por sus customers de referencia; sin evidencia se ven en todo filtro. Si el merchant pide una cantidad, pásala en 'limit' (1-20, default 10).",
+      "Leads propuestos por el prospector (negocios parecidos al ICP, con score, motivo, contacto público y RRSS en evidence_json.contacts). Por defecto los pendientes de revisión del humano. País por sus customers de referencia; sin evidencia se ven en todo filtro. Si el merchant pide una cantidad, pásala en 'limit' (1-20, default 10). Sin panel de señales: solo actions/leads/filter abren Review a la derecha. Paginación con 'offset' (default 0).",
     parameters: z.object({
       status: z.enum(["pending_review", "approved", "rejected", "contacted", "discarded"]).optional(),
       limit: z.number().int().min(1).max(20).optional(),
+      offset: z.number().int().min(0).max(10000).optional(),
     }),
-    execute: async ({ status, limit }: { status?: string; limit?: number }) => {
+    execute: async ({ status, limit, offset }: { status?: string; limit?: number; offset?: number }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const n = limit ?? 10;
+      const off = offset ?? 0;
       const { count } = await withMarket(
         getSupabase()
           .from("proposed_leads")
@@ -1329,14 +1368,23 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const { data, error } = await lq
         .order("icp_score", { ascending: false })
         .order("id", { ascending: true })
-        .limit(n);
+        .range(off, off + n - 1);
       if (error) return { error: error.message };
       const rows = data ?? [];
+      if (count == null) {
+        return {
+          items: rows,
+          total_count: null,
+          returned_count: rows.length,
+          truncated: null,
+          note: "Total no disponible (count falló): hay más, pide offset.",
+        };
+      }
       return {
         items: rows,
-        total_count: count ?? rows.length,
+        total_count: count,
         returned_count: rows.length,
-        truncated: (count ?? rows.length) > rows.length,
+        truncated: count > off + rows.length,
       };
     },
   });
@@ -1437,6 +1485,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       // PEN+MXN por título. Se rankea por (título, moneda) con rótulo por
       // fila, como el drawer (nunca se mezclan monedas).
       if (!viewCurrency) {
+        const { normProductTitle: normTitleTop, normProductTitleLoose: normLooseTop } = await import("@/lib/product-stats");
         const byKey = new Map<string, { title: string; currency: string; quantity: number; revenueMinor: number; orders: number }>();
         for (const o of realRows) {
           const cur = ((o.currency as string | null) ?? "SIN-MONEDA").toUpperCase();
@@ -1444,7 +1493,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           const seenThisOrder = new Set<string>();
           for (const raw of items as Array<Record<string, unknown>>) {
             const rawTitle = String(raw.title ?? "").trim() || "Sin título";
-            const key = `${rawTitle.toLowerCase()}|${cur}`;
+            // Canónico (issue #29): misma normalización que rankItems/stats.
+            const normKey = normLooseTop(rawTitle) || normTitleTop(rawTitle) || "sin-titulo";
+            const key = `${normKey}|${cur}`;
             const qty = Number(raw.quantity ?? 0) || 0;
             const price = Number(raw.unit_price ?? 0) || 0;
             if (qty <= 0 && price <= 0) continue;
@@ -1495,14 +1546,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           ? [...topWithDisplay].sort((a, b) => b.orders - a.orders)
           : topWithDisplay;
       // total_count = títulos distintos intra-moneda (no el largo de la ventana).
-      // Sin viewCurrency (todas) no se filtra por moneda.
+      // Sin viewCurrency (todas) no se filtra por moneda. Canónico (issue #29).
+      const { normProductTitle: normTitleCount, normProductTitleLoose: normLooseCount } = await import("@/lib/product-stats");
       const seen = new Set<string>();
       for (const o of realRows) {
         const cur = (o.currency as string | null) ?? null;
         if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency) continue;
         const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
         for (const it of items) {
-          const t = String(it.title ?? "").trim().toLowerCase() || "sin-titulo";
+          const rawT = String(it.title ?? "").trim();
+          const t = normLooseCount(rawT) || normTitleCount(rawT) || "sin-titulo";
           seen.add(t);
         }
       }
@@ -1677,40 +1730,75 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const db = getSupabase();
       const { data: p, error: pErr } = await db
         .from("products")
-        .select("title")
+        .select("title,handle,source_id,variants_json")
         .eq("store_id", storeId)
         .eq("id", productId)
         .maybeSingle();
       if (pErr) return { error: pErr.message };
       if (!p) return { error: "Producto no encontrado en esta tienda." };
-      const { normProductTitle } = await import("@/lib/product-stats");
-      const normTitle = normProductTitle(String((p as Record<string, unknown>).title ?? ""));
+      const pr = p as Record<string, unknown>;
+      // Match canónico global (issue #29): mismo índice first-wins que
+      // computeProductStats/drawer (ID>variante>handle>sku>título>título loose).
+      // Antes era réplica local solo-foco (sin índice global) y divergía.
+      // CAP con flag honesto: si el catálogo supera el índice, se expone
+      // product_index_truncated (el match por ID fuera del índice cae al
+      // fallback por título y puede divergir de product_stats).
+      const { buildProductPidIndex, resolveProductPid, normProductTitle } = await import("@/lib/product-stats");
+      const PRODUCT_INDEX_CAP = 5000;
+      const [{ data: prodsAll }, { count: prodsTotal }] = await Promise.all([
+        db
+          .from("products")
+          .select("id,title,handle,source_id,variants_json")
+          .eq("store_id", storeId)
+          .limit(PRODUCT_INDEX_CAP),
+        db.from("products").select("id", { count: "exact", head: true }).eq("store_id", storeId),
+      ]);
+      const pidIndex = buildProductPidIndex((prodsAll ?? []) as Array<Record<string, unknown>>);
+      const indexed = (prodsAll ?? []).some((r) => String((r as Record<string, unknown>).id ?? "") === productId);
+      const productIndexTruncated = (prodsTotal ?? (prodsAll ?? []).length) > (prodsAll ?? []).length;
+      const normTitle = normProductTitle(String(pr.title ?? ""));
+      const isMineLine = (it: Record<string, unknown>): boolean => {
+        const resolved = resolveProductPid(pidIndex, it);
+        if (resolved) return resolved === productId;
+        // Fallback si el catálogo truncó (5000) y este producto quedó fuera.
+        if (!indexed) return normProductTitle(String(it.title ?? "")) === normTitle;
+        return false;
+      };
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
       const viewCurrency = marketCurrency ?? shopCurrency;
       // Agregado paginado con CAP + flag: lotes 1000, nunca .length de ventana.
       const PAGE = 1000;
       const CAP = 20000;
-      const META_CAP = 45;
       const want = off + n + 1; // +1 para saber si hay más (truncated real)
       const items: Array<Record<string, unknown>> = [];
       const metaLines: Array<{ title: string; quantity: number; metadata?: unknown; oi: number }> = [];
       let scanned = 0;
       let hitCap = false;
+      // Scope grande por IDs: sin .in(miles) en URL (revienta PostgREST);
+      // se escanea sin filtro SQL y se aplica el predicado en JS (misma
+      // semántica NULL-comodín que applyScopeFilter).
+      const largeScope = isLargeIdScope(marketScope);
+      const idSet = largeScope
+        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
+        : null;
       for (let at = 0; ; at += PAGE) {
-        const oq = withMarket(
-          db
-            .from("orders")
-            .select("currency,items_json,placed_at,status,payment_status,is_test")
-            .eq("store_id", storeId)
-            .order("placed_at", { ascending: false })
-            .order("id", { ascending: true }),
-        );
+        const baseQ = db
+          .from("orders")
+          .select("currency,items_json,placed_at,customer_id,country,status,payment_status,is_test")
+          .eq("store_id", storeId)
+          .order("placed_at", { ascending: false })
+          .order("id", { ascending: true });
+        const oq = largeScope ? baseQ : withMarket(baseQ);
         const { data, error } = await oq.range(at, at + PAGE - 1);
         if (error) return { error: error.message };
         const orows = (data ?? []) as Array<Record<string, unknown>>;
         for (const o of orows) {
-          scanned += 1;
+          if (largeScope && idSet) {
+            const c = typeof o.country === "string" ? o.country : null;
+            const cid = typeof o.customer_id === "string" ? o.customer_id : "";
+            if (c !== null && !idSet.has(cid)) continue;
+          }
           if (!isRealDbOrder({
             status: typeof o.status === "string" ? o.status : null,
             payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
@@ -1720,13 +1808,15 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           // Misma moneda que el drawer: con market activo se filtra a su
           // moneda; sin market se muestran todas con rótulo por fila.
           if (marketCurrency && cur && cur.toUpperCase() !== marketCurrency) continue;
+          // scanned = órdenes reales en la moneda/scope (issue #29).
+          scanned += 1;
           const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
           let qty = 0;
           let revenue = 0;
           let unitPrice: number | null = null;
           const matched: Array<{ title: string; quantity: number; metadata?: unknown }> = [];
           for (const it of oitems) {
-            if (normTitle !== normProductTitle(String(it.title ?? ""))) continue;
+            if (!isMineLine(it)) continue;
             const q = Number(it.quantity ?? 0);
             if (!(q > 0)) continue;
             const up = Number(it.unit_price ?? 0);
@@ -1748,7 +1838,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
               meta: null,
             });
             for (const m of matched) {
-              if (metaLines.length >= META_CAP) break;
               metaLines.push({ ...m, oi });
             }
           }
@@ -1763,33 +1852,46 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       }
       const hasMore = items.length > off + n;
       const window = items.slice(off, off + n);
-      // Contenido POR LÍNEA (misma fusión que el drawer: first-wins).
+      // Contenido POR LÍNEA (misma fusión que el drawer: concatena distintos).
       // Solo la key elegida en settings (contiene/categoria); ninguna otra key fluye.
+      // Se enriquece solo la ventana visible para no dejar nulls falsos por topes.
       if (metaLines.length > 0 && window.length > 0) {
-        const { EMPTY_KEYS, resolveItemKeys } = await import("@/lib/metadata-map");
-        const { enrichOrderItems } = await import("@/lib/item-context");
-        const keys = await resolveItemKeys(storeId).catch(() => EMPTY_KEYS);
-        const enriched = await enrichOrderItems(storeId, metaLines, keys).catch(() => []);
-        const byOi = new Map<number, typeof enriched>();
-        enriched.forEach((e, i) => {
-          const oi = metaLines[i]?.oi;
-          if (oi === undefined) return;
-          const arr = byOi.get(oi) ?? [];
-          arr.push(e);
-          byOi.set(oi, arr);
-        });
-        for (const [oi, list] of byOi) {
-          if (oi < off || oi >= off + window.length) continue;
-          const mv = window[oi - off] as Record<string, unknown>;
-          if (!mv) continue;
-          let contiene: string | null = null;
-          let categoria: string | null = null;
-          for (const e of list) {
-            if (!contiene && e.contiene) contiene = e.contiene;
-            if (!categoria && e.categoria) categoria = e.categoria;
+        const windowMeta = metaLines.filter((m) => m.oi >= off && m.oi < off + window.length);
+        if (windowMeta.length > 0) {
+          const { EMPTY_KEYS, resolveItemKeys } = await import("@/lib/metadata-map");
+          const { enrichOrderItems } = await import("@/lib/item-context");
+          const keys = await resolveItemKeys(storeId).catch(() => EMPTY_KEYS);
+          const enriched = await enrichOrderItems(storeId, windowMeta, keys).catch(() => []);
+          const byOi = new Map<number, typeof enriched>();
+          enriched.forEach((e, i) => {
+            const oi = windowMeta[i]?.oi;
+            if (oi === undefined) return;
+            const arr = byOi.get(oi) ?? [];
+            arr.push(e);
+            byOi.set(oi, arr);
+          });
+          for (const [oi, list] of byOi) {
+            const mv = window[oi - off] as Record<string, unknown>;
+            if (!mv) continue;
+            const seenC = new Set<string>();
+            const seenK = new Set<string>();
+            const partesC: string[] = [];
+            const partesK: string[] = [];
+            for (const e of list) {
+              if (e.contiene && !seenC.has(e.contiene)) {
+                seenC.add(e.contiene);
+                partesC.push(e.contiene);
+              }
+              if (e.categoria && !seenK.has(e.categoria)) {
+                seenK.add(e.categoria);
+                partesK.push(e.categoria);
+              }
+            }
+            const contiene = partesC.length > 0 ? partesC.join(" | ").slice(0, 500) : null;
+            const categoria = partesK.length > 0 ? partesK.join(" | ").slice(0, 200) : null;
+            // Mismas claves que el drawer: el agente cita lo mismo que la GUI muestra.
+            mv.meta = contiene || categoria ? { contiene, categoria } : null;
           }
-          // Mismas claves que el drawer: el agente cita lo mismo que la GUI muestra.
-          mv.meta = contiene || categoria ? { contiene, categoria } : null;
         }
       }
       const truncated = hasMore || hitCap;
@@ -1800,8 +1902,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         truncated,
         scanned_orders: scanned,
         view_currency: viewCurrency,
+        product_index_truncated: productIndexTruncated,
         note_truncated: truncated ? "Ventana escaneada: puede haber más historial; no afirmes el total." : null,
-        note: "Meta = solo el contenido de la key elegida en settings (contiene/categoria) o null. " + DISPLAY_RULE,
+        note: (productIndexTruncated ? "Índice de catálogo truncado (5000): el match por ID fuera del índice cae a título y puede divergir de product_stats. " : "") + "Meta = solo el contenido de la key elegida en settings (contiene/categoria) o null. " + DISPLAY_RULE,
       };
     },
   });
@@ -1827,7 +1930,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const [{ data: p }, { data: stats }] = await Promise.all([
         db
           .from("products")
-          .select("title")
+          .select("title,handle,source_id,variants_json")
           .eq("store_id", storeId)
           .eq("id", productId)
           .maybeSingle(),
@@ -1839,8 +1942,29 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           .limit(10),
       ]);
       if (!p) return { error: "Producto no encontrado en esta tienda." };
-      const { normProductTitle } = await import("@/lib/product-stats");
-      const normTitle = normProductTitle(String((p as Record<string, unknown>).title ?? ""));
+      const prp = p as Record<string, unknown>;
+      // Match canónico global (issue #29): mismo índice que stats/drawer.
+      // CAP con flag honesto: si el catálogo supera el índice, se expone.
+      const { buildProductPidIndex: buildPidB, resolveProductPid: resolvePidB, normProductTitle: normTB } = await import("@/lib/product-stats");
+      const PRODUCT_INDEX_CAP_B = 5000;
+      const [{ data: prodsAllB }, { count: prodsTotalB }] = await Promise.all([
+        db
+          .from("products")
+          .select("id,title,handle,source_id,variants_json")
+          .eq("store_id", storeId)
+          .limit(PRODUCT_INDEX_CAP_B),
+        db.from("products").select("id", { count: "exact", head: true }).eq("store_id", storeId),
+      ]);
+      const pidIndexB = buildPidB((prodsAllB ?? []) as Array<Record<string, unknown>>);
+      const indexedB = (prodsAllB ?? []).some((r) => String((r as Record<string, unknown>).id ?? "") === productId);
+      const productIndexTruncatedB = (prodsTotalB ?? (prodsAllB ?? []).length) > (prodsAllB ?? []).length;
+      const normTitleB = normTB(String(prp.title ?? ""));
+      const isMineB = (it: Record<string, unknown>): boolean => {
+        const resolved = resolvePidB(pidIndexB, it);
+        if (resolved) return resolved === productId;
+        if (!indexedB) return normTB(String(it.title ?? "")) === normTitleB;
+        return false;
+      };
       const statsTotal = ((stats ?? []) as Array<Record<string, unknown>>)
         .reduce((acc, s) => acc + Number(s.buyers_all ?? 0), 0);
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
@@ -1852,31 +1976,40 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const buyerAgg = new Map<string, Map<string, { qty: number; revenue: number }>>();
       let scanned = 0;
       let hitCap = false;
+      const largeScopeB = isLargeIdScope(marketScope);
+      const idSetB = largeScopeB
+        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
+        : null;
       for (let at = 0; ; at += PAGE) {
-        const oq = withMarket(
-          db
-            .from("orders")
-            .select("currency,items_json,customer_id,status,payment_status,is_test")
-            .eq("store_id", storeId)
-            .order("placed_at", { ascending: false })
-            .order("id", { ascending: true }),
-        );
+        const baseQB = db
+          .from("orders")
+          .select("currency,items_json,customer_id,country,status,payment_status,is_test")
+          .eq("store_id", storeId)
+          .order("placed_at", { ascending: false })
+          .order("id", { ascending: true });
+        const oq = largeScopeB ? baseQB : withMarket(baseQB);
         const { data, error } = await oq.range(at, at + PAGE - 1);
         if (error) return { error: error.message };
         const orows = (data ?? []) as Array<Record<string, unknown>>;
         for (const o of orows) {
-          scanned += 1;
+          if (largeScopeB && idSetB) {
+            const c = typeof o.country === "string" ? o.country : null;
+            const cid0 = typeof o.customer_id === "string" ? o.customer_id : "";
+            if (c !== null && !idSetB.has(cid0)) continue;
+          }
           if (!isRealDbOrder({
             status: typeof o.status === "string" ? o.status : null,
             payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
             is_test: o.is_test === true,
           })) continue;
+          // scanned = órdenes reales en scope (issue #29, no basura).
+          scanned += 1;
           const cur = (o.currency as string | null) ?? null;
           const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
           let qty = 0;
           let revenue = 0;
           for (const it of oitems) {
-            if (normTitle !== normProductTitle(String(it.title ?? ""))) continue;
+            if (!isMineB(it)) continue;
             const q = Number(it.quantity ?? 0);
             if (!(q > 0)) continue;
             qty += q;
@@ -1963,8 +2096,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         stats_total: statsTotal,
         stats_stale: statsStale,
         null_country_count: nullCountryCount ?? null,
+        product_index_truncated: productIndexTruncatedB,
         note_truncated: hitCap ? "Muestra parcial: universo mayor al CAP escaneado." : truncated ? `Te muestro ${items.length} de ${total}: pide offset ${off + items.length} para los siguientes.` : null,
-        note: DISPLAY_RULE,
+        note: (productIndexTruncatedB ? "Índice de catálogo truncado (5000): el match por ID fuera del índice cae a título y puede divergir de product_stats. " : "") + DISPLAY_RULE,
       };
     },
   });

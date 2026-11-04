@@ -10,7 +10,7 @@ import {
 } from "@/lib/product-stats";
 import { EMPTY_KEYS, resolveItemKeys } from "@/lib/metadata-map";
 import { enrichOrderItems } from "@/lib/item-context";
-import { displayMarket, resolveMarketScope } from "@/lib/markets";
+import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
 
 export interface ProductDetailStats {
   currency: string;
@@ -66,11 +66,13 @@ export interface ProductDetailDTO {
   totalMatchedQty: number;
   scannedOrders: number;
   scanTruncated: boolean;
+  /** Índice de catálogo truncado (5000): el match por ID fuera del índice cae
+   *  a título y puede divergir de product_stats. Honesto, no silencioso. */
+  productIndexTruncated: boolean;
 }
 
 const MOVEMENT_PAGE = 500;
 const MOVEMENT_SCAN_CAP = 3000;
-const META_LINES_CAP = 40;
 
 export async function loadProductDetail(
   productId: string,
@@ -104,12 +106,17 @@ export async function loadProductDetail(
   // Mismo criterio que el sync (product_stats): ID > variante > handle > sku >
   // título exacto > título loose. El drawer antes solo comparaba `title`
   // estricto y perdía ventas que la tabla sí cuenta (puntuación, tildes,
-  // renombres, líneas con product_title distinto).
-  const { data: prods } = await db
-    .from("products")
-    .select("id,title,handle,source_id,variants_json")
-    .eq("store_id", storeId)
-    .limit(5000);
+  // renombres, líneas con product_title distinto). CAP con flag honesto.
+  const PRODUCT_INDEX_CAP = 5000;
+  const [{ data: prods }, { count: prodsTotal }] = await Promise.all([
+    db
+      .from("products")
+      .select("id,title,handle,source_id,variants_json")
+      .eq("store_id", storeId)
+      .limit(PRODUCT_INDEX_CAP),
+    db.from("products").select("id", { count: "exact", head: true }).eq("store_id", storeId),
+  ]);
+  const productIndexTruncated = (prodsTotal ?? (prods ?? []).length) > (prods ?? []).length;
   const pidIndex = buildProductPidIndex(
     (prods ?? []) as Array<Record<string, unknown>>,
   );
@@ -125,19 +132,20 @@ export async function loadProductDetail(
   let totalMatchedQty = 0;
   let scanTruncated = false;
   for (let off = 0; ; off += MOVEMENT_PAGE) {
-    let oq = db
-      .from("orders")
-      .select("currency,items_json,placed_at,customer_id,status,payment_status,is_test")
-      .eq("store_id", storeId)
-      .order("placed_at", { ascending: false })
-      .order("id", { ascending: true })
-      .range(off, off + MOVEMENT_PAGE - 1);
-    if (scope?.market) oq = oq.or(`market_id.eq.${scope.market.id},country.is.null`);
+    let oq = applyScopeFilter(
+      db
+        .from("orders")
+        .select("currency,items_json,placed_at,customer_id,country,status,payment_status,is_test")
+        .eq("store_id", storeId)
+        .order("placed_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(off, off + MOVEMENT_PAGE - 1),
+      scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
+    );
     const { data, error } = await oq;
     if (error) throw new Error(`Orders read: ${error.message}`);
     const orows = (data ?? []) as Array<Record<string, unknown>>;
     for (const o of orows) {
-      scanned += 1;
       if (!isRealDbOrder({
         status: typeof o.status === "string" ? o.status : null,
         payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
@@ -145,6 +153,9 @@ export async function loadProductDetail(
       })) continue;
       const cur = (o.currency as string | null) ?? null;
       if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency) continue;
+      // scanned = órdenes reales en la moneda/scope de la vista (issue #29):
+      // antes contaba basura (test/canceladas/otra moneda) e inflaba el N.
+      scanned += 1;
       const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
       let qty = 0;
       let revenue = 0;
@@ -182,7 +193,8 @@ export async function loadProductDetail(
         }
       }
       // La lista trae TODOS los movimientos de lo escaneado (la UI los pagina
-      // de 20 en 20). El enriquecimiento de metadata sí va topado a 40 líneas.
+      // de 20 en 20). Se colectan todas las líneas para enriquecer (1 sola
+      // query a item_content); sin tope absoluto para no dejar nulls falsos.
       if (qty > 0) {
         const oi = movements.length;
         movements.push({
@@ -194,7 +206,6 @@ export async function loadProductDetail(
           meta: null,
         });
         for (const m of matched) {
-          if (metaLines.length >= META_LINES_CAP) break;
           metaLines.push({ ...m, oi });
         }
       }
@@ -245,12 +256,22 @@ export async function loadProductDetail(
     for (const [oi, list] of byOi) {
       const mv = movements[oi];
       if (!mv) continue;
-      let contiene: string | null = null;
-      let categoria: string | null = null;
+      const seenC = new Set<string>();
+      const seenK = new Set<string>();
+      const partesC: string[] = [];
+      const partesK: string[] = [];
       for (const e of list) {
-        if (!contiene && e.contiene) contiene = e.contiene;
-        if (!categoria && e.categoria) categoria = e.categoria;
+        if (e.contiene && !seenC.has(e.contiene)) {
+          seenC.add(e.contiene);
+          partesC.push(e.contiene);
+        }
+        if (e.categoria && !seenK.has(e.categoria)) {
+          seenK.add(e.categoria);
+          partesK.push(e.categoria);
+        }
       }
+      const contiene = partesC.length > 0 ? partesC.join(" | ").slice(0, 500) : null;
+      const categoria = partesK.length > 0 ? partesK.join(" | ").slice(0, 200) : null;
       mv.meta = contiene || categoria ? { contiene, categoria } : null;
     }
   }
@@ -285,6 +306,7 @@ export async function loadProductDetail(
       totalMatchedQty,
       scannedOrders: scanned,
       scanTruncated,
+      productIndexTruncated,
     },
   };
 }

@@ -5,7 +5,7 @@
 // mediana y ticket p50/p80 de orders reales, patrones de repite.
 import { getSupabase } from "@/lib/supabase";
 import { isRealDbOrder } from "@/lib/medusa";
-import { normProductTitle } from "@/lib/product-stats";
+import { normProductTitleLoose } from "@/lib/product-stats";
 
 export interface BrainTopProducto {
   title: string;
@@ -195,7 +195,8 @@ export async function computeTenantBrain(storeId: string): Promise<TenantBrain> 
       const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
       const cid = typeof o.customer_id === "string" ? o.customer_id : "";
       for (const it of items) {
-        const title = normProductTitle(String(it.title ?? ""));
+        // Agrupación loose canónica (issue #29): "cdra." ≙ "cdra", sin tildes.
+        const title = normProductTitleLoose(String(it.title ?? "") || String(it.product_title ?? ""));
         if (!title || title === "—") continue;
         if (cid) {
           let s = titleBuyers.get(title);

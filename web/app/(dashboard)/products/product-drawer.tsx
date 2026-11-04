@@ -183,6 +183,7 @@ function MovimientosTab({ detail, summary }: { detail: ProductDetailDTO | null; 
   const matchedTotal = detail.totalMatchedMovements ?? rows.length;
   const matchedQty = detail.totalMatchedQty ?? visibleQty;
   const scanTruncated = detail.scanTruncated ?? false;
+  const productIndexTruncated = (detail as { productIndexTruncated?: boolean }).productIndexTruncated ?? false;
   const searching = rows.length !== detail.movements.length;
   return (
     <div className="flex flex-col gap-3">
@@ -191,6 +192,7 @@ function MovimientosTab({ detail, summary }: { detail: ProductDetailDTO | null; 
         ({formatNumber(detail.scannedOrders ?? 0)} órdenes) · Suma: {formatNumber(matchedQty)}
         {" "}· Total histórico (tabla): {formatNumber(summary.qty_all)}
         {scanTruncated ? " · escaneo topado (CAP 3k): hay más fuera de lo escaneado" : ""}
+        {productIndexTruncated ? " · catálogo topado (índice 5k): el match por ID puede estar parcial" : ""}
         {searching ? ` · Viendo ${formatNumber(rows.length)} filtrados (suman ${formatNumber(visibleQty)})` : ""}.
       </p>
       <DrawerSearch value={query} onChange={setQuery} placeholder="Buscar en movimientos…" />

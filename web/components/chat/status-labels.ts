@@ -9,7 +9,7 @@ const TOOL_STATUS: Record<string, string> = {
   start_dispatcher_run: "Mensajero enviando lo aprobado…",
   start_analyst_run: "Analista midiendo recupero…",
   start_prospect_run: "Prospector buscando leads…",
-  list_actions: "Revisando acciones pendientes…",
+  list_actions: "Revisando acciones…",
   list_leads: "Buscando leads…",
   filter_customers: "Filtrando customers…",
   find_customer: "Buscando al customer…",

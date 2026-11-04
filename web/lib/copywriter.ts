@@ -217,6 +217,7 @@ async function buildSystem(storeId: string): Promise<{
   catalog: CatalogType | null;
   brain: import("@/lib/brain").TenantBrain | null;
   inactiveNorm: Set<string>;
+  inactiveLoose: Set<string>;
 }> {
   const [brainNs, profile] = await Promise.all([
     import("@/lib/brain").catch(() => null),
@@ -232,8 +233,9 @@ async function buildSystem(storeId: string): Promise<{
   const vertical = (profile?.verticalDetected ?? "").trim().slice(0, 120) || null;
   const topActivos = (brain?.topProductos ?? []).slice(0, 3).map((p) => p.title).filter(Boolean);
   let inactiveNorm = new Set<string>();
+  let inactiveLoose = new Set<string>();
   try {
-    const { normProductTitle } = await import("@/lib/product-stats");
+    const { normProductTitle, normProductTitleLoose } = await import("@/lib/product-stats");
     const { data } = await getSupabase()
       .from("products")
       .select("title")
@@ -243,9 +245,12 @@ async function buildSystem(storeId: string): Promise<{
     for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
       const t = normProductTitle(String(r.title ?? ""));
       if (t) inactiveNorm.add(t);
+      const tl = normProductTitleLoose(String(r.title ?? ""));
+      if (tl) inactiveLoose.add(tl);
     }
   } catch {
     inactiveNorm = new Set<string>();
+    inactiveLoose = new Set<string>();
   }
   const brainLine = brain
     ? `Activos que sí se pueden proponer (top ventas activas): ${topActivos.length > 0 ? topActivos.join(" · ") : "sin top"}.`
@@ -259,6 +264,7 @@ async function buildSystem(storeId: string): Promise<{
     catalog: profile?.catalogType ?? null,
     brain,
     inactiveNorm,
+    inactiveLoose,
   };
 }
 
@@ -276,6 +282,7 @@ async function composeDraftCopy(
     forceChannel?: "email" | "whatsapp" | null;
     brain?: import("@/lib/brain").TenantBrain | null;
     inactiveNorm?: Set<string>;
+    inactiveLoose?: Set<string>;
   },
 ): Promise<{
   channel: string;
@@ -311,11 +318,16 @@ async function composeDraftCopy(
   const itemKeys = await resolveItemKeys(storeId).catch(() => null);
   const enrichedAll = await enrichOrderItems(storeId, rawPerOrder.flat(), itemKeys ?? undefined);
   // Filtro de activos (#25.1): cero borradores de inactivos. Agnóstico: compara
-  // por título normalizado contra products.is_active=false (viene del stamp,
-  // 1 query por corrida, no por borrador).
-  const { normProductTitle: normTitle } = await import("@/lib/product-stats");
+  // por título normalizado (exacto + loose) contra products.is_active=false.
+  const { normProductTitle: normTitle, normProductTitleLoose: normTitleLoose } = await import("@/lib/product-stats");
   const inactive = stamp.inactiveNorm ?? new Set<string>();
-  const isInactiveTitle = (t: string) => inactive.has(normTitle(t));
+  const inactiveL = stamp.inactiveLoose ?? new Set<string>();
+  const isInactiveTitle = (t: string) => {
+    const n = normTitle(t);
+    if (n && inactive.has(n)) return true;
+    const nl = n ? normTitleLoose(t) : "";
+    return !!nl && inactiveL.has(nl);
+  };
   // Reconstruye por pedido ANTES de filtrar: enrichedAll va en orden plano
   // rawPerOrder.flat(). Si se filtra y luego se hace slice por longitudes
   // crudas, los ítems se atribuyen a fecha/orden equivocada (P1).
@@ -656,6 +668,7 @@ async function draftForSignal(
     forceChannel?: "email" | "whatsapp" | null;
     brain?: import("@/lib/brain").TenantBrain | null;
     inactiveNorm?: Set<string>;
+    inactiveLoose?: Set<string>;
   },
 ): Promise<{ channel: string; chars: number }> {
   // Issue #13: baja total (ambos canales) → ni se redacta. La baja parcial
@@ -732,7 +745,7 @@ export async function previewSignalCopy(
   }
   try {
     const db = getSupabase();
-    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm, inactiveLoose } = await buildSystem(storeId);
     const { channel, body, subject } = await composeDraftCopy(db, storeId, system, {
       id: found.signalId,
       kind: found.kind,
@@ -748,7 +761,7 @@ export async function previewSignalCopy(
       country: found.country,
       decision: found.decision ?? null,
       pRecompraH: found.pRecompraH ?? null,
-    }, { runId: null, catalog, forceChannel, brain, inactiveNorm });
+    }, { runId: null, catalog, forceChannel, brain, inactiveNorm, inactiveLoose });
     return { ok: true, channel, body, subject };
   } catch (e) {
     if (e instanceof OptOutSkip) {
@@ -797,7 +810,7 @@ export async function draftSingleSignal(
     return { ok: false, message: "Este cliente ya tiene un borrador en Review (otra señal)." };
   }
   try {
-    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm, inactiveLoose } = await buildSystem(storeId);
     const { channel } = await draftForSignal(db, storeId, system, {
       id: found.signalId,
       kind: found.kind,
@@ -813,7 +826,7 @@ export async function draftSingleSignal(
       country: found.country,
       decision: found.decision ?? null,
       pRecompraH: found.pRecompraH ?? null,
-    }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null, brain, inactiveNorm });
+    }, { runId: null, catalog, forceChannel: opts.forceChannel ?? null, brain, inactiveNorm, inactiveLoose });
     return { ok: true, message: `Borrador (${channel}) listo en Review.` };
   } catch (e) {
     if (e instanceof OptOutSkip) {
@@ -893,7 +906,7 @@ export async function runCopywriter(
     // Lenguaje + activos del tenant (2 queries por corrida, no por borrador):
     // sin esto el redactor trata todo como bodega (“llevaste un Rp Cajamarca”)
     // y puede proponer inactivos.
-    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm, inactiveLoose } = await buildSystem(storeId);
 
     // La puerta del juez puede omitir: se recorre el ranking hasta llenar el
     // límite (orden determinista + sensatez LLM). Omitidos ≠ fallidos.
@@ -905,7 +918,7 @@ export async function runCopywriter(
       if (draftedCustomer.has(s.customer_id)) continue;
       await step(null);
       try {
-        const { channel, chars } = await draftForSignal(db, storeId, system, s, { runId, catalog, brain, inactiveNorm });
+        const { channel, chars } = await draftForSignal(db, storeId, system, s, { runId, catalog, brain, inactiveNorm, inactiveLoose });
         drafted += 1;
         draftedCustomer.add(s.customer_id);
         log(`run ${runId} ${s.email} → ${channel} (${chars} chars)`);
@@ -1184,7 +1197,7 @@ export async function runStaleRefresh(
     }
 
     // 7. Un solo buildSystem por corrida (sin N+1, como runCopywriter).
-    const { system, catalog, brain, inactiveNorm } = await buildSystem(storeId);
+    const { system, catalog, brain, inactiveNorm, inactiveLoose } = await buildSystem(storeId);
     const { isFullyOptedOut, isOptedOut } = await import("@/lib/pre-send");
 
     const draftedCustomer = new Set<string>();
@@ -1223,6 +1236,7 @@ export async function runStaleRefresh(
           catalog,
           brain,
           inactiveNorm,
+          inactiveLoose,
         });
         if (await isOptedOut(storeId, s.customer_id, channel)) {
           throw new OptOutSkip(`baja del destinatario en ${channel} (opt-out)`);

@@ -2,6 +2,7 @@
 // Puro cálculo sobre filas `orders` (total_amount, currency, placed_at).
 // Regla de moneda: solo la moneda de la vista (tienda o market). El resto
 // se ignora aquí y se muestra aparte (nunca se suman PEN+MXN).
+import { normProductTitle, normProductTitleLoose } from "@/lib/product-stats";
 export interface FinanceOrder {
   total_amount: number;
   currency: string | null;
@@ -98,13 +99,18 @@ export interface ItemRanking {
 
 /**
  * Ranking de items por revenue (qty × unit_price) en la moneda de la vista.
- * Agrupa por título normalizado (minúsculas); títulos vacíos van a "Sin título".
+ * Agrupa por título normalizado canónico (normProductTitle: quita
+ * zero-width, minúsculas, colapsa espacios) con fallback loose
+ * (normProductTitleLoose: "cdra." ≙ "cdra"). Misma regla que
+ * product-stats/drawer/tools (issue #29): nunca toLowerCase crudo.
+ * Títulos vacíos van a "Sin título".
  */
 export function rankItems(
   orders: Array<Pick<FinanceOrder, "currency"> & { items_json: unknown }>,
   viewCurrency: string | null,
   limit = 5,
 ): ItemRanking {
+  // Import lazy para no romper tests puros (mismo patrón que tools).
   const byKey = new Map<string, RankedItem>();
   orders.forEach((o) => {
     if (!sameCurrency(o.currency, viewCurrency)) return;
@@ -113,7 +119,11 @@ export function rankItems(
     for (const raw of items) {
       const it = raw as Record<string, unknown>;
       const rawTitle = String(it.title ?? "").trim();
-      const key = rawTitle.toLowerCase() || "sin-titulo";
+      // Canónico loose (issue #29): "cdra." ≙ "cdra", tildes/zero-width fuera.
+      // El exacto se conserva en display; la llave es loose para no partir buckets.
+      const normLoose = normProductTitleLoose(rawTitle);
+      const normExact = normLoose ? "" : normProductTitle(rawTitle);
+      const key = normLoose || normExact || "sin-titulo";
       const qty = Number(it.quantity ?? 0) || 0;
       const price = Number(it.unit_price ?? 0) || 0;
       if (qty <= 0 && price <= 0) continue;
@@ -132,9 +142,9 @@ export function rankItems(
   });
   const all = [...byKey.values()].sort((a, b) => b.revenueMinor - a.revenueMinor);
   const top = all.slice(0, limit);
-  const topTitles = new Set(top.map((t) => t.title.toLowerCase()));
+  const topKeys = new Set(top.map((t) => normProductTitleLoose(t.title) || normProductTitle(t.title) || t.title.toLowerCase()));
   const bottom = all
-    .filter((r) => !topTitles.has(r.title.toLowerCase()))
+    .filter((r) => !topKeys.has(normProductTitleLoose(r.title) || normProductTitle(r.title) || r.title.toLowerCase()))
     .slice(-limit)
     .reverse();
   return { top, bottom };

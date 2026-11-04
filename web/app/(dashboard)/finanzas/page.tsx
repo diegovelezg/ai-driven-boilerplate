@@ -146,13 +146,19 @@ export default async function FinanzasPage({
     }
     const orows: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
-      let oq = db
-        .from("orders")
-        .select("total_amount,currency,placed_at,items_json,customer_id")
-        .eq("store_id", active.id)
-        .gte("placed_at", yearAgoIso)
-        .order("placed_at", { ascending: false });
-      if (scope.market) oq = oq.or(`market_id.eq.${scope.market.id},country.is.null`);
+      // Mismo universo que get_store_summary/tools (issue #29): scope por
+      // país/customerIds vía applyScopeFilter (NULL-comodín), no por
+      // market_id manual (ese filtraba otro universo que revRows).
+      const oq = applyScopeFilter(
+        db
+          .from("orders")
+          .select("total_amount,currency,placed_at,items_json,customer_id,country")
+          .eq("store_id", active.id)
+          .gte("placed_at", yearAgoIso)
+          .order("placed_at", { ascending: false })
+          .order("id", { ascending: true }),
+        scope,
+      );
       const { data: opage, error: qErr } = await oq.range(off, off + 999);
       if (qErr) throw new Error(`orders: ${qErr.message}`);
       const rows = (opage ?? []) as Array<Record<string, unknown>>;

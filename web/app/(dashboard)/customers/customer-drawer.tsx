@@ -1250,6 +1250,8 @@ const CONTACT_STATUS_LABEL: Record<string, string> = {
   approved: "Aprobado, esperando envío",
   pending_review: "Borrador sin aprobar",
   rejected: "Rechazado",
+  contacted: "Contactado por mi cuenta",
+  discarded: "Descartado (rejected canónico)",
 };
 
 const CONTACT_STATUS_CLASS: Record<string, string> = {
@@ -1259,6 +1261,8 @@ const CONTACT_STATUS_CLASS: Record<string, string> = {
   pending_review:
     "border-transparent bg-amber-500/10 text-amber-600 dark:text-amber-400",
   rejected: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  contacted: "border-transparent bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  discarded: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
 /** Issue #14 B3: "contactar igual" en la ficha. Reabre la última señal

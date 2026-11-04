@@ -116,16 +116,20 @@ export async function runStrategist(
     // Hito 2 (#25.6): vip_care real = alto gasto + compra de top activo.
     // Sin product_stats (sin ventas) se conserva el criterio solo-gasto.
     let topActiveNorm = new Set<string>();
+    let topActiveLoose = new Set<string>();
     try {
       const { getTenantBrain } = await import("@/lib/brain");
-      const { normProductTitle } = await import("@/lib/product-stats");
+      const { normProductTitle, normProductTitleLoose } = await import("@/lib/product-stats");
       const brain = await getTenantBrain(storeId).catch(() => null);
       for (const t of (brain?.topProductos ?? []).slice(0, 3)) {
         const n = normProductTitle(t.title);
         if (n) topActiveNorm.add(n);
+        const nl = normProductTitleLoose(t.title);
+        if (nl) topActiveLoose.add(nl);
       }
     } catch {
       topActiveNorm = new Set<string>();
+      topActiveLoose = new Set<string>();
     }
     log(`run ${runId} start abiertas=${rows.length} limite=${limit} umbral_vip=${vipSpend} topActivos=${topActiveNorm.size}`);
     // Trazabilidad del ranking: si el top se discute, el log dice quién era.
@@ -142,8 +146,10 @@ export async function runStrategist(
     const hasTopByCust = new Map<string, boolean>();
     if (topActiveNorm.size > 0 && batch.length > 0) {
       try {
-        const { normProductTitle: normT } = await import("@/lib/product-stats");
-        const ids = [...new Set(batch.map((b) => b.customer_id))];
+      const { normProductTitle: normT, normProductTitleLoose: normTL } = await import("@/lib/product-stats");
+      const ids = [...new Set(batch.map((b) => b.customer_id))];
+      // Match canónico (issue #29): title + product_title, exacto + loose
+      // (antes solo title exacto → vip_care falso-negativo donde stats resolvió por ID/loose).
         for (let k = 0; k < ids.length; k += 200) {
           const chunk = ids.slice(k, k + 200);
           for (let off = 0; ; off += 1000) {
@@ -161,7 +167,16 @@ export async function runStrategist(
               if (!cid || hasTopByCust.get(cid) === true) continue;
               const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
               for (const it of items) {
-                if (topActiveNorm.has(normT(String(it.title ?? "")))) {
+                const cands = [String(it.title ?? ""), String(it.product_title ?? "")];
+                let hit = false;
+                for (const c of cands) {
+                  if (!c) continue;
+                  const n = normT(c);
+                  if (n && topActiveNorm.has(n)) { hit = true; break; }
+                  const nl = n ? normTL(c) : "";
+                  if (nl && topActiveLoose.has(nl)) { hit = true; break; }
+                }
+                if (hit) {
                   hasTopByCust.set(cid, true);
                   break;
                 }

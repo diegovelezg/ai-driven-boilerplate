@@ -9,7 +9,8 @@ const SUGGESTED = [
   "¿Quiénes compran más este ítem?",
   "¿Cuándo se vende más este ítem?",
   "¿Qué metadata traen sus compras?",
-  "¿Qué harías para vender más de este ítem?",
+  "Resúmeme la ficha de este ítem",
+  "Compara este ítem con el top que más vende",
 ];
 
 export function ProductChat({
