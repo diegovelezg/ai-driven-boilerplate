@@ -29,8 +29,9 @@ function sse(text: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 }
 
-/** Tools cuyos resultados son listas accionables: se reenvían al cliente como
- *  artefacto para pintarlos en el panel lateral (canvas), no en el chat.
+/** Tools cuyos resultados filtran la vista derecha: se reenvían al cliente como
+ *  artefacto (list_actions/list_leads → Review filtrado; filter_customers →
+ *  tabla de Customers filtrada), no se repiten en el chat.
  *  El resumen (get_store_summary) NO es artefacto: se responde en el chat.
  *  list_signals tampoco: las señales son insumo interno del loop; al merchant
  *  se le responde con decisiones del motor (filter_customers), en el chat. */
@@ -172,7 +173,7 @@ export async function POST(req: Request) {
               continue;
             }
             // Resultado de tool de datos (role "user", autor = agente) →
-            // artefacto para el canvas. Arrays llegan como {results: [...]}.
+            // artefacto que filtra la vista derecha. Arrays llegan como {results: [...]}.
             const fr = p.functionResponse;
             if (fr && ARTIFACT_TOOLS.includes(fr.name ?? "")) {
               const r = fr.response as { results?: unknown; result?: unknown; items?: unknown } | unknown[];
@@ -193,14 +194,17 @@ export async function POST(req: Request) {
           }
         }
         // Tras una escritura, el canvas quedaría con filas viejas: re-emite
-        // los pendientes con los últimos args de list_actions.
+        // los pendientes con los últimos args de list_actions (incluido offset).
         if (wroteActions) {
           try {
             const q = (callArgs["list_actions"] ?? {}) as {
               status?: string;
               limit?: number;
+              offset?: number;
               channel?: string;
             };
+            const n = q.limit ?? 10;
+            const off = q.offset ?? 0;
             let aq = getSupabase()
               .from("proposed_actions")
               .select("id,customer_id,channel,subject,body,status,created_at,customers(email,first_name,last_name)")
@@ -212,9 +216,9 @@ export async function POST(req: Request) {
               : null;
             const { data } = await applyScopeFilter(aq, scope).order("created_at", {
               ascending: false,
-            }).limit(q.limit ?? 10);
+            }).range(off, off + n - 1);
             log(`artifact list_actions refresh filas=${(data ?? []).length}`);
-            send(artifactSse("list_actions", data ?? [], { status: q.status ?? "pending_review", limit: q.limit ?? 10, channel: q.channel ?? null }));
+            send(artifactSse("list_actions", data ?? [], { status: q.status ?? "pending_review", limit: n, offset: off, channel: q.channel ?? null }));
           } catch (e) {
             log(`refresh tras escritura falló (${e instanceof Error ? e.message : "?"})`);
           }

@@ -142,9 +142,13 @@ export function rankItems(
   });
   const all = [...byKey.values()].sort((a, b) => b.revenueMinor - a.revenueMinor);
   const top = all.slice(0, limit);
-  const topKeys = new Set(top.map((t) => normProductTitleLoose(t.title) || normProductTitle(t.title) || t.title.toLowerCase()));
+  // Canónico (issue #35): misma llave que el bucket; títulos vacíos van al
+  // bucket "sin-titulo", nunca toLowerCase crudo fuera de product-stats.
+  const keyOfTitle = (t: string): string =>
+    normProductTitleLoose(t) || normProductTitle(t) || "sin-titulo";
+  const topKeys = new Set(top.map((t) => keyOfTitle(t.title)));
   const bottom = all
-    .filter((r) => !topKeys.has(normProductTitleLoose(r.title) || normProductTitle(r.title) || r.title.toLowerCase()))
+    .filter((r) => !topKeys.has(keyOfTitle(r.title)))
     .slice(-limit)
     .reverse();
   return { top, bottom };

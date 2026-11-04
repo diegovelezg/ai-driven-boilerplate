@@ -195,9 +195,15 @@ export async function computeTenantBrain(storeId: string): Promise<TenantBrain> 
       const items = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
       const cid = typeof o.customer_id === "string" ? o.customer_id : "";
       for (const it of items) {
-        // Agrupación loose canónica (issue #29): "cdra." ≙ "cdra", sin tildes.
-        const title = normProductTitleLoose(String(it.title ?? "") || String(it.product_title ?? ""));
-        if (!title || title === "—") continue;
+        // Agrupación canónica (issue #35): product_title manda sobre title
+        // (mismo orden que resolveProductPid), loose en ambos; sin índice de
+        // IDs aquí (estadística del brain, no match de catálogo). Títulos
+        // vacíos/puntuación caen fuera, como el bucket "sin-titulo" de stats.
+        const rawPt = String(it.product_title ?? "").trim();
+        const rawT = String(it.title ?? "").trim();
+        if ((!rawPt || rawPt === "—") && (!rawT || rawT === "—")) continue;
+        const title = normProductTitleLoose(rawPt) || normProductTitleLoose(rawT);
+        if (!title) continue;
         if (cid) {
           let s = titleBuyers.get(title);
           if (!s) { s = new Set(); titleBuyers.set(title, s); }

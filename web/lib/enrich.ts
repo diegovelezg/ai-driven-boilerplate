@@ -13,6 +13,7 @@ import { searchSearxng, scrapable } from "@/lib/retrieval";
 import { mapPool } from "@/lib/parallel";
 import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 import { formatNumber } from "@/lib/format";
+import { normProductTitle } from "@/lib/product-stats";
 
 const UA = "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)";
 // Sitios legítimos responden en <3s (medido); colgados = muertos. 8s acota el
@@ -128,7 +129,7 @@ async function rescueDomain(
   const Label = label.length > 0 ? label[0].toUpperCase() + label.slice(1) : label;
   const country = TLD_COUNTRY[tld];
   const queries = [...new Set([users.company, country ? `${Label} ${country}` : null, Label].filter((q): q is string => !!q && q.trim().length > 0))].slice(0, 3);
-  const coLower = (users.company ?? "").toLowerCase();
+  const coNorm = normProductTitle(users.company ?? "");
   for (const q of queries) {
     log(`${domain} capa=rescue query="${q}"`);
     let hits: Array<{ url: string }>;
@@ -149,11 +150,13 @@ async function rescueDomain(
         continue;
       }
       const host = hostOf(r.url || url);
-      const titleLower = r.title.toLowerCase();
+      // Identidad con normalización canónica (issue #35): sin toLowerCase
+      // suelto sobre títulos; misma semántica case-insensitive por substring.
+      const titleNorm = normProductTitle(r.title);
       const same =
         host.includes(label) ||
-        titleLower.includes(label) ||
-        (coLower !== "" && (titleLower.includes(coLower) || r.text.toLowerCase().includes(coLower)));
+        titleNorm.includes(label) ||
+        (coNorm !== "" && (titleNorm.includes(coNorm) || normProductTitle(r.text).includes(coNorm)));
       if (!same) {
         log(`${domain} capa=rescue candidato=${url} veredicto=descartado-identidad`);
         continue;

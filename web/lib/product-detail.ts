@@ -6,11 +6,18 @@ import { isRealDbOrder } from "@/lib/medusa";
 import {
   buildProductPidIndex,
   normProductTitle,
+  normProductTitleLoose,
   resolveProductPid,
 } from "@/lib/product-stats";
 import { EMPTY_KEYS, resolveItemKeys } from "@/lib/metadata-map";
 import { enrichOrderItems } from "@/lib/item-context";
-import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
+import {
+  applyScopeFilter,
+  displayMarket,
+  effectiveScopeFilter,
+  isLargeIdScope,
+  resolveMarketScope,
+} from "@/lib/markets";
 
 export interface ProductDetailStats {
   currency: string;
@@ -89,6 +96,7 @@ export async function loadProductDetail(
   const storeId = String(pr.store_id ?? "");
   const title = String(pr.title ?? "");
   const normTitle = normProductTitle(title);
+  const normTitleLoose = normProductTitleLoose(title);
 
   const scope = marketId
     ? await resolveMarketScope(storeId, marketId)
@@ -131,21 +139,38 @@ export async function loadProductDetail(
   let totalMatchedMovements = 0;
   let totalMatchedQty = 0;
   let scanTruncated = false;
+  // Scope grande por IDs (>200): sin .in(miles) en URL (revienta PostgREST);
+  // se escanea sin filtro SQL y se aplica el predicado en JS (misma semántica
+  // NULL-comodín que applyScopeFilter, cfr. get_product_movements en tools).
+  const largeScope = isLargeIdScope(
+    scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
+  );
+  const detailIdSet = largeScope
+    ? new Set((effectiveScopeFilter(scope ? { countries: scope.countries, customerIds: scope.customerIds } : null).ids ?? []) as string[])
+    : null;
   for (let off = 0; ; off += MOVEMENT_PAGE) {
-    let oq = applyScopeFilter(
-      db
-        .from("orders")
-        .select("currency,items_json,placed_at,customer_id,country,status,payment_status,is_test")
-        .eq("store_id", storeId)
-        .order("placed_at", { ascending: false })
-        .order("id", { ascending: true })
-        .range(off, off + MOVEMENT_PAGE - 1),
-      scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
-    );
+    const base = db
+      .from("orders")
+      .select("currency,items_json,placed_at,customer_id,country,status,payment_status,is_test")
+      .eq("store_id", storeId)
+      .order("placed_at", { ascending: false })
+      .order("id", { ascending: true })
+      .range(off, off + MOVEMENT_PAGE - 1);
+    const oq = largeScope
+      ? base
+      : applyScopeFilter(
+          base,
+          scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
+        );
     const { data, error } = await oq;
     if (error) throw new Error(`Orders read: ${error.message}`);
     const orows = (data ?? []) as Array<Record<string, unknown>>;
     for (const o of orows) {
+      if (largeScope && detailIdSet) {
+        const c = typeof o.country === "string" ? o.country : null;
+        const cid = typeof o.customer_id === "string" ? o.customer_id : "";
+        if (c !== null && !detailIdSet.has(cid)) continue;
+      }
       if (!isRealDbOrder({
         status: typeof o.status === "string" ? o.status : null,
         payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
@@ -163,11 +188,21 @@ export async function loadProductDetail(
       const matched: Array<{ title: string; quantity: number; metadata?: unknown }> = [];
       for (const it of items) {
         // Mismo match que computeProductStats; si el catálogo truncó el índice
-        // (5000) y este producto quedó fuera, fallback al título estricto.
+        // (5000) y este producto quedó fuera, fallback honesto a título:
+        // exacto + loose sobre title y product_title (canónico product-stats).
         const resolved = resolveProductPid(pidIndex, it);
+        const normItTitle = normProductTitle(String(it.title ?? ""));
+        const normItProductTitle = normProductTitle(String(it.product_title ?? ""));
+        const looseItTitle = normProductTitleLoose(String(it.title ?? ""));
+        const looseItProductTitle = normProductTitleLoose(String(it.product_title ?? ""));
         const isMine = resolved
           ? resolved === productId
-          : !indexed && normProductTitle(String(it.title ?? "")) === normTitle;
+          : !indexed &&
+            (normTitle !== "" || normTitleLoose !== "") &&
+            (normItTitle === normTitle ||
+              normItProductTitle === normTitle ||
+              (normTitleLoose !== "" &&
+                (looseItTitle === normTitleLoose || looseItProductTitle === normTitleLoose)));
         if (!isMine) continue;
         const q = Number(it.quantity ?? 0);
         if (!(q > 0)) continue;

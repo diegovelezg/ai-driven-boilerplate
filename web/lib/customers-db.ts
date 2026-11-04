@@ -22,6 +22,7 @@ import {
   applyScopeFilter,
   effectiveScopeFilter,
   isEmptyScope,
+  isLargeIdScope,
   type MarketScope,
 } from "@/lib/markets";
 
@@ -153,6 +154,10 @@ export function toEditableCustomer(
 export interface DbCustomersPage {
   rows: EditableCustomer[];
   totalCount: number;
+  /** Count exacto falló (PostgREST devolvió null): totalCount es 0 provisional, no censo. */
+  countFailed?: boolean;
+  /** La foto de predicciones truncó (CAP): el conteo con filtros del motor es parcial. */
+  predictionsTruncated?: boolean;
 }
 
 export type CustomersSortKey = "email" | "name" | "phone" | "company" | "orders" | "total" | "valor";
@@ -359,10 +364,12 @@ function effectiveCustomerType(r: Record<string, unknown>): string {
  *  (este módulo arrastra `server-only` vía sync). */
 export type { CustomerPredictionLite } from "@/lib/customer-predictions";
 
-/** Última predicción por cliente (una foto; pagina completo hasta CAP). */
-export async function getPredictionsMap(
+/** Última predicción por cliente (una foto; pagina completo hasta CAP).
+ *  Devuelve también si la foto truncó (CAP ~31k filas): los conteos sobre el
+ *  mapa son parciales y el caller debe declararlo (issue #33). */
+export async function getPredictionsPhoto(
   storeId: string,
-): Promise<Map<string, CustomerPredictionLite>> {
+): Promise<{ map: Map<string, CustomerPredictionLite>; truncated: boolean }> {
   const db = getSupabase();
   const map = new Map<string, CustomerPredictionLite>();
   for (let off = 0; ; off += 1000) {
@@ -377,7 +384,7 @@ export async function getPredictionsMap(
       .order("model_version", { ascending: false })
       .order("id", { ascending: true })
       .range(off, off + 999);
-    if (error) return map;
+    if (error) return { map, truncated: true };
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     for (const r of rows) {
       const cid = String(r.customer_id ?? "");
@@ -404,10 +411,16 @@ export async function getPredictionsMap(
         elegibilidad: (r.elegibilidad as string | null) ?? null,
       });
     }
-    if (rows.length < 1000) break;
-    if (off >= 30000) break;
-    }
-  return map;
+    if (rows.length < 1000) return { map, truncated: false };
+    if (off >= 30000) return { map, truncated: true };
+  }
+}
+
+/** Compat: solo el mapa (los resúmenes display no declaran truncado). */
+export async function getPredictionsMap(
+  storeId: string,
+): Promise<Map<string, CustomerPredictionLite>> {
+  return (await getPredictionsPhoto(storeId)).map;
 }
 
 /** ¿La predicción calza con el filtro `decision`? Ver `lib/customer-predictions`. */
@@ -648,7 +661,10 @@ export async function queryStoreCustomers(
 
   // Con filtros de decisión o sort por valor se resuelve en JS sobre la
   // población completa (misma cohorte de mercado que el resto de la vista).
-  if (hasCustomerFilters(filters) || sort.key === "valor") {
+  // Scope grande por IDs (>200) también va por aquí: el path SQL con un solo
+  // `.or(id.in(miles),country.is.null)` revienta la URL (issue #32); el
+  // predicado inMarket en JS tiene la misma semántica NULL-comodín.
+  if (hasCustomerFilters(filters) || sort.key === "valor" || isLargeIdScope(market)) {
     const all: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
       const { data, error } = await db
@@ -674,7 +690,10 @@ export async function queryStoreCustomers(
       filters.elegibilidad !== null ||
       filters.decil !== null ||
       sort.key === "valor";
-    const predMap = needPred ? await getPredictionsMap(storeId).catch(() => new Map()) : new Map<string, CustomerPredictionLite>();
+    const predPhoto = needPred
+      ? await getPredictionsPhoto(storeId).catch(() => ({ map: new Map(), truncated: false }))
+      : { map: new Map<string, CustomerPredictionLite>(), truncated: false };
+    const predMap: Map<string, CustomerPredictionLite> = predPhoto.map;
     for (const [domain, firm] of firms) {
       if (firm.company) enriched.set(domain, firm.company);
     }
@@ -802,7 +821,11 @@ export async function queryStoreCustomers(
           );
       }
     });
-    return { rows: matched.slice(from, from + pageSize), totalCount: matched.length };
+    return {
+      rows: matched.slice(from, from + pageSize),
+      totalCount: matched.length,
+      predictionsTruncated: predPhoto.truncated || undefined,
+    };
   }
 
   // "Empresa" se ordena por el nombre EFECTIVO (manual > Medusa > enriquecido),
@@ -906,5 +929,8 @@ export async function queryStoreCustomers(
   return {
     rows: raw.map((r) => toEditableCustomer(r, enrichedByDomain)),
     totalCount: count ?? 0,
+    // Honesto (issue #33): count null no es censo 0; el caller decide (la tool
+    // devuelve null + nota, la vista pagina con el 0 provisional).
+    countFailed: count == null,
   };
 }

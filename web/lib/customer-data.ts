@@ -81,7 +81,7 @@ export async function loadCustomerOrdersAndRfm(
   dbId: string,
   orderLimit = 20,
   offset = 0,
-): Promise<(CustomerOrdersAndRfm & { totalOrders: number; truncated: boolean }) | null> {
+): Promise<(CustomerOrdersAndRfm & { totalOrders: number; truncated: boolean; orders_note: string }) | null> {
   const db = getSupabase();
   const { data: customer, error: custErr } = await db
     .from("customers")
@@ -156,6 +156,12 @@ export async function loadCustomerOrdersAndRfm(
     orders: orderRows,
     totalOrders: frequency,
     truncated: frequency > orderRows.length + offset,
+    // Deriva documentada (issue #33): el offset SQL corre sobre filas crudas
+    // (incluye test/canceladas filtradas después), así que páginas con offset
+    // alto pueden traer menos filas reales de las pedidas; totalOrders es la
+    // columna desnormalizada orders_count, no un count exacto.
+    orders_note:
+      "El offset pagina filas crudas (test/canceladas se filtran después): con offset alto puede haber huecos. totalOrders = orders_count (no count exacto).",
     summary: {
       recencyDays,
       frequency,

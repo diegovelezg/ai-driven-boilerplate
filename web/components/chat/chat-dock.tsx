@@ -101,14 +101,15 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 }
 
 /** Raíz del dock: chat fijo a la izquierda (420px) + página a la derecha.
- *  Pedir ver datos NO crea tarjetas paralelas: navega la derecha al Review
- *  real filtrado a esos IDs (misma página, mismos botones). */
+ *  Pedir ver datos NO crea tarjetas paralelas: filtra la vista real a la
+ *  derecha (Review para actions/leads, Customers para filter_customers). */
 function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  /** Artefacto de lista → la derecha muestra el Review filtrado.
-   *  Misma ruta: replace (sin spam de historial). Otra ruta: push.
+  /** Artefacto → la derecha muestra la vista real filtrada.
+   *  list_actions/list_leads: Review por IDs (misma ruta: replace; otra: push).
+   *  filter_customers: tabla de Customers con los filtros del motor.
    *  Lo último pedido manda (reemplaza filtros anteriores del chat). */
   const handleArtifact = useCallback(
     (artifact: ChatArtifact | null) => {
@@ -139,6 +140,10 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
             ritmo?: string | null;
             customer_type?: string | null;
             customerType?: string | null;
+            ventana?: string | null;
+            banda?: string | null;
+            elegibilidad?: string | null;
+            decil?: string | null;
           };
         };
         // `data.filter` es el eco de la tool; `query` son los args del
@@ -150,6 +155,10 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
           ritmo?: string | null;
           customer_type?: string | null;
           customerType?: string | null;
+          ventana?: string | null;
+          banda?: string | null;
+          elegibilidad?: string | null;
+          decil?: string | null;
         };
         const f = { ...qargs, ...(d.filter ?? {}) };
         const tipo = f.customer_type ?? f.customerType ?? null;
@@ -160,6 +169,10 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
         if (f.vista) qs.set("vista", f.vista);
         if (f.ritmo) qs.set("ritmo", f.ritmo);
         if (tipo) qs.set("tipo", tipo);
+        if (f.ventana) qs.set("ventana", f.ventana);
+        if (f.banda) qs.set("banda", f.banda);
+        if (f.elegibilidad) qs.set("elegibilidad", f.elegibilidad);
+        if (f.decil) qs.set("decil", f.decil);
         const href = `/customers?${qs.toString()}`;
         if (pathname === "/customers") router.replace(href);
         else router.push(href);

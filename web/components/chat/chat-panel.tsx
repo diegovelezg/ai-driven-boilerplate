@@ -42,7 +42,7 @@ function pickRandomSuggestions(pool: string[], n = 3): string[] {
 /** Panel de chat store-scoped: lo usa el dock del dashboard.
  *  Chat único sin selector: el orquestador decide qué especialista responde.
  *  El dato estructurado siempre se eleva vía `onArtifact`: el host decide
- *  (navegar al Review filtrado). Este panel nunca pinta datos. */
+ *  (navegar a la vista filtrada: Review o Customers). Este panel nunca pinta datos. */
 export function ChatPanel({
   storeId,
   marketId = null,
