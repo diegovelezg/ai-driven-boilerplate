@@ -1,11 +1,11 @@
 // Gate de esquema en runtime (deuda 2026-10-21: la web se desplegó 9
-// migraciones por delante de la DB prod y el sync falló con
+// migraciones por delante de la DB prod y falló con
 // "Could not find the table 'public.products' in the schema cache").
 // Sonda por PostgREST (no por information_schema, que rest no expone):
 // si la tabla/columna no existe O el schema-cache de rest está viejo, el
 // error es el mismo que ve el código real. No crea ni migra nada: solo
 // diagnostica. La fuente de verdad sigue en supabase/migrations/*.sql y
-// el que aplica es scripts/retain-apply.sh (ver docs/coolify.md §4).
+// el que aplica es scripts/db-apply.sh (ver docs/coolify.md §4).
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface SchemaGap {
@@ -44,7 +44,7 @@ export function schemaGapMessage(gaps: SchemaGap[]): string {
   return (
     `DB detrás del código: falta ${names}. ` +
     `Aplicar supabase/migrations en el contenedor supabase-db-* ` +
-    `(DB_CONTAINER=... ./scripts/retain-apply.sh schema) y reiniciar la sub-app rest ` +
+    `(DB_CONTAINER=... ./scripts/db-apply.sh schema) y reiniciar la sub-app rest ` +
     `(schema-cache de PostgREST). Ver docs/coolify.md §4.`
   );
 }

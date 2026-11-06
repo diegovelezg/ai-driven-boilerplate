@@ -192,15 +192,15 @@ Lima, offset fijo −5). Solo para dev/local; en Coolify no se setea
 La plantilla no corre `supabase/migrations/*.sql`: se aplican por stdin contra
 el contenedor `supabase-db-<uuid>` (`docker exec -i -u postgres … psql`,
 peer-auth, sin password y sin copiar archivos al VPS). Script versionado:
-`scripts/retain-apply.sh` (testeado con stub de `docker`; ver su cabecera):
+`scripts/db-apply.sh` (testeado con stub de `docker`; ver su cabecera):
 
 ```bash
 export SSHPASS='<root VPS>' VPS_IP=46.225.73.40
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh status     # solo lectura: pendientes local vs VPS (exit 1 si hay)
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh schema     # todas las migraciones en orden + tracking public.schema_migrations
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh relations  # solo lectura: tablas/columnas que el código asume
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh data <public-data.sql> [auth.sql]  # data-only (sin tracking)
-DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify     # esperado: stores=1 customers=953 orders=699 merchant_users=1 auth.users=1 auth.identities=1
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh status     # solo lectura: pendientes local vs VPS (exit 1 si hay)
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh schema     # todas las migraciones en orden + tracking public.schema_migrations
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh relations  # solo lectura: tablas/columnas que el código asume
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh data <public-data.sql> [auth.sql]  # data-only (sin tracking)
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh verify     # esperado: stores=1 customers=953 orders=699 merchant_users=1 auth.users=1 auth.identities=1
 ```
 
 Tras `schema` con DDL (tablas/columnas nuevas): el propio script ya envía
@@ -225,7 +225,7 @@ Usa tu `DB_CONTAINER`/`VPS_IP` de siempre (los mismos del modo manual, nada
 nuevo que guardar). Si el push no toca `supabase/migrations/`, no hace nada.
 Nota: corre al hacer **push**, no en cada commit — es cuando el código sale
 de tu máquina. Si fusionas desde la web de GitHub (ahí no hay hook), corre
-`retain-apply.sh schema` a mano esa vez.
+`db-apply.sh schema` a mano esa vez.
 
 Notas:
 

@@ -30,4 +30,4 @@ echo "pre-push: el push incluye migraciones → aplicando al VPS antes..."
 export DB_CONTAINER VPS_IP SSHPASS="${SSHPASS:-}"
 # $0 puede ser el symlink en .git/hooks: resolver a scripts/hooks/pre-push.
 HOOK="$(readlink -f "$0")"
-exec "$(dirname "$HOOK")/../retain-apply.sh" schema
+exec "$(dirname "$HOOK")/../db-apply.sh" schema

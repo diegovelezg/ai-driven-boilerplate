@@ -1,16 +1,16 @@
-// Verticales raíz de la Shopify Standard Product Taxonomy (MIT, snapshot es).
+// Verticales raíz de taxonomía estándar (MIT, snapshot es).
 // La taxonomía es la referencia; el vertical libre del agente es la verdad.
 // El mapeo agente → taxonomy_id lo hace el propio agente con juicio (nullable).
-import snapshot from "@/data/shopify-verticals.es.json";
+import snapshot from "@/data/taxonomy-verticals.es.json";
 
-export interface ShopifyVertical {
+export interface TaxonomyVertical {
   taxonomy_id: string;
   prefix: string;
   name: string;
 }
 
-export const VERTICALS: ShopifyVertical[] = (
-  snapshot as { verticals: ShopifyVertical[] }
+export const VERTICALS: TaxonomyVertical[] = (
+  snapshot as { verticals: TaxonomyVertical[] }
 ).verticals;
 
 const VALID_IDS = new Set(VERTICALS.map((v) => v.taxonomy_id));
@@ -28,5 +28,5 @@ export function verticalName(id: string | null): string | null {
 /** Fragmento del prompt: las 26 raíces entre las que el agente puede mapear (o null). */
 export function taxonomyPromptFragment(): string {
   const lines = VERTICALS.map((v) => `- ${v.taxonomy_id} :: ${v.name}`).join("\n");
-  return `Verticales Shopify (elige el taxonomy_id que mejor encaje con tu "vertical" o null si ninguno encaja — null honesto antes que forzado):\n${lines}`;
+  return `Verticales (elige el taxonomy_id que mejor encaje con tu "vertical" o null si ninguno encaja — null honesto antes que forzado):\n${lines}`;
 }
