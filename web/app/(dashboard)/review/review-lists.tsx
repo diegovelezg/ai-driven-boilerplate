@@ -305,8 +305,6 @@ export function ReviewLists({
   dismissedSignals = [],
   visible,
   runningKinds = [],
-  /** ?market= activo: el botón prospecta segmentado a ese mercado. */
-  marketId = null,
   customerDomains = null,
   shopCurrency = null,
   filtered = false,
@@ -339,8 +337,6 @@ export function ReviewLists({
   dismissedSignals?: SignalRow[];
   visible: { actions: boolean; leads: boolean; signals: boolean };
   runningKinds?: string[];
-  /** ?market= activo: el botón prospecta segmentado a ese mercado. */
-  marketId?: string | null;
   /** null = sin verificar (canvas): se omite el check de duplicado. */
   customerDomains?: string[] | null;
   shopCurrency?: string | null;
@@ -878,7 +874,7 @@ export function ReviewLists({
             </FilterToggleButton>
             {prospectEligible ? (
               <span className="ml-auto">
-                <ProspectButton onProspect={() => triggerProspectAction(marketId ?? null)} />
+                <ProspectButton onProspect={() => triggerProspectAction()} />
               </span>
             ) : undefined}
           </div>

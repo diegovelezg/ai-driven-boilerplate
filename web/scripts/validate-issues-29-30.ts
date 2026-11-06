@@ -5,7 +5,7 @@
 // misma lógica que drawer/tools. Corre con: npx tsx scripts/validate-issues-29-30.ts
 import { rankItems } from "@/lib/finance";
 import { buildProductPidIndex, resolveProductPid, normProductTitle, normProductTitleLoose } from "@/lib/product-stats";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

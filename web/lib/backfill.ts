@@ -1,6 +1,6 @@
 // Backfill de onboarding: fotos a hoy-T + recupero al inbox.
 // Se ejecuta UNA vez por tenant (needsBackfill: sin foto previa) desde el
-// morning pipeline, tras el primer sync con historia. Re-correr es inocuo:
+// morning pipeline, con historia. Re-correr es inocuo:
 // las fotos son upsert idempotente y el recupero omite lo gestionado.
 import { getSupabase } from "@/lib/supabase";
 import { isRealDbOrder } from "@/lib/canonical";
@@ -28,7 +28,7 @@ async function readAll(db: any, table: string, select: string, apply: (q: any) =
   return out;
 }
 
-/** true si el tenant nunca tuvo foto (onboarding: primer sync con historia). */
+/** true si el tenant nunca tuvo foto (onboarding: primera carga con historia). */
 export async function needsBackfill(storeId: string): Promise<boolean> {
   const db = getSupabase();
   const { data, error } = await db

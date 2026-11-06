@@ -67,7 +67,7 @@ export async function getProfileSignals(storeId: string): Promise<(ProfileSignal
 function toProfile(storeId: string, r: Record<string, unknown>): StoreProfile {
   return {
     storeId,
-    businessModel: (r.business_model as BusinessModel) ?? "b2c",
+    businessModel: (r.business_model as BusinessModel) ?? "b2b",
     verticalDetected: (r.vertical_detected as string) ?? null,
     taxonomyId: (r.taxonomy_id as string) ?? null,
     buyerType: (r.buyer_type as string) ?? null,
@@ -75,7 +75,7 @@ function toProfile(storeId: string, r: Record<string, unknown>): StoreProfile {
     catalogType: (r.catalog_type as CatalogType) ?? null,
     repurchaseCycleDays: (r.repurchase_cycle_days as number) ?? null,
     churnMultiplier: Number(r.churn_multiplier ?? 1.25),
-    archetype: (r.archetype as ArchetypeId) ?? "b2c_consumible",
+    archetype: (r.archetype as ArchetypeId) ?? "b2b_recurrente",
     archetypeSource: (r.archetype_source as StoreProfile["archetypeSource"]) ?? "auto",
     manualSlots: Array.isArray(r.manual_slots) ? (r.manual_slots as string[]) : [],
     companyRequired: Boolean(r.company_required),
@@ -209,7 +209,7 @@ export async function resolveBandCuts(
 ): Promise<{ high: number; low: number }> {
   const fallback = async (): Promise<{ high: number; low: number }> => {
     const profile = await getStoreProfile(storeId).catch(() => null);
-    const arch = profile?.archetype ?? "b2c_consumible";
+    const arch = profile?.archetype ?? "b2b_recurrente";
     return BAND_CUTS_BY_ARCHETYPE[arch] ?? { high: 0.6, low: 0.15 };
   };
   try {
@@ -221,7 +221,7 @@ export async function resolveBandCuts(
       .maybeSingle();
     if (error || !data) return fallback();
     const r = data as Record<string, unknown>;
-    const arch = (r.archetype as ArchetypeId) ?? "b2c_consumible";
+    const arch = (r.archetype as ArchetypeId) ?? "b2b_recurrente";
     const dflt = BAND_CUTS_BY_ARCHETYPE[arch] ?? { high: 0.6, low: 0.15 };
     const h = r.p_band_high == null ? NaN : Number(r.p_band_high);
     const l = r.p_band_low == null ? NaN : Number(r.p_band_low);

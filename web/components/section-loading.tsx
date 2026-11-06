@@ -3,7 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 /**
  * Regla global: sección vacía + trabajo en bg en curso → skeleton +
  * "Generando…", nunca un vacío engañoso ("sin resultados", "todo al día").
- * Úsalo en cualquier sección alimentada por sync o agentes de fondo.
+ * Úsalo en cualquier sección alimentada por agentes de fondo.
  */
 export function SectionLoading({ label, rows = 3 }: { label: string; rows?: number }) {
   return (

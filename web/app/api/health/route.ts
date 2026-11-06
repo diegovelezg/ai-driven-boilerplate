@@ -1,14 +1,13 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { getMyActiveStore } from "@/lib/tenant";
-import { applyScopeFilter, resolveMarketScope } from "@/lib/markets";
 import { countDuplicateEmails } from "@/lib/duplicates";
 import { pendingDomains } from "@/lib/enrich";
 
 /**
- * GET /api/health?store=<uuid>&market=<uuid>
+ * GET /api/health?store=<uuid>
  * Números vivos de "Salud de tu cartera" para el componente reactivo:
  * duplicados, dominios pendientes (fresco, sin caché de 5min) y compradores.
- * Respeta ?store= y ?market= como el home.
+ * Respeta ?store= como el home.
  */
 export async function GET(req: Request) {
   if (!isSupabaseConfigured()) {
@@ -33,16 +32,12 @@ export async function GET(req: Request) {
   const access = await requireStoreAccess(active.id);
   if (access instanceof Response) return access;
   const db = getSupabase();
-  const scope = await resolveMarketScope(active.id, sp.get("market")).catch(() => null);
   try {
     const [dupN, enrichN, buyersN, schema] = await Promise.all([
-      countDuplicateEmails(active.id, scope).catch(() => 0),
-      pendingDomains(active.id, scope, { fresh: true }).then((d) => d.length).catch(() => 0),
+      countDuplicateEmails(active.id).catch(() => 0),
+      pendingDomains(active.id, undefined, { fresh: true }).then((d) => d.length).catch(() => 0),
       (async () => {
-        const { count: n } = await applyScopeFilter(
-          db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", active.id).gt("orders_count", 0),
-          scope,
-        );
+        const { count: n } = await db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", active.id).gt("orders_count", 0);
         return n ?? 0;
       })().catch(() => 0),
       // Gate visible (best-effort, nunca tumba el health): si la DB va por

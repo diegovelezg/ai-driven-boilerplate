@@ -1,4 +1,4 @@
-// Ejecución manual del enriquecimiento (como sync-once.ts).
+// Ejecución manual del enriquecimiento.
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/enrich-once.ts [limit]
 import { pendingDomains, runEnrichment } from "@/lib/enrich";
 import { startRun } from "@/lib/background";

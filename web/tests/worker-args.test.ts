@@ -19,13 +19,13 @@ describe("parseWorkerArgs", () => {
   });
 
   it("acepta --kinds con = y separado", () => {
-    assert.deepEqual(parseWorkerArgs(["--kinds=sync,morning"]).kinds, ["sync", "morning"]);
-    assert.deepEqual(parseWorkerArgs(["--kinds", "sync,morning"]).kinds, ["sync", "morning"]);
+    assert.deepEqual(parseWorkerArgs(["--kinds=morning"]).kinds, ["morning"]);
+    assert.deepEqual(parseWorkerArgs(["--kinds", "morning"]).kinds, ["morning"]);
   });
 
   it("filtra kinds desconocidos y los reporta (no idle silencioso)", () => {
-    const r = parseWorkerArgs(["--kinds=sync,foo"]);
-    assert.deepEqual(r.kinds, ["sync"]);
+    const r = parseWorkerArgs(["--kinds=morning,foo"]);
+    assert.deepEqual(r.kinds, ["morning"]);
     assert.deepEqual(r.unknownKinds, ["foo"]);
   });
 

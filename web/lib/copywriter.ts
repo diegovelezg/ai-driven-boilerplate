@@ -501,7 +501,7 @@ async function composeDraftCopy(
   // Nunca ordenar continuidad en modo identidad: esa era la raíz del caso
   // Patricia (CONTENIDO + jugada habitual vs PROHIBIDO del SYSTEM).
   // Hito 1 (#25.1): ventana concreta + ticket dirigen la jugada.
-  // SSOT compras (órdenes Medusa, no metadata): ritmo propio del cliente =
+  // SSOT compras (órdenes locales, no metadata): ritmo propio del cliente =
   // mediana de gaps entre sus compras reales; fallback típica del negocio.
   const gaps: number[] = [];
   for (let i = 0; i + 1 < real.length; i++) {

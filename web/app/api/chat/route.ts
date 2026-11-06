@@ -3,7 +3,6 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
 import { createLogger } from "@/lib/log";
-import { applyScopeFilter, displayMarket, resolveMarketScope } from "@/lib/markets";
 
 const log = createLogger("adk");
 
@@ -52,7 +51,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Supabase no configurado." }, { status: 500 });
   }
 
-  let body: { storeId?: string; messages?: IncomingMessage[]; marketId?: string };
+  let body: { storeId?: string; messages?: IncomingMessage[] };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -86,21 +85,6 @@ export async function POST(req: Request) {
   const s = store as Record<string, unknown>;
   const storeName = String(s.name ?? s.shop_url ?? storeId);
 
-  // Filtro global por mercado: mismo Scope que el drawer (países/IDs + moneda).
-  // Sin fallback silencioso a "todos": marketId inválido o DB caída = 400.
-  let marketScope: Awaited<ReturnType<typeof resolveMarketScope>> | null = null;
-  if (typeof body.marketId === "string" && body.marketId) {
-    try {
-      marketScope = await resolveMarketScope(storeId, body.marketId);
-    } catch (e) {
-      return Response.json({ error: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, code: "INVALID_MARKET" }, { status: 400 });
-    }
-    if (!marketScope?.market) {
-      return Response.json({ error: "Market inválido: no existe en esta tienda.", code: "INVALID_MARKET" }, { status: 400 });
-    }
-  }
-  const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
-
   const prior = history
     .slice(0, -1)
     .slice(-8)
@@ -108,7 +92,7 @@ export async function POST(req: Request) {
     .join("\n");
   const userText = last.content.slice(0, 4000);
   const prompt =
-    `Hablas de ${storeName}${marketSuffix} como equipo orquestado (Scout, Estratega, Redactor, Prospector, Mensajero, Analista, Perfilador). ` +
+    `Hablas de ${storeName} como equipo orquestado (Scout, Estratega, Redactor, Prospector, Mensajero, Analista, Perfilador). ` +
     (prior
       ? `Historial reciente (contexto; el mensaje actual es lo vigente):\n${prior}\n\nMensaje actual: ${userText}`
       : `Mensaje actual: ${userText}`);
@@ -118,10 +102,7 @@ export async function POST(req: Request) {
     agent = getCustomerAgent({
       storeId,
       view: "store_chat",
-      focusLabel: `${storeName}${marketSuffix} · equipo orquestado`,
-      marketCountries: marketScope?.countries ?? null,
-      marketCustomerIds: marketScope?.customerIds ?? null,
-      marketCurrency: marketScope?.market ? marketScope.market.currency.toUpperCase() : null,
+      focusLabel: `${storeName} · equipo orquestado`,
     });
   } catch (e) {
     return Response.json(
@@ -211,10 +192,7 @@ export async function POST(req: Request) {
               .eq("store_id", storeId)
               .eq("status", q.status ?? "pending_review");
             if (q.channel) aq = aq.eq("channel", q.channel);
-            const scope = marketScope
-              ? { countries: marketScope.countries, customerIds: marketScope.customerIds }
-              : null;
-            const { data } = await applyScopeFilter(aq, scope).order("created_at", {
+            const { data } = await aq.order("created_at", {
               ascending: false,
             }).range(off, off + n - 1);
             log(`artifact list_actions refresh filas=${(data ?? []).length}`);

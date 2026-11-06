@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import { COPYWRITER_GEN, draftSingleSignal } from "@/lib/copywriter";
 import { getChannelVariants, isReusableChannelVariant, type ChannelVariant } from "@/lib/channel-variants";
 import { isFreshGenerator, isV1SignalReason } from "@/lib/copywriter-gen";
@@ -393,10 +393,8 @@ export async function getDrawerCustomerAction(
   customerDbId: string,
 ): Promise<ReviewOp & { customer?: import("@/lib/customers-db").EditableCustomer | null }> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda." };
   const { data, error } = await getSupabase()
     .from("customers")
     .select("*")
@@ -512,7 +510,7 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
     };
   }
   // Cache hit: variante fresca del otro canal → swap sin LLM, sin tocar la
-  // señal ni Medusa. La cola no se reordena (created_at intacto).
+  // señal. La cola no se reordena (created_at intacto).
   const cached = prevVariants[target] ?? keptVariants[target];
   if (isReusableChannelVariant(target, cached)) {
     const v = cached as ChannelVariant;
@@ -545,10 +543,8 @@ export async function switchChannelAction(id: string): Promise<ReviewOp> {
     revalidatePath("/review");
     return { ok: true, message: `Mensaje para ${target === "email" ? "Email" : "WhatsApp"} restaurado (versión guardada, sin regenerar).` };
   }
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda." };
   // Re-redacción in place sobre la misma fila: created_at intacto (la cola
   // no se reordena) y nunca hay dos filas vivas (anti-spam por construcción).
   // La señal se presta a prioritized para componer y vuelve a actioned.
@@ -919,11 +915,9 @@ function isStaleDraft(evidence: Record<string, unknown> | null): boolean {
  *  Reproceso independiente por etapa: solo borradores, nada más. */
 export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local." };
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings)." };
   const db = getSupabase();
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda." };
   const regenConflict = await hasConflict(storeId, { kind: "regenerate" }).catch(() => null);
   if (regenConflict) return { ok: false, message: busyMessage(regenConflict), run: regenConflict };
   const log = createLogger("review-actions");
@@ -1080,34 +1074,15 @@ export async function regenerateStaleDraftsAction(): Promise<ReviewOp> {
 /** Dispara una prospección manual desde el inbox (botón "Buscar más empresas").
  *  A diferencia del auto de la mañana, sí puede pasar el tope de 10: es
  *  intención explícita. Respeta el lock `prospect` (si ya corre, devuelve la
- *  corrida en curso en vez de duplicar). Patrón SSOT sync/enrich/copywriter:
- *  `startRun` + `after(work)`; la cinta avisa el progreso y el cierre.
- *  Con `marketId` (?market= del inbox) segmenta al mercado activo. */
-export async function triggerProspectAction(marketId?: string | null): Promise<ReviewOp> {
+ *  corrida en curso en vez de duplicar). Patrón SSOT enrich/copywriter:
+ *  `startRun` + `after(work)`; la cinta avisa el progreso y el cierre. */
+export async function triggerProspectAction(): Promise<ReviewOp> {
   if (!isSupabaseConfigured()) return { ok: false, message: "Falta Supabase en .env.local.", run: null };
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return { ok: false, message: "Sin conexión a Medusa (Settings).", run: null };
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", run: null };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda.", run: null };
   const { getIcp, prospectEligibility } = await import("@/lib/prospect");
-  let scope: { countries: string[] | null; customerIds: string[] | null } | null = null;
-  let marketLabel: string | null = null;
-  try {
-    const { resolveMarketScope, displayMarket } = await import("@/lib/markets");
-    const resolved = await resolveMarketScope(storeId, marketId ?? null);
-    if (marketId && !resolved?.market) {
-      return { ok: false, message: "Market inválido: no existe en esta tienda.", run: null };
-    }
-    if (resolved?.market) {
-      scope = { countries: resolved.countries, customerIds: resolved.customerIds };
-      marketLabel = displayMarket(resolved.market);
-    } else if (resolved) {
-      scope = { countries: resolved.countries, customerIds: resolved.customerIds };
-    }
-  } catch (e) {
-    if (marketId) return { ok: false, message: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, run: null };
-    // sin marketId y sin scope: global
-  }
+  const scope = null;
+  const marketLabel = null;
   try {
     const elig = await prospectEligibility(storeId);
     if (!elig.eligible) {

@@ -6,11 +6,9 @@ import { FilterSelect, SelectItem } from "@/components/filter-select";
 export function ProductsEstadoSelect({
   estado,
   q,
-  market,
 }: {
   estado: string;
   q: string;
-  market: string | null;
 }) {
   const router = useRouter();
 
@@ -19,7 +17,6 @@ export function ProductsEstadoSelect({
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
     if (v !== "activos") params.set("estado", v);
-    if (market) params.set("market", market);
     const qs = params.toString();
     router.replace(`/products${qs ? `?${qs}` : ""}`);
   };

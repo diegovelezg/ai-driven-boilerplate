@@ -2,7 +2,7 @@
 // Sin LLM para los números; el synthesizer los interpreta.
 // Aislado del loop de retención: solo lee customers/orders/domains.
 import { getSupabase } from "@/lib/supabase";
-import { isRealOrder } from "@/lib/medusa";
+import { isRealOrder } from "@/lib/canonical";
 import { domainFromEmail, isCustomDomain } from "@/lib/domains";
 
 export interface TenantStats {

@@ -1,8 +1,8 @@
 // Fusión de customers duplicados (mismo email). Mueve órdenes, preserva ediciones
-// manuales y registra un alias para que el sync de Medusa no recree los combinados.
+// manuales y registra un alias para no recrear los combinados.
 import "server-only";
 import { getSupabase } from "@/lib/supabase";
-import { groupTotalsByCurrency } from "@/lib/medusa";
+import { groupTotalsByCurrency } from "@/lib/canonical";
 
 export interface MergeResult {
   removed: number;
@@ -97,7 +97,7 @@ export async function mergeCustomers(storeId: string, dbIds: string[]): Promise<
   const { error: upErr } = await db.from("customers").update(patch).eq("id", canonical.id);
   if (upErr) throw new Error(`Merge update: ${upErr.message}`);
 
-  // Alias para que el sync no recree los combinados.
+  // Alias para no recrear los combinados.
   const canonicalExt = canonical.external_id;
   if (canonicalExt) {
     const aliases = merged

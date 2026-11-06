@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { LogOut } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { LogOut, Store } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,28 +10,81 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
 import { signOutAction } from "@/lib/auth-actions";
 import { toast } from "@/components/ui/toast";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
+import { MEMBER_ROLE_LABELS, isMemberRole, type MemberRole } from "@/lib/roles";
+
+/** displayStoreName puro (lib/tenant es server-only: no importar en cliente). */
+function displayTenantName(s: { name?: string | null; shop_url?: string }): string {
+  if (s.name?.trim()) return s.name.trim();
+  const raw = s.shop_url ?? "";
+  try {
+    const host = new URL(raw).hostname.replace(/^(www|api)\./, "");
+    const first = host.split(".")[0];
+    if (first) return first.charAt(0).toUpperCase() + first.slice(1);
+  } catch {
+    // shop_url sin protocolo: se muestra tal cual
+  }
+  return raw || "Tienda";
+}
+
+export interface UserMenuStore {
+  id: string;
+  name?: string | null;
+  shop_url?: string;
+}
 
 /**
  * Avatar del merchant + dropdown de cuenta.
  * - `initialEmail` viene del servidor (layout dashboard): pinta email + avatar
  *   en el primer paint sin esperar al fetch cliente.
- * - Se suscribe a cambios de sesión para no quedarse stale tras login/logout.
+ * - `stores` + `initialRoles` vienen del servidor: resuelven tenant activo
+ *   (?store= válido > primero) y rol del user sin fetch extra.
+ * - Se suscribe a cambios de sesión para no quedarse stale tras login/logout;
+ *   refresca el rol vía `merchant_users` (RLS self-read).
  * - Silencioso (skeleton → nada) si no hay sesión.
  */
-export function UserMenu({ initialEmail = null }: { initialEmail?: string | null }) {
+export function UserMenu({
+  initialEmail = null,
+  stores = [],
+  initialRoles = {},
+}: {
+  initialEmail?: string | null;
+  stores?: UserMenuStore[];
+  initialRoles?: Record<string, MemberRole>;
+}) {
   const [email, setEmail] = useState<string | null>(initialEmail);
+  const [roles, setRoles] = useState<Record<string, MemberRole>>(initialRoles);
   const [loaded, setLoaded] = useState(initialEmail != null);
   const [pending, startSignOut] = useTransition();
   // Doble-submit: la transición cubre el await, pero un segundo clic en la
   // ventana previa redirigiría dos veces; el ref lo frena en seco.
   const signingOutRef = useRef(false);
+  const sp = useSearchParams();
 
   useEffect(() => {
     let alive = true;
     let unsubscribe: (() => void) | null = null;
+    const refreshRoles = async (userId: string | null) => {
+      if (!alive || !userId) return;
+      try {
+        const client = createBrowserSupabase();
+        const { data } = await client
+          .from("merchant_users")
+          .select("store_id,role")
+          .eq("user_id", userId);
+        if (!alive || !data) return;
+        const next: Record<string, MemberRole> = {};
+        for (const r of data as Array<Record<string, unknown>>) {
+          if (isMemberRole(r.role)) next[String(r.store_id ?? "")] = r.role;
+        }
+        setRoles(next);
+      } catch {
+        // RLS sin acceso o sin tabla: se conserva el rol del servidor
+      }
+    };
     (async () => {
       try {
         const client = createBrowserSupabase();
@@ -39,11 +93,13 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
           setEmail(data.user?.email ?? null);
           setLoaded(true);
         }
+        void refreshRoles(data.user?.id ?? null);
         const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
           if (alive) {
             setEmail(session?.user?.email ?? null);
             setLoaded(true);
           }
+          void refreshRoles(session?.user?.id ?? null);
         });
         unsubscribe = () => listener.subscription.unsubscribe();
       } catch {
@@ -67,6 +123,14 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
   if (!email) return null;
 
   const initial = (email.trim()[0] ?? "?").toUpperCase();
+  // Tenant activo igual que lib/tenant en servidor (?store= válido > primera).
+  const param = sp.get("store");
+  const active = stores.some((s) => s.id === param)
+    ? (stores.find((s) => s.id === param) ?? null)
+    : (stores[0] ?? null);
+  const tenantName = active ? displayTenantName(active) : null;
+  const role: MemberRole | null = active ? (roles[active.id] ?? null) : null;
+  const roleLabel = role ? MEMBER_ROLE_LABELS[role] : null;
 
   return (
     <DropdownMenu>
@@ -82,26 +146,54 @@ export function UserMenu({ initialEmail = null }: { initialEmail?: string | null
           </button>
         }
       />
-      <DropdownMenuContent align="end" sideOffset={8} className="w-64">
-        <div className="flex items-center gap-2.5 px-2 py-2">
+      <DropdownMenuContent align="end" sideOffset={8} className="w-72 p-2">
+        {/* Identidad: avatar + email, con aire */}
+        <div className="flex items-center gap-3 px-2 pt-1.5 pb-3">
           <span
             aria-hidden
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground"
           >
             {initial}
           </span>
           <span className="min-w-0">
-            <span className="block text-xs text-muted-foreground">
-              Sesión iniciada como
+            <span className="block text-[11px] tracking-wide text-muted-foreground uppercase">
+              Sesión iniciada
             </span>
             <span
-              className="block truncate text-sm font-medium"
+              className="block truncate text-sm font-medium leading-snug"
               title={email}
             >
               {email}
             </span>
           </span>
         </div>
+        {/* Tenant activo: tarjeta sutil separada del resto */}
+        {tenantName ? (
+          <div className="mb-1 flex items-center gap-2.5 rounded-lg bg-muted/60 px-3 py-2.5">
+            <span
+              aria-hidden
+              className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground"
+            >
+              <Store className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] tracking-wide text-muted-foreground uppercase">
+                Tienda
+              </span>
+              <span
+                className="block truncate text-sm font-medium leading-snug"
+                title={tenantName}
+              >
+                {tenantName}
+              </span>
+            </span>
+            {roleLabel ? (
+              <Badge variant="secondary" className="shrink-0">
+                {roleLabel}
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={pending}

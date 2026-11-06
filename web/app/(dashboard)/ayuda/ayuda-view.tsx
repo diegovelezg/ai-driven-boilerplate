@@ -131,10 +131,10 @@ const SECTIONS: Section[] = [
     articles: [
       {
         id: "paso-conectar",
-        title: "1 · Conecta y enséñale tu negocio",
-        text: "En Tienda conectas Medusa (solo lectura; cada login sincroniza en segundo plano). En Negocio describes qué vendes y cada cuánto vuelven: con eso fija ciclo, patrón y ventana. La app lee su propia base, no la tienda en vivo.",
-        href: "/settings?tab=tienda",
-        hrefLabel: "Conectar tienda",
+        title: "1 · Enséñale tu negocio",
+        text: "En Negocio describes qué vendes y cada cuánto vuelven: con eso fija ciclo, patrón y ventana. La app lee su propia base.",
+        href: "/settings?tab=negocio",
+        hrefLabel: "Describir negocio",
       },
       {
         id: "paso-revisar",
@@ -202,7 +202,7 @@ const SECTIONS: Section[] = [
       {
         id: "secundarios",
         title: "Cerebro y Prospector (secundarios)",
-        text: "Cerebro resume tu negocio y se actualiza si pasó más de un día; si pasan 30 días o cambias el negocio, pide recalibrar. Prospector busca negocios parecidos a tus mejores clientes, solo en B2B y como apoyo: primero se recupera lo propio, nunca contacta solo.",
+        text: "Cerebro resume tu negocio y se actualiza si pasó más de un día; si pasan 30 días o cambias el negocio, pide recalibrar. Prospector busca empresas parecidas a tus mejores clientes, como apoyo: primero se recupera lo propio, nunca contacta solo.",
         href: "/review?tab=leads",
         hrefLabel: "Ver empresas por contactar",
       },
@@ -230,7 +230,7 @@ const SECTIONS: Section[] = [
       {
         id: "aprobar",
         title: "Aprueba y envía el WhatsApp",
-        text: "Lee el porqué de cada borrador, ajusta el tono y decide (en B2B de a uno; en B2C en lote). WhatsApp sale de tu número por wa.me: envíalo y marca enviado, o el loop queda abierto.",
+        text: "Lee el porqué de cada borrador, ajusta el tono y decide empresa por empresa. WhatsApp sale de tu número por wa.me: envíalo y marca enviado, o el loop queda abierto.",
         href: "/review",
         hrefLabel: "Ir a Review",
       },
@@ -346,7 +346,7 @@ const SECTIONS: Section[] = [
       {
         id: "f-actualiza",
         title: "¿Cuándo se actualiza?",
-        text: "La tienda se sincroniza al iniciar sesión y el motor corre por corridas (Scout → Estratega → Redactor). No es tiempo real: la app muestra la fecha de la última foto.",
+        text: "El motor corre por corridas (Scout → Estratega → Redactor). No es tiempo real: la app muestra la fecha de la última foto.",
       },
       {
         id: "f-crm",
@@ -356,7 +356,7 @@ const SECTIONS: Section[] = [
       {
         id: "f-plataformas",
         title: "¿Con qué tiendas funciona y de dónde salen los datos?",
-        text: "Hoy con Medusa v1/v2 en solo lectura (Shopify y WooCommerce aún no). Solo de tu tienda conectada; cada tienda es un tenant aislado.",
+        text: "Los datos salen de tu propia base (inventario DOOH vía Sheet/CSV). Cada tienda es un tenant aislado.",
       },
       {
         id: "f-editar",
@@ -569,7 +569,7 @@ export function AyudaView() {
 
       {results === null && (
         <section
-          aria-label="Qué es AI Retention Engine"
+          aria-label="Qué es MEOW"
           className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary/[0.09] via-card to-card p-6 ring-1 ring-primary/15 md:p-7"
         >
           <div

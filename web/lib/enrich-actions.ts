@@ -3,8 +3,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import {
   enrichDomain,
   invalidatePendingCache,
@@ -30,16 +29,12 @@ export interface StartEnrichState {
 
 /** Crea una corrida y la ejecuta en background (no bloquea ni se corta al navegar). */
 export async function startEnrichmentAction(): Promise<StartEnrichState> {
-  const conn = await readConnections();
-  if (!conn.medusaUrl || !conn.medusaToken) {
-    return { ok: false, message: "Sin conexión a Medusa (Settings).", run: null };
-  }
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "Falta SUPABASE_URL / SERVICE_ROLE en .env.local.", run: null };
   }
   try {
-    const storeId = await resolveStoreId(conn.medusaUrl);
-    if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", run: null };
+    const storeId = await resolveActiveStoreId();
+    if (!storeId) return { ok: false, message: "Sin tienda.", run: null };
 
     // Lock por compatibilidad (Fase 3): el bulk frena ante otro bulk o
     // un puntual del mismo dominio; con copywriter convive.
@@ -83,8 +78,7 @@ export async function reenrichDomainAction(
     return { ok: false, message: "Falta Supabase en .env.local.", run: null };
   }
   const log = createLogger("enrich");
-  const conn = await readConnections();
-  const storeId = conn.medusaUrl ? await resolveStoreId(conn.medusaUrl).catch(() => null) : null;
+  const storeId = await resolveActiveStoreId();
   let runId: string | null = null;
   if (storeId) {
     const conflict = await hasConflict(storeId, { kind: "enrich_single", scopeKind: "domain", scopeId: domain });

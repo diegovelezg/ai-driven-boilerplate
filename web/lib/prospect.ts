@@ -2,7 +2,7 @@
 // scrape (Crawlee Cheerio) → score LLM vs ICP → proposed_leads PENDING_REVIEW.
 // El prospector propone; nunca contacta solo.
 import { getSupabase } from "@/lib/supabase";
-import { modeCountry } from "@/lib/medusa";
+import { modeCountry } from "@/lib/canonical";
 import { classifyDomain, domainFromEmail } from "@/lib/domains";
 import { getLlmConfig } from "@/lib/ai/llm-config";
 import {
@@ -24,10 +24,11 @@ import { createLogger } from "@/lib/log";
 const log = createLogger("prospect");
 
 /** Versión del criterio prospector. Sube cuando cambia scoring/retrieval. */
-const PROSPECT_GEN = "prospect:v6:market-scores";
+const PROSPECT_GEN = "prospect:v7:single-country";
 
-/** Scope de mercado para segmentar la prospección (SSOT markets):
- *  países ISO2 y/o IDs (fallback sin países). null = todos (legacy). */
+/** Scope de prospección (deprecated, single-país: siempre null).
+ *  Se conserva el tipo por compatibilidad; el prospector opera sobre toda
+ *  la tienda (un solo país/moneda). */
 export interface ProspectScope {
   countries: string[] | null;
   customerIds: string[] | null;
@@ -62,41 +63,24 @@ export interface ProspectEligibility {
 }
 
 /**
- * Gate B2B del prospector (feature solo-B2B, multitenant): en B2C los
- * compradores son personas y buscar "empresas parecidas" devuelve
- * competidores o ruido. Elegible si el arquetipo es B2B, o si es
- * híbrido/sin calibrar con densidad B2B real (>=6/20 top) y base
- * enriquecible (>=3 dominios). B2C explícito nunca pasa.
+ * Elegibilidad del prospector (B2B-only): siempre aplica si hay base
+ * enriquecible (>=3 dominios). Sin base, se reporta "sin-base".
  */
 export async function prospectEligibility(storeId: string): Promise<ProspectEligibility> {
   const db = getSupabase();
-  let archetype: string | null = null;
-  try {
-    const { data } = await db.from("store_profiles").select("archetype").eq("store_id", storeId).maybeSingle();
-    archetype = ((data as Record<string, unknown> | null)?.archetype as string | null) ?? null;
-  } catch {
-    archetype = null;
-  }
-  if (archetype && archetype.startsWith("b2c")) {
-    return { eligible: false, reason: "b2c" };
-  }
   try {
     const { data } = await db
       .from("customers")
-      .select("email,customer_type")
+      .select("email")
       .eq("store_id", storeId)
       .gt("orders_count", 0)
       .order("total_spent", { ascending: false })
       .limit(60);
     const rows = ((data ?? []) as Array<Record<string, unknown>>).slice(0, 20);
-    const b2b = rows.filter((r) => String(r.customer_type ?? "") === "B2B").length;
     const doms = new Set(
       rows.map((r) => domainFromEmail(String(r.email ?? ""))).filter((d) => d && classifyDomain(d).enrichable),
     );
-    if (archetype && (archetype === "b2b_recurrente" || archetype === "b2b_proyecto")) {
-      return doms.size >= 3 ? { eligible: true, reason: null } : { eligible: false, reason: "sin-base" };
-    }
-    if (b2b >= 6 && doms.size >= 3) return { eligible: true, reason: null };
+    if (doms.size >= 3) return { eligible: true, reason: null };
     return { eligible: false, reason: "sin-base" };
   } catch {
     return { eligible: false, reason: "sin-base" };

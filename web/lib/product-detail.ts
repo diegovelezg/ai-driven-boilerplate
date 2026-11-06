@@ -1,8 +1,8 @@
 // Detalle por producto para el drawer: metadata del tenant +
 // últimos movimientos. Las cifras globales por moneda salen de product_stats
-// (autoritativo); los movimientos se acotan al market (?market=) cuando se pide.
+// (autoritativo); single-país: sin filtro por market.
 import { getSupabase } from "@/lib/supabase";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import {
   buildProductPidIndex,
   normProductTitle,
@@ -11,13 +11,6 @@ import {
 } from "@/lib/product-stats";
 import { EMPTY_KEYS, resolveItemKeys } from "@/lib/metadata-map";
 import { enrichOrderItems } from "@/lib/item-context";
-import {
-  applyScopeFilter,
-  displayMarket,
-  effectiveScopeFilter,
-  isLargeIdScope,
-  resolveMarketScope,
-} from "@/lib/markets";
 
 export interface ProductDetailStats {
   currency: string;
@@ -83,7 +76,8 @@ const MOVEMENT_SCAN_CAP = 3000;
 
 export async function loadProductDetail(
   productId: string,
-  marketId: string | null | undefined,
+  // @deprecated Single-país: se ignora.
+  _marketId?: string | null | undefined,
 ): Promise<{ storeId: string; dto: ProductDetailDTO } | null> {
   const db = getSupabase();
   const { data: p } = await db
@@ -98,11 +92,9 @@ export async function loadProductDetail(
   const normTitle = normProductTitle(title);
   const normTitleLoose = normProductTitleLoose(title);
 
-  const scope = marketId
-    ? await resolveMarketScope(storeId, marketId)
-    : null;
-  const marketLabel = scope?.market ? displayMarket(scope.market) : null;
-  const viewCurrency = scope?.market ? scope.market.currency.toUpperCase() : null;
+  const marketLabel: string | null = null;
+  const { data: srow } = await db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
+  const viewCurrency = ((srow as Record<string, unknown> | null)?.shop_currency as string | null)?.toUpperCase() ?? null;
 
   const { data: stats } = await db
     .from("product_stats")
@@ -111,7 +103,7 @@ export async function loadProductDetail(
     .eq("product_id", productId)
     .limit(20);
 
-  // Mismo criterio que el sync (product_stats): ID > variante > handle > sku >
+  // Mismo criterio que product_stats: ID > variante > handle > sku >
   // título exacto > título loose. El drawer antes solo comparaba `title`
   // estricto y perdía ventas que la tabla sí cuenta (puntuación, tildes,
   // renombres, líneas con product_title distinto). CAP con flag honesto.
@@ -139,15 +131,6 @@ export async function loadProductDetail(
   let totalMatchedMovements = 0;
   let totalMatchedQty = 0;
   let scanTruncated = false;
-  // Scope grande por IDs (>200): sin .in(miles) en URL (revienta PostgREST);
-  // se escanea sin filtro SQL y se aplica el predicado en JS (misma semántica
-  // NULL-comodín que applyScopeFilter, cfr. get_product_movements en tools).
-  const largeScope = isLargeIdScope(
-    scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
-  );
-  const detailIdSet = largeScope
-    ? new Set((effectiveScopeFilter(scope ? { countries: scope.countries, customerIds: scope.customerIds } : null).ids ?? []) as string[])
-    : null;
   for (let off = 0; ; off += MOVEMENT_PAGE) {
     const base = db
       .from("orders")
@@ -156,21 +139,10 @@ export async function loadProductDetail(
       .order("placed_at", { ascending: false })
       .order("id", { ascending: true })
       .range(off, off + MOVEMENT_PAGE - 1);
-    const oq = largeScope
-      ? base
-      : applyScopeFilter(
-          base,
-          scope ? { countries: scope.countries, customerIds: scope.customerIds } : null,
-        );
-    const { data, error } = await oq;
+    const { data, error } = await base;
     if (error) throw new Error(`Orders read: ${error.message}`);
     const orows = (data ?? []) as Array<Record<string, unknown>>;
     for (const o of orows) {
-      if (largeScope && detailIdSet) {
-        const c = typeof o.country === "string" ? o.country : null;
-        const cid = typeof o.customer_id === "string" ? o.customer_id : "";
-        if (c !== null && !detailIdSet.has(cid)) continue;
-      }
       if (!isRealDbOrder({
         status: typeof o.status === "string" ? o.status : null,
         payment_status: typeof o.payment_status === "string" ? o.payment_status : null,

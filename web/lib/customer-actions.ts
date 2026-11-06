@@ -22,18 +22,18 @@ function clean(field: ManualField, raw: unknown): string | null {
   const v = raw.trim().replace(/\s+/g, " ");
   if (v.length > MAX_LEN[field]) return null;
   if (field === "customer_type") {
-    const t = v.toUpperCase();
-    return t === "B2C" || t === "B2B" ? t : null;
+    // B2B-only: solo se acepta B2B (legacy B2C se rechaza).
+    return v.toUpperCase() === "B2B" ? "B2B" : null;
   }
   return v;
 }
 
 /**
  * Guarda overrides manuales (edición inline/modal). `id` = dbId (uuid de la
- * fila, no el external_id). No toca columnas base: el sync puede reescribir
- * Medusa sin perder lo editado.
- * Semántica: valor vacío = revertir al valor de Medusa (elimina el override).
- * `reverts` es azúcar explícito para lo mismo (botones "volver a Medusa").
+ * fila, no el external_id). No toca columnas base:
+ * base sin perder lo editado.
+ * Semántica: valor vacío = revertir al valor base (elimina el override).
+ * `reverts` es azúcar explícito para lo mismo (botones de revertir).
  */
 export async function updateCustomerAction(input: {
   id: string;

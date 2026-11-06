@@ -18,8 +18,8 @@ const SYSTEM = `Eres el revisor adversarial de perfiles de negocio. Decides slot
 Responde SOLO JSON válido, sin markdown:
 {"verdict": "accept"|"reject", "slots": {"business_model": {"decision": "keep"|"change", "value": string, "reason": string}, "vertical": {...}, "taxonomy_id": {...}, "buyer_type": {...}, "catalog_type": {...}, "archetype": {...}, "cycle_days": {...}, "company_required": {...}}, "reasons": string[], "questions": string[]}
 Checklist (slot por slot, sin excepciones):
-1. business_model: ¿"hybrid"/"b2c" tiene evidencia positiva de consumo personal? Gmail masivo + dominios propios + ICP de negocios = b2b. company_name vacío no es evidencia de nada. Si la web muestra uso personal real (p.ej. saludos/eventos), puede sostener hybrid: cítalo.
-2. archetype: ¿coherente con business_model? ¿el ciclo tiene fuente o es inventado?
+1. business_model: B2B-only, siempre "b2b". Cualquier otro valor es change → "b2b".
+2. archetype: solo "b2b_recurrente" o "b2b_proyecto", coherente con el ciclo. ¿el ciclo tiene fuente o es inventado?
 3. taxonomy_id: ¿el nodo más preciso o uno grueso por comodidad?
 4. buyer_type: ¿granularidad real (la que den datos/enriched) o genérico?
 5. cycle_days y company_required: ¿justificados o default silencioso?
@@ -50,10 +50,19 @@ export async function critique(synthesis: Synthesis, evidence: string, opts: { s
     if (slot === "taxonomy_id" && !isKnownTaxonomyId(value)) continue;
     corrections.push({ slot, value: value.slice(0, 120), reason: reason.slice(0, 200) });
   }
-  const verdict = corrections.length > 0 ? "reject" : "accept";
+  // B2B-only: el crítico nunca puede proponer salir de B2B.
+  const coerced = corrections
+    .map((c) => {
+      if (c.slot === "business_model") return { ...c, value: "b2b" };
+      if (c.slot === "archetype" && c.value !== "b2b_recurrente" && c.value !== "b2b_proyecto") return null;
+      if (c.slot === "company_required") return { ...c, value: "true" };
+      return c;
+    })
+    .filter((c): c is { slot: string; value: string; reason: string } => c !== null);
+  const verdict = coerced.length > 0 ? "reject" : "accept";
   return {
     verdict,
-    corrections,
+    corrections: coerced,
     reasons: Array.isArray(p.reasons)
       ? p.reasons.filter((x): x is string => typeof x === "string" && x.trim() !== "").slice(0, 4)
       : [],

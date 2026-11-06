@@ -1,0 +1,66 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { Button } from "@/components/ui/button";
+import { normalizeCommissionPct } from "@/lib/agency-commission";
+import { setAgencyCommissionAction } from "@/lib/crm-actions";
+
+/** Comisión de agencia: solo visible/gestionable por owner/admin (el padre hace gating). */
+export function AgencyCommissionForm({
+  companyId,
+  initial,
+  onSaved,
+}: {
+  companyId: string;
+  initial: number | null;
+  onSaved?: () => void;
+}) {
+  const [value, setValue] = useState<string>(initial !== null ? String(initial) : "");
+  const [pending, startTransition] = useTransition();
+  const [msg, setMsg] = useState<string | null>(null);
+
+  function save() {
+    setMsg(null);
+    const trimmed = value.trim();
+    if (trimmed !== "" && normalizeCommissionPct(trimmed) === null) {
+      setMsg("Comisión inválida (0-100).");
+      return;
+    }
+    startTransition(async () => {
+      const res = await setAgencyCommissionAction({
+        companyId,
+        pct: trimmed === "" ? null : trimmed,
+      });
+      setMsg(res.message);
+      if (res.ok) onSaved?.();
+    });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-xs">
+          Comisión agencia (% sobre bruto)
+          <span className="flex items-center gap-1">
+            <input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              inputMode="decimal"
+              placeholder="p. ej. 15"
+              aria-label="Comisión agencia en porcentaje"
+              className="h-8 w-28 rounded-lg border border-border bg-background px-2 text-sm"
+            />
+            <span className="text-muted-foreground">%</span>
+          </span>
+        </label>
+        <Button size="sm" onClick={save} disabled={pending}>
+          {pending ? "Guardando…" : "Guardar"}
+        </Button>
+        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Vacío = sin acuerdo (0% efectivo). Solo propietarios y administradores ven este campo.
+      </p>
+    </div>
+  );
+}

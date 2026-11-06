@@ -61,7 +61,7 @@ export function AttentionTable({
   const [selected, setSelected] = useState<EditableCustomer | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   // Lock por señal (Fase 3 + P2): cada fila rastrea su propio vuelo; el
-  // servidor frena lo incompatible (misma señal, bulk, regenerate, sync).
+  // servidor frena lo incompatible (misma señal, bulk, regenerate).
   const [busyIds, setBusyIds] = useState<string[]>([]);
   const { start } = useBackground();
 

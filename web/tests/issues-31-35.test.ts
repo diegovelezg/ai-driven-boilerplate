@@ -1,14 +1,13 @@
-// Regresión issues #31-35 (totales honestos, scope large, counts, drift, match).
+// Regresión issues #31-35 (totales honestos, counts, drift, match).
 // Corre con: npm test (node:test vía tsx, sin BD ni server-only).
-// Estrategia: análisis estático del fuente + units puros (rankItems,
-// market-utils), mismo patrón que agent-pattern.test.ts.
+// Estrategia: análisis estático del fuente + units puros (rankItems),
+// mismo patrón que agent-pattern.test.ts.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rankItems } from "@/lib/finance";
-import { chunkIds, effectiveScopeFilter, isLargeIdScope } from "@/lib/market-utils";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = (p: string) => readFileSync(join(root, p), "utf-8");
@@ -40,46 +39,42 @@ describe("#31 totales honestos (store_summary, recovery_stats)", () => {
   });
 });
 
-describe("#32 scope (hoy_snapshot + large-scope sin .or gigante)", () => {
-  it("hoy_snapshot filtra por customerIds en JS y declara N/A por país", () => {
+describe("#32 sin scope (consultas directas a la tienda)", () => {
+  it("hoy_snapshot no filtra por scope y usa moneda de la tienda", () => {
     const b = blockOf(tools(), "get_hoy_snapshot", 12000);
-    assert.match(b, /scopeIds/);
-    assert.match(b, /if \(scopeIds && !scopeIds\.has\(cid0\)\) continue/);
-    assert.match(b, /scope_note/);
+    assert.doesNotMatch(b, /scopeIds/);
+    assert.doesNotMatch(b, /isLargeIdScope/);
+    assert.doesNotMatch(b, /marketScope/);
+    assert.match(b, /const viewCur = shopCurrency/);
   });
 
-  it("get_top_products tiene rama large-scope con predicado JS", () => {
+  it("get_top_products consulta directo, sin rama large-scope", () => {
     const b = blockOf(tools(), "get_top_products", 12000);
-    assert.match(b, /isLargeIdScope\(marketScope\)/);
-    assert.match(b, /largeScope \? base : withMarket\(base\)/);
+    assert.doesNotMatch(b, /isLargeIdScope/);
+    assert.doesNotMatch(b, /withMarket\(/);
   });
 
-  it("customers-db y product-detail rutearon el path SQL grande a JS", () => {
-    assert.match(src("lib/customers-db.ts"), /isLargeIdScope\(market\)/);
-    assert.match(src("lib/product-detail.ts"), /const oq = largeScope/);
+  it("customers-db y product-detail consultan directo, sin scope", () => {
+    assert.doesNotMatch(src("lib/customers-db.ts"), /isLargeIdScope/);
+    assert.doesNotMatch(src("lib/product-detail.ts"), /largeScope/);
   });
 
-  it("find_customer sobre-pide y filtra en JS con scope grande", () => {
+  it("find_customer busca directo, sin filtro de scope en JS", () => {
     const b = blockOf(tools(), "find_customer", 12000);
-    assert.match(b, /largeFind/);
-    assert.match(b, /filter\(inFindScope\)/);
-  });
-
-  it("market-utils: chunks de 200 e isLargeIdScope (>200)", () => {
-    const ids = Array.from({ length: 450 }, (_, i) => `id-${i}`);
-    assert.equal(chunkIds(ids).length, 3);
-    assert.equal(isLargeIdScope({ customerIds: ids }), true);
-    assert.equal(isLargeIdScope({ customerIds: ids.slice(0, 10) }), false);
-    assert.equal(effectiveScopeFilter({ countries: ["PE"], customerIds: ids }).ids, null);
+    assert.doesNotMatch(b, /largeFind/);
+    assert.doesNotMatch(b, /inFindScope/);
   });
 });
 
 describe("#33 counts silenciosos y CAPs con flag", () => {
-  it("ramas large de signals/actions propagan null+nota, no ?? 0", () => {
+  it("signals/actions consultan directo sin ramas large; conteos con null+nota", () => {
     const t = tools();
+    assert.doesNotMatch(t, /isLargeIdScope/);
+    assert.doesNotMatch(t, /chunkIds/);
     for (const name of ["list_signals", "list_actions"]) {
       const b = blockOf(t, name, 12000);
-      assert.match(b, /countFailed/);
+      assert.doesNotMatch(b, /countFailed/, `${name} sin rama large`);
+      assert.match(b, /Total no disponible \(count falló\)/);
     }
     assert.doesNotMatch(blockOf(t, "get_inbox_summary", 6000), /return count \?\? 0/);
     assert.match(blockOf(t, "get_inbox_summary", 6000), /counts_note/);

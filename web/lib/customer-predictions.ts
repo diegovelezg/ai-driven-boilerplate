@@ -1,5 +1,5 @@
 // Presentación de predicciones del motor (lectura). Módulo puro sin imports
-// server: apto para Client Components (no importar customers-db/sync aquí,
+// server: apto para Client Components (no importar customers-db aquí,
 // su cadena trae `server-only` y rompe el build del Pages/SSR).
 // Lo pesado con BD (getPredictionsMap) vive en `lib/customers-db.ts`.
 import { formatNumber } from "@/lib/format";

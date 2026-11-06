@@ -415,65 +415,51 @@ describe("release gate multi-tenant (Paso 5.3: la mezcla no pierde)", () => {
   });
 });
 
-describe("partitionTuneDataset (tune por partición, invariante #21)", () => {
-  const M1 = { id: "m1", name: "Perú", currency: "PEN", countries: ["PE"] };
-  const M2 = { id: "m2", name: "México", currency: "MXN", countries: ["MX"] };
-
-  const tOrder = (customerId: string, tRel: number, marketId: string | null = null): TuneOrder => ({
+describe("partitionTuneDataset (single-país, una partición)", () => {
+  const tOrder = (customerId: string, tRel: number): TuneOrder => ({
     customerId,
     at: C + tRel * DAY,
     ticketMinor: 1000,
-    currency: marketId === "m2" ? "MXN" : "PEN",
-    marketId,
+    currency: "PEN",
   });
 
-  it("asigna por mayoría de market_id; fallback país; null si nada coincide", () => {
+  it("una sola partición tienda con todos los clientes ≤ corte", () => {
     const customers = [
-      { id: "a", country: "PE" },
-      { id: "b", country: "MX" },
-      { id: "c", country: "CL" },
+      { id: "a" },
+      { id: "b" },
+      { id: "c" },
     ];
     const orders = [
-      tOrder("a", -10, "m1"), tOrder("a", -20, "m1"), tOrder("a", -30, "m2"), // mayoría m1
-      tOrder("b", -10, null), // sin market ⇒ país MX ⇒ m2
-      tOrder("c", -10, null), // sin market ni país mapeado ⇒ null
+      tOrder("a", -10), tOrder("a", -20), tOrder("a", -30),
+      tOrder("b", -10),
+      tOrder("c", -10),
     ];
-    const parts = partitionTuneDataset(customers, orders, [M1, M2], C);
-    const byId = new Map(parts.map((p) => [p.marketId, p]));
-    assert.ok(byId.get("m1")?.customers.some((c) => c.id === "a"));
-    assert.ok(byId.get("m2")?.customers.some((c) => c.id === "b"));
-    assert.ok(byId.get(null)?.customers.some((c) => c.id === "c"));
+    const parts = partitionTuneDataset(customers, orders, C);
+    assert.equal(parts.length, 1);
+    assert.equal(parts[0].marketId, null);
+    assert.equal(parts[0].label, "tienda");
+    assert.ok(parts[0].customers.some((c) => c.id === "a"));
+    assert.ok(parts[0].customers.some((c) => c.id === "b"));
+    assert.ok(parts[0].customers.some((c) => c.id === "c"));
   });
 
-  it("órdenes market=null se comparten; las de otro market se excluyen; sin compras ≤ corte fuera", () => {
+  it("sin compras ≤ corte fuera", () => {
     const customers = [
-      { id: "a", country: "PE" },
-      { id: "future", country: "PE" },
+      { id: "a" },
+      { id: "future" },
     ];
     const orders = [
-      tOrder("a", -10, "m1"),
-      tOrder("a", -20, null), // compartida: va a m1 (y a m2 si existiera)
-      tOrder("a", -30, "m2"), // otro market: NO va a m1 (pero vota en asignación)
-      tOrder("future", 5, "m1"), // solo futuro: fuera
+      tOrder("a", -10),
+      tOrder("a", -20),
+      { customerId: "future", at: C + 5 * DAY, ticketMinor: 1000, currency: "PEN" },
     ];
-    const parts = partitionTuneDataset(customers, orders, [M1, M2], C);
-    // a: 2×m1 vs 1×m2 ⇒ m1.
-    const m1 = parts.find((p) => p.marketId === "m1");
-    assert.ok(m1 !== undefined);
-    const ats = m1.orders.map((o) => o.at);
-    assert.ok(ats.some((t) => t === C - 10 * DAY));
-    assert.ok(ats.some((t) => t === C - 20 * DAY));
-    assert.ok(!ats.some((t) => t === C - 30 * DAY));
-    assert.ok(!m1.customers.some((c) => c.id === "future"));
-    assert.ok(!parts.some((p) => p.customers.some((c) => c.id === "future")));
-    // La orden null-market también está en m2 si m2 existe como partición.
-    const m2 = parts.find((p) => p.marketId === "m2");
-    if (m2 !== undefined) {
-      assert.ok(m2.orders.some((o) => o.at === C - 20 * DAY));
-    }
+    const parts = partitionTuneDataset(customers, orders, C);
+    assert.equal(parts.length, 1);
+    assert.ok(parts[0].customers.some((c) => c.id === "a"));
+    assert.ok(!parts[0].customers.some((c) => c.id === "future"));
   });
 
-  it("tune por partición: mezcla aplica donde hay señal y conserva donde no", () => {
+  it("tune single-país: mezcla aplica donde hay señal", () => {
     // m1: mezcla heterogénea (gana); m2: 5 clientes homogéneos (mínimos).
     const rand = rng(4242);
     const gauss = (): number => {
@@ -487,45 +473,40 @@ describe("partitionTuneDataset (tune por partición, invariante #21)", () => {
     };
     const logn = (mu: number, s: number): number => Math.max(0.5, Math.exp(mu + s * gauss()));
     const orders: TuneOrder[] = [];
-    const customers: { id: string; country: string | null }[] = [];
-    const at = (id: string, t: number, marketId: string | null): void => {
-      orders.push({ customerId: id, at: C + t * DAY, ticketMinor: 1000, currency: marketId === "m2" ? "MXN" : "PEN", marketId });
+    const customers: { id: string }[] = [];
+    const at = (id: string, t: number): void => {
+      orders.push({ customerId: id, at: C + t * DAY, ticketMinor: 1000, currency: "PEN" });
     };
     for (let i = 0; i < 10; i += 1) {
-      customers.push({ id: `f-${i}`, country: "PE" });
+      customers.push({ id: `f-${i}` });
       let t = -400;
       for (;;) {
         t += logn(Math.log(7), 0.4);
         if (t > H) break;
-        at(`f-${i}`, t, "m1");
+        at(`f-${i}`, t);
       }
     }
     for (let i = 0; i < 30; i += 1) {
-      customers.push({ id: `s-${i}`, country: "PE" });
+      customers.push({ id: `s-${i}` });
       let t = -400;
       for (;;) {
         t += logn(Math.log(60), 0.4);
         if (t > H) break;
-        at(`s-${i}`, t, "m1");
+        at(`s-${i}`, t);
       }
     }
     for (let i = 0; i < 40; i += 1) {
-      customers.push({ id: `sh-${i}`, country: "PE" });
+      customers.push({ id: `sh-${i}` });
       const t = 5 + Math.floor(rand() * 76);
       const g = logn(Math.log(60), 0.4);
-      at(`sh-${i}`, -(t + g), "m1");
-      at(`sh-${i}`, -t, "m1");
+      at(`sh-${i}`, -(t + g));
+      at(`sh-${i}`, -t);
       let g2 = -1;
       for (let k = 0; k < 100 && g2 <= t; k += 1) g2 = logn(Math.log(60), 0.4);
-      if (g2 > t && g2 <= t + H) at(`sh-${i}`, -t + g2, "m1");
+      if (g2 > t && g2 <= t + H) at(`sh-${i}`, -t + g2);
     }
-    for (let i = 0; i < 5; i += 1) {
-      customers.push({ id: `mx-${i}`, country: "MX" });
-      at(`mx-${i}`, -10 - i * 5, "m2");
-      at(`mx-${i}`, -100 - i * 5, "m2");
-    }
-    const parts = partitionTuneDataset(customers, orders, [M1, M2], C);
-    assert.equal(parts.length, 2);
+    const parts = partitionTuneDataset(customers, orders, C);
+    assert.equal(parts.length, 1);
     const base = { asOf: C, cycleDays: 30, horizonDays: H, sigma0: 0.5 };
     const actions = new Map<string | null, string>();
     for (const part of parts) {
@@ -545,9 +526,8 @@ describe("partitionTuneDataset (tune por partición, invariante #21)", () => {
       );
       actions.set(part.marketId, d.action);
     }
-    // m1 tiene señal suficiente; m2 (5 clientes) conserva por mínimos.
-    assert.ok(["apply", "propose"].includes(actions.get("m1") ?? ""));
-    assert.equal(actions.get("m2"), "keep");
+    // Con señal heterogénea suficiente el tune aplica o propone estructura.
+    assert.ok(["apply", "propose"].includes(actions.get(null) ?? ""));
   });
 });
 
@@ -665,12 +645,12 @@ describe("decideTune con margen por ruido", () => {
   }
 });
 
-describe("evaluateTuneWFO (walk-forward pooled, partición por origen)", () => {
-  const wfoCustomers = (orders: TuneOrder[]): Array<{ id: string; country: string | null }> =>
-    [...new Set(orders.map((o) => o.customerId))].map((id) => ({ id, country: null }));
+describe("evaluateTuneWFO (walk-forward pooled)", () => {
+  const wfoCustomers = (orders: TuneOrder[]): Array<{ id: string }> =>
+    [...new Set(orders.map((o) => o.customerId))].map((id) => ({ id }));
   const wfoCurrent = () => ({ window: null as number | null, mixture: null, hasRow: false });
 
-  it("pooled = concat de orígenes; mezcla = fit en C0; tabla por origen; partición por origen", () => {
+  it("pooled = concat de orígenes; mezcla = fit en C0; tabla por origen", () => {
     const rand = rng(4242);
     const gauss = (): number => {
       let u = 0;
@@ -693,7 +673,7 @@ describe("evaluateTuneWFO (walk-forward pooled, partición por origen)", () => {
       }
     }
     const origins = [C, tuneCutoff(NOW, 2 * H)];
-    const byMarket = evaluateTuneWFO(orders, wfoCustomers(orders), [], origins, { cycleDays: 30, sigma0: 0.5 }, wfoCurrent, H);
+    const byMarket = evaluateTuneWFO(orders, wfoCustomers(orders), origins, { cycleDays: 30, sigma0: 0.5 }, wfoCurrent, H);
     // Sin markets ni países: una sola partición null.
     assert.equal(byMarket.size, 1);
     const wfo = byMarket.get(null);
@@ -745,7 +725,7 @@ describe("evaluateTuneWFO (walk-forward pooled, partición por origen)", () => {
     }
     const origins = [C, tuneCutoff(NOW, 2 * H)];
     const byMarket = evaluateTuneWFO(
-      orders, wfoCustomers(orders), [], origins, { cycleDays: 30, sigma0: 0.5 },
+      orders, wfoCustomers(orders), origins, { cycleDays: 30, sigma0: 0.5 },
       wfoCurrent, H,
     );
     const wfo = byMarket.get(null);

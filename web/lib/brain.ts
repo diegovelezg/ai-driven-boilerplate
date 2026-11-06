@@ -4,7 +4,7 @@
 // top activos de product_stats, marcas/categorías de item_content, ventana
 // mediana y ticket p50/p80 de orders reales, patrones de repite.
 import { getSupabase } from "@/lib/supabase";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import { normProductTitleLoose } from "@/lib/product-stats";
 
 export interface BrainTopProducto {

@@ -30,14 +30,14 @@ export interface Synthesis {
   questions: string[];
 }
 
-const SYSTEM = `Eres el sintetizador de perfiles de negocio. Recibes 4 evidencias y produces el perfil.
+const SYSTEM = `Eres el sintetizador de perfiles de negocio B2B. Recibes 4 evidencias y produces el perfil.
 Responde SOLO JSON válido, sin markdown:
-{"business_model": "b2c"|"b2b"|"hybrid"|null, "vertical": string|null, "taxonomy_id": string|null, "buyer_type": string|null, "catalog_type": "consumible"|"perecedero"|"moda_estacional"|"durable"|"servicio"|"digital"|"mixto"|null, "archetype": "b2c_consumible"|"b2c_moda"|"b2c_durable"|"b2b_recurrente"|"b2b_proyecto"|"hibrido"|null, "cycle_days": number|null, "company_required": boolean, "confidence": "alta"|"media"|"baja", "evidence": [{"slot": string, "value": string, "confidence": "alta"|"media"|"baja", "source": "web"|"sector"|"datos"|"dicho"}], "questions": string[]}
+{"business_model": "b2b"|null, "vertical": string|null, "taxonomy_id": string|null, "buyer_type": string|null, "catalog_type": "consumible"|"perecedero"|"moda_estacional"|"durable"|"servicio"|"digital"|"mixto"|null, "archetype": "b2b_recurrente"|"b2b_proyecto"|null, "cycle_days": number|null, "company_required": true, "confidence": "alta"|"media"|"baja", "evidence": [{"slot": string, "value": string, "confidence": "alta"|"media"|"baja", "source": "web"|"sector"|"datos"|"dicho"}], "questions": string[]}
 Reglas duras:
-- business_model: "hybrid" exige evidencia POSITIVA de consumo personal (personas comprando para sí). Gmail masivo + dominios propios + ICP de negocios = b2b, nunca hybrid por defecto. La ausencia de company_name (campo vacío) no es evidencia de B2C.
-- vertical: palabras del negocio, texto libre (máx 60). taxonomy_id: nodo Shopify si encaja, null si no.
-- buyer_type: granularidad ("negocio pequeño anunciante", "consumidor final"...) o null.
-- archetype coherente con business_model. cycle_days solo si hay evidencia (sector o datos); null antes que inventado.
+- Sistema B2B-only: business_model siempre "b2b", archetype siempre b2b_recurrente (reposición) o b2b_proyecto (compra esporádica), company_required siempre true.
+- vertical: palabras del negocio, texto libre (máx 60). taxonomy_id: nodo de taxonomía si encaja, null si no.
+- buyer_type: granularidad de empresa ("distribuidor", "anunciante", "contratista"...) o null.
+- cycle_days solo si hay evidencia (sector o datos); null antes que inventado.
 - cycle_days: prefiere el intervalo_mediano de los datos si la cobertura es razonable (≥20% de compradores); si no, el ciclo típico del sector mapeado a días; null si nada lo sostiene. Cita la fuente en evidence.
 - evidence: una entrada por slot con valor, cada una con su fuente real. Si dos fuentes discrepan, dilo en questions y baja confidence.
 - questions: máx 3, solo lo que NADA cierra. Vacío si el perfil está completo.
@@ -51,6 +51,19 @@ const VALID = {
   conf: new Set(["alta", "media", "baja"]),
   source: new Set(["web", "sector", "datos", "dicho"]),
 };
+/** Normalización B2B-only: cualquier modelo/arquetipo legacy se mapea a B2B. */
+export function normalizeB2BProfile(p: { business_model?: unknown; archetype?: unknown; company_required?: unknown }): {
+  business_model: string;
+  archetype: string | null;
+  company_required: boolean;
+} {
+  const a = String(p.archetype ?? "");
+  return {
+    business_model: "b2b",
+    archetype: a === "b2b_proyecto" ? "b2b_proyecto" : a === "b2b_recurrente" ? "b2b_recurrente" : null,
+    company_required: true,
+  };
+}
 
 export interface SynthesisInput {
   description: string;
@@ -109,15 +122,16 @@ export async function synthesize(input: SynthesisInput): Promise<Synthesis> {
         .filter((e): e is SlotEvidence => e !== null)
         .slice(0, 10)
     : [];
+  const normB2B = normalizeB2BProfile({ business_model: model, archetype: arch });
   return {
-    businessModel: model && VALID.model.has(model) ? (model as Synthesis["businessModel"]) : null,
+    businessModel: "b2b",
     vertical: cut(str(p.vertical), 80),
     taxonomyId: taxRaw && isKnownTaxonomyId(taxRaw) ? taxRaw : null,
     buyerType: cut(str(p.buyer_type), 80),
     catalogType: catalog && VALID.catalog.has(catalog) ? (catalog as Synthesis["catalogType"]) : null,
-    archetype: arch && VALID.archetype.has(arch) ? (arch as Synthesis["archetype"]) : null,
+    archetype: normB2B.archetype as Synthesis["archetype"],
     cycleDays: typeof cyc === "number" && Number.isInteger(cyc) && cyc >= 1 && cyc <= 1095 ? cyc : null,
-    companyRequired: p.company_required === true,
+    companyRequired: true,
     confidence: conf && VALID.conf.has(conf) ? (conf as Synthesis["confidence"]) : "baja",
     evidence: ev,
     questions: Array.isArray(p.questions)

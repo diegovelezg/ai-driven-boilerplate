@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { resolveStoreId } from "@/lib/customers-db";
-import { readConnections } from "@/lib/store";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import {
   ARCHETYPES,
   getStoreProfile,
@@ -119,7 +118,7 @@ const REQUIRED_SLOTS = ["business_model", "vertical", "buyer_type"] as const;
 
 /** Pregunta con propósito: cada slot desbloquea algo del motor. */
 const SLOT_QUESTIONS: Array<{ slot: string; ask: string }> = [
-  { slot: "business_model", ask: "¿Tus clientes son personas, empresas o ambos?" },
+  { slot: "business_model", ask: "¿A qué tipo de empresas vendes?" },
   { slot: "vertical", ask: "¿Cómo describirías tu rubro en una frase?" },
   { slot: "buyer_type", ask: "¿Quién te compra más: consumidor final, negocio pequeño o empresa grande?" },
   { slot: "catalog_type", ask: "¿Lo que vendes se recompra seguido, es por temporada o es una sola compra?" },
@@ -235,7 +234,6 @@ export interface ProfileSaveState {
   message: string;
 }
 
-const MODELS: BusinessModel[] = ["b2c", "b2b", "hybrid"];
 const ARCHETYPE_IDS = Object.keys(ARCHETYPES) as ArchetypeId[];
 
 export async function saveTenantProfileAction(
@@ -245,23 +243,14 @@ export async function saveTenantProfileAction(
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "Sin Supabase en .env.local: perfil no guardado." };
   }
-  const conn = await readConnections();
-  if (!conn.medusaUrl) {
-    return { ok: false, message: "Conecta Medusa primero: aún no hay store." };
-  }
-  let storeId: string | null;
-  try {
-    storeId = await resolveStoreId(conn.medusaUrl);
-  } catch (e) {
-    return { ok: false, message: `No pude resolver el store: ${e instanceof Error ? e.message : "error"}` };
-  }
+  const storeId = await resolveActiveStoreId();
   if (!storeId) {
-    return { ok: false, message: "Haz un sync primero (Guardar y conectar) para crear el store." };
+    return { ok: false, message: "Sin tienda todavía." };
   }
 
-  const businessModel = String(formData.get("businessModel") ?? "b2c") as BusinessModel;
-  const archetype = String(formData.get("archetype") ?? "b2c_consumible") as ArchetypeId;
-  if (!MODELS.includes(businessModel)) return { ok: false, message: "Modelo inválido." };
+  const businessModel = "b2b" as BusinessModel;
+  const rawArch = String(formData.get("archetype") ?? "b2b_recurrente") as ArchetypeId;
+  const archetype: ArchetypeId = rawArch === "b2b_proyecto" ? "b2b_proyecto" : "b2b_recurrente";
   if (!ARCHETYPE_IDS.includes(archetype)) return { ok: false, message: "Arquetipo inválido." };
 
   const catalogRaw = String(formData.get("catalogType") ?? "").trim();

@@ -490,8 +490,8 @@ describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
     { customerId: "f", sessions: singleSession(10, 6000) },
   ];
 
-  it("puro-B2C idéntico a v2 (sin tipos ⇒ fallback global false)", () => {
-    const legacy = predictStore(baseInput(base(), 30, 30, 0.5, "PEN", false));
+  it("B2B-only: sin tipos o con B2C legacy ⇒ todo B2B (fallback true)", () => {
+    const legacy = predictStore(baseInput(base(), 30, 30, 0.5, "PEN", true));
     const typed = predictStore(
       baseInput(
         base().map((c) => ({ ...c, customerType: "B2C" })),
@@ -514,11 +514,11 @@ describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
     assert.equal(typed.find((x) => x.customerId === "vip")!.decision, "dormido");
   });
 
-  it("mix parte dormido por lado y deciles por lado (v4: sin revision por dormido)", () => {
+  it("B2B-only: el pool es único (mix legacy normalizado a B2B)", () => {
     const customers: CustomerSessions[] = base().map((c) =>
       c.customerId === "vip" || c.customerId === "b"
         ? { ...c, customerType: "B2B" }
-        : { ...c, customerType: "B2C" },
+        : { ...c, customerType: "B2B" },
     );
     const preds = predictStore(baseInput(customers, 30, 30, 0.5, "PEN", false));
     // Lado B2B: vip dormido + top de su lado ⇒ dormido igual (v4).
@@ -528,7 +528,7 @@ describe("issue #21 Paso 4: isB2B por cliente (mismo tren v3)", () => {
     // pool chico no colapsa.
     const b = preds.find((x) => x.customerId === "b")!;
     assert.ok(b.valorDecil !== null && b.valorDecil >= 1 && b.valorDecil <= 10);
-    // Un B2C dormido equivalente no califica a revisión (por datos, no veto):
+    // Un dormido equivalente no califica a revisión (por datos, no veto):
     const c = preds.find((x) => x.customerId === "c")!;
     assert.ok(c.decision === "dormido" || c.decision === "vigilar" || c.decision === "actuar");
   });

@@ -1,5 +1,5 @@
 // Log auditable del vigilante de perfil (#6): JSONL en .data/recalibrate.jsonl.
-// "Siempre": cada pasada (script, post-sync, manual) deja una línea, incluso
+// "Siempre": cada pasada (script, post-import, manual) deja una línea, incluso
 // los silencios (skipped) y los errores; cada decisión por delta también.
 // El silencio por defecto debe ser auditable: si no propuso nada, el log dice por qué.
 // Escritura sincrónica best-effort (las corridas son semanales): nunca rompe
@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 
 const RECALIBRATE_LOG = join(process.cwd(), ".data", "recalibrate.jsonl");
 
-export type RecalibrationSource = "post-sync" | "manual" | "script";
+export type RecalibrationSource = "post-import" | "manual" | "script";
 
 export type RecalibrateOutcomeKind =
   | "skipped"

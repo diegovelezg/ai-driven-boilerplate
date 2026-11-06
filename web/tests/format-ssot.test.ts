@@ -2,7 +2,7 @@
 // Regla: todo valor visible —incluidos los datos que se le pasan a los
 // agentes (tools ADK, prompts de workers)— pasa por `@/lib/format`.
 // Prohibido:
-// - importar formatMoney/formatNumber/formatDecimal/formatPercent* desde `@/lib/medusa`
+// - importar formatMoney/formatNumber/formatDecimal/formatPercent* desde `@/lib/canonical`
 //   (estático o dinámico)
 // - `toLocaleString` o `new Intl.NumberFormat` fuera de `lib/format.ts`
 // - símbolos de moneda a mano (`S/ ${`, `US$`…) fuera del SSOT
@@ -39,16 +39,16 @@ const files = walk(join(ROOT, "app"), /\.(ts|tsx)$/)
 const rel = (p: string) => relative(ROOT, p).replace(/\\/g, "/");
 
 describe("SSOT formato numérico", () => {
-  it("nadie importa helpers de formato desde @/lib/medusa (ni dinámico)", () => {
+  it("nadie importa helpers de formato desde @/lib/canonical (ni dinámico)", () => {
     const bad: string[] = [];
-    const reStatic = /import\s*\{[^}]*format(Money|Number|Decimal|Percent)[^}]*\}\s*from\s*["']@\/lib\/medusa["']/;
+    const reStatic = /import\s*\{[^}]*format(Money|Number|Decimal|Percent)[^}]*\}\s*from\s*["']@\/lib\/canonical["']/;
     const reDynamic =
-      /\{\s*[^}]*format(Money|Number|Decimal|Percent)[^}]*\}\s*=\s*await\s*import\(\s*["']@\/lib\/medusa["']\s*\)/;
+      /\{\s*[^}]*format(Money|Number|Decimal|Percent)[^}]*\}\s*=\s*await\s*import\(\s*["']@\/lib\/canonical["']\s*\)/;
     for (const f of files) {
       const src = readFileSync(f, "utf8");
       if (reStatic.test(src) || reDynamic.test(src)) bad.push(rel(f));
     }
-    assert.deepEqual(bad, [], `importan formato desde medusa (usar @/lib/format): ${bad.join(", ")}`);
+    assert.deepEqual(bad, [], `importan formato desde canonical (usar @/lib/format): ${bad.join(", ")}`);
   });
 
   it("no hay toLocaleString fuera del SSOT", () => {

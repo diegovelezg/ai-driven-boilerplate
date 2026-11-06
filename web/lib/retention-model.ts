@@ -1171,15 +1171,11 @@ export function predictStore(input: StoreModelInput): Prediction[] {
   const nStoreWithGaps = per.filter((p) => p.gaps.length >= 1).length;
   const cohortCases = cohortGaps.length + cohortCens.length;
 
-  // Tipo efectivo por cliente (issue #21 Paso 4): customerType del input
-  // (ya resuelto por el caller como manual_edits ?? customer_type) manda;
-  // sin tipo ⇒ fallback al global legacy (puro-B2C/B2B idénticos a v2).
-  const legacyB2B = input.isB2B === true;
+  // B2B-only: todo cliente es empresa; sin tipo ⇒ B2B (fallback legacy true).
   const isB2BClient = (c: CustomerSessions): boolean => {
     const t = (c.customerType ?? "").trim().toUpperCase();
-    if (t === "B2B") return true;
-    if (t === "B2C") return false;
-    return legacyB2B;
+    if (t === "B2C") return true; // legacy: se normaliza a B2B
+    return true;
   };
 
   // Lado por cliente + deciles por lado (issue #21 Paso 4). Sin tipos
@@ -1286,7 +1282,7 @@ export function predictStore(input: StoreModelInput): Prediction[] {
       ventana = "en";
     }
     let valorDecil: number | null = null;
-    const sideB2B = sideById.get(p.id) ?? legacyB2B;
+    const sideB2B = sideById.get(p.id) ?? true;
     const sidePool = sideB2B ? b2bVals : b2cVals;
     const pool = sidePool.length > 0 ? sidePool : ticketVals;
     if (ticket !== null && pool.length > 0) {

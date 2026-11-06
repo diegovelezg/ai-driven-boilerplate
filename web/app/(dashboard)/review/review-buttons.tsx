@@ -194,7 +194,7 @@ export function ReopenButton({ id, onReopen }: { id: string; onReopen: Op }) {
 }
 
 /** Lanza una prospección manual (botón del inbox). Mismo tratamiento SSOT
- *  que Sync/Enriquecer: `bg.start()` y la cinta avisa; solo se toastea el
+ *  que Enriquecer: `bg.start()` y la cinta avisa; solo se toastea el
  *  error sin run. Pasa el tope del auto: el tope solo frena la mañana. */
 export function ProspectButton({
   onProspect,

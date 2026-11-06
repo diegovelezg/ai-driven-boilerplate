@@ -222,7 +222,7 @@ export async function getMetadataMap(storeId: string): Promise<MetadataMap | nul
   return parsed.ok ? parsed.map : null;
 }
 
-/** Guarda el mapa (upsert del perfil; el sync nunca toca esta columna). */
+/** Guarda el mapa (upsert del perfil; la importación nunca toca esta columna). */
 export async function saveMetadataMap(storeId: string, raw: unknown): Promise<MetadataMap> {
   const parsed = validateMetadataMap(raw);
   if (!parsed.ok) throw new Error(parsed.message);

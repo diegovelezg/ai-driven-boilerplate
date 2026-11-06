@@ -406,7 +406,7 @@ describe("recalibrate log (JSONL auditable)", () => {
     appendRecalibrateLog(
       {
         store_id: "s9",
-        source: "post-sync",
+        source: "post-import",
         dry_run: false,
         outcome: "skipped",
         reason: "Propuesta pendiente.",

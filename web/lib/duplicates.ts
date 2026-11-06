@@ -3,7 +3,6 @@
 import "server-only";
 import { getSupabase } from "@/lib/supabase";
 import { smartTitleCase } from "@/lib/text";
-import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 
 export interface DuplicateCustomerRow {
   dbId: string;
@@ -38,7 +37,7 @@ function toRow(r: Record<string, unknown>): DuplicateCustomerRow {
     lastName: smartTitleCase((r.last_name as string) ?? null),
     phone: (r.phone as string) ?? null,
     companyName: smartTitleCase((r.company_name as string) ?? null),
-    customerType: (r.customer_type as string) ?? "B2C",
+    customerType: (r.customer_type as string) ?? "B2B",
     source: (r.source as string) ?? "ecommerce",
     ordersCount: Number(r.orders_count ?? 0),
     totalSpent: Number(r.total_spent ?? 0),
@@ -51,16 +50,11 @@ function toRow(r: Record<string, unknown>): DuplicateCustomerRow {
 
 async function loadAll(
   storeId: string,
-  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
 ): Promise<Array<Record<string, unknown>>> {
   const db = getSupabase();
   const all: Array<Record<string, unknown>> = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await applyScopeFilter(
-      db.from("customers").select(SELECT).eq("store_id", storeId).order("id", { ascending: true }),
-      scope,
-      "id",
-    ).range(from, from + 999);
+    const { data, error } = await db.from("customers").select(SELECT).eq("store_id", storeId).order("id", { ascending: true }).range(from, from + 999);
     if (error) throw new Error(`Duplicates read: ${error.message}`);
     all.push(...((data as Array<Record<string, unknown>>) ?? []));
     if (!data || data.length < 1000) break;
@@ -71,9 +65,8 @@ async function loadAll(
 /** Grupos de customers que comparten email (mismo email, >1 fila). */
 export async function findDuplicateGroups(
   storeId: string,
-  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
 ): Promise<DuplicateGroup[]> {
-  const all = await loadAll(storeId, scope);
+  const all = await loadAll(storeId);
   const byEmail = new Map<string, DuplicateCustomerRow[]>();
   for (const r of all) {
     const email = String(r.email ?? "").trim().toLowerCase();
@@ -91,17 +84,12 @@ export async function findDuplicateGroups(
 /** Conteo ligero (solo emails) para el badge del header. */
 export async function countDuplicateEmails(
   storeId: string,
-  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
 ): Promise<number> {
   const db = getSupabase();
   const seen = new Set<string>();
   const dup = new Set<string>();
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await applyScopeFilter(
-      db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }),
-      scope,
-      "id",
-    ).range(from, from + 999);
+    const { data, error } = await db.from("customers").select("email").eq("store_id", storeId).order("id", { ascending: true }).range(from, from + 999);
     if (error) throw new Error(`Duplicates read: ${error.message}`);
     for (const r of data ?? []) {
       const e = String(r.email ?? "").trim().toLowerCase();

@@ -2,20 +2,23 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Briefcase, Cpu, Mail, Store, type LucideIcon } from "lucide-react";
+import { Briefcase, Cpu, Mail, Users, type LucideIcon } from "lucide-react";
 import { cn } from "cn";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { SectionHeading } from "@/components/section-heading";
-import { EmailSettingsForm, SettingsForm } from "@/components/settings-form";
+import { EmailSettingsForm } from "@/components/settings-form";
 import { TenantProfileForm } from "@/components/tenant-profile-form";
 import { ProfileProposalsPanel } from "@/components/profile-proposals";
+import { TeamPanel } from "./team-panel";
 import { formatNumber } from "@/lib/format";
 import type { SafeStoreConnections } from "@/lib/store";
 import type { StoreProfile, Suggestion } from "@/lib/store-profile-defs";
 import type { ProfileProposal } from "@/lib/profile-recalibrate/service";
+import type { StoreMember } from "@/lib/members";
+import type { MemberRole } from "@/lib/roles";
 
-/** Tab de settings: un grupo por trabajo (conectar vs calibrar vs motor). */
-export type SettingsTab = "tienda" | "email" | "negocio" | "motor";
+/** Tab de settings: un grupo por trabajo (conectar vs calibrar vs motor vs equipo). */
+export type SettingsTab = "email" | "negocio" | "motor" | "equipo";
 
 export interface MotorSummary {
   declarado: number | null;
@@ -40,6 +43,9 @@ export function SettingsTabs({
   motor,
   proposal,
   initialTab = "negocio",
+  members,
+  myRole,
+  myUserId,
 }: {
   defaults: SafeStoreConnections;
   secretsInDb?: boolean;
@@ -55,16 +61,19 @@ export function SettingsTabs({
   motor: MotorSummary | null;
   proposal: ProfileProposal | null;
   initialTab?: SettingsTab;
+  members: StoreMember[];
+  myRole: MemberRole | null;
+  myUserId: string | null;
 }) {
   const router = useRouter();
   const tabs: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
     { id: "negocio", label: "Negocio", icon: Briefcase },
-    { id: "tienda", label: "Tienda", icon: Store },
     { id: "email", label: "Email", icon: Mail },
     { id: "motor", label: "Motor", icon: Cpu },
+    { id: "equipo", label: "Equipo", icon: Users },
   ];
   const [active, setActive] = useState<SettingsTab>(
-    tabs.some((t) => t.id === initialTab) ? initialTab : "tienda",
+    tabs.some((t) => t.id === initialTab) ? initialTab : "negocio",
   );
   const selectTab = (id: SettingsTab) => {
     setActive(id);
@@ -98,17 +107,6 @@ export function SettingsTabs({
           </button>
         ))}
       </div>
-
-      {active === "tienda" && (
-        <section role="tabpanel" aria-label="Tienda" className="flex w-full max-w-2xl flex-col gap-4">
-          <SectionHeading
-            title="Conecta tu tienda"
-            hint="Medusa como origen de clientes y pedidos. Solo se guarda el token, nunca el password."
-            tone="primary"
-          />
-          <SettingsForm defaults={defaults} secretsInDb={secretsInDb} storeId={storeId} contentReady={contentReady} contentMapped={contentMapped} contentKey={contentKey} />
-        </section>
-      )}
 
       {active === "email" && (
         <section role="tabpanel" aria-label="Email" className="flex w-full max-w-2xl flex-col gap-4">
@@ -189,12 +187,16 @@ export function SettingsTabs({
           ) : (
             <AppCardState tone="emerald">
               {storeId
-                ? "Aún sin datos del motor: vuelve tras la primera sincronización."
-                : "Conecta Medusa en Tienda para activar el motor."}
+                ? "Aún sin datos del motor."
+                : "Sin tienda todavía."}
             </AppCardState>
           )}
           {storeId && <ProfileProposalsPanel proposal={proposal} />}
         </section>
+      )}
+
+      {active === "equipo" && (
+        <TeamPanel members={members} myRole={myRole} myUserId={myUserId} storeId={storeId} />
       )}
     </>
   );

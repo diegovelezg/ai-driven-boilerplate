@@ -1,14 +1,55 @@
-// Reglas canónicas de ecommerce (agnósticas de plataforma).
-// Viven aquí —no en `lib/medusa.ts`— para que el segundo proveedor las
-// reutilice sin bifurcar: `lib/sync.ts` y `lib/connectors/*` importan de
-// este módulo. `lib/medusa.ts` las re-exporta (compat: ~20 imports legacy).
-// Barrera: código nuevo de plataforma → `import from "@/lib/connectors"`;
-// nunca `from "@/lib/medusa"` directo salvo `connectors/medusa.ts` y UI legacy.
-import type {
-  CanonicalMarketRef,
-  CanonicalOrder,
-  CurrencyTotals,
-} from "@/lib/medusa";
+// Reglas canónicas puras (sin backend ecommerce).
+// La ingesta es Sheet/CSV (DOOH). Este módulo solo conserva tipos + reglas
+// usadas por lecturas legacy (customers/orders) y tests de reglas.
+
+export interface CurrencyTotals {
+  currency: string;
+  ordersCount: number;
+  totalSpent: number;
+}
+
+export interface CanonicalCustomer {
+  id: string;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  companyName: string | null;
+  createdAt: string | null;
+  ordersCount: number;
+  totalSpent: number;
+  currency: string | null;
+  totalsByCurrency: CurrencyTotals[];
+}
+
+export interface CanonicalChannelRef {
+  source: string;
+  sourceId: string;
+  name: string;
+}
+
+export interface CanonicalMarketRef {
+  source: string;
+  sourceId: string;
+  name: string;
+  currency: string;
+  countries: string[];
+}
+
+export interface CanonicalOrder {
+  sourceOrderId: string;
+  customerEmail: string;
+  customerExternalId: string | null;
+  channel: CanonicalChannelRef | null;
+  market: CanonicalMarketRef | null;
+  totalAmount: number;
+  currency: string;
+  country: string | null;
+  placedAt: string | null;
+  status: string | null;
+  paymentStatus: string | null;
+  isTest: boolean;
+}
 
 /** Agrupa montos por moneda — nunca sumar PEN + MXN en un solo número. */
 export function groupTotalsByCurrency(
@@ -106,14 +147,13 @@ export function isRealDbOrder(o: {
 }
 
 /**
- * País canónico ISO2 de una orden — general medusa v1/v2 + shopify.
+ * País canónico ISO2 de una orden (single-país: el país del tenant manda,
+ * el crudo de la orden solo informa).
  * Cascada (primera que resuelva gana):
- *   1. country crudo: shipping_address.country_code → billing_address.country_code
- *      (Medusa v1/v2 y Shopify exponen ISO2 aquí cuando hay dirección).
- *   2. market.countries con un único ISO2 (region de un solo país).
- *   3. nombre del market si es ISO2 ("PE", "MX", "CL").
- *   4. null = sin país (bienes digitales, checkout sin dirección).
- * Shopify mapea igual: shipping/billing country_code → shopify_market.
+ *   1. country crudo (ISO2 de dirección).
+ *   2. market.countries con un único ISO2 (deprecated, sin markets).
+ *   3. nombre del market si es ISO2 (deprecated).
+ *   4. null = sin país.
  */
 export function resolveOrderCountry(
   raw: string | null | undefined,

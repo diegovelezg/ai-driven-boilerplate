@@ -1,4 +1,4 @@
-# AI Retention Engine — Blueprint de arquitectura (implementado)
+# MEOW — Blueprint de arquitectura (implementado)
 
 > **Estado:** documento vivo, refleja `main` a 2026-10-22. Ya no es visión: el loop
 > scout→strategist→copywriter→dispatcher→analyst corre en prod vía worker + cron Coolify,
@@ -11,17 +11,16 @@
 +-------------------------------------------------------------------------+
 |                          INGESTION LAYER (MODULAR)                      |
 |  +--------------------+   +--------------------+   +---------------+    |
-|  | Medusa v2 API REAL |   | Shopify STUB       |   | Woo STUB      |    |
-|  | login JWT v1/v2    |   | sin backend        |   | sin backend   |    |
+|  | Sheet/CSV DOOH     |   | Sheet URL          |   | CSV              |    |
+|  | companies/contacts |   | venues/screens     |   | slots            |    |
 +--+---------+----------+---+---------+----------+---+-------+-------+--+
              |                        |                        |
              +------------------------+------------------------+
                                       |
                                       v
 +-------------------------------------------------------------------------+
-|              SYNC + MORNING PIPELINE (web/worker.ts, sin cola)          |
-|  sync (runSyncOnce, slot atómico/store)                                 |
-|   → enrichment → brain → regenerate(stale) → [foto si sync cambió]     |
+|              MORNING PIPELINE (web/worker.ts, sin cola)                    |
+|  enrichment → brain → regenerate(stale) → [foto si cambió]              |
 |   → scout → strategist → copywriter(10) → prospect(B2B-only)            |
 |  background_runs = cinta por paso (claimRunSlot, best-effort)           |
 +--------------------------------+----------------------------------------+
@@ -58,44 +57,29 @@
 +-------------------------------------------------------------------------+
 ```
 
-## 2. Ingestion Module: ecommerce connectors (Medusa real)
+## 2. Ingestion Module: DOOH vía Sheet/CSV
 
-> Implementado en `web/lib/connectors/` (`types.ts` + `medusa.ts` + `index.ts:getConnector`).
-> `web/lib/sync.ts` orquesta (`syncStoreFromPlatform`, 6 fases); `syncStoreFromMedusa` wrapper.
-> `web/lib/sync-runner.ts:runSyncOnce` con slot atómico; `web/worker.ts` lo corre por tienda.
+> Implementado en `web/lib/sheet-import.ts` + `web/lib/dooh-import.ts`.
+> `web/worker.ts` corre solo `morning` por tienda.
 
-Medusa (único real): login JWT v1/v2, `regions` → `market_regions`,
-`sales_channel` → `channels`, customers/orders/products raw → canónicos, upsert +
-tombstones + `product_stats`. Shopify/Woo: `ConnectorNotImplementedError` explícito.
+Ingesta: companies → contacts → venues → screens → slots (upsert por external_ref).
 
-`CanonicalOrderEvent` (vigente, `docs/architecture` original §2 se mantiene):
-
-```ts
-interface CanonicalOrderEvent {
-  source: 'medusa' | 'shopify' | 'woocommerce';
-  sourceOrderId: string; storeId: string;
-  channel: { sourceId: string; name: string };
-  market: { sourceId: string; name: string; currency: string; countries: string[] };
-  customer: { id: string; email: string; firstName?: string; lastName?: string;
-              phone?: string; companyName?: string; };
-  items: Array<{ sku: string; title: string; quantity: number; unitPrice: number }>;
-  totalAmount: number; currency: string; country?: string; createdAt: Date;
-}
-```
-
-País canónico (`resolveOrderCountry`, medusa v1/v2 + shopify): shipping/billing →
-`market.countries` si único → nombre market si ISO2 → `null`. Moda por customer en
-`customers.country`; writers desnormalizan en señales/acciones para filtro `?market=` por ISO2.
+Single-país: cada tenant tiene UN solo país/región/moneda
+(`stores.shop_country` + `stores.shop_currency`). Sin `market_regions`,
+sin `market_id`, sin `?market=`. País canónico de la orden: ISO2 directo,
+si no el `shop_country` del tenant.
 
 ## 3. Data Classification & Enrichment Pipeline (implementado)
 
-- **B2B vs B2C**: dominio vs lista ~4.500 webmails + `companyName`; `isB2B` por lado
-  (issue #21 parcial: display + prospect gate, decisión aún no parte por lado).
+- **B2B-only**: `customers.customer_type` siempre `B2B` (CHECK `customers_customer_type_b2b`,
+  `20261107000000_b2b_only.sql`); `classify` normaliza legacy a B2B; `store_profiles`
+  (`business_model=b2b`, arquetipos `b2b_recurrente/b2b_proyecto`, `company_required=true`);
+  prospector sin gate (solo exige base enriquecible); UI y ADK hablan de empresas.
 - **Enriquecimiento**: `domains` + `enrichment_runs`, `pendingDomains` → `runEnrichment`
   (SearXNG rescue + scrape), industria/escala a `CustomerFirmographic`-like en `domains`;
   brief sectorial cacheado; `vertical_profiles`.
 - **Perfilador tenant** (`web/lib/profiling/` + `store_profiles`): investigator/sector/
-  synthesizer/critic aislados, taxonomía Shopify, arquetipo
+  synthesizer/critic aislados, taxonomía estándar, arquetipo
   (`ARCHETYPE_RULE_VERSION=v1:…`), vigilante mensual + recalibración HITL (#6),
   `brain_json` mínimo diario (#25 Hito 1).
 
@@ -142,7 +126,7 @@ Por `prioritized` top-mira sin `busySignal/busyCustomer`: historial 5 órdenes +
 wa≤450/body≤800, email 400–750). Inserta `pending_review` + señal→`actioned`. Nunca envía.
 `runStaleRefresh(limit 10)`: re-redacta stale a GEN vigente (#26 implementado).
 
-### Prospect `prospect:v6:market-scores` (`web/lib/prospect.ts`)
+### Prospect `prospect:v7:single-country` (`web/lib/prospect.ts`)
 
 Gate B2B-only; ICP manual o auto (top-20 + brain + feedback); queries LLM →
 SearXNG → scrape → score vs ICP + pool similar + retrieval top-3 + gate contacto +
@@ -162,15 +146,26 @@ Analyst: sesioniza post-envío (moneda tienda), 1 sesión→1ª acción vigente,
 > Fuente de verdad: `supabase/migrations/*.sql` (56 archivos). El modelo Prisma de abajo
 > es ilustrativo; el DDL real es SQL directo.
 
-Tablas (28): `stores, channels, market_regions, customers, orders, products,
+Tablas (28 + 3 CRM): `stores, channels, customers, orders, products,
 product_stats, item_content, customer_predictions, churn_signals, proposed_actions,
 proposed_leads, background_runs, domains, enrichment_runs, customer_aliases,
 media_captions, store_profiles, vertical_profiles, profile_snapshots, profile_proposals,
 tenant_model_params, opt_outs, llm_usage, conversations, messages, merchant_users,
-store_secrets, store_secret_audits, jobs` (+ `start_run_if_free()`).
+store_secrets, store_secret_audits, jobs` (+ `start_run_if_free()`)
++ CRM: `companies, contacts, company_roles` (`20261106000000_crm_base.sql` + polish `20261112000000_crm_polish.sql`).
+Single-país: sin `market_regions`; país/moneda del tenant en
+`stores.shop_country` + `stores.shop_currency`.
+CRM: `companies 1-N contacts` (`contacts.company_id` nullable, `SET NULL` al borrar;
+dedupe BD por empresa email/phone + `external_ref` único por tenant para idempotencia Sheet/CSV);
+rol cliente/proveedor = fila activa en `company_roles` (`valid_to IS NULL`), no columna.
+Puentes: `campaigns.advertiser_company_id + primary_contact_id → contacts`,
+`customers.company_id → companies` (backfill por nombre normalizado, motor intacto).
++ Roles por membresía: `merchant_users.role` (`20261108000000_member_roles.sql`,
+`owner|admin|seller|viewer`, jerarquía en `lib/roles.ts` + `FEATURE_MIN_ROLE`);
+gestión en Settings › Equipo (solo admin+; admin no toca owners; siempre queda un owner).
 
 Claves: `stores(platform,shop_url)` único; `customers(source)` ecommerce-upsert/local-intacto;
-`orders` moneda original + `channel/market/country/is_test`; `customer_predictions`
+`orders` moneda original + `channel/country/is_test`; `customer_predictions`
 `(store,customer,as_of)` + `model_version`; `churn_signals(status,objective,evidence_json)`;
 `proposed_actions(status,evidence_json.generator,approved_by)`; `background_runs(kind,scope)`.
 
@@ -180,7 +175,7 @@ Claves: `stores(platform,shop_url)` único; `customers(source)` ecommerce-upsert
   `lib/` + ADK.
 - **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Customers, Review, Finanzas, Products, Settings, Ayuda).
 - **DB/Auth:** Supabase (Postgres + Auth + Realtime). RLS por `is_store_member`.
-- **Scheduler/Worker:** sin cola: `web/worker.ts` one-shot (`--once --kinds=sync,morning`) +
+- **Scheduler/Worker:** sin cola: `web/worker.ts` one-shot (`--once --kinds=morning`) +
   Scheduled Task Coolify diario 11:00 UTC + daemon dev `WORKER_SCHEDULE=1`. `jobs` retirada
   (artefacto, no programar sobre ella); slot vía `start_run_if_free`.
 - **Scraping/búsqueda:** SearXNG (service Coolify) + Crawlee/cheerio (`procps` en runner).

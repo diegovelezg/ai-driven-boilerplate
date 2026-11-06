@@ -109,11 +109,11 @@ function FieldMeta({
           <Badge variant="secondary" className="font-normal">
             Editado
           </Badge>
-          <AppTooltip tip="Volver al valor de Medusa">
+          <AppTooltip tip="Volver al valor base">
             <button
               type="button"
               onClick={onRevert}
-              aria-label={`Revertir ${label} a valor de Medusa`}
+              aria-label={`Revertir ${label} a valor base`}
               className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
             >
               <Undo2 className="size-3.5" aria-hidden />
@@ -220,7 +220,7 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
         className="h-10"
       />
       {isOverridden(key) && baseStr(customer, key) !== drafts[key] && (
-        <p className="text-xs text-muted-foreground">Medusa: {baseStr(customer, key) || "—"}</p>
+        <p className="text-xs text-muted-foreground">Base: {baseStr(customer, key) || "—"}</p>
       )}
     </div>
   );
@@ -230,7 +230,7 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
       <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-8 py-6">
       <SectionHeading
         title="Datos del cliente"
-        hint="Identidad y clasificación. Lo editado se conserva ante el sync de Medusa."
+        hint="Identidad y clasificación. Lo editado se conserva."
         tone="primary"
         className="mb-0"
       />
@@ -267,11 +267,10 @@ function DatosTab({ customer, onClose }: { customer: EditableCustomer; onClose: 
             >
               <SelectTrigger id="cm-type" className="h-10 w-full">
                 <SelectValue>
-                  {(value) => (value === "B2B" ? "B2B · Empresa" : "B2C · Consumidor final")}
+                  {(value) => "B2B · Empresa"}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="B2C">B2C · Consumidor final</SelectItem>
                 <SelectItem value="B2B">B2B · Empresa</SelectItem>
               </SelectContent>
             </Select>
@@ -1478,7 +1477,7 @@ export function CustomerDrawer({
       badges={
         <>
           <Badge variant="secondary" className="font-normal">
-            {customer.customerType === "B2B" ? "B2B · Empresa" : "B2C · Consumidor"}
+            B2B · Empresa
           </Badge>
           {customer.country && (
             <span className="text-[11px] text-muted-foreground">{customer.country}</span>

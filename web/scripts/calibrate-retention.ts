@@ -3,7 +3,7 @@
 // Uso: npx tsx --env-file=.env.local scripts/calibrate-retention.ts
 // Salida: consola + JSON en .data/calibrate-retention.json (no UI).
 import { writeFileSync } from "node:fs";
-import { isRealOrder } from "@/lib/medusa";
+import { isRealOrder } from "@/lib/canonical";
 import { ARCHETYPES, getStoreProfile } from "@/lib/store-profiles";
 import { BAND_CUTS_BY_ARCHETYPE } from "@/lib/store-profile-defs";
 import {
@@ -35,17 +35,8 @@ async function main() {
   const bandHigh = Number.isFinite(bhRaw) && (bhRaw as number) > 0 && (bhRaw as number) < 1 ? (bhRaw as number) : dfltBands.high;
   const bandLow = Number.isFinite(blRaw) && (blRaw as number) >= 0 && (blRaw as number) < 1 ? (blRaw as number) : dfltBands.low;
   const [effHigh, effLow] = bandHigh > bandLow ? [bandHigh, bandLow] : [dfltBands.high, dfltBands.low];
-  // Markets (paridad v2 Paso 3): moneda por partición.
-  const { data: marketRows } = await db.from("market_regions").select("id,currency,countries,name").eq("store_id", storeId);
-  const markets = ((marketRows ?? []) as Array<Record<string, unknown>>).map((m) => ({
-    id: String(m.id),
-    currency: String(m.currency ?? ""),
-    countries: ((m.countries as string[] | null) ?? []).map(String),
-    name: String(m.name ?? ""),
-  }));
-  const marketCur = new Map(markets.map((m) => [m.id, m.currency]));
-  const marketCountries = new Map(markets.map((m) => [m.id, m.countries.map((c) => c.trim().toUpperCase())]));
-  console.log(`perfil: archetype=${archetype} cycle=${cycle} H=${H} sigma0=${sigma0} shop=${shopCurrency} bands=${effHigh}/${effLow} markets=${markets.length}`);
+  // Single-país: una sola moneda (la de la tienda), sin particiones.
+  console.log(`perfil: archetype=${archetype} cycle=${cycle} H=${H} sigma0=${sigma0} shop=${shopCurrency} bands=${effHigh}/${effLow}`);
 
   // Bulk: clientes (con tipo efectivo + país para partición v2) + órdenes reales.
   const { data: custRows } = await db
@@ -63,7 +54,7 @@ async function main() {
           : String((c.customer_type as string | null) ?? "B2C").trim().toUpperCase();
       return [
         String(c.id),
-        { customerType: eff === "B2B" ? "B2B" : "B2C", country: ((c.country as string | null) ?? null) as string | null },
+        { customerType: "B2B", country: ((c.country as string | null) ?? null) as string | null },
       ];
     }),
   );
@@ -89,18 +80,17 @@ async function main() {
       orders.push({ customer_id: o.customer_id as string, at: d.getTime() });
     }
   }
-  // Órdenes con ticket/moneda/market para el modelo (ticket no afecta calibración de p, pero se necesita).
+  // Órdenes con ticket/moneda para el modelo (ticket no afecta calibración de p, pero se necesita).
   const ordersFull: Array<{
     customer_id: string;
     at: number;
     ticketMinor: number;
     currency: string | null;
-    market_id: string | null;
   }> = [];
   for (let i = 0; i < custIds.length; i += 200) {
     const { data } = await db
       .from("orders")
-      .select("customer_id,placed_at,total_amount,currency,market_id,status,payment_status,is_test")
+      .select("customer_id,placed_at,total_amount,currency,status,payment_status,is_test")
       .in("customer_id", custIds.slice(i, i + 200))
       .order("placed_at", { ascending: true });
     for (const o of (data ?? []) as Array<Record<string, unknown>>) {
@@ -120,7 +110,6 @@ async function main() {
         at: d.getTime(),
         ticketMinor: Number(o.total_amount ?? 0),
         currency: (o.currency as string | null) ?? null,
-        market_id: (o.market_id as string | null) ?? null,
       });
     }
   }
@@ -145,40 +134,14 @@ async function main() {
   // cicloFuente en el JSON.
   const step = Math.max(15, H);
   const cutoffs = [0, 1, 2, 3, 4, 5].map((k) => now - H * DAY_MS - k * step * DAY_MS);
-  const pairs: Array<{ p: number; pLow: number; pHigh: number; y: number; model: string; decision: string; marketId: string | null }> = [];
-  // Asignación a market (paridad retention.ts): mayoría market_id ≤ corte ⇒ país ⇒ null.
-  const assignMarket = (mids: Array<string | null>, country: string | null): string | null => {
-    const counts = new Map<string, number>();
-    for (const m of mids) {
-      if (!m) continue;
-      counts.set(m, (counts.get(m) ?? 0) + 1);
-    }
-    if (counts.size > 0) {
-      let best: string | null = null;
-      let bestN = -1;
-      for (const [m, n] of counts) {
-        if (n > bestN || (n === bestN && (best === null || m < best))) {
-          best = m;
-          bestN = n;
-        }
-      }
-      if (best) return best;
-    }
-    const cc = (country ?? "").trim().toUpperCase();
-    if (cc && /^[A-Z]{2}$/.test(cc)) {
-      for (const [mid, clist] of marketCountries) {
-        if (clist.includes(cc)) return mid;
-      }
-    }
-    return null;
-  };
+  const pairs: Array<{ p: number; pLow: number; pHigh: number; y: number; model: string; decision: string }> = [];
   let nPred = 0;
   for (const cutoff of cutoffs) {
     // Sesiones completas (toda la historia) para la etiqueta y por SESIONES
-    // (issue #10 P2: pago partido = 1 compra, no N órdenes).
+    // (pago partido = 1 compra, no N órdenes).
     const sessionsByCust = new Map<string, Array<{ at: number }>>();
-    // Partición por market con sesiones filtradas (universos separados, nunca PEN+MXN).
-    const partCustomers = new Map<string | null, Array<{ customerId: string; sessions: Array<{ at: number; ticketMinor: number; currency: string | null }>; marketId: string | null; customerType: string }>>();
+    // Single-país: un solo universo (toda la tienda), sin particiones.
+    const allCustomers: Array<{ customerId: string; sessions: Array<{ at: number; ticketMinor: number; currency: string | null }>; marketId: string | null; customerType: string }> = [];
     for (const cid of custIds) {
       const allOrds = byCustFull.get(cid) ?? [];
       if (allOrds.length === 0) continue;
@@ -186,34 +149,29 @@ async function main() {
         cid,
         sessionize(allOrds.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency }))),
       );
-      const meta = custMeta.get(cid) ?? { customerType: "B2C", country: null };
+      const meta = custMeta.get(cid) ?? { customerType: "B2B", country: null };
       const ordsCut = allOrds.filter((o) => o.at <= cutoff);
       if (ordsCut.length === 0) continue;
-      const assigned = assignMarket(ordsCut.map((o) => o.market_id), meta.country);
-      const inPart = assigned === null ? ordsCut : ordsCut.filter((o) => o.market_id === null || o.market_id === assigned);
       const sessions = sessionize(
-        inPart.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency })),
+        ordsCut.map((o) => ({ placedAt: o.at, ticketMinor: o.ticketMinor, currency: o.currency })),
       );
       if (sessions.length === 0) continue;
-      const cs = { customerId: cid, sessions, marketId: assigned, customerType: meta.customerType };
-      const list = partCustomers.get(assigned) ?? [];
-      list.push(cs);
-      partCustomers.set(assigned, list);
+      allCustomers.push({ customerId: cid, sessions, marketId: null, customerType: meta.customerType });
     }
-    if (partCustomers.size === 0) continue;
+    if (allCustomers.length === 0) continue;
     let nCut = 0;
-    for (const [partId, customers] of partCustomers) {
-      const partCurrency = (partId === null ? null : marketCur.get(partId)) ?? shopCurrency ?? null;
+    {
+      const partCurrency = shopCurrency ?? null;
       const preds = predictStore({
         asOf: cutoff,
         cycleDays: cycle,
         horizonDays: H,
         sigma0,
         shopCurrency: partCurrency,
-        customers,
+        customers: allCustomers,
         suppressed: new Map(),
         isB2B,
-        marketId: partId,
+        marketId: null,
         bandHigh: effHigh,
         bandLow: effLow,
       });
@@ -222,11 +180,11 @@ async function main() {
       for (const p of preds) {
         const sessions = sessionsByCust.get(p.customerId) ?? [];
         const y = sessions.some((s) => s.at > cutoff && s.at <= cutoff + H * DAY_MS) ? 1 : 0;
-        pairs.push({ p: p.pRecompraH, pLow: p.pLow, pHigh: p.pHigh, y, model: p.model, decision: p.decision, marketId: p.marketId });
+        pairs.push({ p: p.pRecompraH, pLow: p.pLow, pHigh: p.pHigh, y, model: p.model, decision: p.decision });
       }
     }
     console.log(
-      `corte ${new Date(cutoff).toISOString().slice(0, 10)}: particiones=${partCustomers.size} preds=${nCut}`,
+      `corte ${new Date(cutoff).toISOString().slice(0, 10)}: preds=${nCut}`,
     );
   }
 

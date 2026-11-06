@@ -24,7 +24,7 @@ const CALLING_CODES: Record<string, string> = {
 };
 
 /**
- * Normaliza un teléfono crudo del sync a dígitos internacionales para wa.me.
+ * Normaliza un teléfono crudo a dígitos internacionales para wa.me.
  * - Quita todo lo no-dígito (espacios, `+`, guiones, paréntesis).
  * - Si ya trae código país conocido, se respeta.
  * - Si no, antepone el del `countryIso` (país del cliente).

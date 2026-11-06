@@ -34,7 +34,7 @@ const PAGE_SIZE = 50;
 
 // Solo lectura: sin gestión de catálogo (sin columna Acción).
 // Click en la fila abre el drawer con el detalle de lo vendido.
-export function ProductsList({ rows, total, truncated, activeTotal, inactiveTotal, market }: { rows: ProductWithStats[]; total: number; truncated: boolean; activeTotal: number; inactiveTotal: number; market: string | null }) {
+export function ProductsList({ rows, total, truncated, activeTotal, inactiveTotal }: { rows: ProductWithStats[]; total: number; truncated: boolean; activeTotal: number; inactiveTotal: number }) {
   const [sortKey, setSortKey] = useState<SortKey>("revenue");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
@@ -188,7 +188,7 @@ export function ProductsList({ rows, total, truncated, activeTotal, inactiveTota
         </div>
       </div>
       {selected && (
-        <ProductDrawer summary={selected} market={market} onClose={() => setSelectedId(null)} />
+        <ProductDrawer summary={selected} onClose={() => setSelectedId(null)} />
       )}
     </div>
   );

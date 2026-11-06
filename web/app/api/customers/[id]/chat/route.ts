@@ -38,7 +38,7 @@ export async function POST(
   const access = await requireCustomerStoreAccess(id);
   if (access instanceof Response) return access;
 
-  let body: { messages?: IncomingMessage[]; marketId?: string };
+  let body: { messages?: IncomingMessage[] };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -90,31 +90,13 @@ export async function POST(
   }
 
   // Contexto generalista: la tienda enfoca el ámbito; la ficha, el customer.
-  // Mismo Scope que tienda/producto: sin fallback silencioso (400 si inválido).
   const c = customer as Record<string, unknown>;
   const focusName = [c.first_name, c.last_name].filter(Boolean).join(" ") || String(c.email ?? id);
-  const storeIdForScope = String(c.store_id ?? "");
-  let marketScope: { countries: string[] | null; customerIds: string[] | null; market?: { currency: string } | null } | null = null;
-  if (typeof body.marketId === "string" && body.marketId) {
-    try {
-      const { resolveMarketScope } = await import("@/lib/markets");
-      const resolved = await resolveMarketScope(storeIdForScope, body.marketId);
-      if (!resolved?.market) {
-        return Response.json({ error: "Market inválido: no existe en esta tienda.", code: "INVALID_MARKET" }, { status: 400 });
-      }
-      marketScope = resolved;
-    } catch (e) {
-      return Response.json({ error: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, code: "INVALID_MARKET" }, { status: 400 });
-    }
-  }
   const ctx = {
     storeId: (c.store_id as string) ?? null,
     customerId: id,
     view: "customer_drawer",
     focusLabel: `${focusName} <${String(c.email ?? "")}>`,
-    marketCountries: marketScope?.countries ?? null,
-    marketCustomerIds: marketScope?.customerIds ?? null,
-    marketCurrency: marketScope?.market ? String(marketScope.market.currency ?? "").toUpperCase() : null,
   };
 
   // Construir el agente aquí cubre errores de config/API key antes de streamear.

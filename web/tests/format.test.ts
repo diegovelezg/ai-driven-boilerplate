@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatDecimal, formatMoney, formatNumber, formatPercent, formatPercentPoints } from "@/lib/format";
+import { formatDecimal, formatMoney, formatNumber, formatPercent, formatPercentPoints, toTitleCase } from "@/lib/format";
 
 describe("formato numérico único (es: miles '.' y decimales ',')", () => {
   it("formatNumber agrupa miles con punto y 0 decimales por defecto", () => {
@@ -55,5 +55,18 @@ describe("formato numérico único (es: miles '.' y decimales ',')", () => {
     assert.equal(formatMoney(123456, ""), "S/ 1.235");
     assert.equal(formatMoney(123456, "  pen  "), "S/ 1.235");
     assert.equal(formatMoney(123456, "XYZ"), "XYZ 1.235");
+  });
+});
+
+describe("toTitleCase", () => {
+  it("razones sociales en Title Case con siglas intactas", () => {
+    assert.equal(toTitleCase("ESPECIALIDADES DIGITALES INTERNACIONALES S.A.C"), "Especialidades Digitales Internacionales S.A.C");
+    assert.equal(toTitleCase("Hipermercados Tottus S.A."), "Hipermercados Tottus S.A.");
+    assert.equal(toTitleCase("STRONG MINDS PERU SAC"), "Strong Minds Peru SAC");
+    assert.equal(toTitleCase("MEDIA DIALOGUE S.A.C."), "Media Dialogue S.A.C.");
+    assert.equal(toTitleCase("PACIFICO COMPAÑIA DE SEGUROS Y REASEGUROS"), "Pacifico Compañia de Seguros y Reaseguros");
+    assert.equal(toTitleCase("  Toyota  "), "Toyota");
+    assert.equal(toTitleCase(null), "—");
+    assert.equal(toTitleCase(""), "—");
   });
 });

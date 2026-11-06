@@ -1,6 +1,5 @@
-// Orquestador de mañana (issue UX: "actuar hoy" sin borrador en Inbox).
-// Cadena secuencial tras el login: sync ya corrió antes; aquí
-// enrichment (best-effort, acotado) → scout (auto-corre retention si las
+// Orquestador de mañana.
+// Cadena secuencial tras el login: enrichment (best-effort, acotado) → scout (auto-corre retention si las
 // predicciones no son de hoy) → strategist (prioriza open con actuar) →
 // copywriter (redacta prioritized sin borrador) → prospect (rellena
 // "Empresas por contactar"). Cada paso conserva su
@@ -9,7 +8,6 @@
 // busySignal/busyCustomer, prospect dedupe por URL). Best-effort: un paso
 // que falla no tumba los siguientes ni el login.
 import { getSupabase } from "@/lib/supabase";
-import { hasConflict } from "@/lib/background";
 import { createLogger } from "@/lib/log";
 import { formatMoney } from "@/lib/format";
 
@@ -64,12 +62,8 @@ async function step(
   }
 }
 
-/** Cadena completa post-sync. Llamar dentro de `after()` (no bloquea login). */
+/** Cadena completa de mañana. Llamar dentro de `after()` (no bloquea login). */
 export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?: boolean }): Promise<void> {
-  if (await hasConflict(storeId, { kind: "sync" })) {
-    log("morning omitido (sync en curso)");
-    return;
-  }
   // 1. Enriquecimiento completo: corre en CADA login si hay pendientes
   // (la cadena-done no lo frena). Solo frena si ya hay uno en curso.
   // Sin esto, los reintentos (intento 1/3) esperan al día siguiente aunque
@@ -162,7 +156,7 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
   } catch (e) {
     log(`stale-refresh omitido: ${e instanceof Error ? e.message : e}`);
   }
-  // 0c. Foto del día (2026-10-22): si el sync trajo órdenes nuevas o
+  // 0c. Foto del día (2026-10-22): si hubo órdenes nuevas o
   // corregidas, la foto vigente miente (t_days congelados) y el scout la
   // reutilizaría igual. Se regenera ANTES del gate de cadena-done (ese gate
   // es justo el que escondía el bug: cadena done + datos nuevos). Upsert
@@ -173,7 +167,7 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
     try {
       const { runRetentionModel } = await import("@/lib/retention");
       const r = await runRetentionModel(storeId, new Date());
-      log(`foto regenerada (órdenes cambiaron en sync): predicted=${r.predicted} actuar=${r.actuar} vigilar=${r.vigilar}`);
+      log(`foto regenerada: predicted=${r.predicted} actuar=${r.actuar} vigilar=${r.vigilar}`);
     } catch (e) {
       log(`foto no regenerada (${e instanceof Error ? e.message : e}): el scout usa la vigente`);
     }
@@ -194,35 +188,12 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
   const { runProspect, countPendingLeads, prospectEligibility } = await import("@/lib/prospect");
   const { PROSPECT_LEAD_CAP, PROSPECT_PAUSED_HINT, PROSPECT_B2B_ONLY_HINT } = await import("@/lib/prospect-cap");
   const { finishRun: finishProspect } = await import("@/lib/background");
-  // Segmentación: el auto prospecta el mercado primario (nunca mezcla
-  // monedas/países en un mismo ICP/pool). Sin markets, scope global.
-  let prospectScope: { countries: string[] | null; customerIds: string[] | null } | null = null;
-  let prospectMarketLabel: string | null = null;
-  try {
-    const { listStoreMarkets, pickPrimaryMarket, resolveMarketScope, displayMarket } = await import("@/lib/markets");
-    const { getSupabase: getSb } = await import("@/lib/supabase");
-    let shopCur: string | null = null;
-    try {
-      const { data: srow } = await getSb().from("stores").select("shop_currency").eq("id", storeId).maybeSingle();
-      shopCur = ((srow as Record<string, unknown> | null)?.shop_currency as string | null) ?? null;
-    } catch {
-      shopCur = null;
-    }
-    const markets = await listStoreMarkets(storeId).catch(() => []);
-    const primary = pickPrimaryMarket(markets, shopCur);
-    if (primary) {
-      const resolved = await resolveMarketScope(storeId, primary.id).catch(() => null);
-      if (resolved) {
-        prospectScope = { countries: resolved.countries, customerIds: resolved.customerIds };
-        prospectMarketLabel = displayMarket(resolved.market ?? primary);
-      }
-    }
-  } catch (e) {
-    log(`prospect scope omitido: ${e instanceof Error ? e.message : e}`);
-  }
+  // Sin segmentación: toda la tienda es un solo universo.
+  const prospectScope = null;
+  const prospectMarketLabel = null;
   await step(storeId, "prospect", "Prospección", 0, (runId, sid) =>
     (async () => {
-      // Feature solo-B2B: en B2C no hay empresas que buscar.
+      // B2B-only: siempre hay empresas que buscar; solo se omite sin base.
       try {
         const elig = await prospectEligibility(sid);
         if (!elig.eligible) {
@@ -233,7 +204,7 @@ export async function runMorningPipeline(storeId: string, opts?: { refreshFoto?:
             summary: PROSPECT_B2B_ONLY_HINT,
             pulseState: "paused",
           });
-          log("prospect omitido (no B2B)");
+          log("prospect omitido (sin base)");
           return;
         }
       } catch (e) {

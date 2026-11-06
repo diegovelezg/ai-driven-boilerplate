@@ -92,7 +92,7 @@ export interface StoreProfile {
   businessModel: BusinessModel;
   /** Vertical con las palabras del agente (verdad primaria). */
   verticalDetected: string | null;
-  /** Nodo Shopify Standard Product Taxonomy (null = sin mapeo honesto). */
+  /** Nodo de taxonomía estándar (null = sin mapeo honesto). */
   taxonomyId: string | null;
   /** Granularidad del comprador deducida por el perfilador. */
   buyerType: string | null;
@@ -157,8 +157,8 @@ export interface Suggestion {
   ruleVersion: string;
 }
 
-/** Versión de la heurística B2B/B2C. Sube cuando cambia cualquier umbral/peso. */
-export const ARCHETYPE_RULE_VERSION = "v1:w0.6-0.4/b2b0.5-high0.7/hyb0.15-0.25/rep0.3-0.25";
+/** Versión de la heurística B2B-only. v1 distinguía B2B/B2C; v2 asume B2B. */
+export const ARCHETYPE_RULE_VERSION = "v2:b2b-only";
 
 /** Umbrales de la heurística (un solo lugar, testeable). */
 export const ARCHETYPE_THRESHOLDS = {
@@ -172,37 +172,28 @@ export const ARCHETYPE_THRESHOLDS = {
   b2cRepeat: 0.25,
 } as const;
 
-/** Heurística mínima: distingue B2B (empresa/dominio propio) de B2C y
- *  propone arquetipo según recurrencia. Sin datos → b2c_consumible/auto.
+/** Heurística B2B-only: todo tenant vende a empresas; solo se elige entre
+ *  recurrente y proyecto según recurrencia. Sin datos → b2b_recurrente/auto.
  *  Regla versionada en ARCHETYPE_RULE_VERSION. */
 export function suggestArchetype(s: ProfileSignals | null): Suggestion {
   if (!s || s.customers < 5) {
     return {
-      archetype: "b2c_consumible",
-      businessModel: "b2c",
+      archetype: "b2b_recurrente",
+      businessModel: "b2b",
       confidence: "baja",
-      reasons: ["Menos de 5 customers sincronizados: sugerencia por defecto."],
+      reasons: ["Menos de 5 empresas importadas: sugerencia B2B por defecto."],
       ruleVersion: ARCHETYPE_RULE_VERSION,
     };
   }
   const t = ARCHETYPE_THRESHOLDS;
-  const b2bScore = s.companyRate * t.companyW + s.customDomainRate * t.domainW;
   const reasons = [
     `${Math.round(s.companyRate * 100)}% con empresa`,
     `${Math.round(s.customDomainRate * 100)}% con dominio propio`,
     `${Math.round(s.repeatRate * 100)}% con 2+ compras`,
   ];
-  if (b2bScore > t.b2bScore) {
-    const archetype: ArchetypeId = s.repeatRate > t.b2bRepeat ? "b2b_recurrente" : "b2b_proyecto";
-    return { archetype, businessModel: "b2b", confidence: b2bScore > t.b2bHigh ? "alta" : "media", reasons, ruleVersion: ARCHETYPE_RULE_VERSION };
-  }
-  if (s.companyRate > t.hybridCompany || s.customDomainRate > t.hybridDomain) {
-    return { archetype: "hibrido", businessModel: "hybrid", confidence: "media", reasons, ruleVersion: ARCHETYPE_RULE_VERSION };
-  }
-  // B2C: sin mediana de intervalos aún (Fase 2); la recurrencia decide entre
-  // consumible y durable como aproximación.
-  const archetype: ArchetypeId = s.repeatRate > t.b2cRepeat ? "b2c_consumible" : "b2c_durable";
-  return { archetype, businessModel: "b2c", confidence: "media", reasons, ruleVersion: ARCHETYPE_RULE_VERSION };
+  const archetype: ArchetypeId = s.repeatRate > t.b2bRepeat ? "b2b_recurrente" : "b2b_proyecto";
+  const b2bScore = s.companyRate * t.companyW + s.customDomainRate * t.domainW;
+  return { archetype, businessModel: "b2b", confidence: b2bScore > t.b2bHigh ? "alta" : "media", reasons, ruleVersion: ARCHETYPE_RULE_VERSION };
 }
 
 /** Slots del perfil que el vigilante puede proponer (columnas 1:1). */

@@ -12,40 +12,29 @@ import {
   DataTableTd,
   DataTableTh,
 } from "@/components/data-table";
-import { resolveStoreId } from "@/lib/customers-db";
 import { findDuplicateGroups } from "@/lib/duplicates";
-import { resolveMarketScope, withMarketParam } from "@/lib/markets";
 import { formatMoney, formatNumber } from "@/lib/format";
-import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess } from "@/lib/tenant";
+import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { MergeButton } from "./merge-button";
 import { MergeAllBar } from "./merge-all-button";
 
 export const instant = false;
 
-export default async function DuplicatesPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ market?: string }>;
-}) {
-  const conn = await readConnections();
-  const ready = Boolean(conn.medusaUrl) && isSupabaseConfigured();
-  const sp = await searchParams;
+export default async function DuplicatesPage() {
+  const activeStoreId = await resolveActiveStoreId();
+  const ready = Boolean(activeStoreId) && isSupabaseConfigured();
 
   let groups: Awaited<ReturnType<typeof findDuplicateGroups>> = [];
   let error: string | null = null;
-  let marketId: string | null = null;
   if (ready) {
     try {
-      const storeId = await resolveStoreId(conn.medusaUrl);
-      if (!storeId) error = "Tienda sin sincronizar.";
+      const storeId = activeStoreId!;
+      if (!storeId) error = "Sin tienda.";
       else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
-        const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
-        marketId = scope?.market?.id ?? null;
-        groups = await findDuplicateGroups(storeId, scope);
+        groups = await findDuplicateGroups(storeId);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "Error al leer duplicados.";
@@ -62,7 +51,7 @@ export default async function DuplicatesPage({
         description={`${formatNumber(groups.length)} email${groups.length === 1 ? "" : "s"} con más de una ficha${extraRows > 0 ? ` · ${formatNumber(extraRows)} fila${extraRows === 1 ? "" : "s"} extra` : ""}. Solo lectura.`}
         right={
           <Button
-            render={<Link href={withMarketParam("/customers", marketId)} />}
+            render={<Link href="/customers" />}
             nativeButton={false}
             variant="outline"
             size="sm"

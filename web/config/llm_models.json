@@ -1,5 +1,5 @@
 {
-    "$comment": "Configuración LLM — AI Retention Engine. Primario gpt-6-luna (OpenAI) + fallback deepseek-flash. Escala 'reasoning_effort': low|medium|high|max|none. Verificado 2026-10-16 con sondas: luna en chat/completions exige max_completion_tokens (no max_tokens), solo temperature=1 (se omite), effort high OK, json_object OK, tools OK solo con effort 'none' (por eso customer_chat usa none). deepseek-v4-flash NO existe: fallback es deepseek-flash (tools + thinking verificados). json_mode: native=response_format json_object, none=texto libre.",
+    "$comment": "Configuración LLM — MEOW. Primario gpt-6-luna (OpenAI) + fallback deepseek-flash. Escala 'reasoning_effort': low|medium|high|max|none. Verificado 2026-10-16 con sondas: luna en chat/completions exige max_completion_tokens (no max_tokens), solo temperature=1 (se omite), effort high OK, json_object OK, tools OK solo con effort 'none' (por eso customer_chat usa none). deepseek-v4-flash NO existe: fallback es deepseek-flash (tools + thinking verificados). json_mode: native=response_format json_object, none=texto libre.",
   "providers": {
     "deepseek": {
       "api_key_env": "DEEPSEEK_API_KEY",

@@ -1,10 +1,8 @@
-// Clasificador B2B/B2C por dominio (worker post-sync). Regla del blueprint:
-// webmail + sin empresa → B2C; dominio propio/institucional (o empresa declarada
-// con ID fiscal implícito) → B2B. Webmail CON empresa = ambiguo: no se toca.
-// Nunca pisa overrides manuales (manual_edits.customer_type). Sin LLM: la regla
-// es determinista; el gate LLM vive en el enricher por dominio.
+// Sistema B2B-only: todo customer es empresa.
+// runClassify normaliza a 'B2B' cualquier fila legacy (incluye overrides
+// manuales B2C heredados). Se mantiene la firma/counts por compat con el
+// worker (b2c siempre 0).
 import { getSupabase } from "@/lib/supabase";
-import { classifyDomain, domainFromEmail } from "@/lib/domains";
 import { advanceRun, finishRun, type RunStatus } from "@/lib/background";
 import { formatNumber } from "@/lib/format";
 
@@ -14,7 +12,7 @@ export interface ClassifyCounts {
   untouched: number;
 }
 
-/** Clasifica la tienda por páginas; actualiza solo customer_type cuando cambia. */
+/** Normaliza la tienda a B2B por páginas; actualiza solo customer_type cuando cambia. */
 export async function runClassify(runId: string, storeId: string, limit = 0): Promise<ClassifyCounts> {
   const db = getSupabase();
   const counts: ClassifyCounts = { b2b: 0, b2c: 0, untouched: 0 };
@@ -26,7 +24,7 @@ export async function runClassify(runId: string, storeId: string, limit = 0): Pr
     for (let from = 0; ; from += 500) {
       const { data, error } = await db
         .from("customers")
-        .select("id,email,company_name,customer_type,manual_edits")
+        .select("id,email,customer_type")
         .eq("store_id", storeId)
         .order("id", { ascending: true })
         .range(from, from + 499);
@@ -40,26 +38,14 @@ export async function runClassify(runId: string, storeId: string, limit = 0): Pr
         const id = String(r.id);
         await advanceRun(runId, { processed, failed, current: String(r.email ?? id) });
         try {
-          const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
-          if (typeof overrides.customer_type === "string" && overrides.customer_type.trim()) {
-            counts.untouched += 1; // override manual: no tocar
-            continue;
-          }
-          const domain = domainFromEmail(String(r.email ?? ""));
-          const cls = classifyDomain(domain);
-          const company = String(r.company_name ?? "").trim();
-          let next: string | null = null;
-          if (cls.type === "webmail" && !company) next = "B2C";
-          else if (cls.type === "business" || cls.type === "institutional") next = "B2B";
-          if (!next || next === String(r.customer_type ?? "B2C")) {
+          if (String(r.customer_type ?? "B2B") === "B2B") {
             counts.untouched += 1;
             continue;
           }
-          const { error: upErr } = await db.from("customers").update({ customer_type: next }).eq("id", id);
+          const { error: upErr } = await db.from("customers").update({ customer_type: "B2B" }).eq("id", id);
           if (upErr) throw new Error(upErr.message);
           processed += 1;
-          if (next === "B2B") counts.b2b += 1;
-          else counts.b2c += 1;
+          counts.b2b += 1;
         } catch {
           failed += 1;
         }
@@ -71,7 +57,7 @@ export async function runClassify(runId: string, storeId: string, limit = 0): Pr
       status,
       processed,
       failed,
-      summary: `${formatNumber(processed)} clasificados (B2B ${formatNumber(counts.b2b)} · B2C ${formatNumber(counts.b2c)}) · ${formatNumber(counts.untouched)} intactos`,
+      summary: `${formatNumber(processed)} normalizados a B2B · ${formatNumber(counts.untouched)} intactos`,
     });
   } catch (e) {
     await finishRun(runId, {

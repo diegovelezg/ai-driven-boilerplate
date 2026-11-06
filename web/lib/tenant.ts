@@ -8,9 +8,8 @@
 // contextos sin sesión). `listMyStores`/`getMyActiveStore` = filtrado por el
 // usuario actual vía cliente RLS (cualquier miembro del tenant ve todo el
 // tenant, y solo sus tenants).
-import { resolveStoreId } from "@/lib/customers-db";
-import { readConnections } from "@/lib/store";
 import { getSupabase } from "@/lib/supabase";
+import type { MemberRole } from "@/lib/roles";
 
 export interface TenantStore {
   id: string;
@@ -18,6 +17,7 @@ export interface TenantStore {
   shop_url: string;
   platform: string;
   shop_currency: string;
+  shop_country: string | null;
 }
 
 /** Lista tiendas ordenadas por creación. Si hay más de 50, valida el ?store=
@@ -27,7 +27,7 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
   if (requestedId) {
     const { data: one } = await db
       .from("stores")
-      .select("id,name,shop_url,platform,shop_currency")
+      .select("id,name,shop_url,platform,shop_currency,shop_country")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) {
@@ -38,12 +38,13 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
         shop_url: String(r.shop_url ?? ""),
         platform: String(r.platform ?? ""),
         shop_currency: String(r.shop_currency ?? "PEN"),
+        shop_country: (r.shop_country as string | null) ?? null,
       }];
     }
   }
   const { data, error, count } = await db
     .from("stores")
-    .select("id,name,shop_url,platform,shop_currency", { count: "exact" })
+    .select("id,name,shop_url,platform,shop_currency,shop_country", { count: "exact" })
     .order("created_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Stores read: ${error.message}`);
@@ -57,14 +58,8 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
     shop_url: String(r.shop_url ?? ""),
     platform: String(r.platform ?? ""),
     shop_currency: String(r.shop_currency ?? "PEN"),
+    shop_country: (r.shop_country as string | null) ?? null,
   }));
-}
-
-/** Fallback legacy: la única conexión guardada en .data/connections.json. */
-async function getLegacyStoreId(): Promise<string | null> {
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return null;
-  return resolveStoreId(conn.medusaUrl).catch(() => null);
 }
 
 /** Valida ?store= contra la lista; si no existe, null (el caller aplica fallback). */
@@ -83,17 +78,10 @@ async function resolveActiveStore(
 ): Promise<TenantStore> {
   const picked = pickRequestedStore(stores, requestedId);
   if (picked) return picked;
-  const viaConn = await getLegacyStoreId();
-  if (viaConn) {
-    const viaStore = stores.find((s) => s.id === viaConn);
-    if (viaStore) return viaStore;
-  }
   return stores[0];
 }
 
-/** Atajo: lista + resuelve. Devuelve tiendas vacías si aún no hay sync.
- *  Ventana 50 para el switcher + validación por ID directo si ?store= cae
- *  fuera (merge, no reemplazo: el switcher sigue viendo la lista). */
+/** Atajo: lista + resuelve. */
 export async function getActiveStore(
   requestedId: string | null | undefined,
 ): Promise<{ stores: TenantStore[]; active: TenantStore | null }> {
@@ -157,6 +145,58 @@ export async function requireMyStoreAccess(storeId: string): Promise<boolean | n
   return ids.includes(storeId);
 }
 
+/** Roles del usuario actual por tienda (vía RLS). null = sin auth (dev: sin scoping). */
+export async function getMyStoreRoles(): Promise<Map<string, MemberRole> | null> {
+  let configured = false;
+  try {
+    const { isUserAuthConfigured } = await import("@/lib/supabase-server");
+    configured = isUserAuthConfigured();
+  } catch {
+    return null;
+  }
+  if (!configured) return null;
+  try {
+    const { createServerSupabase } = await import("@/lib/supabase-server");
+    const { isMemberRole } = await import("@/lib/roles");
+    const supabase = await createServerSupabase();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return new Map();
+    const { data } = await supabase
+      .from("merchant_users")
+      .select("store_id,role")
+      .eq("user_id", user.id);
+    const out = new Map<string, MemberRole>();
+    for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+      const role = r.role;
+      if (!isMemberRole(role)) continue;
+      out.set(String(r.store_id ?? ""), role);
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Rol del usuario actual en `storeId`. null = sin auth (dev: permite todo). */
+export async function getMyStoreRole(storeId: string): Promise<MemberRole | null> {
+  const roles = await getMyStoreRoles().catch(() => null);
+  if (roles === null) return null;
+  return roles.get(storeId) ?? null;
+}
+
+/** ¿El usuario actual alcanza el rol mínimo en `storeId`? null = sin auth (dev: permite). */
+export async function requireMinRole(
+  storeId: string,
+  need: MemberRole,
+): Promise<boolean | null> {
+  const { hasMinRole } = await import("@/lib/roles");
+  const roles = await getMyStoreRoles().catch(() => null);
+  if (roles === null) return null; // sin auth: permite
+  const role = roles.get(storeId) ?? null;
+  if (role === null) return false; // sin membresía: deniega
+  return hasMinRole(role, need);
+}
+
 /** Tiendas visibles para el usuario actual. Fuera de membresía no se lista
  *  nada (el ?store= hostil se ignora aguas abajo en `getMyActiveStore`). */
 export async function listMyStores(requestedId?: string | null): Promise<TenantStore[]> {
@@ -168,7 +208,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
     if (!ids.includes(requestedId)) return listMyStores();
     const { data: one } = await db
       .from("stores")
-      .select("id,name,shop_url,platform,shop_currency")
+      .select("id,name,shop_url,platform,shop_currency,shop_country")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) {
@@ -179,13 +219,14 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
         shop_url: String(r.shop_url ?? ""),
         platform: String(r.platform ?? ""),
         shop_currency: String(r.shop_currency ?? "PEN"),
+        shop_country: (r.shop_country as string | null) ?? null,
       }];
     }
     return [];
   }
   const { data, error } = await db
     .from("stores")
-    .select("id,name,shop_url,platform,shop_currency")
+    .select("id,name,shop_url,platform,shop_currency,shop_country")
     .in("id", ids)
     .order("created_at", { ascending: true });
   if (error) throw new Error(`Stores read: ${error.message}`);
@@ -195,6 +236,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
     shop_url: String(r.shop_url ?? ""),
     platform: String(r.platform ?? ""),
     shop_currency: String(r.shop_currency ?? "PEN"),
+    shop_country: (r.shop_country as string | null) ?? null,
   }));
 }
 
@@ -208,4 +250,14 @@ export async function getMyActiveStore(
   const picked = requestedId ? (stores.find((s) => s.id === requestedId) ?? null) : null;
   if (picked) return { stores, active: picked };
   return { stores, active: stores[0] };
+}
+
+/** Atajo server-action: id del tenant activo (primera tienda del usuario). */
+export async function resolveActiveStoreId(requestedId?: string | null): Promise<string | null> {
+  try {
+    const { active } = await getMyActiveStore(requestedId ?? null);
+    return active?.id ?? null;
+  } catch {
+    return null;
+  }
 }

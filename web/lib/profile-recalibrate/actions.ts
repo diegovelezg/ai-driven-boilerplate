@@ -8,8 +8,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import { finishRun, getLatestRun, startRun, type BackgroundRun } from "@/lib/background";
 import { decideDelta, recalibrateWithRun, runRecalibration } from "./service";
 import type { ProfileSlot } from "./diff";
@@ -23,9 +22,7 @@ export interface RecalibrateState {
 
 async function currentStoreId(): Promise<string | null> {
   if (!isSupabaseConfigured()) return null;
-  const conn = await readConnections();
-  if (!conn.medusaUrl) return null;
-  return resolveStoreId(conn.medusaUrl).catch(() => null);
+  return resolveActiveStoreId();
 }
 
 /** Botón "Revisar mi perfil": dispara el vigilante saltando la cadencia.
@@ -34,7 +31,7 @@ async function currentStoreId(): Promise<string | null> {
 export async function runRecalibrationAction(): Promise<RecalibrateState> {
   const storeId = await currentStoreId();
   if (!storeId) {
-    return { ok: false, message: "Conecta Medusa y sincroniza primero: aún no hay store." };
+    return { ok: false, message: "Sin tienda todavía." };
   }
   try {
     const runId = await startRun(storeId, "recalibrate", "Revisión de perfil", 1);

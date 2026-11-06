@@ -5,7 +5,6 @@
 // Lo consumen Overview, Review, Copywriter y Strategist.
 import { getSupabase } from "@/lib/supabase";
 import { resolveShopCurrency } from "@/lib/store-profiles";
-import { applyScopeFilter, chunkIds, effectiveScopeFilter, isLargeIdScope } from "@/lib/markets";
 
 export interface MiraRow {
   signalId: string;
@@ -92,10 +91,9 @@ export function avgTicket(totalSpent: number, ordersCount: number): number {
 }
 
 /**
- * Toda la mira (open + prioritized) rankeada con el criterio único, separada
- * por universo monetario: NUNCA se mezclan PEN con MXN en un mismo ranking ni
- * en una misma suma. `rows` = moneda de la tienda (el ranking principal);
- * `foreign` = otras monedas rankeadas entre sí (no abandonadas, pero aparte).
+ * Toda la mira (open + prioritized) rankeada con el criterio único.
+ * Single-país: un solo universo monetario (moneda de la tienda). `foreign`
+ * se conserva vacío por compatibilidad (ya no hay monedas mezcladas).
  *
  * Dos queries simples + join en JS: el ORDER BY score deja empates arbitrarios
  * y el order por join (referencedTable) PostgREST lo ignora en silencio.
@@ -103,12 +101,9 @@ export function avgTicket(totalSpent: number, ordersCount: number): number {
 export async function getRankedMira(
   storeId: string,
   limit = 100,
-  // null = sin filtro de mercado (toda la tienda).
-  scope: { countries?: string[] | null; customerIds?: string[] | null; currency?: string | null } | null = null,
+  // @deprecated Single-país: se ignora (toda la tienda es un universo).
+  _scope?: { countries?: string[] | null; customerIds?: string[] | null; currency?: string | null } | null,
 ): Promise<{ rows: MiraRow[]; foreign: MiraRow[] }> {
-  // Filtro global por mercado: ISO2 cortos (nunca miles de IDs en la URL).
-  // customerIds solo en el fallback sin países (ver resolveMarketScope).
-  // NULL-comodín: señales sin país se ven en todo filtro.
   const db = getSupabase();
   // Issue #11 P1: no truncar por score antes de rankear por valor.
   // Se pagina el universo open+prioritized (no ventana por created_at) y se
@@ -117,76 +112,12 @@ export async function getRankedMira(
   const CAP = 10000;
   const sigs: Array<Record<string, unknown>> = [];
   let sigTruncated = false;
-  // Scope fallback grande: rama null una vez + paginado por chunk de IDs
-  // (un solo `.in(miles)` revienta la URL). Dedupe por id de señal.
-  if (isLargeIdScope(scope)) {
-    const { ids } = effectiveScopeFilter(scope);
-    const idList = ids ?? [];
-    const seenSig = new Set<string>();
-    const pushUniq = (rows: Array<Record<string, unknown>>) => {
-      for (const r of rows) {
-        const k = String(r.id ?? "");
-        if (!k || seenSig.has(k)) continue;
-        seenSig.add(k);
-        sigs.push(r);
-      }
-    };
-    for (let off = 0; ; off += PAGE) {
-      const { data: pageRows, error: pageErr } = await db
+  for (let off = 0; ; off += PAGE) {
+    const { data: pageRows, error: pageErr } = await db
         .from("churn_signals")
         .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
         .eq("store_id", storeId)
         .in("status", ["open", "prioritized"])
-        .is("country", null)
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: true })
-        .range(off, off + PAGE - 1);
-      if (pageErr) throw new Error(`signals read: ${pageErr.message}`);
-      const rows = (pageRows ?? []) as Array<Record<string, unknown>>;
-      pushUniq(rows);
-      if (rows.length < PAGE) break;
-      if (sigs.length >= CAP) {
-        sigTruncated = true;
-        break;
-      }
-    }
-    if (!sigTruncated) {
-      for (const c of chunkIds(idList)) {
-        let chunkDone = false;
-        for (let off = 0; !chunkDone; off += PAGE) {
-          const { data: pageRows, error: pageErr } = await db
-            .from("churn_signals")
-            .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
-            .eq("store_id", storeId)
-            .in("status", ["open", "prioritized"])
-            .in("customer_id", c)
-            .order("created_at", { ascending: false })
-            .order("id", { ascending: true })
-            .range(off, off + PAGE - 1);
-          if (pageErr) throw new Error(`signals read: ${pageErr.message}`);
-          const rows = (pageRows ?? []) as Array<Record<string, unknown>>;
-          pushUniq(rows);
-          if (rows.length < PAGE) chunkDone = true;
-          if (sigs.length >= CAP) {
-            sigTruncated = true;
-            chunkDone = true;
-            break;
-          }
-        }
-        if (sigTruncated) break;
-      }
-    }
-  } else {
-  for (let off = 0; ; off += PAGE) {
-    const pageQ = applyScopeFilter(
-      db
-        .from("churn_signals")
-        .select("id,customer_id,kind,objective,score,reason,status,created_at,evidence_json")
-        .eq("store_id", storeId)
-        .in("status", ["open", "prioritized"]),
-      scope,
-    );
-    const { data: pageRows, error: pageErr } = await pageQ
       .order("created_at", { ascending: false })
       .order("id", { ascending: true })
       .range(off, off + PAGE - 1);
@@ -198,7 +129,6 @@ export async function getRankedMira(
       sigTruncated = true;
       break;
     }
-  }
   }
   if (sigs.length === 0) return { rows: [], foreign: [] };
   if (sigTruncated) {
@@ -356,19 +286,9 @@ export async function getRankedMira(
     }
     return 0;
   };
-  // Universos separados: misma moneda rankea junta; la foránea no contamina
-  // el ranking ni las sumas de la tienda (pero sigue su propio ranking).
-  // Con filtro de mercado el market YA es el universo: todo va a rows.
-  const scoped = !!scope && (scope.countries != null || scope.customerIds != null);
-  const inShop = (r: MiraRow) =>
-    scoped ||
-    shopCurrency === null ||
-    r.currency === null ||
-    r.currency.toUpperCase() === shopCurrency.toUpperCase();
-  const rows = allRows.filter(inShop);
-  const foreign = allRows.filter((r) => !inShop(r));
+  // Single-país: todo rankea junto (sin universo foreign).
+  const rows = [...allRows];
   rows.sort(cmp);
-  foreign.sort(cmp);
   // Limit al final (issue #11): el ranking por valor ya está completo.
-  return { rows: rows.slice(0, limit), foreign: foreign.slice(0, limit) };
+  return { rows: rows.slice(0, limit), foreign: [] };
 }

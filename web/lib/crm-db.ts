@@ -1,0 +1,230 @@
+// Lecturas CRM (service_role, como customers-db). Escrituras en crm-actions.ts.
+import { getSupabase } from "@/lib/supabase";
+import type { CompanyKind } from "@/lib/crm";
+
+export interface CrmCompany {
+  id: string;
+  store_id: string;
+  name: string;
+  kind: CompanyKind | null;
+  tax_id: string | null;
+  domain: string | null;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  country: string | null;
+  external_ref: string | null;
+  contacts_count: number;
+}
+
+export interface CrmContact {
+  id: string;
+  store_id: string;
+  company_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  job_title: string | null;
+  is_primary: boolean;
+}
+
+export type EmpresasSortKey = "nombre" | "tipo" | "contactos" | "tax_id";
+export type EmpresasSortDir = "asc" | "desc";
+
+export function parseEmpresasSort(sp: { sort?: string; dir?: string }): {
+  key: EmpresasSortKey;
+  dir: EmpresasSortDir;
+} {
+  const key: EmpresasSortKey =
+    sp.sort === "tipo" || sp.sort === "contactos" || sp.sort === "tax_id" ? sp.sort : "nombre";
+  if (sp.dir === "asc" || sp.dir === "desc") return { key, dir: sp.dir };
+  // Texto ASC primero; conteos DESC primero (lo más relevante).
+  return { key, dir: key === "contactos" ? "desc" : "asc" };
+}
+
+export async function listCrmCompanies(
+  storeId: string,
+  opts: { q?: string; kind?: CompanyKind | null; sortKey?: EmpresasSortKey; sortDir?: EmpresasSortDir; page?: number; pageSize?: number } = {},
+): Promise<{ rows: CrmCompany[]; total: number }> {
+  const db = getSupabase();
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
+  const page = Math.max(1, opts.page ?? 1);
+  const sortKey = opts.sortKey ?? "nombre";
+  const sortDir = opts.sortDir ?? (sortKey === "contactos" ? "desc" : "asc");
+  const ascending = sortDir === "asc";
+  const like = (() => {
+    const q = (opts.q ?? "").trim();
+    return q ? `%${q.replace(/[%_\\]/g, "\\$&")}%` : null;
+  })();
+  // Total exacto para paginar (mismos filtros, sin orden ni rango).
+  // La casa (kind IS NULL, red propia) nunca lista: no es contraparte.
+  let countQuery = db.from("companies").select("id", { count: "exact", head: true }).eq("store_id", storeId).not("kind", "is", null);
+  if (like) countQuery = countQuery.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
+  if (opts.kind) countQuery = countQuery.eq("kind", opts.kind);
+  const { count, error: countError } = await countQuery;
+  if (countError) throw new Error(`CRM read: ${countError.message}`);
+  const total = count ?? 0;
+  if (total === 0) return { rows: [], total };
+  let query = db
+    .from("companies")
+    .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref")
+    .eq("store_id", storeId)
+    .not("kind", "is", null);
+  if (like) query = query.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
+  if (opts.kind) query = query.eq("kind", opts.kind);
+  // contactos es conteo calculado: se ordena en JS tras leer la página.
+  if (sortKey === "nombre") query = query.order("name", { ascending });
+  else if (sortKey === "tipo") query = query.order("kind", { ascending });
+  else if (sortKey === "tax_id") query = query.order("tax_id", { ascending });
+  else query = query.order("name", { ascending: true });
+  const from = (page - 1) * pageSize;
+  const { data, error } = await query.range(from, from + pageSize - 1);
+  if (error) throw new Error(`CRM read: ${error.message}`);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const ids = rows.map((r) => String(r.id));
+  const countBy = new Map<string, number>();
+  if (ids.length > 0) {
+    const { data: counts } = await db
+      .from("contacts")
+      .select("company_id")
+      .eq("store_id", storeId)
+      .in("company_id", ids);
+    for (const c of (counts ?? []) as Array<Record<string, unknown>>) {
+      const cid = String(c.company_id);
+      countBy.set(cid, (countBy.get(cid) ?? 0) + 1);
+    }
+  }
+  const out = rows.map((r) => ({
+    id: String(r.id),
+    store_id: String(r.store_id),
+    name: String(r.name ?? ""),
+    kind: (r.kind as CompanyKind | null) ?? null,
+    tax_id: (r.tax_id as string | null) ?? null,
+    domain: (r.domain as string | null) ?? null,
+    email: (r.email as string | null) ?? null,
+    phone: (r.phone as string | null) ?? null,
+    city: (r.city as string | null) ?? null,
+    country: (r.country as string | null) ?? null,
+    external_ref: (r.external_ref as string | null) ?? null,
+    contacts_count: countBy.get(String(r.id)) ?? 0,
+  }));
+  if (sortKey === "contactos") {
+    out.sort((a, b) => (ascending ? a.contacts_count - b.contacts_count : b.contacts_count - a.contacts_count));
+  }
+  return { rows: out, total };
+}
+
+export interface CrmContactListItem extends CrmContact {
+  company_name: string | null;
+}
+
+export async function listCrmContacts(
+  storeId: string,
+  opts: { q?: string; companyId?: string; limit?: number } = {},
+): Promise<CrmContactListItem[]> {
+  const db = getSupabase();
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
+  let query = db
+    .from("contacts")
+    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,companies(name)")
+    .eq("store_id", storeId)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (opts.companyId) query = query.eq("company_id", opts.companyId);
+  // El texto se filtra en JS (incluye nombre de empresa, que el `or` de
+  // PostgREST no alcanza). Límite 200: escala suficiente para el CRM.
+  const { data, error } = await query;
+  if (error) throw new Error(`CRM read: ${error.message}`);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const companyIds = [...new Set(rows.map((r) => r.company_id as string | null).filter((v): v is string => !!v))];
+  let names = new Map<string, string>();
+  if (companyIds.length > 0) {
+    const { data: cos, error: coerr } = await db.from("companies").select("id,name").eq("store_id", storeId).in("id", companyIds);
+    if (coerr) throw new Error(`CRM read: ${coerr.message}`);
+    names = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]));
+  }
+  const out = rows.map((c) => {
+    const embedded = c.companies as unknown as { name?: unknown } | null;
+    const cid = (c.company_id as string | null) ?? null;
+    return {
+      id: String(c.id),
+      store_id: String(c.store_id),
+      company_id: cid,
+      first_name: (c.first_name as string | null) ?? null,
+      last_name: (c.last_name as string | null) ?? null,
+      email: (c.email as string | null) ?? null,
+      phone: (c.phone as string | null) ?? null,
+      job_title: (c.job_title as string | null) ?? null,
+      is_primary: c.is_primary === true,
+      company_name: (embedded && typeof embedded.name === "string" ? embedded.name : null) ?? (cid ? (names.get(cid) ?? null) : null),
+    };
+  });
+  // Sin join PostgREST (o si falló el embed), el nombre ya viene del mapa.
+  // El filtro por empresa es exacto (company_id); el texto filtra personas.
+  const q = (opts.q ?? "").trim();
+  if (q) {
+    const ql = q.toLowerCase();
+    return out.filter((c) =>
+      [c.first_name, c.last_name, c.email, c.job_title, c.company_name].some((v) => (v ?? "").toLowerCase().includes(ql)),
+    );
+  }
+  return out;
+}
+
+export interface CrmCampaign {
+  id: string;
+  name: string;
+  status: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  primary_contact_id: string | null;
+}
+
+export async function getCrmCompany(
+  storeId: string,
+  companyId: string,
+): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string }> } | null> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("companies")
+    .select("*")
+    .eq("store_id", storeId)
+    .eq("id", companyId)
+    .maybeSingle();
+  if (error) throw new Error(`CRM read: ${error.message}`);
+  if (!data) return null;
+  const [{ data: contacts }, { data: campaigns }, { data: ios }] = await Promise.all([
+    db.from("contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
+    db.from("campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
+    db.from("insertion_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
+  ]);
+  return {
+    company: data as Record<string, unknown>,
+    contacts: ((contacts ?? []) as Array<Record<string, unknown>>).map((c) => ({
+      id: String(c.id),
+      store_id: String(c.store_id),
+      company_id: (c.company_id as string | null) ?? null,
+      first_name: (c.first_name as string | null) ?? null,
+      last_name: (c.last_name as string | null) ?? null,
+      email: (c.email as string | null) ?? null,
+      phone: (c.phone as string | null) ?? null,
+      job_title: (c.job_title as string | null) ?? null,
+      is_primary: c.is_primary === true,
+    })),
+    campaigns: ((campaigns ?? []) as Array<Record<string, unknown>>).map((m) => ({
+      id: String(m.id),
+      name: String(m.name ?? ""),
+      status: String(m.status ?? ""),
+      starts_at: (m.starts_at as string | null) ?? null,
+      ends_at: (m.ends_at as string | null) ?? null,
+      primary_contact_id: (m.primary_contact_id as string | null) ?? null,
+    })),
+    ios: ((ios ?? []) as Array<Record<string, unknown>>).map((o) => ({
+      id: String(o.id),
+      io_number: String(o.io_number ?? ""),
+      brand: (o.brand as string | null) ?? null,
+      status: String(o.status ?? ""),
+    })),
+  };
+}

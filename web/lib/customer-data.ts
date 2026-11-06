@@ -1,7 +1,7 @@
 // Lecturas de compras + firmográficos de un customer. Compartido por las API
 // routes y las tools del agente ADK (misma fuente de verdad).
 import { getSupabase } from "@/lib/supabase";
-import { isRealOrder } from "@/lib/medusa";
+import { isRealOrder } from "@/lib/canonical";
 import { enrichOrderItems } from "@/lib/item-context";
 import { classifyDomain, domainFromEmail, type DomainType } from "@/lib/domains";
 
@@ -101,7 +101,7 @@ export async function loadCustomerOrdersAndRfm(
     .range(offset, offset + Math.max(orderLimit * 3, 60) - 1);
   if (error) throw new Error(error.message);
 
-  // Solo compras reales: misma regla que los agregados del sync
+  // Solo compras reales: misma regla que los agregados
   // (cabecera orders_count ↔ lista visibles, por construcción).
   const realRows = ((orders as Array<Record<string, unknown>> | null) ?? []).filter((o) =>
     isRealOrder({

@@ -16,7 +16,6 @@ import { ChatPanel } from "./chat-panel";
 interface ChatDockState {
   storeId: string;
   storeName: string;
-  marketId: string | null;
 }
 
 interface ChatDockContextValue {
@@ -26,10 +25,9 @@ interface ChatDockContextValue {
   openDock: (input: {
     storeId: string;
     storeName: string;
-    marketId?: string | null;
   }) => void;
   /** Toggle desde el icono del sidebar: cierra si está abierto; si no,
-   *  abre heredando tienda/market de la URL. */
+   *  abre heredando tienda de la URL. */
   toggleChat: () => void;
   closeDock: () => void;
 }
@@ -58,7 +56,6 @@ export function ChatDockProvider({
     setDock({
       storeId: input.storeId,
       storeName: input.storeName,
-      marketId: input.marketId ?? null,
     });
   }, []);
 
@@ -76,7 +73,6 @@ export function ChatDockProvider({
     setDock({
       storeId: store.id,
       storeName: store.label,
-      marketId: sp.get("market"),
     });
   }, [dock, stores]);
 
@@ -163,7 +159,6 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
         const f = { ...qargs, ...(d.filter ?? {}) };
         const tipo = f.customer_type ?? f.customerType ?? null;
         const qs = new URLSearchParams();
-        if (dock.marketId) qs.set("market", dock.marketId);
         if (f.q) qs.set("q", f.q);
         if (f.decision) qs.set("decision", f.decision);
         if (f.vista) qs.set("vista", f.vista);
@@ -188,13 +183,12 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
       const ids = rowsOfArtifact(artifact).slice(0, 20);
       if (ids.length === 0) return;
       const qs = new URLSearchParams();
-      if (dock.marketId) qs.set("market", dock.marketId);
       qs.set(param, ids.join(","));
       const href = `/review?${qs.toString()}`;
       if (pathname === "/review") router.replace(href);
       else router.push(href);
     },
-    [dock.marketId, pathname, router],
+    [dock, pathname, router],
   );
 
   return (
@@ -231,7 +225,6 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
             <div className="flex min-h-0 flex-1 flex-col">
               <ChatPanel
                 storeId={dock.storeId}
-                marketId={dock.marketId}
                 onArtifact={handleArtifact}
               />
             </div>

@@ -24,7 +24,7 @@ function applyCorrections(base: Synthesis, corrections: Critique["corrections"])
     next.evidence.push({ slot: c.slot, value: c.value, confidence: "media" as const, source: "datos" as const });
     switch (c.slot) {
       case "business_model":
-        if (["b2c", "b2b", "hybrid"].includes(c.value)) next.businessModel = c.value as Synthesis["businessModel"];
+        next.businessModel = "b2b";
         break;
       case "vertical":
         next.vertical = c.value.slice(0, 80);
@@ -39,7 +39,7 @@ function applyCorrections(base: Synthesis, corrections: Critique["corrections"])
         next.catalogType = c.value as Synthesis["catalogType"];
         break;
       case "archetype":
-        next.archetype = c.value as Synthesis["archetype"];
+        next.archetype = (c.value === "b2b_proyecto" ? "b2b_proyecto" : "b2b_recurrente") as Synthesis["archetype"];
         break;
       case "cycle_days": {
         const n = Number(c.value);
@@ -47,7 +47,7 @@ function applyCorrections(base: Synthesis, corrections: Critique["corrections"])
         break;
       }
       case "company_required":
-        next.companyRequired = /^(true|sí|si|1)$/i.test(c.value.trim());
+        next.companyRequired = true;
         break;
     }
   }

@@ -12,18 +12,16 @@ import {
   parseCustomerFilters,
   parseCustomersSort,
   queryStoreCustomers,
-  resolveStoreId,
 } from "@/lib/customers-db";
-import { readConnections } from "@/lib/store";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { pendingDomains } from "@/lib/enrich";
 import { countDuplicateEmails } from "@/lib/duplicates";
-import { resolveMarketScope, withMarketParam } from "@/lib/markets";
 import { requireMyStoreAccess } from "@/lib/tenant";
 import { formatNumber } from "@/lib/format";
 import { CustomersView } from "./customers-view";
 import { EnrichmentControls } from "./enrichment-controls";
-import { SyncButton } from "./sync-button";
+import { connection } from "next/server";
 
 export const instant = false;
 
@@ -32,11 +30,16 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; ventana?: string; banda?: string; elegibilidad?: string; decil?: string; market?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; ventana?: string; banda?: string; elegibilidad?: string; decil?: string }>;
 }) {
-  const conn = await readConnections();
-  const connected = Boolean(conn.medusaUrl && conn.medusaToken);
+  // Request-time: la page usa Date.now() y Cache Components no lo difiere
+  // con `instant = false` — sin esto, el prerender falla con
+  // blocking-prerender-current-time. El connection() del layout no cubre
+  // a la page (cada segmento se valida por separado).
+  await connection();
   const dbReady = isSupabaseConfigured();
+  const activeStoreId = await resolveActiveStoreId();
+  const connected = Boolean(activeStoreId);
 
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
@@ -61,7 +64,6 @@ export default async function CustomersPage({
   let pendingCount = 0;
   let duplicateCount = 0;
   let shopCurrency: string | null = null;
-  let marketId: string | null = null;
   let preds: Record<string, CustomerPredictionLite> = {};
   let ventana7: { n: number; sumaMinor: number } | null = null;
   let seguimiento: { n: number; sumaMinor: number } | null = null;
@@ -69,23 +71,19 @@ export default async function CustomersPage({
 
   if (connected && dbReady) {
     try {
-      const storeId = await resolveStoreId(conn.medusaUrl);
+      const storeId = activeStoreId!;
       if (!storeId) {
-        error = "Tienda aún sin sincronizar. Presiona Sincronizar.";
+        error = "Sin tienda.";
       } else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
         synced = true;
-        // Filtro global por país/mercado (?market= del header).
-        // NULL-comodín: los sin compras se ven en todo filtro.
-        const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
-        marketId = scope?.market?.id ?? null;
-        pendingCount = (await pendingDomains(storeId, scope).catch(() => [])).length;
-        duplicateCount = await countDuplicateEmails(storeId, scope).catch(() => 0);
+        pendingCount = (await pendingDomains(storeId).catch(() => [])).length;
+        duplicateCount = await countDuplicateEmails(storeId).catch(() => 0);
         const { resolveCloseWatchP } = await import("@/lib/store-profiles");
         const closeWatchCutoff = await resolveCloseWatchP(storeId).catch(() => 0.1);
         const fetchPage = (p: number) =>
-          queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort, filters, scope, closeWatchCutoff);
+          queryStoreCustomers(storeId, q, p, PAGE_SIZE, sort, filters, undefined, closeWatchCutoff);
         let res = await fetchPage(page);
         totalCount = res.totalCount;
         const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -114,11 +112,10 @@ export default async function CustomersPage({
         if (filters.vista === "seguimiento") {
           seguimiento = await getSeguimientoSummary(storeId, closeWatchCutoff).catch(() => null);
         }
-        // Agregado B2B/B2C por valor (issue #14A): facturación bruta por tipo.
+        // Agregado B2B por valor: facturación bruta de empresas.
         valorByType = await getValorByType(
           storeId,
-          scope?.market?.currency?.toUpperCase() ?? shopCurrency,
-          scope,
+          shopCurrency,
         ).catch(() => null);
       }
     } catch (e) {
@@ -140,10 +137,10 @@ export default async function CustomersPage({
             </span>
             {connected && dbReady && (
               <>
-                {synced && <EnrichmentControls pending={pendingCount} />}
+                <EnrichmentControls pending={pendingCount} />
                 {synced && duplicateCount > 0 && (
                   <Button
-                    render={<Link href={withMarketParam("/customers/duplicates", marketId)} />}
+                    render={<Link href="/customers/duplicates" />}
                     nativeButton={false}
                     variant="outline"
                     size="sm"
@@ -151,7 +148,6 @@ export default async function CustomersPage({
                     Duplicados ({formatNumber(duplicateCount)})
                   </Button>
                 )}
-                <SyncButton />
               </>
             )}
           </span>
@@ -159,20 +155,9 @@ export default async function CustomersPage({
       />
 
       {!connected && (
-        <AppCard
-          footer={
-            <Button
-              render={<Link href="/settings" />}
-              nativeButton={false}
-              variant="outline"
-              size="sm"
-            >
-              Ir a Settings
-            </Button>
-          }
-        >
+        <AppCard>
           <p className="text-sm text-muted-foreground">
-            Conecta Medusa con tu usuario admin para traer customers.
+            Sin tienda. Importa inventario en /inventario.
           </p>
         </AppCard>
       )}
@@ -186,7 +171,7 @@ export default async function CustomersPage({
 
       {error && (
         <AppCard
-          footer={connected && dbReady && !synced ? <SyncButton /> : undefined}
+
         >
           <p className="text-sm text-muted-foreground">{error}</p>
         </AppCard>
@@ -203,7 +188,6 @@ export default async function CustomersPage({
           sortDir={sort.dir}
           filters={filters}
           shopCurrency={shopCurrency}
-          marketId={marketId}
           preds={preds}
           ventana7={ventana7}
           seguimiento={seguimiento}

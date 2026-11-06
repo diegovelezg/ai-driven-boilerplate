@@ -16,7 +16,7 @@ export interface InvestigateSources {
 }
 
 export interface InvestigateResult extends DescriptionInterpretation {
-  /** Mapeo a Shopify (juicio del agente; null = sin encaje honesto). */
+  /** Mapeo a taxonomía (juicio del agente; null = sin encaje honesto). */
   taxonomyId: string | null;
   sources: InvestigateSources | null;
   /** Texto web recortado (para el synthesizer; NO serializar al cliente). */
@@ -73,16 +73,16 @@ async function fetchHomepageText(domain: string): Promise<{ text: string; url: s
   return null;
 }
 
-const SYSTEM = `Eres un analista que tipifica un negocio para un motor de retención.
+const SYSTEM = `Eres un analista que tipifica un negocio B2B para un motor de retención.
 Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
-{"business_model": "b2c"|"b2b"|"hybrid"|null, "vertical": string|null, "taxonomy_id": string|null, "buyer_type": string|null, "cycle_days": number|null, "cycle_unknown": boolean, "industry": "alimentos"|"moda"|"belleza"|"hogar"|"electronica"|"salud"|"mascotas"|"servicios"|"distribucion"|"otro"|null, "catalog_type": "consumible"|"perecedero"|"moda_estacional"|"durable"|"servicio"|"digital"|"mixto"|null, "archetype": "b2c_consumible"|"b2c_moda"|"b2c_durable"|"b2b_recurrente"|"b2b_proyecto"|"hibrido"|null, "company_required": boolean, "confidence": "alta"|"media"|"baja", "understood": string[], "questions": string[]}
+{"business_model": "b2b"|null, "vertical": string|null, "taxonomy_id": string|null, "buyer_type": string|null, "cycle_days": number|null, "cycle_unknown": boolean, "industry": "alimentos"|"moda"|"belleza"|"hogar"|"electronica"|"salud"|"mascotas"|"servicios"|"distribucion"|"otro"|null, "catalog_type": "consumible"|"perecedero"|"moda_estacional"|"durable"|"servicio"|"digital"|"mixto"|null, "archetype": "b2b_recurrente"|"b2b_proyecto"|null, "company_required": true, "confidence": "alta"|"media"|"baja", "understood": string[], "questions": string[]}
 Reglas:
-- business_model: a quién vende (personas / empresas / ambos). Pesa la evidencia web más que la descripción.
+- Sistema B2B-only: business_model siempre "b2b", archetype b2b_recurrente (reposición) o b2b_proyecto (esporádica), company_required siempre true.
 - vertical: LA VERDAD PRIMARIA, texto libre en español (máx 60 caracteres, p.ej. "publicidad en vía pública", "café de especialidad"). Siempre que se deduzca algo, rellénalo con tus palabras.
-- taxonomy_id: mapea tu "vertical" a UNO de los verticales Shopify de abajo, o null si ninguno encaja. Null honesto antes que forzado.
+- taxonomy_id: mapea tu "vertical" a UNO de los verticales de abajo, o null si ninguno encaja. Null honesto antes que forzado.
 - buyer_type: granularidad del comprador si se deduce ("consumidor final", "negocio pequeño", "empresa mediana", "corporativo"); null si no.
 - industry: legado, solo como hint grueso cuando encaje obvio; si no, null. NUNCA fuerces un valor de lista.
-- archetype coherente con business_model (b2c_* solo si b2c, b2b_* solo si b2b, hibrido solo si hybrid).
+- archetype b2b_recurrente (reposición 45d) o b2b_proyecto (esporádica 135d).
 - cycle_days: recompra típica en días si se deduce (suscripción mensual=30, moda por temporada=120, durable=270, reposición B2B=45, proyecto=135); null si no se deduce.
 - cycle_unknown: true SOLO si el merchant dice explícitamente que varía o no sabe ("varía", "por campaña", "no sé"). Es "respondido sin número", distinto de hueco.
 - understood: 1-4 frases en español de lo entendido. questions: máx 3 para afinar.
@@ -147,15 +147,11 @@ async function completeJson(
   return content;
 }
 
-const VALID_MODELS = new Set(["b2c", "b2b", "hybrid"]);
 const VALID_INDUSTRIES = new Set([
   "alimentos", "moda", "belleza", "hogar", "electronica", "salud", "mascotas", "servicios", "distribucion", "otro",
 ]);
 const VALID_CATALOGS = new Set([
   "consumible", "perecedero", "moda_estacional", "durable", "servicio", "digital", "mixto",
-]);
-const VALID_ARCHETYPES = new Set([
-  "b2c_consumible", "b2c_moda", "b2c_durable", "b2b_recurrente", "b2b_proyecto", "hibrido",
 ]);
 const VALID_CONF = new Set(["alta", "media", "baja"]);
 
@@ -226,16 +222,16 @@ export async function investigateBusiness(
       ? cycleRaw
       : null;
   const result = {
-    businessModel: businessModel && VALID_MODELS.has(businessModel) ? (businessModel as InvestigateResult["businessModel"]) : null,
+    businessModel: "b2b" as InvestigateResult["businessModel"],
     vertical,
     taxonomyId,
     buyerType,
     cycleUnknown: p.cycle_unknown === true,
     industry: industry && VALID_INDUSTRIES.has(industry) ? industry : null,
     catalogType: catalogType && VALID_CATALOGS.has(catalogType) ? (catalogType as InvestigateResult["catalogType"]) : null,
-    archetype: archetype && VALID_ARCHETYPES.has(archetype) ? (archetype as InvestigateResult["archetype"]) : null,
+    archetype: (archetype === "b2b_proyecto" ? "b2b_proyecto" : archetype === "b2b_recurrente" ? "b2b_recurrente" : null) as InvestigateResult["archetype"],
     cycleDays,
-    companyRequired: p.company_required === true || businessModel === "b2b",
+    companyRequired: true,
     confidence: confidence && VALID_CONF.has(confidence) ? (confidence as InvestigateResult["confidence"]) : "baja",
     understood: Array.isArray(p.understood) ? p.understood.filter((x): x is string => typeof x === "string").slice(0, 4) : [],
     questions: Array.isArray(p.questions) ? p.questions.filter((x): x is string => typeof x === "string").slice(0, 3) : [],

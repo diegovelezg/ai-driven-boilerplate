@@ -3,7 +3,6 @@ import { getSupabase } from "@/lib/supabase";
 import { requireApiUser, requireStoreMember, resolveRouteCustomerId } from "@/lib/api/guard";
 import { CUSTOMER_AGENT_NAME, getCustomerAgent } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
-import { displayMarket, resolveMarketScope } from "@/lib/markets";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("adk");
@@ -38,7 +37,7 @@ export async function POST(
   if (idOrErr instanceof Response) return idOrErr;
   const id = idOrErr;
 
-  let body: { messages?: IncomingMessage[]; marketId?: string };
+  let body: { messages?: IncomingMessage[] };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -67,24 +66,10 @@ export async function POST(
   const denied = await requireStoreMember(storeId, auth);
   if (denied) return denied;
 
-  // Mismo filtro global que el drawer: mismo universo que la GUI muestra.
-  // Sin fallback silencioso a "todos": marketId inválido o DB caída = 400.
-  let marketScope: Awaited<ReturnType<typeof resolveMarketScope>> | null = null;
-  if (typeof body.marketId === "string" && body.marketId) {
-    try {
-      marketScope = await resolveMarketScope(storeId, body.marketId);
-    } catch (e) {
-      return Response.json({ error: `Market inválido: ${e instanceof Error ? e.message : "no resolvible"}.`, code: "INVALID_MARKET" }, { status: 400 });
-    }
-    if (!marketScope?.market) {
-      return Response.json({ error: "Market inválido: no existe en esta tienda.", code: "INVALID_MARKET" }, { status: 400 });
-    }
-  }
-  const marketSuffix = marketScope?.market ? ` · mercado ${displayMarket(marketScope.market)}` : "";
   const title = String(pr.title ?? "");
   // Solo identidad en el prompt: las cifras salen de get_product_summary
   // (regla "usa SIEMPRE las tools"; el texto fijo se desactualiza y miente).
-  const focusCtx = `Producto en foco: "${title}" (${(pr.platform_status as string | null) ?? "sin estado"}, ${pr.is_active ? "activo" : "inactivo"})${marketSuffix}. Responde sobre ESTE producto (get_product_summary/movements/buyers); para comparar con el resto del catálogo usa get_top_products.`;
+  const focusCtx = `Producto en foco: "${title}" (${(pr.platform_status as string | null) ?? "sin estado"}, ${pr.is_active ? "activo" : "inactivo"}). Responde sobre ESTE producto (get_product_summary/movements/buyers); para comparar con el resto del catálogo usa get_top_products.`;
 
   const clientPrior = history
     .slice(0, -1)
@@ -99,10 +84,7 @@ export async function POST(
       storeId,
       productId: id,
       view: "product_drawer",
-      focusLabel: `producto "${title}"${marketSuffix}`,
-      marketCountries: marketScope?.countries ?? null,
-      marketCustomerIds: marketScope?.customerIds ?? null,
-      marketCurrency: marketScope?.market ? marketScope.market.currency.toUpperCase() : null,
+      focusLabel: `producto "${title}"`,
     });
   } catch (e) {
     return Response.json(

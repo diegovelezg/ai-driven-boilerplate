@@ -357,11 +357,9 @@ function ClientesTab({ detail }: { detail: ProductDetailDTO | null }) {
 
 export function ProductDrawer({
   summary,
-  market,
   onClose,
 }: {
   summary: ProductWithStats;
-  market: string | null;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("resumen");
@@ -372,7 +370,7 @@ export function ProductDrawer({
     let cancelled = false;
     setDetail(null);
     setError(null);
-    fetch(`/api/products/${summary.id}/detail${market ? `?market=${encodeURIComponent(market)}` : ""}`)
+    fetch(`/api/products/${summary.id}/detail`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json().catch(() => null) as { error?: string } | null)?.error ?? "No se pudo cargar el detalle.");
         return (await r.json()) as ProductDetailDTO;
@@ -380,7 +378,7 @@ export function ProductDrawer({
       .then((d) => { if (!cancelled) setDetail(d); })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "No se pudo cargar el detalle."); });
     return () => { cancelled = true; };
-  }, [summary.id, market]);
+  }, [summary.id]);
 
   const drawerTabs = [
     { id: "resumen", label: "Resumen", icon: Package },
@@ -417,7 +415,7 @@ export function ProductDrawer({
       fill={tab === "agentes"}
     >
       {tab === "agentes" ? (
-        <ProductChat productId={summary.id} productTitle={summary.title} market={market} />
+        <ProductChat productId={summary.id} productTitle={summary.title} />
       ) : (
         <>
           {error && (

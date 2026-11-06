@@ -5,9 +5,8 @@ import { usePathname } from "next/navigation";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { UserMenu } from "@/components/user-menu";
-import { MarketSelector } from "@/components/market-selector";
 import { UsagePill } from "@/components/usage-pill";
-import type { TenantMarket } from "@/lib/market-utils";
+import type { MemberRole } from "@/lib/roles";
 
 const titles = [
   { href: "/finanzas", label: "Finanzas" },
@@ -21,14 +20,12 @@ const titles = [
 
 export function AppHeader({
   stores = [],
-  marketsByStore = {},
-  primaryByStore = {},
   userEmail = null,
+  userRoles = {},
 }: {
-  stores?: Array<{ id: string }>;
-  marketsByStore?: Record<string, TenantMarket[]>;
-  primaryByStore?: Record<string, string>;
+  stores?: Array<{ id: string; name?: string | null; shop_url?: string }>;
   userEmail?: string | null;
+  userRoles?: Record<string, MemberRole>;
 }) {
   const pathname = usePathname();
   const title =
@@ -44,9 +41,8 @@ export function AppHeader({
       <span className="ms-auto flex items-center gap-2">
         <Suspense>
           <UsagePill stores={stores} />
-          <MarketSelector stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} />
+          <UserMenu initialEmail={userEmail} stores={stores} initialRoles={userRoles} />
         </Suspense>
-        <UserMenu initialEmail={userEmail} />
       </span>
     </header>
   );

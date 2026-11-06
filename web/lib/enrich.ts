@@ -11,7 +11,6 @@ import { extractFirmographics } from "@/lib/ai/enrich";
 import { judgeBusinessDomain, B2B_GATE_THRESHOLD } from "@/lib/ai/decisions";
 import { searchSearxng, scrapable } from "@/lib/retrieval";
 import { mapPool } from "@/lib/parallel";
-import { applyScopeFilter, type MarketScope } from "@/lib/markets";
 import { formatNumber } from "@/lib/format";
 import { normProductTitle } from "@/lib/product-stats";
 
@@ -192,10 +191,11 @@ function isFreshTerminal(enrichedAt: unknown): boolean {
 
 export async function pendingDomains(
   storeId: string,
-  scope: Pick<MarketScope, "countries" | "customerIds"> | null = null,
+  // @deprecated Single-país: se ignora.
+  _scope?: unknown,
   opts: { fresh?: boolean } = {},
 ): Promise<string[]> {
-  const useCache = scope === null && opts.fresh !== true;
+  const useCache = opts.fresh !== true;
   const cacheKey = useCache ? `pending:${storeId}` : null;
   if (cacheKey) {
     const hit = pendingCache.get(cacheKey);
@@ -207,11 +207,7 @@ export async function pendingDomains(
   // Acumulador de users en la misma pasada (fusión con batchDomainUsers).
   const acc = new Map<string, { emails: string[]; companies: string[]; buyers: number; total: number }>();
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await applyScopeFilter(
-      db.from("customers").select("email,company_name,orders_count").eq("store_id", storeId).order("id", { ascending: true }),
-      scope,
-      "id",
-    ).range(from, from + 999);
+    const { data, error } = await db.from("customers").select("email,company_name,orders_count").eq("store_id", storeId).order("id", { ascending: true }).range(from, from + 999);
     if (error) throw new Error(`Customers read: ${error.message}`);
     for (const r of (data ?? []) as Array<Record<string, unknown>>) {
       const d = domainFromEmail(String(r.email ?? ""));

@@ -3,8 +3,9 @@
 //   Método (código: retention-model.ts): episodeize, mezcla EM, BIC, backtest.
 //     Nadie lo escribe en runtime.
 //   Parámetros (tabla tenant_model_params): episode_window_days y mezcla
-//     K+(peso,μ,σ) por partición (market). Solo los escribe el tune mensual
-//     con backtest obligatorio (Paso 4). NUNCA se comparten entre tenants.
+//     K+(peso,μ,σ) por TENANT (single-país: una fila por tienda).
+//     Solo los escribe el tune mensual con backtest obligatorio (Paso 4).
+//     NUNCA se comparten entre tenants.
 //   Arranque en frío: prior por arquetipo (código); sin fila válida aquí el
 //     motor usa el comportamiento actual (sin episodios extra, grilla única).
 // Este módulo: validación pura (testeable sin I/O) + resolución fail-open +
@@ -54,7 +55,6 @@ export interface TenantModelParams {
 }
 
 export interface ModelParamsRow {
-  market_id: string | null;
   params_json: unknown;
   /** Versión del método que ajustó la fila; ausente/desconocida ⇒ rechazo. */
   version?: string | null;
@@ -115,81 +115,51 @@ export function validateModelParams(raw: unknown, version?: string | null): Tena
   return { episodeWindowDays, mixture };
 }
 
-/** Elige la fila vigente para una partición (puro): match exacto de market
- *  manda; si no, la global (market null); si no, null (arranque en frío).
- *  La validación es por fila (incluida su `version`): una fila de market
- *  inválida o de método desconocido cae a la global, no a legacy directo. */
+/** Elige la fila vigente del tenant (single-país: una sola fila).
+ *  La validación incluye su `version`: fila inválida o de método desconocido
+ *  ⇒ null (arranque en frío). */
 export function pickModelParams(
   rows: ModelParamsRow[],
-  marketId: string | null,
 ): TenantModelParams | null {
-  const byMarket = new Map<string, { params: unknown; version?: string | null }>();
-  let global: { params: unknown; version?: string | null } | null = null;
-  for (const row of rows) {
-    if (row.market_id === null || row.market_id === undefined) {
-      if (global === null) global = { params: row.params_json, version: row.version };
-    } else if (!byMarket.has(row.market_id)) {
-      byMarket.set(row.market_id, { params: row.params_json, version: row.version });
-    }
-  }
-  if (marketId !== null) {
-    const hit = byMarket.get(marketId);
-    if (hit !== undefined) {
-      const v = validateModelParams(hit.params, hit.version ?? null);
-      if (v !== null) return v;
-    }
-  }
-  if (global !== null) return validateModelParams(global.params, global.version ?? null);
-  return null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+  return validateModelParams(row.params_json, row.version ?? null);
 }
 
 /** Resuelve los parámetros aprendidos de una tienda (fail-open).
- *  Una sola query (típicamente ≤ particiones); filtra por `version`
- *  soportada (P2: fits de un método viejo no se aplican en silencio).
- *  Sin fila válida ⇒ mapa vacío ⇒ el motor usa prior de arquetipo (frío).
- *  Nunca lanza. */
+ *  Una sola fila (single-país); filtra por `version` soportada (P2: fits de
+ *  un método viejo no se aplican en silencio). Sin fila válida ⇒ null y el
+ *  motor usa prior de arquetipo (frío). Nunca lanza. */
 export async function resolveModelParams(
   storeId: string,
-): Promise<Map<string | null, TenantModelParams>> {
-  const out = new Map<string | null, TenantModelParams>();
+): Promise<TenantModelParams | null> {
   try {
-    if (!isSupabaseConfigured()) return out;
+    if (!isSupabaseConfigured()) return null;
     const { data, error } = await getSupabase()
       .from("tenant_model_params")
-      .select("market_id,params_json,version")
-      .eq("store_id", storeId);
-    if (error || !data) return out;
-    const rows = (
-      data as Array<{ market_id: string | null; params_json: unknown; version: unknown }>
-    ).map((r) => ({
-      market_id: r.market_id ?? null,
-      params_json: r.params_json,
-      version: typeof r.version === "string" ? r.version : null,
-    }));
-    const seen = new Set<string>();
-    for (const r of rows) {
-      const key = r.market_id ?? null;
-      const seenKey = key === null ? "__global__" : key;
-      if (seen.has(seenKey)) continue;
-      seen.add(seenKey);
-      const v = validateModelParams(r.params_json, r.version);
-      if (v !== null) out.set(key, v);
-    }
-    return out;
+      .select("params_json,version")
+      .eq("store_id", storeId)
+      .order("fitted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const r = data as unknown as { params_json: unknown; version: unknown };
+    return validateModelParams(
+      r.params_json,
+      typeof r.version === "string" ? r.version : null,
+    );
   } catch {
-    return out;
+    return null;
   }
 }
 
-/** Parámetros efectivos por partición: match exacto, si no global, si no frío. */
+/** Parámetros efectivos del tenant: fila vigente o frío. */
 export function paramsForPartition(
-  byKey: Map<string | null, TenantModelParams>,
-  marketId: string | null,
-): { params: TenantModelParams | null; source: "tienda:market" | "tienda:global" | "arquetipo" } {
-  if (marketId !== null && byKey.has(marketId)) {
-    return { params: byKey.get(marketId) ?? null, source: "tienda:market" };
+  params: TenantModelParams | null,
+): { params: TenantModelParams | null; source: "tienda" | "arquetipo" } {
+  if (params) {
+    return { params, source: "tienda" };
   }
-  if (byKey.has(null)) return { params: byKey.get(null) ?? null, source: "tienda:global" };
   return { params: null, source: "arquetipo" };
 }
 
@@ -203,11 +173,10 @@ export interface ModelParamsMeta {
 /** Escritor de parámetros aprendidos (issue #27 Paso 4: solo lo llama el
  *  tune mensual tras backtest ganador). Valida con `validateModelParams` +
  *  versión ANTES del upsert (el escritor no guarda basura ni versiones
- *  futuras); `marketId null` = fila global (v1). Lanza en error (el tune lo
+ *  futuras); single-país: una fila por tienda. Lanza en error (el tune lo
  *  captura en fail-open con motivo). */
 export async function writeModelParams(
   storeId: string,
-  marketId: string | null,
   params: TenantModelParams,
   version: string,
   meta: ModelParamsMeta,
@@ -222,7 +191,6 @@ export async function writeModelParams(
   const { error } = await db.from("tenant_model_params").upsert(
     {
       store_id: storeId,
-      market_id: marketId,
       version,
       params_json: {
         episode_window_days: valid.episodeWindowDays,
@@ -234,7 +202,7 @@ export async function writeModelParams(
       backtest_json: meta.backtest ?? {},
       updated_at: now,
     },
-    { onConflict: "store_id,market_id" },
+    { onConflict: "store_id" },
   );
   if (error) throw new Error(`Model params write: ${error.message}`);
 }

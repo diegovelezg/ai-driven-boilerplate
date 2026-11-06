@@ -110,3 +110,34 @@ export function formatMoney(
   if (body === "—") return "—";
   return `${symbol} ${body}`;
 }
+
+/** Siglas que se conservan en mayúsculas en `toTitleCase` (con o sin puntos). */
+const TITLE_ACRONYMS = new Set(["SAC", "SA", "SRL", "EIRL", "SAA", "ID", "DNI"]);
+
+/** Palabras que van en minúscula salvo al inicio (títulos en español). */
+const TITLE_MINORS = new Set(["de", "del", "la", "el", "los", "las", "y", "e", "en", "con", "por", "para", "al", "a"]);
+
+/**
+ * Nombre propio en Title Case para presentar razones sociales.
+ * "ESPECIALIDADES DIGITALES INTERNACIONALES S.A.C" →
+ * "Especialidades Digitales Internacionales S.A.C".
+ * Respeta siglas (S.A.C., SAC, ID) y minúsculas españolas (de, la, y…).
+ * Solo presentación: en BD se guarda el nombre tal cual figura en el ID fiscal.
+ */
+export function toTitleCase(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  const words = value.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  if (words.length === 0) return "—";
+  return words
+    .map((w, i) => {
+      const bare = w.replace(/\./g, "").toUpperCase();
+      if (TITLE_ACRONYMS.has(bare)) {
+        // Con puntos se respeta la forma original (S.A.C.); sin puntos, upper.
+        return w.includes(".") ? w.toUpperCase() : bare;
+      }
+      const lower = w.toLowerCase();
+      if (i > 0 && TITLE_MINORS.has(lower)) return lower;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}

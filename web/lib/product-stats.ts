@@ -1,7 +1,7 @@
-// Ventas por producto y moneda (determinista, sin LLM). El sync lo recalcula
+// Ventas por producto y moneda (determinista, sin LLM). La importación lo recalcula
 // por tenant desde orders reales; la UI y el futuro sub-engine solo leen.
 import { getSupabase } from "@/lib/supabase";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import { createLogger } from "@/lib/log";
 
 const log = createLogger("product-stats");
@@ -9,8 +9,8 @@ const log = createLogger("product-stats");
 const DAY_MS = 86_400_000;
 
 /** Normaliza títulos para matchear items vendidos ↔ catálogo.
- *  Quita zero-width spaces (Medusa los trae: "Angamos\u200b"), minúsculas,
- *  colapsa espacios. Misma fn para sync, copywriter y tools. */
+ *  Quita zero-width spaces ("Angamos"), minúsculas,
+ *  colapsa espacios. Misma fn para copywriter y tools. */
 export function normProductTitle(t: string): string {
   return t
     .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
@@ -47,7 +47,7 @@ type ProductIndexRow = {
   variants_json?: unknown;
 };
 
-/** Índice first-wins (igual que el sync): ID > variante > handle > sku > título exacto > título loose. */
+/** Índice first-wins  ID > variante > handle > sku > título exacto > título loose. */
 export function buildProductPidIndex(
   prods: Array<Record<string, unknown> | ProductIndexRow>,
 ): ProductPidIndex {

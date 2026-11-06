@@ -6,11 +6,16 @@ import { Toaster } from "@/components/ui/toast";
 import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppTooltipProvider } from "@/components/ui/app-tooltip";
-import { displayStoreName, listMyStores, type TenantStore } from "@/lib/tenant";
-import { listStoreMarkets, pickPrimaryMarket, type TenantMarket } from "@/lib/markets";
+import { displayStoreName, listMyStores, getMyStoreRoles, type TenantStore } from "@/lib/tenant";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 import { connection } from "next/server";
+
+// La chrome del dashboard es siempre dinámica (auth + tenant por request),
+// así que se permite la ruta bloqueante. Sin esto, el `connection()` de
+// abajo hace fallar el prerender con `blocking-prerender-dynamic`
+// (p. ej. Route "/inventario").
+export const instant = false;
 
 // Chrome del dashboard: sidebar + header + toasts de background.
 // Solo aplica a las rutas del grupo (dashboard); /login no lo hereda.
@@ -19,40 +24,34 @@ import { connection } from "next/server";
 // sin esto, Next intenta prerenderizar "/" y falla con
 // `blocking-prerender-current-time` (el cliente Supabase usa timers/Date).
 
-// El layout carga tiendas + markets para el filtro global por país (?market=);
-// si falla, el header sigue funcionando sin selector.
-// Nota CAP 50: es solo el selector UI. La resolución real del tenant/market
-// (getActiveStore/resolveMarketScope en cada page) valida ?store=/?market=
-// por ID directo, fuera de esta ventana.
+// El layout carga tiendas (single-país: sin filtro por market);
+// si falla, el header sigue funcionando.
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   // Todo lo de abajo solo corre a request-time (ver nota arriba).
   await connection();
   let stores: TenantStore[] = [];
-  let marketsByStore: Record<string, TenantMarket[]> = {};
-  const primaryByStore: Record<string, string> = {};
   try {
     stores = await listMyStores();
-    const entries = await Promise.all(
-      stores.map(async (s) => [s.id, await listStoreMarkets(s.id)] as const),
-    );
-    marketsByStore = Object.fromEntries(entries);
-    for (const s of stores) {
-      const primary = pickPrimaryMarket(marketsByStore[s.id] ?? [], s.shop_currency);
-      if (primary) primaryByStore[s.id] = primary.id;
-    }
   } catch {
-    // header degradado: sin selector de mercado
+    // header degradado
   }
   // Email de la cuenta logueada en servidor: el UserMenu lo recibe como prop
   // para pintar el avatar + email en el primer paint, sin depender del fetch
   // cliente (que fallaba y dejaba el dropdown sin email).
   let userEmail: string | null = null;
+  let userRoles: Record<string, import("@/lib/roles").MemberRole> = {};
   try {
     const supabase = await createServerSupabase();
     const { data } = await supabase.auth.getUser();
     userEmail = data.user?.email ?? null;
   } catch {
     userEmail = null;
+  }
+  try {
+    const roles = await getMyStoreRoles();
+    if (roles) userRoles = Object.fromEntries(roles.entries()) as Record<string, import("@/lib/roles").MemberRole>;
+  } catch {
+    userRoles = {};
   }
   return (
     <BackgroundStatus>
@@ -61,7 +60,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           <AppTooltipProvider>
             <AppSidebar />
             <SidebarInset>
-              <AppHeader stores={stores} marketsByStore={marketsByStore} primaryByStore={primaryByStore} userEmail={userEmail} />
+              <AppHeader stores={stores} userEmail={userEmail} userRoles={userRoles} />
               <DashboardShell>{children}</DashboardShell>
             </SidebarInset>
             <Toaster limit={3} />

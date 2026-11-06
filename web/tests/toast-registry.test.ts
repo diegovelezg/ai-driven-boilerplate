@@ -17,12 +17,10 @@ const ROOT = join(import.meta.dirname, "..");
 /** Actions con corrida en `background_runs`: el caller VA a la cinta. */
 const RUNNING = new Set([
   "startCopywriterAction",
-  "syncCustomersAction",
   "proposeSingleAction",
   "approveBatchAction",
   "regenerateStaleDraftsAction",
   "runRecalibrationAction",
-  "saveConnectionsAction",
   "startEnrichmentAction",
   "reenrichDomainAction",
   "triggerProspectAction",
@@ -66,7 +64,6 @@ const INSTANT = new Set([
 const ACTION_MODULES = new Set([
   "lib/review-actions",
   "lib/retention-actions",
-  "lib/sync-actions",
   "lib/enrich-actions",
   "lib/settings-actions",
   "lib/profile-actions",
@@ -208,7 +205,7 @@ describe("canal único: sin updates ni stickies fuera de la cinta", () => {
     assert.deepEqual(bad, [], `type fuera del set oficial: ${bad.join(", ")}`);
   });
 
-  it("el sync a toasts salta payloads idénticos (auto-hide no se resetea)", () => {
+  it("el background a toasts salta payloads idénticos (auto-hide no se resetea)", () => {
     const s = readFileSync(join(ROOT, "components/background-status.tsx"), "utf8");
     assert.ok(s.includes("lastToastKeyRef"), "falta la huella: cada poll re-emite y clava el listo");
   });

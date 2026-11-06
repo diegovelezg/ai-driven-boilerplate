@@ -1,11 +1,9 @@
 // Lecturas de customers desde Supabase (source of truth para la vista).
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { searchContentCustomerIds } from "@/lib/item-context";
-import { normalizeShopUrl } from "@/lib/sync";
 import { domainFromEmail } from "@/lib/domains";
 import { smartTitleCase } from "@/lib/text";
-import type { CanonicalCustomer } from "@/lib/medusa";
-import type { ConnectorPlatform } from "@/lib/connectors/types";
+import type { CanonicalCustomer } from "@/lib/canonical";
 import {
   matchesDecisionFilter,
   BANDA_VALUES,
@@ -18,17 +16,17 @@ import {
   matchesDecilFilter,
   type CustomerPredictionLite,
 } from "@/lib/customer-predictions";
-import {
-  applyScopeFilter,
-  effectiveScopeFilter,
-  isEmptyScope,
-  isLargeIdScope,
-  type MarketScope,
-} from "@/lib/markets";
+
+/** Normaliza URL de tienda (canónica para match en DB). */
+export function normalizeShopUrl(url: string): string {
+  const t = url.trim().replace(/\/+$/, "").toLowerCase();
+  if (t && !t.includes("://")) return `https://${t}`;
+  return t;
+}
 
 export async function resolveStoreId(
   shopUrl: string,
-  platform: ConnectorPlatform = "medusa",
+  platform = "sheet",
 ): Promise<string | null> {
   if (!isSupabaseConfigured()) return null;
   const { data } = await getSupabase()
@@ -41,16 +39,13 @@ export async function resolveStoreId(
 }
 
 /**
- * Lista tiendas por plataforma (el worker y los scripts `run-once` la usan
- * en vez de filtrar `.eq("platform","medusa")` inline: agregar un conector
- * con backend no exige tocarlos).
+ * Lista tiendas (el worker y los scripts la usan).
  */
-export async function listStoresByPlatform(
-  platforms: readonly string[],
+export async function listStores(
   filterStore?: string,
   limit = 100,
 ): Promise<string[]> {
-  const q = getSupabase().from("stores").select("id").in("platform", [...platforms]);
+  const q = getSupabase().from("stores").select("id");
   const { data, error } = filterStore
     ? await q.eq("id", filterStore)
     : await q.order("created_at", { ascending: true }).limit(limit);
@@ -58,11 +53,20 @@ export async function listStoresByPlatform(
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id)).filter(Boolean);
 }
 
+/** @deprecated Compat: antes filtraba por plataforma ecommerce. Ahora lista todo. */
+export async function listStoresByPlatform(
+  _platforms?: readonly string[],
+  filterStore?: string,
+  limit = 100,
+): Promise<string[]> {
+  return listStores(filterStore, limit);
+}
+
 function str(v: unknown): string | null {
   return typeof v === "string" && v !== "" ? v : null;
 }
 
-/** Valor efectivo: override manual ?? base Medusa ("gana lo local"). */
+/** Valor efectivo: override manual ?? base ("gana lo local"). */
 function eff(overrides: Record<string, unknown>, key: string, base: unknown): string | null {
   return str(overrides[key]) ?? (base as string) ?? null;
 }
@@ -76,14 +80,14 @@ export const MANUAL_FIELDS: readonly ManualField[] = [
   "customer_type",
 ];
 
-/** Customer listo para UI editable: valores efectivos + base Medusa + qué está overrideado. */
+/** Customer listo para UI editable: valores efectivos + base + qué está overrideado. */
 export interface EditableCustomer extends CanonicalCustomer {
   /** UUID de la fila en Supabase (para writes). `id` sigue siendo el external_id. */
   dbId: string;
   customerType: string;
   /** ISO2 atribuido por mercado (moda de sus órdenes). null = sin país. */
   country: string | null;
-  /** companyName proviene del enriquecimiento (no de Medusa ni edición manual). */
+  /** companyName proviene del enriquecimiento (no de base ni edición manual). */
   companyNameEnriched: boolean;
   base: {
     firstName: string | null;
@@ -102,7 +106,7 @@ export function toEditableCustomer(
   const currency = (r.currency as string) ?? null;
   const ordersCount = Number(r.orders_count ?? 0);
   const totalSpent = Number(r.total_spent ?? 0);
-  // Desglose por moneda (sync lo escribe; fallback a la primaria pre-migración).
+  // Desglose por moneda (import lo escribe; fallback a la primaria pre-migración).
   const rawStats = (r.stats_by_currency as Array<Record<string, unknown>> | null) ?? [];
   const totalsByCurrency = rawStats.length > 0
     ? rawStats.map((t) => ({
@@ -115,9 +119,9 @@ export function toEditableCustomer(
       : [];
   const overrides =
     (r.manual_edits as Record<string, unknown> | null) ?? {};
-  const baseCustomerType = (r.customer_type as string) ?? "B2C";
+  const baseCustomerType = (r.customer_type as string) ?? "B2B";
   const manualFields = MANUAL_FIELDS.filter((k) => str(overrides[k]) !== null);
-  // Empresa: edición manual > Medusa > enriquecimiento (por dominio).
+  // Empresa: edición manual > base > enriquecimiento (por dominio).
   const overrideCompany = str(overrides["company_name"]);
   const baseCompany = (r.company_name as string) ?? null;
   const enrichedCompany =
@@ -133,7 +137,7 @@ export function toEditableCustomer(
     phone: eff(overrides, "phone", r.phone),
     companyName: smartTitleCase(companyName),
     companyNameEnriched,
-    customerType: eff(overrides, "customer_type", baseCustomerType) ?? "B2C",
+    customerType: eff(overrides, "customer_type", baseCustomerType) ?? "B2B",
     country: (r.country as string) ?? null,
     createdAt: (r.external_created_at as string) ?? null,
     ordersCount,
@@ -194,7 +198,7 @@ export function parseCustomersSort(sp: { sort?: string; dir?: string }): Custome
   return { key, dir };
 }
 
-/** company_name enriquecido por dominio (para poblar "Empresa" si Medusa no la trae). */
+/** company_name enriquecido por dominio (para poblar "Empresa" si la base no la trae). */
 async function loadEnrichedByDomain(
   db: ReturnType<typeof getSupabase>,
   rows: Array<Record<string, unknown>>,
@@ -276,7 +280,7 @@ export interface CustomerFilters {
   vista: string | null;
   /** Ritmo estructural: con-ritmo|primera|sin-compras. */
   ritmo: string | null;
-  /** Tipo efectivo (manual_edits.customer_type ?? customer_type): B2B|B2C. */
+  /** Tipo efectivo: siempre B2B (sistema B2B-only). Se conserva el filtro por compat. */
   customerType: string | null;
   /** Ejes de segmentación (issue #14A): ventana|banda|elegibilidad|decil. */
   ventana: string | null;
@@ -346,22 +350,15 @@ function hasCustomerFilters(f: CustomerFilters): boolean {
   );
 }
 
-/** Tipo efectivo: override manual ?? base Medusa (misma regla que toEditableCustomer). */
-function effectiveCustomerType(r: Record<string, unknown>): string {
-  const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
-  const manual =
-    typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
-      ? (overrides["customer_type"] as string)
-      : null;
-  return (manual ?? (r.customer_type as string) ?? "B2C").toUpperCase() === "B2B"
-    ? "B2B"
-    : "B2C";
+/** Tipo efectivo: siempre B2B (sistema B2B-only). */
+function effectiveCustomerType(_r: Record<string, unknown>): string {
+  return "B2B";
 }
 
 /** Predicción mínima para columnas/filtros (foto del día, solo lectura).
  *  Re-export client-safe: los Client Components deben importar el tipo y
  *  `ventanaLabel`/`matchesDecisionFilter` desde `lib/customer-predictions`
- *  (este módulo arrastra `server-only` vía sync). */
+ *  (este módulo es server-side). */
 export type { CustomerPredictionLite } from "@/lib/customer-predictions";
 
 /** Última predicción por cliente (una foto; pagina completo hasta CAP).
@@ -558,7 +555,8 @@ export async function getPredEnJuegoByMonth(
 export async function getValorByType(
   storeId: string,
   currency: string | null,
-  market: MarketScope | null = null,
+  // @deprecated Single-país: se ignora.
+  _market?: unknown,
 ): Promise<{
   b2b: { n: number; minor: number };
   b2c: { n: number; minor: number };
@@ -572,14 +570,6 @@ export async function getValorByType(
     truncated: false,
   };
   const db = getSupabase();
-  const inMarket = (r: Record<string, unknown>): boolean => {
-    if (!market || (!market.countries && !market.customerIds)) return true;
-    if (isEmptyScope(market)) return r.country == null;
-    const { countries, ids } = effectiveScopeFilter(market);
-    if (countries) return r.country == null || countries.includes(String(r.country));
-    if (ids) return r.country == null || ids.includes(String(r.id));
-    return true;
-  };
   for (let off = 0; ; off += 1000) {
     const { data, error } = await db
       .from("customers")
@@ -590,13 +580,8 @@ export async function getValorByType(
     if (error) return out;
     const rows = (data ?? []) as Array<Record<string, unknown>>;
     for (const r of rows) {
-      if (!inMarket(r)) continue;
-      const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
-      const manual =
-        typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
-          ? String(overrides["customer_type"]).toUpperCase()
-          : null;
-      const tipo = (manual ?? String(r.customer_type ?? "B2C")).toUpperCase() === "B2B" ? "b2b" : "b2c";
+      // B2B-only: todo suma a b2b (b2c queda en 0 por compat de forma).
+      const tipo = "b2b" as const;
       const cur = (r.currency as string | null) ?? null;
       if (currency !== null && cur !== null && cur.toUpperCase() !== currency.toUpperCase()) {
         out.otherCurrency += 1;
@@ -621,31 +606,19 @@ export async function queryStoreCustomers(
   pageSize: number,
   sort: CustomersSort = { key: "total", dir: "desc" },
   filters: CustomerFilters = NO_CUSTOMER_FILTERS,
-  // Filtro global por mercado (null = todos). Por ISO2 (corto); IDs solo en
-  // el fallback sin países (ver resolveMarketScope en lib/markets).
-  // NULL-comodín: los sin país (r.country null) pasan cualquier filtro.
-  market: MarketScope | null = null,
+  // @deprecated Single-país: se ignora (toda la tienda es un universo).
+  _market?: unknown,
   // Corte p de "seguimiento cercano" por tenant (issue #21). Null = default
   // 0.10; los callers pasan el valor resuelto vía resolveCloseWatchP.
   // Solo display.
   closeWatchCutoff: number | null = null,
 ): Promise<DbCustomersPage> {
-  // Predicado JS (misma semántica que applyScopeFilter) para los caminos
-  // que resuelven en memoria. NULL-comodín: sin país pasa todo filtro.
-  const inMarket = (r: Record<string, unknown>): boolean => {
-    if (!market || (!market.countries && !market.customerIds)) return true;
-    if (isEmptyScope(market)) return r.country == null;
-    const { countries, ids } = effectiveScopeFilter(market);
-    if (countries) return r.country == null || countries.includes(String(r.country));
-    if (ids) return r.country == null || ids.includes(String(r.id));
-    return true;
-  };
   const db = getSupabase();
   const from = (page - 1) * pageSize;
   const ascending = sort.dir === "asc";
   const term = q.trim();
   const like = term ? `%${term.replace(/[%_\\]/g, "\\$&").replace(/,/g, " ")}%` : null;
-  // Búsqueda en customers + empresa efectiva (Medusa) + empresa enriquecida
+  // Búsqueda en customers + empresa efectiva (base) + empresa enriquecida
   // (qué es: nombre, industria, descripción…). Lo enriquecido vive en `domains`
   // (global, por dominio): se resuelve a dominios y se filtra por email.
   const enrichedDomains = like ? await searchEnrichedDomains(db, term).catch(() => []) : [];
@@ -660,11 +633,8 @@ export async function queryStoreCustomers(
     : null;
 
   // Con filtros de decisión o sort por valor se resuelve en JS sobre la
-  // población completa (misma cohorte de mercado que el resto de la vista).
-  // Scope grande por IDs (>200) también va por aquí: el path SQL con un solo
-  // `.or(id.in(miles),country.is.null)` revienta la URL (issue #32); el
-  // predicado inMarket en JS tiene la misma semántica NULL-comodín.
-  if (hasCustomerFilters(filters) || sort.key === "valor" || isLargeIdScope(market)) {
+  // población completa del tenant.
+  if (hasCustomerFilters(filters) || sort.key === "valor") {
     const all: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
       const { data, error } = await db
@@ -677,7 +647,7 @@ export async function queryStoreCustomers(
       all.push(...((data as Array<Record<string, unknown>>) ?? []));
       if (!data || data.length < 1000) break;
     }
-    const scoped = all.filter(inMarket);
+    const scoped = all;
     const firms = await loadEnrichedFirmsByDomain(db, scoped);
     const enriched = new Map<string, string>();
     // Foto del día para filtro/sort del motor (una sola query, sin N+1).
@@ -828,7 +798,7 @@ export async function queryStoreCustomers(
     };
   }
 
-  // "Empresa" se ordena por el nombre EFECTIVO (manual > Medusa > enriquecido),
+  // "Empresa" se ordena por el nombre EFECTIVO,
   // que puede venir del enriquecimiento por dominio → se resuelve en JS.
   if (sort.key === "company") {
     const all: Array<Record<string, unknown>> = [];
@@ -841,7 +811,7 @@ export async function queryStoreCustomers(
       if (!data || data.length < 1000) break;
     }
     const enriched = await loadEnrichedByDomain(db, all);
-    const rows = all.filter(inMarket).map((r) => toEditableCustomer(r, enriched));
+    const rows = all.map((r) => toEditableCustomer(r, enriched));
     const cDir = ascending ? 1 : -1;
     const cmpTotalDesc = (a: EditableCustomer, b: EditableCustomer) => b.totalSpent - a.totalSpent;
     const cmpOrdersDesc = (a: EditableCustomer, b: EditableCustomer) => b.ordersCount - a.ordersCount;
@@ -868,11 +838,7 @@ export async function queryStoreCustomers(
     return { rows: rows.slice(from, from + pageSize), totalCount: rows.length };
   }
 
-  let query = applyScopeFilter(
-    db.from("customers").select("*", { count: "exact" }).eq("store_id", storeId),
-    market,
-    "id",
-  );
+  let query = db.from("customers").select("*", { count: "exact" }).eq("store_id", storeId);
   // Criterios default como Catálogo (fijos, no siguen a `dir`):
   // Total DESC, Compras DESC, Nombre ASC, Email ASC. El tie-breaker final
   // es siempre la PK `id` (email no es único: hay duplicados).

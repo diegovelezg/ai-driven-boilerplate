@@ -1,5 +1,5 @@
 // Catálogo por tenant (lectura para el engine + override manual de activo).
-// El sync escribe platform_status; el trigger SQL decide is_active:
+// La importación escribe platform_status; el trigger SQL decide is_active:
 // override ?? plataforma. Esto solo escribe el override (null = seguir plataforma).
 import { getSupabase } from "@/lib/supabase";
 

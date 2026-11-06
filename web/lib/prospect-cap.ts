@@ -6,6 +6,6 @@ export const PROSPECT_LEAD_CAP = 10;
 export const PROSPECT_PAUSED_HINT =
   "Pausamos al Prospector: tienes 10 por revisar. Cuando apruebes o descartes alguna, te propondrá nuevas empresas automáticamente.";
 
-/** Mensaje cuando el Prospector no aplica (tienda no B2B). */
+/** Mensaje cuando el Prospector no tiene base enriquecible (B2B-only). */
 export const PROSPECT_B2B_ONLY_HINT =
-  "El Prospector es una función B2B: tus compradores son personas, no empresas.";
+  "El Prospector necesita base: al menos 3 dominios de empresas entre tus mejores compradores.";

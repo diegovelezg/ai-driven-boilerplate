@@ -42,6 +42,47 @@ export async function requireApiUser(): Promise<{ id: string; email: string | nu
   }
 }
 
+/** Roles del usuario por tienda vía service_role (bypassa RLS para el check). */
+export async function userStoreRoles(userId: string): Promise<Map<string, string>> {
+  try {
+    const { getSupabase } = await import("@/lib/supabase");
+    const { data } = await getSupabase()
+      .from("merchant_users")
+      .select("store_id,role")
+      .eq("user_id", userId);
+    const out = new Map<string, string>();
+    for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+      out.set(String(r.store_id ?? ""), String(r.role ?? "seller"));
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Exige rol mínimo en `storeId` (para separar features por rol).
+ * Devuelve null si ok, o `Response` 403 listo para retornar.
+ */
+export async function requireMinRole(
+  storeId: string,
+  user: { id: string; email: string | null } | null,
+  need: "owner" | "admin" | "seller" | "viewer",
+): Promise<Response | null> {
+  if (!user) return null; // auth no configurada (dev): sin check
+  if (!storeId) return Response.json({ error: "Falta store." }, { status: 400 });
+  const { hasMinRole, isMemberRole } = await import("@/lib/roles");
+  const roles = await userStoreRoles(user.id).catch(() => new Map<string, string>());
+  const raw = roles.get(storeId);
+  if (!raw || !isMemberRole(raw)) {
+    return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
+  }
+  if (!hasMinRole(raw, need)) {
+    return Response.json({ error: `Requiere rol ${need}.` }, { status: 403 });
+  }
+  return null;
+}
+
 /** Tiendas del usuario vía service_role (bypassa RLS para el check). */
 export async function userStoreIds(userId: string): Promise<string[]> {
   try {

@@ -157,23 +157,22 @@ Coolify → Scheduled Task contra el recurso `web`, todos los días 11:00 UTC
 * Command (binario directo, sin `npm`: un nivel menos de procesos y el
   exit code es el real del worker, no el de npm):
 ```
-./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning
+./node_modules/.bin/tsx worker.ts -- --once --kinds=morning
 ```
 * Timeout: `3600` (el full secuencial de 3-5 tiendas con pasos LLM supera
   los 300s del default y la task lo mata a medias dejando solo la cabecera).
 * Container: el de la app `web`.
 
 ```
-./node_modules/.bin/tsx worker.ts -- --once --kinds=sync,morning
+./node_modules/.bin/tsx worker.ts -- --once --kinds=morning
 ```
 
-Sin `--store`: todas las tiendas medusa. `runSyncOnce` reclama slot atómico
-por tienda: si el login/manual lo está corriendo, el cron lo omite (run null),
-no duplica. Exit 1 si alguna tienda falló (visible en la tarea).
+Sin `--store`: todas las tiendas. `claimRunSlot` reclama slot atómico
+por tienda: no duplica. Exit 1 si alguna tienda falló (visible en la tarea).
 Tras guardar: run manual y buscar en el log `start stores=N` … `done
 failed=0`. Si solo salen las líneas de `npm`/avisos de Node = el worker
 murió antes de arrancar (exit 0 falso): ver §7.
-Sin cola: la web corre `runSyncOnce` directo en `after()` (respuesta <200ms);
+Sin cola: la web corre el pipeline directo en `after()` (respuesta <200ms);
 el cron es solo el programador diario + las corridas manuales usan el mismo
 comando con `--store=<uuid>` opcional.
 
@@ -286,7 +285,7 @@ Probar una acción de enriquecimiento (usa `SEARXNG_URL`, `web/lib/retrieval.ts`
 -- retirada como artefacto histórico y siempre sale vacía, no la uses):
 select kind, status, summary, started_at
   from background_runs order by started_at desc limit 10;
--- Esperado a las 06:05 Lima sin ningún login en 24h: filas sync + scout +
+-- Esperado a las 06:05 Lima sin ningún login en 24h: filas scout +
 -- strategist + copywriter + prospect en done para cada store.
 -- Slot atómico (sin duplicados entre réplicas):
 select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -298,7 +297,7 @@ select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 Criterios: sin login en 24h el pipeline corre 1 vez por store; redeploy a
 mitad de run → `error` con `reap` a los 30min (sin reintento intra-día: hasta
 el próximo cron o rerun manual con `--store`); login con sesión siempre
-abierta no dispara trabajo pesado síncrono (solo `runSyncOnce` en `after()`).
+abierta no dispara trabajo pesado síncrono en el login.
 
 Local sigue igual: `npx supabase start` → `http://127.0.0.1:54323`.
 Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).

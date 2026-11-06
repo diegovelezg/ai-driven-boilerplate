@@ -1,33 +1,13 @@
-// Solo server-side: lee/escribe secretos (service_role + AES-GCM) y el
-// fallback JSON local. Nunca importar valores en client components: los
-// tipos (`import type`) se borran en build y son seguros, pero cualquier
-// valor serializado a props de cliente expone los secretos en el Flight
-// payload. Para la UI usa `toSafeConnections()` (solo booleanos has*).
-// (Sin `import "server-only"`: los tests `tsx --test` importan este módulo en
-// node y `server-only` lanza fuera de React Server Components.)
+// Solo server-side: lee/escribe secretos email + fallback JSON local.
+// Sin ecommerce: la ingesta es Sheet/CSV (DOOH). Sin plataformas externas.
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { MedusaVersion } from "@/lib/medusa";
-import type { ConnectorPlatform } from "@/lib/connectors/types";
-
-/** Plataforma de la tienda. Fuente única: `ConnectorPlatform` (conectores). */
-export type Platform = ConnectorPlatform;
 
 export type EmailProvider = "sendgrid" | "resend" | "none";
 
 export type DefaultChannel = "email" | "whatsapp";
 
 export interface StoreConnections {
-  platform: Platform;
-  medusaUrl: string;
-  medusaVersion: MedusaVersion | "";
-  medusaEmail: string;
-  medusaToken: string;
-  shopifyStore: string;
-  shopifyToken: string;
-  wooStore: string;
-  wooConsumerKey: string;
-  wooConsumerSecret: string;
   emailProvider: EmailProvider;
   emailFrom: string;
   emailApiKey: string;
@@ -37,46 +17,17 @@ export interface StoreConnections {
 const DATA_DIR = join(process.cwd(), ".data");
 const CONFIG_FILE = join(DATA_DIR, "connections.json");
 
-const SECRET_JSON_KEYS = ["medusaToken", "shopifyToken", "wooConsumerKey", "wooConsumerSecret", "emailApiKey"] as const;
-
-// Keys del JSON que también viven en DB cifrada en prod (se scraban del JSON
-// cuando la DB las persiste, y el write al JSON se omite del todo en prod).
-const DB_BACKED_JSON_KEYS = [...SECRET_JSON_KEYS, "medusaUrl", "medusaEmail"] as const;
+const SECRET_JSON_KEYS = ["emailApiKey"] as const;
+const DB_BACKED_JSON_KEYS = [...SECRET_JSON_KEYS] as const;
 
 const EMPTY: StoreConnections = {
-  platform: "medusa",
-  medusaUrl: "",
-  medusaVersion: "",
-  medusaEmail: "",
-  medusaToken: "",
-  shopifyStore: "",
-  shopifyToken: "",
-  wooStore: "",
-  wooConsumerKey: "",
-  wooConsumerSecret: "",
   emailProvider: "sendgrid",
   emailFrom: "",
   emailApiKey: "",
   defaultChannel: "email",
 };
 
-/**
- * DTO seguro para client components (settings UI). Contiene los mismos
- * campos no-secretos más booleanos `has*`; NUNCA el valor de los secretos.
- * Serializar `StoreConnections` completo a un `"use client"` expone las
- * keys en el Flight payload / HTML (aunque la UI pinte ••••).
- */
 export interface SafeStoreConnections {
-  platform: Platform;
-  medusaUrl: string;
-  medusaVersion: MedusaVersion | "";
-  medusaEmail: string;
-  hasMedusaToken: boolean;
-  shopifyStore: string;
-  hasShopifyToken: boolean;
-  wooStore: string;
-  hasWooConsumerKey: boolean;
-  hasWooConsumerSecret: boolean;
   emailProvider: EmailProvider;
   emailFrom: string;
   hasEmailApiKey: boolean;
@@ -85,16 +36,6 @@ export interface SafeStoreConnections {
 
 export function toSafeConnections(c: StoreConnections): SafeStoreConnections {
   return {
-    platform: c.platform,
-    medusaUrl: c.medusaUrl,
-    medusaVersion: c.medusaVersion,
-    medusaEmail: c.medusaEmail,
-    hasMedusaToken: Boolean(c.medusaToken),
-    shopifyStore: c.shopifyStore,
-    hasShopifyToken: Boolean(c.shopifyToken),
-    wooStore: c.wooStore,
-    hasWooConsumerKey: Boolean(c.wooConsumerKey),
-    hasWooConsumerSecret: Boolean(c.wooConsumerSecret),
     emailProvider: c.emailProvider,
     emailFrom: c.emailFrom,
     hasEmailApiKey: Boolean(c.emailApiKey),
@@ -105,7 +46,13 @@ export function toSafeConnections(c: StoreConnections): SafeStoreConnections {
 async function readConnectionsJson(): Promise<StoreConnections> {
   try {
     const raw = await readFile(CONFIG_FILE, "utf-8");
-    return { ...EMPTY, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as Partial<StoreConnections>;
+    return {
+      emailProvider: parsed.emailProvider ?? EMPTY.emailProvider,
+      emailFrom: parsed.emailFrom ?? "",
+      emailApiKey: parsed.emailApiKey ?? "",
+      defaultChannel: parsed.defaultChannel ?? "email",
+    };
   } catch {
     return { ...EMPTY };
   }
@@ -114,96 +61,23 @@ async function readConnectionsJson(): Promise<StoreConnections> {
 export async function writeConnectionsJson(next: StoreConnections): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
   await writeFile(CONFIG_FILE, JSON.stringify(next, null, 2), { encoding: "utf-8", mode: 0o600 });
-  // mkdir/writeFile no garantizan el modo si el archivo ya existía (umask):
-  // fuerza 600 (solo owner) para que el fallback JSON nunca quede 644.
   await chmod(CONFIG_FILE, 0o600).catch(() => {});
 }
 
-/**
- * Lee conexiones con overlay DB (issue #20): lo no-secreto sale del JSON
- * local; los 3 secretos se resuelven por tienda desde `store_secrets`
- * (cifrado AES-256-GCM) cuando hay Supabase + SECRETS_ENCRYPTION_KEY.
- * Sin DB/key o sin tienda resuelta, cae al JSON (dev/single-merchant).
- * Nunca lanza: ante cualquier fallo devuelve el JSON.
- */
-export async function readConnections(storeId?: string | null): Promise<StoreConnections> {
-  let json = await readConnectionsJson();
+export async function readConnections(_storeId?: string | null): Promise<StoreConnections> {
+  const json = await readConnectionsJson();
   try {
     const { isSupabaseConfigured } = await import("@/lib/supabase");
     const { isEncryptionConfigured, overlaySecret } = await import("@/lib/secrets-crypto");
     if (!isSupabaseConfigured() || !isEncryptionConfigured()) return json;
-    let sid = storeId ?? null;
-    if (!sid && json.medusaUrl) {
-      try {
-        const { resolveStoreId } = await import("@/lib/customers-db");
-        sid = await resolveStoreId(json.medusaUrl).catch(() => null);
-      } catch {
-        sid = null;
-      }
-    }
-    if (!sid) {
-      // JSON vacío en prod (efímero entre redeploys): si hay UNA sola tienda
-      // medusa en DB, se usa su URL para resolver (multi-tienda sigue
-      // explícita vía JSON/DB). Sin esto, el read retorna vacío aunque la DB
-      // tenga todo, y los guardados fallan con "tienda no encontrada".
-      try {
-        const { isSupabaseConfigured } = await import("@/lib/supabase");
-        if (isSupabaseConfigured()) {
-          const { getSupabase } = await import("@/lib/supabase");
-          const { data } = await getSupabase()
-            .from("stores")
-            .select("id,shop_url")
-            .eq("platform", "medusa")
-            .limit(2);
-          const rows = (data ?? []) as Array<{ id: string; shop_url: string }>;
-          if (rows.length === 1) {
-            sid = rows[0].id;
-            if (!json.medusaUrl && rows[0].shop_url) {
-              json = { ...json, medusaUrl: rows[0].shop_url };
-            }
-          }
-        }
-      } catch {
-        // Cae al JSON como antes.
-      }
-    }
+    const sid = _storeId ?? null;
     if (!sid) return json;
     const { getStoreSecrets } = await import("@/lib/store-secrets");
     const db = await getStoreSecrets(sid).catch(() => null);
-    const { getStoreConnFields } = await import("@/lib/store-secrets");
-    const fields = await getStoreConnFields(sid).catch(() => null);
-    // Tenant explícito (login multiuser): nunca caer al JSON global (sería
-    // credencial cross-tenant). Sin fila en DB → conn vacía (`sin-conexion`).
-    const explicit = storeId != null;
-    if (!db && !fields) {
-      if (!explicit) return json;
-      return {
-        ...json,
-        medusaUrl: "",
-        medusaEmail: "",
-        wooStore: "",
-        medusaToken: "",
-        shopifyToken: "",
-        wooConsumerKey: "",
-        wooConsumerSecret: "",
-        emailApiKey: "",
-      };
-    }
-    // Overlay: el secreto DB manda SOLO si no es vacío; si la tienda existe
-    // en DB pero aún sin fila (migración pendiente), se conserva el JSON.
-    // medusa_url/email también viven cifrados en DB en prod (el JSON local
-    // es efímero en contenedores); el JSON queda como fallback dev.
-    // Con tenant explícito no hay fallback al JSON: DB manda o vacío.
+    if (!db) return json;
     return {
       ...json,
-      medusaUrl: explicit ? (fields?.medusa_url ?? "") : (fields?.medusa_url || json.medusaUrl),
-      medusaEmail: explicit ? (fields?.medusa_email ?? "") : (fields?.medusa_email || json.medusaEmail),
-      wooStore: explicit ? (fields?.woo_store ?? "") : (fields?.woo_store || json.wooStore),
-      medusaToken: explicit ? (db?.medusa_token ?? "") : overlaySecret(json.medusaToken, db?.medusa_token ?? ""),
-      shopifyToken: explicit ? (db?.shopify_token ?? "") : overlaySecret(json.shopifyToken, db?.shopify_token ?? ""),
-      wooConsumerKey: explicit ? (db?.woo_consumer_key ?? "") : overlaySecret(json.wooConsumerKey, db?.woo_consumer_key ?? ""),
-      wooConsumerSecret: explicit ? (db?.woo_consumer_secret ?? "") : overlaySecret(json.wooConsumerSecret, db?.woo_consumer_secret ?? ""),
-      emailApiKey: explicit ? (db?.email_api_key ?? "") : overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
+      emailApiKey: overlaySecret(json.emailApiKey, db?.email_api_key ?? ""),
     };
   } catch {
     return json;
@@ -211,120 +85,32 @@ export async function readConnections(storeId?: string | null): Promise<StoreCon
 }
 
 export interface WriteConnectionsOpts {
-  /** Tienda destino de los secretos. Si se omite, se deriva de medusaUrl. */
   storeId?: string | null;
 }
 
-/**
- * Escribe conexiones: en prod (Supabase + key + tienda resuelta) TODO va a DB
- * cifrada —incluidos medusa_url/email— y NO se toca el JSON (en contenedores
- * es efímero y puede no ser escribible → EACCES). El JSON queda solo como
- * fallback dev (sin DB/key) o temporal hasta el primer guardado con DB.
- *
- * Si la DB era el destino esperado pero el upsert falla (caída transitoria),
- * NO se escribe el secreto nuevo en plaintext al JSON: se conserva el valor
- * previo del JSON y se lanza, para que el caller devuelva error en vez de
- * un "guardado" que dejó la key en disco.
- */
 export async function writeConnections(
   next: StoreConnections,
   opts: WriteConnectionsOpts = {},
 ): Promise<void> {
-  const scrub = new Set<string>();
   const prevJson = await readConnectionsJson().catch(() => null);
-  const dbFailed: string[] = [];
-  let dbExpected = false;
-  let prodReady = false;
-  let sidResolved = false;
   try {
     const { isSupabaseConfigured } = await import("@/lib/supabase");
     const { isEncryptionConfigured } = await import("@/lib/secrets-crypto");
-    if (isSupabaseConfigured() && isEncryptionConfigured()) {
-      prodReady = true;
-      let sid = opts.storeId ?? null;
-      if (!sid && next.medusaUrl) {
-        try {
-          const { resolveStoreId } = await import("@/lib/customers-db");
-          sid = await resolveStoreId(next.medusaUrl).catch(() => null);
-        } catch {
-          sid = null;
+    if (isSupabaseConfigured() && isEncryptionConfigured() && opts.storeId) {
+      const { setStoreSecret } = await import("@/lib/store-secrets");
+      if (next.emailApiKey) {
+        const r = await setStoreSecret(opts.storeId, "email_api_key", next.emailApiKey).catch(() => null);
+        if (r?.persistedToDb) {
+          await writeConnectionsJson({ ...next, emailApiKey: "" });
+          return;
         }
-      }
-      sidResolved = Boolean(sid);
-      if (sid) {
-        dbExpected = true;
-        const { setStoreSecret } = await import("@/lib/store-secrets");
-        const pairs: Array<[string, "medusa_token" | "shopify_token" | "woo_consumer_key" | "woo_consumer_secret" | "email_api_key" | "medusa_url" | "medusa_email" | "woo_store", string]> = [
-          ["medusaToken", "medusa_token", next.medusaToken],
-          ["shopifyToken", "shopify_token", next.shopifyToken],
-          ["wooConsumerKey", "woo_consumer_key", next.wooConsumerKey],
-          ["wooConsumerSecret", "woo_consumer_secret", next.wooConsumerSecret],
-          ["emailApiKey", "email_api_key", next.emailApiKey],
-          ["medusaUrl", "medusa_url", next.medusaUrl],
-          ["medusaEmail", "medusa_email", next.medusaEmail],
-          ["wooStore", "woo_store", next.wooStore],
-        ];
-        for (const [jsonKey, dbKey, val] of pairs) {
-          // Solo toca la key que el caller trae non-empty o que ya existe en
-          // DB: un write parcial (ej. solo email) no debe revocar las demás.
-          // Si el valor es "" y no hay fila previa, no hay nada que hacer.
-          if (!val) continue;
-          const r = await setStoreSecret(sid, dbKey, val).catch(() => null);
-          if (r?.persistedToDb) scrub.add(jsonKey);
-          else dbFailed.push(jsonKey);
-        }
-        // Si el caller pidió revocar explícitamente ("" con intención), lo
-        // hace via revokeStoreSecretAction, no aquí.
+        const reverted = { ...next, emailApiKey: prevJson?.emailApiKey ?? "" };
+        await writeConnectionsJson(reverted);
+        throw new Error("No se pudo cifrar en DB (emailApiKey); no se guardó en disco. Reintenta.");
       }
     }
-  } catch {
-    // Fallback a JSON plano (dev).
+  } catch (e) {
+    if (e instanceof Error && /No se pudo cifrar/.test(e.message)) throw e;
   }
-  if (dbFailed.length > 0) {
-    // La DB debía guardar estos secretos y falló: no persistir el plaintext
-    // nuevo en disco. Revierte esas keys al valor previo del JSON y lanza.
-    const reverted = { ...next };
-    for (const k of dbFailed) {
-      (reverted as Record<string, string>)[k] =
-        (prevJson as Record<string, string> | null)?.[k] ?? "";
-    }
-    // Persiste lo no-secreto + los scrubbed igualmente (sin los fallidos).
-    const scrubbed = { ...reverted };
-    for (const k of scrub) {
-      if ((DB_BACKED_JSON_KEYS as readonly string[]).includes(k)) {
-        (scrubbed as Record<string, string>)[k] = "";
-      }
-    }
-    await writeConnectionsJson(scrubbed);
-    throw new Error(
-      `No se pudo cifrar en DB (${dbFailed.join(", ")}); no se guardó en disco. Reintenta.`,
-    );
-  }
-  if (dbExpected) {
-    // Todo lo intended quedó en DB cifrada: no tocar el JSON (en prod puede
-    // no existir o no ser escribible; además es efímero entre redeploys).
-    return;
-  }
-  if (prodReady && !sidResolved) {
-    // En prod el JSON no es un destino válido: fallar con mensaje accionable
-    // en vez de reventar con EACCES en mkdir. Causa típica: la URL no matchea
-    // ninguna tienda (shop_url) en la DB.
-    throw new Error(
-      "No se encontró la tienda para esa URL en la DB; revisá el Servidor (URL completa con https://). Nada se guardó.",
-    );
-  }
-  if (scrub.size > 0) {
-    const scrubbed = { ...next };
-    for (const k of scrub) {
-      if ((DB_BACKED_JSON_KEYS as readonly string[]).includes(k)) {
-        (scrubbed as Record<string, string>)[k] = "";
-      }
-    }
-    await writeConnectionsJson(scrubbed);
-    return;
-  }
-  // Sin DB esperada (dev) o sin secretos nuevos: JSON como antes.
-  // Si la DB era esperada pero no hubo sid (tienda aún no resuelta), el
-  // secreto queda en JSON temporalmente hasta el primer sync con DB.
   await writeConnectionsJson(next);
 }

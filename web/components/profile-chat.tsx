@@ -30,9 +30,9 @@ const SLOT_LABEL: Record<string, string> = {
 };
 
 const MODEL_LABEL: Record<string, string> = {
-  b2c: "B2C · personas",
+  b2c: "B2B · empresas",
   b2b: "B2B · empresas",
-  hybrid: "Híbrido · ambos",
+  hybrid: "B2B · empresas",
 };
 
 /** Sin SSE aquí (server actions): etapas rotadas por tiempo mientras trabaja. */

@@ -1,11 +1,11 @@
 import { PageHeader } from "@/components/page-header";
-import { resolveStoreId } from "@/lib/customers-db";
 import { readConnections, toSafeConnections } from "@/lib/store";
 import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from "@/lib/store-profiles";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
 import { getPendingProposal } from "@/lib/profile-recalibrate/service";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess } from "@/lib/tenant";
+import { getMyStoreRole, requireMyStoreAccess } from "@/lib/tenant";
+import { createServerSupabase } from "@/lib/supabase-server";
 import { SettingsTabs, type SettingsTab } from "./settings-tabs";
 
 export const instant = false;
@@ -64,11 +64,7 @@ export default async function SettingsPage({
   // Seguridad: al cliente solo viajan booleanos has* (nunca los secretos en
   // plaintext por el Flight payload). Los valores reales solo viven en server.
   const safeDefaults = toSafeConnections(defaults);
-  const resolvedId =
-    activeStoreId ??
-    (isSupabaseConfigured() && defaults.medusaUrl
-      ? await resolveStoreId(defaults.medusaUrl).catch(() => null)
-      : null);
+  const resolvedId = activeStoreId;
   // Multiuser por tenant: la conexión legacy es global; sin membresía no se
   // muestra ni se edita nada de otro tenant.
   const storeId =
@@ -76,7 +72,7 @@ export default async function SettingsPage({
       ? null
       : resolvedId;
   const accessDenied = Boolean(resolvedId && !storeId);
-  const [profile, signals, proposal, secretsInDb, savedMap] = storeId
+  const [profile, signals, proposal, secretsInDb, savedMap, membersData] = storeId
     ? await Promise.all([
         getStoreProfile(storeId).catch(() => null),
         getProfileSignals(storeId).catch(() => null),
@@ -96,24 +92,13 @@ export default async function SettingsPage({
         import("@/lib/metadata-map")
           .then((m) => m.getMetadataMap(storeId))
           .catch(() => null),
+        import("@/lib/members")
+          .then((m) => m.listStoreMembers(storeId))
+          .catch(() => []),
       ])
-    : [null, null, null, false, null];
+    : [null, null, null, false, null, []];
   const suggestion = suggestArchetype(signals);
-  // Contenido solo con conexión exitosa y datos: tienda resuelta + token +
-  // al menos 1 orden sincronizada (si no, el scan no tiene de dónde leer).
-  let contentReady = false;
-  if (storeId && defaults.medusaToken) {
-    try {
-      const { count } = await getSupabase()
-        .from("orders")
-        .select("id", { count: "exact", head: true })
-        .eq("store_id", storeId)
-        .limit(1);
-      contentReady = (count ?? 0) > 0;
-    } catch {
-      contentReady = false;
-    }
-  }
+  const contentReady = false;
   // Qué aprendió el motor (solo lectura de predicciones + órdenes, sin priors ni grillas).
   let motorCard: {
     declarado: number | null;
@@ -172,13 +157,22 @@ export default async function SettingsPage({
   }
   const rawTab = sp?.tab;
   const initialTab: SettingsTab =
-    rawTab === "email" || rawTab === "negocio" || rawTab === "motor" || rawTab === "tienda" ? rawTab : "negocio";
+    rawTab === "email" || rawTab === "negocio" || rawTab === "motor" || rawTab === "equipo" ? rawTab : "negocio";
+  // Rol del usuario actual (para el tab Equipo) + su id (marca "tú").
+  const myRole = storeId ? await getMyStoreRole(storeId).catch(() => null) : null;
+  let myUserId: string | null = null;
+  try {
+    const supabase = await createServerSupabase();
+    myUserId = (await supabase.auth.getUser()).data.user?.id ?? null;
+  } catch {
+    myUserId = null;
+  }
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Configuración"
         title="Settings"
-        description="Conecta tu tienda, calibra tu negocio y revisa lo que aprendió el motor."
+        description="Calibra tu negocio y revisa lo que aprendió el motor."
       />
       {accessDenied ? (
         <p className="text-sm text-muted-foreground">
@@ -198,6 +192,9 @@ export default async function SettingsPage({
         motor={motorCard}
         proposal={proposal}
         initialTab={initialTab}
+        members={membersData ?? []}
+        myRole={myRole}
+        myUserId={myUserId}
       />
       )}
     </div>

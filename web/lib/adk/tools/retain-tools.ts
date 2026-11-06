@@ -2,11 +2,10 @@ import { FunctionTool, type BaseTool } from "@google/adk";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import { formatMoney } from "@/lib/format";
 import { rankItems } from "@/lib/finance";
 import { domainFromEmail } from "@/lib/domains";
-import { applyScopeFilter, chunkIds, effectiveScopeFilter, isLargeIdScope, type MarketScope } from "@/lib/markets";
 import { queryStoreCustomers } from "@/lib/customers-db";
 import { loadCustomerOrdersAndRfm, loadCustomerFirmographics } from "@/lib/customer-data";
 import { getIcp, runProspect } from "@/lib/prospect";
@@ -29,60 +28,14 @@ export interface AgentContext {
    */
   productId?: string | null;
   /**
-   * Filtro global por mercado (null = todos). Por ISO2 (corto); IDs solo en
-   * el fallback sin países (ver resolveMarketScope en lib/markets).
+   * Empresa en foco (drawer de empresas): habilita get_company_profile.
+   * Sin companyId esa tool lo pide.
    */
-  marketCountries?: string[] | null;
-  marketCustomerIds?: string[] | null;
-  /**
-   * Moneda de la vista (market activo ?? shop default), en mayúsculas.
-   * Las tools de producto la usan igual que el drawer: filtran movimientos
-   * por ella solo cuando viene de un market; sin market se muestran todas
-   * las monedas con su rótulo por fila (igual que la GUI).
-   */
-  marketCurrency?: string | null;
+  companyId?: string | null;
 }
 
 function needStore(ctx: AgentContext): string | null {
   return ctx.storeId ?? null;
-}
-
-/** Fusiona una página por chunks en `merged` sin duplicar ids (señales/acciones). */
-function mergeChunkPage(
-  merged: Map<string, Record<string, unknown>>,
-  rows: Array<Record<string, unknown>> | null | undefined,
-): void {
-  for (const r of (rows ?? [])) if (!merged.has(String(r.id))) merged.set(String(r.id), r);
-}
-
-/** Recorta el top `n` con `offset` por `created_at` desc con el sobre de paginado estándar. */
-function finishMergedPage(
-  merged: Map<string, Record<string, unknown>>,
-  total: number | null,
-  n: number,
-  off = 0,
-  note: string | null = null,
-) {
-  const rows = [...merged.values()]
-    .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
-    .slice(off, off + n);
-  // total_count honesto (issue #33): si algún count falló, null + nota, nunca suma parcial.
-  if (total == null) {
-    return {
-      items: rows,
-      total_count: null,
-      returned_count: rows.length,
-      truncated: null,
-      note: note ?? "Total no disponible (count falló en algún chunk): hay más, pide offset.",
-    };
-  }
-  return {
-    items: rows,
-    total_count: total,
-    returned_count: rows.length,
-    truncated: total > off + rows.length,
-    ...(note ? { note } : {}),
-  };
 }
 
 /**
@@ -102,8 +55,8 @@ const DISPLAY_RULE =
 
 /**
  * Tools del agente generalista de retención. Ámbito tienda (resumen, señales,
- * acciones, buscar customer) + ámbito ficha (perfil, compras/RFM, empresa)
- * + loop de retención como tools (scout/strategist/copywriter/dispatcher/
+ * acciones, buscar customer) + ámbito ficha (perfil, compras/RFM, empresa
+ * enriquecida / empresa CRM, producto) + loop de retención como tools (scout/strategist/copywriter/dispatcher/
  * analyst corren en background y devuelven run_id; el humano aprueba en
  * /review). Lectura + disparo de workers: proponer/enviar nunca es directo.
  */
@@ -111,46 +64,24 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const storeId = needStore(ctx);
   const customerId = ctx.customerId ?? null;
   const productId = ctx.productId ?? null;
-  /** Moneda de la vista cuando hay market activo (null = todas, como el drawer). */
-  const marketCurrency = ctx.marketCurrency ?? null;
-  const marketScope = {
-    countries: ctx.marketCountries ?? null,
-    customerIds: ctx.marketCustomerIds ?? null,
-  };
-
-  /** Aplica el filtro de mercado (NULL-comodín: sin país pasa todo filtro). */
-  const withMarket = <T>(q: T, idCol: string | null = "customer_id"): T =>
-    applyScopeFilter(q, marketScope, idCol);
+  const companyId = ctx.companyId ?? null;
 
   const summary = new FunctionTool({
     name: "get_store_summary",
     description:
-      "Resumen de la tienda: nº de customers, compradores, desglose B2B/B2C (conteos, compradores y FACTURACIÓN BRUTA por tipo y moneda: revenue_by_type + revenue_by_type_display), FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency + revenue_by_currency_display), señales abiertas y acciones pendientes. Para 'qué tipo de cliente vale más' usa revenue_by_type_display (B2B vs B2C por moneda). NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats. " + DISPLAY_RULE,
+      "Resumen de la tienda B2B: nº de empresas, compradoras, FACTURACIÓN BRUTA acumulada por moneda (revenue_by_currency + revenue_by_currency_display) y por tipo (todo B2B: revenue_by_type + revenue_by_type_display por compat). NO es recupero: ventas ≠ recuperado. Para 'cuánto recuperamos' usa SIEMPRE get_recovery_stats. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const db = getSupabase();
       // Conteos exactos (no .length de una ventana): única fuente de totales.
-      const baseCust = withMarket(
-        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId),
-        "id",
-      );
-      const baseBuyers = withMarket(
-        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).gt("orders_count", 0),
-        "id",
-      );
-      const sigCountQ = withMarket(
-        db.from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", ["open", "prioritized"]),
-      );
-      const actCountQ = withMarket(
-        db.from("proposed_actions").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review"),
-      );
+      const baseCust = db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId);
+      const baseBuyers = db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).gt("orders_count", 0);
+      const sigCountQ = db.from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", ["open", "prioritized"]);
+      const actCountQ = db.from("proposed_actions").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review");
       // Backlog completo del inbox (/review + badge): sin leads el chat cojea.
-      // Misma fuente que `app/api/inbox-count/route.ts` (leads con idCol null).
-      const leadCountQ = withMarket(
-        db.from("proposed_leads").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review"),
-        null,
-      );
+      // Misma fuente que `app/api/inbox-count/route.ts`.
+      const leadCountQ = db.from("proposed_leads").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("status", "pending_review");
       // Agregados (revenue + B2B/B2C): paginado completo en lotes, con flag si se capa.
       // PostgREST no suma por moneda: se pagina y se suma en JS sobre el universo.
       const PAGE = 1000;
@@ -165,32 +96,20 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let b2bBuyers = 0;
       let b2cBuyers = 0;
       for (;;) {
-        const pageQ = withMarket(
-          db.from("customers").select("orders_count,total_spent,currency,customer_type,manual_edits").eq("store_id", storeId).order("id", { ascending: true }),
-          "id",
-        );
+        const pageQ = db.from("customers").select("orders_count,total_spent,currency,customer_type,manual_edits").eq("store_id", storeId).order("id", { ascending: true });
         const { data, error: pageErr } = await pageQ.range(offset, offset + PAGE - 1);
         if (pageErr) return { error: pageErr.message };
         const rows = (data ?? []) as Array<Record<string, unknown>>;
         for (const r of rows) {
           const cur = String(r.currency ?? "?");
           revenue[cur] = (revenue[cur] ?? 0) + Number(r.total_spent ?? 0);
-          const overrides = (r.manual_edits as Record<string, unknown> | null) ?? {};
-          const manual =
-            typeof overrides["customer_type"] === "string" && overrides["customer_type"] !== ""
-              ? String(overrides["customer_type"]).toUpperCase()
-              : null;
-          const tipo = (manual ?? String(r.customer_type ?? "B2C")).toUpperCase() === "B2B" ? "B2B" : "B2C";
+          // B2B-only: todo suma a B2B.
+          const tipo = "B2B";
           const rev = revenueByType[tipo] ?? (revenueByType[tipo] = {});
           rev[cur] = (rev[cur] ?? 0) + Number(r.total_spent ?? 0);
           const isBuyer = Number(r.orders_count ?? 0) > 0;
-          if (tipo === "B2B") {
-            b2b += 1;
-            if (isBuyer) b2bBuyers += 1;
-          } else {
-            b2c += 1;
-            if (isBuyer) b2cBuyers += 1;
-          }
+          b2b += 1;
+          if (isBuyer) b2bBuyers += 1;
         }
         offset += rows.length;
         if (rows.length < PAGE) break;
@@ -248,13 +167,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const db = getSupabase();
-      const { count: totalMeasured } = await withMarket(
-        getSupabase()
-          .from("proposed_actions")
-          .select("id", { count: "exact", head: true })
-          .eq("store_id", storeId)
-          .not("revenue_attributed", "is", null),
-      );
+      const { count: totalMeasured } = await getSupabase()
+        .from("proposed_actions")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .not("revenue_attributed", "is", null);
       // Paginado completo: el universo atribuido suele ser chico, pero .limit(500)
       // mentía sumas. CAP alto con flag para no colgar el tool.
       const PAGE = 1000;
@@ -270,14 +187,12 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let converted30d = 0;
       let measured = 0;
       for (;;) {
-        const rq = withMarket(
-          db
-            .from("proposed_actions")
-            .select("revenue_attributed,dispatched_at,created_at")
-            .eq("store_id", storeId)
-            .not("revenue_attributed", "is", null)
-            .order("id", { ascending: true }),
-        );
+        const rq = db
+          .from("proposed_actions")
+          .select("revenue_attributed,dispatched_at,created_at")
+          .eq("store_id", storeId)
+          .not("revenue_attributed", "is", null)
+          .order("id", { ascending: true });
         const { data, error } = await rq.range(offset, offset + PAGE - 1);
         if (error) return { error: error.message };
         const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -305,7 +220,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         }
       }
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
-      const cur = marketCurrency ?? ((await resolveShopCurrency(storeId).catch(() => null)) ?? null);
+      const cur = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null);
       return {
         recovered_this_month: Math.round(recoveredMonth),
         recovered_this_month_display: formatMoney(Math.round(recoveredMonth), cur),
@@ -343,83 +258,12 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const wanted = status ? [status] : ["open", "prioritized"];
       const n = limit ?? 10;
       const off = offset ?? 0;
-      // Scope fallback grande (market sin países + miles de IDs): un solo
-      // `.in(miles de UUIDs)` revienta la URL. Rama null una vez + un
-      // top-(offset+n) por chunk, merge en JS (dedupe por id, orden created_at
-      // desc) y UN solo slice global en finishMergedPage. Cada chunk trae
-      // desde 0: si trajera .range(off,off+n) el offset se aplicaría dos
-      // veces (una por chunk, otra global) y saltaría filas con off>0.
-      if (isLargeIdScope(marketScope)) {
-        const { ids } = effectiveScopeFilter(marketScope);
-        const idList = ids ?? [];
-        const want = off + n;
-        try {
-          const db = getSupabase();
-          const baseSelect =
-            "id,customer_id,kind,score,reason,status,created_at,customers(email,first_name,last_name)";
-          const [nullCountRaw, nullTop] = await Promise.all([
-            db
-              .from("churn_signals")
-              .select("id", { count: "exact", head: true })
-              .eq("store_id", storeId)
-              .in("status", wanted)
-              .is("country", null)
-              .then((r) => r.count),
-            db
-              .from("churn_signals")
-              .select(baseSelect)
-              .eq("store_id", storeId)
-              .in("status", wanted)
-              .is("country", null)
-              .order("created_at", { ascending: false })
-              .order("id", { ascending: true })
-              .range(0, want - 1),
-          ]);
-          if (nullTop.error) return { error: nullTop.error.message };
-          // Honesto (issue #33): si algún count falla, el total es null + nota.
-          let total: number | null = nullCountRaw ?? null;
-          let countFailed = nullCountRaw == null;
-          const merged = new Map<string, Record<string, unknown>>();
-          for (const r of ((nullTop.data ?? []) as Array<Record<string, unknown>>))
-            merged.set(String(r.id), r);
-          for (const c of chunkIds(idList)) {
-            const [{ count: cc }, { data: cd, error: ce }] = await Promise.all([
-              db
-                .from("churn_signals")
-                .select("id", { count: "exact", head: true })
-                .eq("store_id", storeId)
-                .in("status", wanted)
-                .in("customer_id", c),
-              db
-                .from("churn_signals")
-                .select(baseSelect)
-                .eq("store_id", storeId)
-                .in("status", wanted)
-                .in("customer_id", c)
-                .order("created_at", { ascending: false })
-                .order("id", { ascending: true })
-                .range(0, want - 1),
-            ]);
-            if (ce) return { error: ce.message };
-            if (cc == null) countFailed = true;
-            else if (total != null) total += cc;
-            mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
-          }
-          return finishMergedPage(merged, countFailed ? null : total, n, off);
-        } catch (e) {
-          return { error: e instanceof Error ? e.message : String(e) };
-        }
-      }
-      const { count } = await withMarket(
-        getSupabase().from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", wanted),
-      );
-      const sq = withMarket(
-        getSupabase()
-          .from("churn_signals")
-          .select("id,customer_id,kind,score,reason,status,created_at,customers(email,first_name,last_name)")
-          .eq("store_id", storeId)
-          .in("status", wanted),
-      );
+      const { count } = await getSupabase().from("churn_signals").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("status", wanted);
+      const sq = getSupabase()
+        .from("churn_signals")
+        .select("id,customer_id,kind,score,reason,status,created_at,customers(email,first_name,last_name)")
+        .eq("store_id", storeId)
+        .in("status", wanted);
       const { data, error } = await sq
         .order("created_at", { ascending: false })
         .order("id", { ascending: true })
@@ -459,77 +303,18 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const n = limit ?? 10;
       const off = offset ?? 0;
-      const st = status ?? "pending_review";
-      if (isLargeIdScope(marketScope)) {
-        const { ids } = effectiveScopeFilter(marketScope);
-        const idList = ids ?? [];
-        try {
-          const db = getSupabase();
-          // Feed "¿qué enviamos, quién aprobó, volvió?" (page.tsx sentFeed):
-          // revenue_attributed + dispatched_at + approved_by viajan siempre.
-          const baseSelect =
-            "id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,approved_by,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)";
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const nullQ = (q: any): any => {
-            let qq = q.eq("store_id", storeId).eq("status", st).is("country", null);
-            if (channel) qq = qq.eq("channel", channel);
-            return qq;
-          };
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const chunkQ = (q: any, c: string[]): any => {
-            let qq = q.eq("store_id", storeId).eq("status", st).in("customer_id", c);
-            if (channel) qq = qq.eq("channel", channel);
-            return qq;
-          };
-          const nullCount = await nullQ(
-            db.from("proposed_actions").select("id", { count: "exact", head: true }),
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ).then((r: any) => r.count as number | null);
-          const nullTop = await nullQ(db.from("proposed_actions").select(baseSelect))
-            .order("created_at", { ascending: false })
-            .order("id", { ascending: true })
-            .range(0, off + n - 1);
-          if (nullTop.error) return { error: nullTop.error.message };
-          // Honesto (issue #33): si algún count falla, el total es null + nota.
-          let total: number | null = nullCount ?? null;
-          let countFailed = nullCount == null;
-          const merged = new Map<string, Record<string, unknown>>();
-          for (const r of ((nullTop.data ?? []) as Array<Record<string, unknown>>))
-            merged.set(String(r.id), r);
-          for (const c of chunkIds(idList)) {
-            const [{ count: cc }, { data: cd, error: ce }] = await Promise.all([
-              chunkQ(db.from("proposed_actions").select("id", { count: "exact", head: true }), c),
-              chunkQ(db.from("proposed_actions").select(baseSelect), c)
-                .order("created_at", { ascending: false })
-                .order("id", { ascending: true })
-                .range(0, off + n - 1),
-            ]);
-            if (ce) return { error: ce.message };
-            if (cc == null) countFailed = true;
-            else if (total != null) total += cc;
-            mergeChunkPage(merged, (cd ?? []) as Array<Record<string, unknown>>);
-          }
-          return finishMergedPage(merged, countFailed ? null : total, n, off);
-        } catch (e) {
-          return { error: e instanceof Error ? e.message : String(e) };
-        }
-      }
-      let countQ = withMarket(
-        getSupabase()
-          .from("proposed_actions")
-          .select("id", { count: "exact", head: true })
-          .eq("store_id", storeId)
-          .eq("status", status ?? "pending_review"),
-      );
+      let countQ = getSupabase()
+        .from("proposed_actions")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .eq("status", status ?? "pending_review");
       if (channel) countQ = countQ.eq("channel", channel);
       const { count } = await countQ;
-      let aq = withMarket(
-        getSupabase()
-          .from("proposed_actions")
-          .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,approved_by,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
-          .eq("store_id", storeId)
-          .eq("status", status ?? "pending_review"),
-      );
+      let aq = getSupabase()
+        .from("proposed_actions")
+        .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,approved_by,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+        .eq("store_id", storeId)
+        .eq("status", status ?? "pending_review");
       if (channel) aq = aq.eq("channel", channel);
       let data: Array<Record<string, unknown>> | null = null;
       let error: { message: string } | null = null;
@@ -544,13 +329,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       // Fallback sin approved_by: DBs aún sin la migración 20261022000000
       // (mismo criterio que el feed sentFeed de page.tsx).
       if (error && /approved_by/i.test(error.message)) {
-        let aq2 = withMarket(
-          getSupabase()
-            .from("proposed_actions")
-            .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
-            .eq("store_id", storeId)
-            .eq("status", status ?? "pending_review"),
-        );
+        let aq2 = getSupabase()
+          .from("proposed_actions")
+          .select("id,customer_id,channel,subject,body,status,created_at,signal_id,revenue_attributed,dispatched_at,evidence_json,customers(email,first_name,last_name),churn_signals(reason,score,kind)")
+          .eq("store_id", storeId)
+          .eq("status", status ?? "pending_review");
         if (channel) aq2 = aq2.eq("channel", channel);
         const res2 = await aq2
           .order("created_at", { ascending: false })
@@ -631,7 +414,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const inboxSummary = new FunctionTool({
     name: "get_inbox_summary",
     description:
-      "Backlog TOTAL de /review con el mismo criterio que `app/api/inbox-count/route.ts` y el badge del sidebar: borradores pendientes + leads pendientes + señales abiertas/priorizadas (acumulado, sin filtro de fecha). Úsala para '¿qué hay por revisar?', '¿qué hago primero hoy?', '¿qué hay en el inbox?'. Cita `total` y cada parcial; nunca uses `returned_count`/`items.length` como total (ese es el bug 2-vs-N). Respeta el mercado activo.",
+      "Backlog TOTAL de /review con el mismo criterio que `app/api/inbox-count/route.ts` y el badge del sidebar: borradores pendientes + leads pendientes + señales abiertas/priorizadas (acumulado, sin filtro de fecha). Úsala para '¿qué hay por revisar?', '¿qué hago primero hoy?', '¿qué hay en el inbox?'. Cita `total` y cada parcial; nunca uses `returned_count`/`items.length` como total (ese es el bug 2-vs-N).",
     parameters: z.object({}),
     execute: async () => {
       if (!storeId) return { error: "Sin tienda en contexto." };
@@ -640,45 +423,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         table: "proposed_actions" | "proposed_leads" | "churn_signals",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         apply: (q: any) => any,
-        idCol: string | null = "customer_id",
         // Honesto (issue #33): null si el count falla, nunca 0 silencioso.
       ): Promise<number | null> => {
-        if (isLargeIdScope(marketScope)) {
-          // Rama chunkeada, mismo patrón que list_signals/list_actions:
-          // NULL-comodín = `country IS NULL` una vez + chunks `.in(customer_id)`
-          // sin OR-null. leads no tiene customer_id (idCol null): solo país
-          // null, igual que applyScopeFilter con ids y sin idCol.
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const scoped = (q: any): any => apply(q.eq("store_id", storeId));
-          if (!idCol) {
-            const { count } = await scoped(
-              db.from(table).select("id", { count: "exact", head: true }),
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ).is("country", null) as any;
-            return count ?? null;
-          }
-          const { ids } = effectiveScopeFilter(marketScope);
-          const idList = ids ?? [];
-          const nullN = await scoped(
-            db.from(table).select("id", { count: "exact", head: true }),
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ).is("country", null).then((r: any) => r.count as number | null);
-          if (nullN == null) return null;
-          let total: number | null = nullN;
-          for (const c of chunkIds(idList)) {
-            const { count } = await scoped(
-              db.from(table).select("id", { count: "exact", head: true }),
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ).in("customer_id", c) as any;
-            if (count == null) return null;
-            total += count;
-          }
-          return total;
-        }
-        const q = withMarket(
-          apply(db.from(table).select("id", { count: "exact", head: true }).eq("store_id", storeId)),
-          idCol,
-        );
+        const q = apply(db.from(table).select("id", { count: "exact", head: true }).eq("store_id", storeId));
         const { count, error } = await q;
         if (error) throw new Error(error.message);
         return count ?? null;
@@ -686,7 +433,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       try {
         const [actions, leads, signals] = await Promise.all([
           countScoped("proposed_actions", (q) => q.eq("status", "pending_review")),
-          countScoped("proposed_leads", (q) => q.eq("status", "pending_review"), null),
+          countScoped("proposed_leads", (q) => q.eq("status", "pending_review")),
           countScoped("churn_signals", (q) => q.in("status", ["open", "prioritized"])),
         ]);
         const anyNull = actions == null || leads == null || signals == null;
@@ -718,18 +465,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const { resolveShopCurrency, resolveCloseWatchP } = await import("@/lib/store-profiles");
         const { isCloseWatch } = await import("@/lib/customer-predictions");
         const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
-        const viewCur = marketCurrency ?? shopCurrency;
+        const viewCur = shopCurrency;
         const closeWatchP = await resolveCloseWatchP(storeId).catch(() => 0.1);
-        const marketActive = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
-        // Scope por IDs en predicciones (issue #32): customer_predictions no
-        // tiene country, así que el filtro por país no existe en SQL. Los IDs
-        // sí se filtran aquí en JS (misma semántica NULL-comodín imposible:
-        // sin country no hay nulls que pasar; solo IDs del market).
-        const scopeIds =
-          marketScope.customerIds && marketScope.customerIds.length > 0
-            ? new Set(marketScope.customerIds)
-            : null;
-        const scopeCountriesOnly = marketActive && !scopeIds;
         const PRED_CAP = 5000;
         const dayStart = new Date(
           Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
@@ -784,12 +521,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         for (const r of predRows) {
           const cid0 = String(r.customer_id ?? "");
           if (!cid0 || seenCust.has(cid0)) continue;
-          if (scopeIds && !scopeIds.has(cid0)) continue;
           seenCust.add(cid0);
           const d = String(r.decision ?? "");
           const cur = (r.currency as string | null) ?? null;
           const inView = viewCur === null || cur === null || cur.toUpperCase() === viewCur.toUpperCase();
-          if (marketActive && !inView) continue;
           if (d === "actuar" || d === "revision_humana") actuar += 1;
           else if (d === "vigilar") {
             vigilar += 1;
@@ -846,11 +581,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         let top1: Record<string, unknown> | null = null;
         try {
           const { getRankedMira } = await import("@/lib/mira");
-          const { rows } = await getRankedMira(storeId, 5, {
-            countries: marketScope.countries,
-            customerIds: marketScope.customerIds,
-            currency: marketActive ? (viewCur ?? null) : null,
-          });
+          const { rows } = await getRankedMira(storeId, 5, null);
           const actionable = rows.filter(
             (a) => a.decision === "actuar" || a.decision === "revision_humana" || (a.decision == null && (a.daysSince ?? 0) <= 365),
           );
@@ -889,12 +620,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           debiles_cercano: debilesCercano,
           top1,
           view_currency: viewCur,
-          market_active: marketActive,
+          market_active: false,
           truncated: predRows.length >= PRED_CAP,
           note_truncated: predRows.length >= PRED_CAP ? "Muestra parcial: predicciones mayores al CAP 5000; conteos parciales." : null,
-          scope_note: scopeCountriesOnly
-            ? "Scope por país sin filtro en predicciones (la tabla no tiene country): conteos globales en la moneda de la vista, no del país."
-            : null,
+          scope_note: null,
           note: fotoVieja ? "Foto del día anterior (sin corrida hoy): conteos de la última foto, no de hoy. Si foto_vieja=true di 'foto de ayer', nunca 'hoy'." : null,
         };
       } catch (e) {
@@ -1089,18 +818,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const db = getSupabase();
       const esc = q.replace(/[%_\\]/g, "\\$&").replace(/,/g, " ");
       const like = `%${esc}%`;
-      // Scope grande por IDs (issue #32): sin .in(miles) en URL; se busca sin
-      // filtro SQL y se aplica el predicado en JS (misma semántica
-      // NULL-comodín). Se sobre-pide (20) y se recorta a 5 tras filtrar.
-      const largeFind = isLargeIdScope(marketScope);
-      const findIds = largeFind
-        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
-        : null;
-      const inFindScope = (r: Record<string, unknown>): boolean => {
-        if (!findIds) return true;
-        const c = typeof r.country === "string" ? r.country : null;
-        return c === null || findIds.has(String(r.id ?? ""));
-      };
       const custCols =
         "id,email,first_name,last_name,phone,company_name,orders_count,total_spent,currency,country";
       const baseFq = getSupabase()
@@ -1108,10 +825,9 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         .select(custCols)
         .eq("store_id", storeId)
         .or(`email.ilike.${like},first_name.ilike.${like},last_name.ilike.${like},phone.ilike.${like},company_name.ilike.${like}`);
-      const fq = largeFind ? baseFq : withMarket(baseFq, "id");
-      const { data, error } = await fq.limit(largeFind ? 20 : 5);
+      const { data, error } = await baseFq.limit(5);
       if (error) return { error: error.message };
-      const rows = (((data ?? []) as Array<Record<string, unknown>>).filter(inFindScope)).slice(0, 5);
+      const rows = ((data ?? []) as Array<Record<string, unknown>>).slice(0, 5);
       // Empresa enriquecida vive en `domains` (por dominio): dominios que
       // matchean (qué es, no solo el nombre) → customers con ese email.
       if (rows.length < 5) {
@@ -1136,14 +852,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         for (const d of [...firmByDomain.keys()].slice(0, 10)) {
           if (rows.length >= 5) break;
           const escD = d.replace(/[%_\\]/g, "\\$&");
-          const baseDq = db
+          const dq = db
             .from("customers")
             .select(custCols)
             .eq("store_id", storeId)
             .like("email", `%@${escD}`);
-          const dq = largeFind ? baseDq : withMarket(baseDq, "id");
           const { data: dc } = await dq.limit(5 - rows.length);
-          for (const c of (((dc ?? []) as Array<Record<string, unknown>>).filter(inFindScope))) {
+          for (const c of (((dc ?? []) as Array<Record<string, unknown>>))) {
             if (seen.has(String(c.id))) continue;
             seen.add(String(c.id));
             rows.push({ ...c, enriched_company: firmByDomain.get(d)?.company ?? null });
@@ -1157,14 +872,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         const known = new Set(rows.map((r) => String((r as Record<string, unknown>).id)));
         const ids = [...hits.keys()].filter((id) => !known.has(id)).slice(0, 5 - rows.length);
         if (ids.length > 0) {
-          const baseCcq = db
+          const ccq = db
             .from("customers")
             .select(custCols)
             .eq("store_id", storeId)
             .in("id", ids);
-          const ccq = largeFind ? baseCcq : withMarket(baseCcq, "id");
           const { data: cc } = await ccq;
-          for (const c of (((cc ?? []) as Array<Record<string, unknown>>).filter(inFindScope))) {
+          for (const c of (((cc ?? []) as Array<Record<string, unknown>>))) {
             const hit = hits.get(String(c.id));
             known.add(String(c.id));
             rows.push({
@@ -1205,7 +919,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const filterCustomers = new FunctionTool({
     name: "filter_customers",
     description:
-      "Filtra la tabla de Customers y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días; vista=seguimiento: vigilar cercano (recuperable o p alta, mismo corte que el héroe). ritmo: con-ritmo, primera o sin-compras (segmentación estructural). customer_type: B2B o B2C (tipo efectivo: override manual ?? clasificación por dominio). Ejes del motor: ventana (antes/en/pasada/dormido), banda (organico-probable/recuperable/lejos), elegibilidad (ok/sin-canal/contacto-reciente), decil de valor (alto 8-10/medio 4-7/bajo 1-3). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
+      "Filtra la tabla de Empresas y devuelve cuántos coinciden (la vista los muestra; aquí no se listan filas). decision: actuar, vigilar, no-tocar, organico, dormido, sin_canal, contactado_reciente o revision_humana (criterio del motor, foto del día). vista=ventana7: vigilar que entra en ventana en 7 días; vista=seguimiento: vigilar cercano (recuperable o p alta, mismo corte que el héroe). ritmo: con-ritmo, primera o sin-compras (segmentación estructural). Ejes del motor: ventana (antes/en/pasada/dormido), banda (organico-probable/recuperable/lejos), elegibilidad (ok/sin-canal/contacto-reciente), decil de valor (alto 8-10/medio 4-7/bajo 1-3). q = texto libre (email/nombre/teléfono/empresa, incluida la enriquecida: nombre, industria, descripción). Pasa SOLO lo que pida el merchant.",
     parameters: z.object({
       q: z.string().min(2).max(100).optional(),
       decision: z.enum(DECISIONS).optional(),
@@ -1239,11 +953,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       decil?: string;
     }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
-      const scope: MarketScope = {
-        market: null,
-        countries: marketScope.countries,
-        customerIds: marketScope.customerIds,
-      };
       const { resolveCloseWatchP } = await import("@/lib/store-profiles");
       const closeWatchCutoff = await resolveCloseWatchP(storeId).catch(() => 0.1);
       const res = await queryStoreCustomers(
@@ -1262,7 +971,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           elegibilidad: elegibilidad ?? null,
           decil: decil ?? null,
         },
-        scope,
+        null,
         closeWatchCutoff,
       );
       return {
@@ -1294,7 +1003,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
   const profile = new FunctionTool({
     name: "get_customer_profile",
     description:
-      "Ficha del customer en contexto: nombre, email, teléfono, empresa (efectiva: manual > Medusa > enriquecida), tipo (B2B/B2C), compras y gasto (total_spent_display ya formateado). Si la empresa viene del enriquecimiento, incluye industria y descripción (qué es). Úsala para identidad. " + DISPLAY_RULE,
+      "Ficha del customer en contexto: nombre, email, teléfono, empresa (efectiva: manual > base > enriquecida), tipo (B2B/B2C), compras y gasto (total_spent_display ya formateado). Si la empresa viene del enriquecimiento, incluye industria y descripción (qué es). Úsala para identidad. " + DISPLAY_RULE,
     parameters: z.object({}),
     execute: async () => {
       if (!customerId) return noCustomer;
@@ -1306,7 +1015,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (error) return { error: error.message };
       if (!data) return { error: "Customer no encontrado." };
       const c = data as Record<string, unknown>;
-      // Empresa efectiva (misma regla que la GUI): manual > Medusa > enriquecida.
+      // Empresa efectiva (misma regla que la GUI): manual > base > enriquecida.
       const overrides = (c.manual_edits as Record<string, unknown> | null) ?? {};
       const manualCompany =
         typeof overrides["company_name"] === "string" && overrides["company_name"] !== ""
@@ -1428,22 +1137,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       if (!storeId) return { error: "Sin tienda en contexto." };
       const n = limit ?? 10;
       const off = offset ?? 0;
-      const { count } = await withMarket(
-        getSupabase()
-          .from("proposed_leads")
-          .select("id", { count: "exact", head: true })
-          .eq("store_id", storeId)
-          .eq("status", status ?? "pending_review"),
-        null,
-      );
-      const lq = withMarket(
-        getSupabase()
-          .from("proposed_leads")
-          .select("id,company,domain,url,contact,icp_score,reason,status,created_at,evidence_json")
-          .eq("store_id", storeId)
-          .eq("status", status ?? "pending_review"),
-        null,
-      );
+      const { count } = await getSupabase()
+        .from("proposed_leads")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId)
+        .eq("status", status ?? "pending_review");
+      const lq = getSupabase()
+        .from("proposed_leads")
+        .select("id,company,domain,url,contact,icp_score,reason,status,created_at,evidence_json")
+        .eq("store_id", storeId)
+        .eq("status", status ?? "pending_review");
       const { data, error } = await lq
         .order("icp_score", { ascending: false })
         .order("id", { ascending: true })
@@ -1479,7 +1182,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     }),
     execute: async ({ queries, perQuery, focus }: { queries?: number; perQuery?: number; focus?: string }) => {
       if (!storeId) return { error: "Sin tienda en contexto." };
-      const scope = { countries: marketScope.countries, customerIds: marketScope.customerIds };
       try {
         const { prospectEligibility } = await import("@/lib/prospect");
         const elig = await prospectEligibility(storeId);
@@ -1491,7 +1193,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         // sigue al ICP
       }
       try {
-        await getIcp(storeId, scope);
+        await getIcp(storeId, null);
       } catch (e) {
         return { error: e instanceof Error ? e.message : String(e) };
       }
@@ -1501,7 +1203,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const runId = await startRun(storeId, "prospect", "Prospección", 1);
       const { after } = await import("next/server");
       after(() => {
-        runProspect(runId, storeId, { queries: queries ?? 3, perQuery: perQuery ?? 5, focus: focus?.trim() || null, scope }).catch(() => undefined);
+        runProspect(runId, storeId, { queries: queries ?? 3, perQuery: perQuery ?? 5, focus: focus?.trim() || null, scope: null }).catch(() => undefined);
       });
       return { run_id: runId, already_running: false, focus: focus?.trim() || null };
     },
@@ -1520,10 +1222,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const n = limit ?? 5;
       const db = getSupabase();
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
-      // Sin ?? PEN: sin market ni shop_currency no se asume moneda (null = todas,
+      // Sin ?? PEN: sin shop_currency no se asume moneda (null = todas,
       // como el drawer). Asumir PEN mezclaba/ocultaba otras monedas.
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
-      const viewCurrency = marketCurrency ?? shopCurrency;
+      const viewCurrency = shopCurrency;
       // Misma ventana que /finanzas (12m): año móvil para no mezclar historia vieja.
       const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
       const PAGE = 1000;
@@ -1531,13 +1233,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       let offset = 0;
       let ordersTruncated = false;
       const orows: Array<Record<string, unknown>> = [];
-      // Scope grande por IDs: sin .in(miles) en URL (revienta PostgREST);
-      // se escanea sin filtro SQL y se aplica el predicado en JS (misma
-      // semántica NULL-comodín que applyScopeFilter, cfr. get_product_movements).
-      const largeScope = isLargeIdScope(marketScope);
-      const idSet = largeScope
-        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
-        : null;
       for (;;) {
         const base = db
           .from("orders")
@@ -1546,20 +1241,10 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           .gte("placed_at", yearAgoIso)
           .order("placed_at", { ascending: false })
           .order("id", { ascending: true });
-        const oq = largeScope ? base : withMarket(base);
-        const { data, error } = await oq.range(offset, offset + PAGE - 1);
+        const { data, error } = await base.range(offset, offset + PAGE - 1);
         if (error) return { error: error.message };
         const rows = (data ?? []) as Array<Record<string, unknown>>;
-        if (largeScope && idSet) {
-          for (const o of rows) {
-            const c = typeof o.country === "string" ? o.country : null;
-            const cid = typeof o.customer_id === "string" ? o.customer_id : "";
-            if (c !== null && !idSet.has(cid)) continue;
-            orows.push(o);
-          }
-        } else {
-          orows.push(...rows);
-        }
+        orows.push(...rows);
         offset += rows.length;
         if (rows.length < PAGE) break;
         if (orows.length >= CAP) {
@@ -1799,7 +1484,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           buyers_all: Number(s.buyers_all ?? 0),
           last_sold_at: (s.last_sold_at as string | null) ?? null,
         })),
-        view_currency: marketCurrency ?? (shopCurrency ? shopCurrency.toUpperCase() : null),
+        view_currency: shopCurrency ? shopCurrency.toUpperCase() : null,
         truncated: statRows.length >= 10,
         note_truncated: statRows.length >= 10 ? "Ventana de 10 filas de product_stats: puede haber más monedas." : null,
         note: "Sin product_stats = sin ventas registradas. " + DISPLAY_RULE,
@@ -1875,7 +1560,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       };
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
-      const viewCurrency = marketCurrency ?? shopCurrency;
+      const viewCurrency = shopCurrency;
       // Agregado paginado con CAP + flag: lotes 1000, nunca .length de ventana.
       const PAGE = 1000;
       const CAP = 20000;
@@ -1884,13 +1569,6 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       const metaLines: Array<{ title: string; quantity: number; metadata?: unknown; oi: number }> = [];
       let scanned = 0;
       let hitCap = false;
-      // Scope grande por IDs: sin .in(miles) en URL (revienta PostgREST);
-      // se escanea sin filtro SQL y se aplica el predicado en JS (misma
-      // semántica NULL-comodín que applyScopeFilter).
-      const largeScope = isLargeIdScope(marketScope);
-      const idSet = largeScope
-        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
-        : null;
       for (let at = 0; ; at += PAGE) {
         const baseQ = db
           .from("orders")
@@ -1898,26 +1576,17 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           .eq("store_id", storeId)
           .order("placed_at", { ascending: false })
           .order("id", { ascending: true });
-        const oq = largeScope ? baseQ : withMarket(baseQ);
-        const { data, error } = await oq.range(at, at + PAGE - 1);
+        const { data, error } = await baseQ.range(at, at + PAGE - 1);
         if (error) return { error: error.message };
         const orows = (data ?? []) as Array<Record<string, unknown>>;
         for (const o of orows) {
-          if (largeScope && idSet) {
-            const c = typeof o.country === "string" ? o.country : null;
-            const cid = typeof o.customer_id === "string" ? o.customer_id : "";
-            if (c !== null && !idSet.has(cid)) continue;
-          }
           if (!isRealDbOrder({
             status: typeof o.status === "string" ? o.status : null,
             payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
             is_test: o.is_test === true,
           })) continue;
           const cur = (o.currency as string | null) ?? null;
-          // Misma moneda que el drawer: con market activo se filtra a su
-          // moneda; sin market se muestran todas con rótulo por fila.
-          if (marketCurrency && cur && cur.toUpperCase() !== marketCurrency) continue;
-          // scanned = órdenes reales en la moneda/scope (issue #29).
+          // scanned = órdenes reales (issue #29).
           scanned += 1;
           const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
           let qty = 0;
@@ -2090,17 +1759,13 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         .reduce((acc, s) => acc + Number(s.buyers_all ?? 0), 0);
       const { resolveShopCurrency } = await import("@/lib/store-profiles");
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
-      const viewCurrency = marketCurrency ?? shopCurrency;
+      const viewCurrency = shopCurrency;
       // Agregado paginado con CAP + flag: lotes 1000 sobre órdenes reales.
       const PAGE = 1000;
       const CAP = 20000;
       const buyerAgg = new Map<string, Map<string, { qty: number; revenue: number }>>();
       let scanned = 0;
       let hitCap = false;
-      const largeScopeB = isLargeIdScope(marketScope);
-      const idSetB = largeScopeB
-        ? new Set((effectiveScopeFilter(marketScope).ids ?? []) as string[])
-        : null;
       for (let at = 0; ; at += PAGE) {
         const baseQB = db
           .from("orders")
@@ -2108,22 +1773,16 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
           .eq("store_id", storeId)
           .order("placed_at", { ascending: false })
           .order("id", { ascending: true });
-        const oq = largeScopeB ? baseQB : withMarket(baseQB);
-        const { data, error } = await oq.range(at, at + PAGE - 1);
+        const { data, error } = await baseQB.range(at, at + PAGE - 1);
         if (error) return { error: error.message };
         const orows = (data ?? []) as Array<Record<string, unknown>>;
         for (const o of orows) {
-          if (largeScopeB && idSetB) {
-            const c = typeof o.country === "string" ? o.country : null;
-            const cid0 = typeof o.customer_id === "string" ? o.customer_id : "";
-            if (c !== null && !idSetB.has(cid0)) continue;
-          }
           if (!isRealDbOrder({
             status: typeof o.status === "string" ? o.status : null,
             payment_status: typeof o.payment_status === "string" ? o.payment_status : null,
             is_test: o.is_test === true,
           })) continue;
-          // scanned = órdenes reales en scope (issue #29, no basura).
+          // scanned = órdenes reales (issue #29, no basura).
           scanned += 1;
           const cur = (o.currency as string | null) ?? null;
           const oitems = Array.isArray(o.items_json) ? (o.items_json as Array<Record<string, unknown>>) : [];
@@ -2161,11 +1820,8 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       }).sort((a, b) => b.revenue - a.revenue);
       // Total honesto: distintos reales del scan. product_stats suma por moneda
       // (duplica multi-moneda) y puede estar stale: se expone aparte, no como total.
-      // Scope-aware: con market activo el scan va filtrado y stats es global,
-      // comparar sería siempre true (ruido). Solo se compara sin scope.
       const total = buyerAgg.size;
-      const scoped = (marketScope.countries?.length ?? 0) > 0 || (marketScope.customerIds?.length ?? 0) > 0;
-      const statsStale = scoped ? null : (stats ?? []).length === 0 ? total > 0 : statsTotal !== total;
+      const statsStale = (stats ?? []).length === 0 ? total > 0 : statsTotal !== total;
       const ranked = rankedAll.slice(off, off + n);
       let items: Array<Record<string, unknown>> = ranked.map((r) => ({
         ...r,
@@ -2175,14 +1831,11 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         company: null,
       }));
       if (ranked.length > 0) {
-        const cq = withMarket(
-          db
-            .from("customers")
-            .select("id,email,first_name,last_name,company_name")
-            .eq("store_id", storeId)
-            .in("id", ranked.map((r) => r.customer_id)),
-          "id",
-        );
+        const cq = db
+          .from("customers")
+          .select("id,email,first_name,last_name,company_name")
+          .eq("store_id", storeId)
+          .in("id", ranked.map((r) => r.customer_id));
         const { data: custs, error: cErr } = await cq;
         if (cErr) return { error: cErr.message };
         const byId = new Map(
@@ -2201,12 +1854,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
         });
       }
       const truncated = total > items.length + off || hitCap;
-      // NULL-comodín: los sin país pasan todo filtro y contaminan cada market.
-      // Se expone para no presentar el total como limpio.
-      const { count: nullCountryCount } = await withMarket(
-        db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).is("country", null),
-        "id",
-      );
+      const { count: nullCountryCount } = await db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", storeId).is("country", null);
       return {
         items,
         total_count: total,
@@ -2224,5 +1872,81 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
     },
   });
 
-  return [summary, recovery, signals, actions, approveActions, rejectActions, inboxSummary, hoySnapshot, runsStatus, dismissSignals, reopenSignals, decideLead, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...(productId ? [productSummary, productMovements, productBuyers] : []), ...loopTools];
+  /** Guarda defensiva (hoy inalcanzable: la tool de empresa solo se
+   *  registra con companyId en contexto; sin foco no existe). */
+  const noCompany = { error: "Sin empresa en contexto: abre su ficha en Empresas." };
+
+  /** Ficha de la empresa en foco: identidad + contactos + pedidos (IOs
+   *  donde es anunciante o facturación) + campañas donde es anunciante.
+   *  Es lo mismo que ven los tabs del drawer. Úsala antes de afirmar
+   *  cualquier dato de ESTA empresa. Los contactos (llamar/WhatsApp) se
+   *  hacen en la GUI: la tool no escribe. No expone comisión de agencia. */
+  const companyProfile = new FunctionTool({
+    name: "get_company_profile",
+    description:
+      "Ficha de la empresa en foco: identidad (nombre, tipo, RUT, dominio, email, teléfono, ciudad/país), contactos (principal primero), pedidos/IOs (número, marca, estado) y campañas (nombre, estado). Úsala antes de afirmar cualquier dato de ESTA empresa. " + DISPLAY_RULE,
+    parameters: z.object({}),
+    execute: async () => {
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      if (!companyId) return noCompany;
+      const db = getSupabase();
+      const { data: co, error: coErr } = await db
+        .from("companies")
+        .select("id,name,kind,tax_id,domain,email,phone,city,country")
+        .eq("store_id", storeId)
+        .eq("id", companyId)
+        .maybeSingle();
+      if (coErr) return { error: coErr.message };
+      if (!co) return { error: "Empresa no encontrada en esta tienda." };
+      const c = co as Record<string, unknown>;
+      const [contactsRes, iosRes, campsRes, contactsTotal, iosTotal, campsTotal] = await Promise.all([
+        db.from("contacts").select("first_name,last_name,email,phone,job_title,is_primary").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).limit(30),
+        db.from("insertion_orders").select("io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(10),
+        db.from("campaigns").select("name,status").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(10),
+        db.from("contacts").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("company_id", companyId),
+        db.from("insertion_orders").select("id", { count: "exact", head: true }).eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`),
+        db.from("campaigns").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("advertiser_company_id", companyId),
+      ]);
+      const contacts = contactsRes.data ?? [];
+      const ios = iosRes.data ?? [];
+      const campaigns = campsRes.data ?? [];
+      const cname = (row: Record<string, unknown>) =>
+        [row.first_name, row.last_name].filter(Boolean).join(" ") || "—";
+      return {
+        company: {
+          id: String(c.id ?? ""),
+          name: String(c.name ?? ""),
+          kind: (c.kind as string | null) ?? null,
+          tax_id: (c.tax_id as string | null) ?? null,
+          domain: (c.domain as string | null) ?? null,
+          email: (c.email as string | null) ?? null,
+          phone: (c.phone as string | null) ?? null,
+          city: (c.city as string | null) ?? null,
+          country: (c.country as string | null) ?? null,
+        },
+        contacts: ((contacts ?? []) as Array<Record<string, unknown>>).map((r) => ({
+          name: cname(r),
+          email: (r.email as string | null) ?? null,
+          phone: (r.phone as string | null) ?? null,
+          job_title: (r.job_title as string | null) ?? null,
+          is_primary: r.is_primary === true,
+        })),
+        contacts_total: contactsTotal.count ?? null,
+        ios: ((ios ?? []) as Array<Record<string, unknown>>).map((r) => ({
+          io_number: String(r.io_number ?? ""),
+          brand: (r.brand as string | null) ?? null,
+          status: String(r.status ?? ""),
+        })),
+        ios_total: iosTotal.count ?? null,
+        campaigns: ((campaigns ?? []) as Array<Record<string, unknown>>).map((r) => ({
+          name: String(r.name ?? ""),
+          status: String(r.status ?? ""),
+        })),
+        campaigns_total: campsTotal.count ?? null,
+        note: "Listas acotadas (30 contactos, 10 IOs/campañas recientes): usa los *_total exactos para el M y dilo si hay más. Contactos del drawer (llamar/WhatsApp) no tienen tool: se hacen en la GUI. " + DISPLAY_RULE,
+      };
+    },
+  });
+
+  return [summary, recovery, signals, actions, approveActions, rejectActions, inboxSummary, hoySnapshot, runsStatus, dismissSignals, reopenSignals, decideLead, find, filterCustomers, profile, orders, firmographics, leads, prospect, topProducts, ...(productId ? [productSummary, productMovements, productBuyers] : []), ...(companyId ? [companyProfile] : []), ...loopTools];
 }

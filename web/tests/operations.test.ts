@@ -19,13 +19,6 @@ const op = (kind: string, scopeId: string | null = null, label = kind): ActiveOp
 });
 
 describe("matriz de compatibilidad", () => {
-  it("sync bloquea todo (y todo bloquea sync)", () => {
-    for (const k of ["enrichment", "scout", "strategist", "copywriter", "copywriter_single", "dispatcher", "analyst", "prospect", "approve_batch"]) {
-      assert.equal(conflictsWith({ kind: "sync" }, op(k)), true, `sync vs ${k}`);
-      assert.equal(conflictsWith({ kind: k }, op("sync")), true, `${k} vs sync`);
-    }
-  });
-
   it("cadena scout→strategist→copywriter mutuamente secuencial", () => {
     for (const a of ["scout", "strategist", "copywriter"]) {
       for (const b of ["scout", "strategist", "copywriter"]) {

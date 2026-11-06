@@ -1,11 +1,11 @@
-# AI Retention Engine
+# MEOW
 
 > Sistema agéntico de **retención y comprensión de negocio**: entiende tu negocio y actúa
 > sobre él (detecta, decide, propone, ejecuta con aprobación humana y mide).
 
 ## Qué es (y qué no es)
 
-No es un CRM. Guardar y segmentar clientes ya es commodity. AI Retention Engine es un **motor de
+No es un CRM. Guardar y segmentar clientes ya es commodity. MEOW es un **motor de
 decisión y acción** encima de los datos del negocio: ingesta desde el ecommerce, construye una
 comprensión viva de quién compra, qué compra, cada cuánto debería volver y qué cuentas se están
 enfriando; y luego, de forma autónoma, **propone la siguiente mejor acción** (WhatsApp/email),
@@ -13,7 +13,7 @@ que el humano aprueba antes de que se ejecute.
 
 La diferencia con CRM/analytics/marketing automation:
 el CRM *almacena*, el analytics *describe*, el marketing automation *ejecuta reglas que tú
-armaste*; AI Retention Engine **decide y propone por ti, y cierra el loop midiendo el resultado**.
+armaste*; MEOW **decide y propone por ti, y cierra el loop midiendo el resultado**.
 
 ## El problema
 

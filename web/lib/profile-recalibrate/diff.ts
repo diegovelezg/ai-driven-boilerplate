@@ -145,7 +145,7 @@ export function buildDeltas(
     }
   }
 
-  // Taxonomía: solo nodos Shopify conocidos. Proponer BORRAR la vigente
+  // Taxonomía: solo nodos conocidos. Proponer BORRAR la vigente
   // exige evidencia real del slot (igual que el ciclo): el synthesizer
   // convierte un nodo inválido del LLM en null, y eso no es evidencia.
   if (proposed.taxonomyId !== null && isKnownTaxonomyId(proposed.taxonomyId)) {
@@ -153,7 +153,7 @@ export function buildDeltas(
       "taxonomy_id",
       profile.taxonomyId,
       proposed.taxonomyId,
-      `Nodo Shopify propuesto: ${proposed.taxonomyId}.`,
+      `Nodo propuesto: ${proposed.taxonomyId}.`,
     );
   } else if (proposed.taxonomyId === null && profile.taxonomyId !== null) {
     const { evidencia } = evidenceFor("taxonomy_id", proposed, "");

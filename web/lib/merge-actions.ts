@@ -3,8 +3,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import { findDuplicateGroups } from "@/lib/duplicates";
 import { mergeCustomers } from "@/lib/merge";
 import { formatNumber } from "@/lib/format";
@@ -57,9 +56,8 @@ function triggerPostMergeRefresh(storeId: string): void {
 export async function mergeAllDuplicatesAction(): Promise<MergeAllState> {
   if (!isSupabaseConfigured())
     return { ok: false, message: "Supabase no configurado.", merged: 0, failed: 0, total: 0 };
-  const conn = await readConnections();
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", merged: 0, failed: 0, total: 0 };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda.", merged: 0, failed: 0, total: 0 };
   try {
     const groups = await findDuplicateGroups(storeId);
     if (groups.length === 0)
@@ -149,9 +147,8 @@ export async function mergeCustomersAction(dbIds: string[]): Promise<MergeState>
   if (!Array.isArray(dbIds) || dbIds.length < 2) {
     return { ok: false, message: "Se necesitan al menos 2 fichas." };
   }
-  const conn = await readConnections();
-  const storeId = await resolveStoreId(conn.medusaUrl);
-  if (!storeId) return { ok: false, message: "Tienda sin sincronizar." };
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { ok: false, message: "Sin tienda." };
   try {
     const { startRun, finishRun } = await import("@/lib/background");
     let runId: string | null = null;

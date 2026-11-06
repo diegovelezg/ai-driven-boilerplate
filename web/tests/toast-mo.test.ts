@@ -47,7 +47,7 @@ describe("revisión de perfil en la cinta", () => {
 });
 
 describe("auto-hide de terminados no se reinicia", () => {
-  it("el sync a toasts salta payloads idénticos", () => {
+  it("el background a toasts salta payloads idénticos", () => {
     const s = src("components/background-status.tsx");
     assert.ok(
       s.includes("lastToastKeyRef"),
@@ -59,30 +59,15 @@ describe("auto-hide de terminados no se reinicia", () => {
 });
 
 describe("settings por el canal único de toasts", () => {
-  it("el connect corre el sync en background (sin cola, directo)", () => {
-    const s = src("lib/settings-actions.ts");
-    assert.ok(
-      s.includes("runSyncOnce(storeId"),
-      "connect sin runSyncOnce: el sync vuelve a bloquear el submit sin progreso",
-    );
-    assert.ok(s.includes("after("), "sync sin after(): bloquea la respuesta en vez de ir a background");
-    assert.ok(!s.includes("enqueueJob"), "quedó enqueue: la cola está fuera");
-  });
-
   it("sin cola: ningún caller encola y el worker no hace poll", () => {
-    for (const p of ["lib/sync-actions.ts", "lib/auth-actions.ts", "lib/settings-actions.ts", "worker.ts"]) {
+    for (const p of ["lib/auth-actions.ts", "lib/settings-actions.ts", "worker.ts"]) {
       const s = src(p);
       assert.ok(!s.includes("enqueueJob"), `${p} aún encola: la cola está fuera`);
       assert.ok(!s.includes("@/lib/jobs"), `${p} aún importa lib/jobs`);
     }
     const w = src("worker.ts");
     assert.ok(!w.includes("claimNextJob"), "worker aún hace poll: cron directo por tienda");
-    assert.ok(w.includes("runSyncOnce") || w.includes("runMorningPipeline"), "worker sin pipeline directo");
-  });
-
-  it("SettingsForm envuelve en bg.start()", () => {
-    const s = src("components/settings-form.tsx");
-    assert.ok(s.includes("bg.start("), "SettingsForm sin bg.start(): el connect no llega a la cinta");
+    assert.ok(w.includes("runMorningPipeline"), "worker sin pipeline directo");
   });
 
   it("guardados instantáneos avisan por toast, no solo inline", () => {

@@ -1,8 +1,4 @@
-// Solo server-side: usa service_role (bypassa RLS). Nunca importar en client components.
-// (Sin `import "server-only"`: el worker dedicado `worker.ts` (issue #24) y los
-// tests `tsx --test` importan este módulo en node y `server-only` lanza fuera de
-// React Server Components. El `resolveActor` dinámico a `supabase-server` sigue
-// protegido por try/catch: en node cae a actor por defecto.)
+// Solo server-side: usa service_role (bypassa RLS). Sin ecommerce.
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   decryptSecret,
@@ -12,18 +8,13 @@ import {
   isEncryptionConfigured,
 } from "@/lib/secrets-crypto";
 
-const SECRET_KEYS = ["medusa_token", "shopify_token", "woo_consumer_key", "woo_consumer_secret", "email_api_key"] as const;
+const SECRET_KEYS = ["email_api_key"] as const;
 export type SecretKeyName = (typeof SECRET_KEYS)[number];
 
-// Campos de conexión no-secretos que TAMBIÉN viven cifrados en DB en prod
-// (el JSON local es efímero en contenedores: se pierde en cada redeploy y el
-// usuario nextjs no siempre puede escribirlo → EACCES).
-const CONN_FIELD_KEYS = ["medusa_url", "medusa_email", "woo_store"] as const;
+const CONN_FIELD_KEYS = [] as const;
 export type ConnFieldName = (typeof CONN_FIELD_KEYS)[number];
 
 type SecretAction = "upsert" | "revoke";
-
-// Huella para auditoría: reutiliza `fingerprintSecret` (única definición).
 const shaShort = fingerprintSecret;
 
 function isSecretsDbReady(): boolean {
@@ -59,13 +50,11 @@ async function logAudit(
       actor: (await resolveActor(actor)) ?? "settings-ui",
     });
   } catch {
-    // Auditoría best-effort: nunca rompe el guardado.
   }
 }
 
-/** Lee y descifra los secretos de una tienda. Sin DB/key → "" (fallback JSON). */
 export async function getStoreSecrets(storeId: string): Promise<Record<SecretKeyName, string>> {
-  const empty = { medusa_token: "", shopify_token: "", woo_consumer_key: "", woo_consumer_secret: "", email_api_key: "" };
+  const empty = { email_api_key: "" };
   if (!isSecretsDbReady()) return { ...empty };
   try {
     const db = getSupabase();
@@ -83,7 +72,6 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
       try {
         out[name] = decryptSecret(String(r.encrypted_value ?? ""), key);
       } catch {
-        // Fila ilegible (key rotada o corrupta): se trata como no configurada.
         out[name] = "";
       }
     }
@@ -93,43 +81,13 @@ export async function getStoreSecrets(storeId: string): Promise<Record<SecretKey
   }
 }
 
-/** Lee y descifra medusa_url / medusa_email / woo_store de una tienda. Sin DB/key → "" (fallback JSON). */
-export async function getStoreConnFields(storeId: string): Promise<Record<ConnFieldName, string>> {
-  const empty = { medusa_url: "", medusa_email: "", woo_store: "" };
-  if (!isSecretsDbReady()) return { ...empty };
-  try {
-    const db = getSupabase();
-    const { data, error } = await db
-      .from("store_secrets")
-      .select("key_name,encrypted_value")
-      .eq("store_id", storeId)
-      .in("key_name", [...CONN_FIELD_KEYS]);
-    if (error) return { ...empty };
-    const key = getEncryptionKey();
-    const out = { ...empty };
-    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
-      const name = String(r.key_name ?? "") as ConnFieldName;
-      if (!CONN_FIELD_KEYS.includes(name)) continue;
-      try {
-        out[name] = decryptSecret(String(r.encrypted_value ?? ""), key);
-      } catch {
-        out[name] = "";
-      }
-    }
-    return out;
-  } catch {
-    return { ...empty };
-  }
+export async function getStoreConnFields(_storeId: string): Promise<Record<string, string>> {
+  return {};
 }
 
-/**
- * Guarda (o revoca con "" ) un secreto: cifra + upsert + auditoría.
- * Devuelve { migratedToDb: true } si quedó en DB; false si cayó a JSON
- * (sin Supabase/key: el caller escribe el JSON como antes).
- */
 export async function setStoreSecret(
   storeId: string,
-  keyName: SecretKeyName | ConnFieldName,
+  keyName: SecretKeyName,
   plaintext: string,
   actor?: string | null,
 ): Promise<{ persistedToDb: boolean }> {
@@ -161,4 +119,3 @@ export async function setStoreSecret(
   await logAudit(storeId, keyName, "upsert", value, actor);
   return { persistedToDb: true };
 }
-

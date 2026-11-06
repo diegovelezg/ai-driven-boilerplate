@@ -585,7 +585,7 @@ export async function recalibrateWithRun(
   storeId: string,
   source: RecalibrationSource,
 ): Promise<RecalibrationOutcome> {
-  // Sin cinta si no toca: el post-sync no debe ensuciar el progreso global.
+  // Sin cinta si no toca: el post-import no debe ensuciar el progreso global.
   // Pero el silencio sí queda en .data/recalibrate.jsonl (auditable).
   if (source !== "manual") {
     const [pending, last] = await Promise.all([

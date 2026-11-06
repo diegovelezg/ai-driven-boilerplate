@@ -1,7 +1,7 @@
 // Args del worker cron (sin cola). Módulo puro (sin I/O ni imports
 // server): testeable con node:test vía tsx.
-// Formas aceptadas: `--once`, `--kinds=sync,morning` o `--kinds sync,morning`,
-// `--store=<uuid>` o `--store <uuid>` (una tienda; sin él: todas las medusa).
+// Formas aceptadas: `--once`, `--kinds=morning` o `--kinds morning`,
+// `--store=<uuid>` o `--store <uuid>` (una tienda; sin él: todas).
 export interface WorkerArgs {
   once: boolean;
   pollMs: number;
@@ -15,7 +15,7 @@ export interface WorkerArgs {
 }
 
 /** Kinds que el worker sabe ejecutar (etapas del pipeline por tienda). */
-export const KNOWN_JOB_KINDS: readonly string[] = ["sync", "morning"];
+export const KNOWN_JOB_KINDS: readonly string[] = ["morning"];
 
 function splitKinds(raw: string): { kinds: string[]; unknownKinds: string[] } {
   const kinds: string[] = [];

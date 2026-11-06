@@ -3,8 +3,7 @@
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
+import { resolveActiveStoreId } from "@/lib/tenant";
 import { runStrategist } from "@/lib/strategist";
 import { runCopywriter } from "@/lib/copywriter";
 import { runDispatcher } from "@/lib/dispatcher";
@@ -29,16 +28,12 @@ async function startWorker(
   total: number,
   work: (runId: string, storeId: string) => Promise<void>,
 ): Promise<StartRetentionState> {
-  const conn = await readConnections();
-  if (!conn.medusaUrl) {
-    return { ok: false, message: "Sin conexión a Medusa (Settings).", run: null };
-  }
   if (!isSupabaseConfigured()) {
     return { ok: false, message: "Falta SUPABASE_URL / SERVICE_ROLE en .env.local.", run: null };
   }
   try {
-    const storeId = await resolveStoreId(conn.medusaUrl);
-    if (!storeId) return { ok: false, message: "Tienda sin sincronizar.", run: null };
+    const storeId = await resolveActiveStoreId();
+    if (!storeId) return { ok: false, message: "Sin tienda.", run: null };
     // Lock por compatibilidad (issue #16 Fase 3): solo lo incompatible
     // frena; el resto corre en paralelo y suma su chip a la cinta.
     const conflict = await hasConflict(storeId, { kind });

@@ -1,16 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { after } from "next/server";
 import { createServerSupabase } from "@/lib/supabase-server";
-import { isSupabaseConfigured } from "@/lib/supabase";
-import { readConnections } from "@/lib/store";
-import { resolveStoreId } from "@/lib/customers-db";
-import { ensureStore } from "@/lib/sync";
-import { hasRunningRun } from "@/lib/background";
-import { createLogger } from "@/lib/log";
-
-const log = createLogger("sync");
 
 export interface AuthState {
   ok: boolean;
@@ -31,33 +22,21 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
   }
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
-    // Diagnóstico: el mensaje genérico ocultaba la causa (API key, URL, red).
     console.error("[login] signInWithPassword:", error.status, error.message);
     return { ok: false, message: `Credenciales inválidas. (${error.message})` };
   }
-  // Cada inicio de sesión dispara sync ecommerce → BD en background
-  // (no bloquea el login si falla; se omite si hay run en curso).
-  // Multiuser: se sincroniza la tienda del usuario (su primera membresía),
-  // no la conexión global: 5 users del mismo tenant comparten throttle+slot.
-  // Nota: solo la primera membresía dispara sync; otras membresías del mismo
-  // usuario quedan stale hasta su cron o su propio login con ?store=.
   const { data, error: membersError } = await supabase
     .from("merchant_users")
     .select("store_id")
     .order("created_at", { ascending: true });
   if (membersError) {
-    // Fail-closed: sin membresías verificadas no se toca ningún tenant
-    // (antes caía al probe global y podía sincronizar la tienda equivocada).
     console.error("[login] merchant_users:", membersError.message);
     redirect(safeNext(next) ?? "/");
   }
   const memberIds = ((data ?? []) as Array<{ store_id: unknown }>)
     .map((r) => String(r.store_id ?? ""))
     .filter(Boolean);
-  if (memberIds.length > 1) log(`login multi-membresía (${memberIds.length}): sync solo ${memberIds[0]}`);
   const storeId = memberIds[0] as string | undefined;
-  const userId = (await supabase.auth.getUser().catch(() => ({ data: { user: null } }))).data.user?.id ?? null;
-  scheduleSyncOnLogin(storeId ?? null, userId);
   const dest = pickSafeNext(next, memberIds) ?? (storeId ? `/?store=${storeId}` : "/");
   redirect(dest);
 }
@@ -90,94 +69,4 @@ function pickSafeNext(next: string, memberIds: string[]): string | null {
   }
   if (store && !memberIds.includes(store)) return null;
   return safe;
-}
-
-/**
- * Login liviano: ejecución directa en `after()`, sin cola.
- * Best-effort: nunca rompe el login; omite si no hay conexión, si Supabase
- * no está configurado o si ya hay un run en curso. Throttle de 12h por
- * tienda (el cron diario es el dueño del full; el login solo cubre
- * staleness) + slot atómico de `runSyncOnce`: N users del mismo tenant
- * comparten throttle+slot, no hacen N fulls.
- * @param targetStoreId tienda del usuario (primera membresía). Null = legacy
- * single-merchant (se resuelve por URL como antes).
- * @param userId id auth del usuario (solo para el log de decisiones, nullable).
- */
-function scheduleSyncOnLogin(targetStoreId?: string | null, userId?: string | null): void {
-  after(async () => {
-    try {
-      const supabaseConfigured = isSupabaseConfigured();
-      const { planLoginSync } = await import("@/lib/login-plan");
-      const { recordLoginDecision, buildLoginRecord } = await import("@/lib/login-decisions");
-      const plan = await planLoginSync(targetStoreId ?? null, {
-        readConnections: (sid) => readConnections(sid),
-        resolveStoreId: (url) => resolveStoreId(url),
-        hasRunningRun: async (sid) => hasRunningRun(sid),
-        getLastFinishedAt: async (sid, kind) => {
-          const { getLastFinishedAt } = await import("@/lib/background");
-          return getLastFinishedAt(sid, kind).catch(() => null);
-        },
-        ensureStore: (url, token) => ensureStore(url, token).catch(() => null),
-        supabaseConfigured,
-      });
-      if (plan.omitReason) {
-        log(`login sync omitido store=${targetStoreId} (${plan.omitReason})`);
-        await recordLoginDecision(buildLoginRecord(plan, targetStoreId ?? null, userId ?? null));
-        return;
-      }
-      const { conn, probeStoreId, running, decision, storeId } = plan;
-      // Decisión explícita a DB (debug multi-tenant) + log a consola/archivo.
-      // Sin esto, "¿por qué no sincronizó?" solo existía en `.data/sync.log`
-      // efímero: en prod era imposible responderlo por tienda.
-      // `sync` = full decidido, no ejecutado ni morning (ver buildLoginRecord).
-      await recordLoginDecision(buildLoginRecord(plan, targetStoreId ?? null, userId ?? null));
-      if (!storeId) {
-        log(`login sync omitido store=${probeStoreId ?? "?"} (${decision.reason})`);
-        return;
-      }
-      // Sin cola: ejecución directa. `runSyncOnce` reclama slot atómico
-      // (null si el cron/manual lo cubre) y encadena la mañana.
-      try {
-        if (decision.sync && !running) {
-          const { runSyncOnce } = await import("@/lib/sync-runner");
-          await runSyncOnce(storeId, conn.medusaUrl, {
-            version: conn.medusaVersion || "v1",
-            token: conn.medusaToken,
-            withMorning: true,
-          });
-        } else if (!running && conn.medusaUrl && conn.medusaToken) {
-          // Solo con backend conectado: sin credenciales el morning LLM
-          // quemaría sobre un tenant vacío/stale (el cron lo cubre).
-          log(`login sync omitido store=${storeId} (${decision.reason})`);
-          const { runMorningPipeline } = await import("@/lib/morning-run");
-          await runMorningPipeline(storeId);
-        } else {
-          log(`login sync omitido store=${storeId} (${decision.reason})`);
-        }
-        return;
-      } catch (e) {
-        log(`login pipeline omitido store=${storeId}: ${e instanceof Error ? e.message : "error"}`);
-      }
-      return;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "error";
-      log(`login sync omitido store=${targetStoreId ?? "?"}: ${msg}`);
-      // El fallo más interesante (plan no computable) también va a DB,
-      // no solo a consola efímera. Best-effort: nunca lanza.
-      try {
-        const { recordLoginDecision } = await import("@/lib/login-decisions");
-        await recordLoginDecision({
-          storeId: targetStoreId ?? null,
-          userId: userId ?? null,
-          sync: false,
-          reason: "plan-error",
-          hasRunning: false,
-          lastSyncDoneAt: null,
-          omitDetail: msg.slice(0, 300),
-        });
-      } catch {
-        // Ya logueado arriba; el login sigue.
-      }
-    }
-  });
 }

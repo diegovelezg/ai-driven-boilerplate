@@ -1,5 +1,5 @@
 // Corridas en segundo plano. Fuente única de verdad (SSOT) para la cinta de
-// progreso global: cualquier trabajo de larga duración (enriquecimiento, sync,
+// progreso global: cualquier trabajo de larga duración (enriquecimiento, mañana,
 // ...) registra aquí su estado y la UI lo muestra con un solo componente.
 // Sin `server-only`: los scripts tsx (enrich-once, prospect-once) lo importan;
 // ningún componente cliente lo importa en runtime (solo el tipo BackgroundRun).

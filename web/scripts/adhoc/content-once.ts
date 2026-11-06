@@ -3,7 +3,7 @@
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/adhoc/content-once.ts
 // Universo: órdenes reales (no test/canceladas/pago fallido) + URL viva (HEAD) + dedup por sha256(url).
 // Resume-safe: salta hashes ya presentes en item_content. Guarda crudo (content_json) + vivas/muertas.
-// NUNCA toca el comentario humano del metadata (fuente de Medusa).
+// NUNCA toca el comentario humano del metadata.
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { appendFile, mkdtemp, rm } from "node:fs/promises";
@@ -188,13 +188,11 @@ async function framesFor(url: string, kind: "video" | "image", dir: string): Pro
 }
 
 async function main() {
-  const conn = JSON.parse(readFileSync(".data/connections.json", "utf-8"));
-  const shopUrl = String(conn.medusaUrl).trim().replace(/\/+$/, "").toLowerCase();
   const db = getSupabase();
-  const { data: store, error: storeErr } = await db.from("stores").select("id").eq("platform", "medusa").eq("shop_url", shopUrl).maybeSingle();
+  const { data: store, error: storeErr } = await db.from("stores").select("id").order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (storeErr) throw new Error(`Stores read: ${storeErr.message}`);
-  if (!store) throw new Error("Tienda sin sincronizar en Supabase.");
-  const storeId = store.id as string;
+  if (!store) throw new Error("Sin tiendas en Supabase.");
+  const storeId = (store as { id: string }).id as string;
 
   // Gate de esquema (falla rápido, no 500 FAILs crípticos): la tabla existe y
   // la PK compuesta (store_id, content_hash) de 20261030000006 está aplicada.

@@ -1,7 +1,6 @@
 // Matriz de compatibilidad de operaciones (issue #16, Fase 0). Módulo puro
 // y testeable (sin I/O): decide qué puede correr contra qué, sin estados
-// locales divergentes. El lock global grueso (`hasRunningRun` sin filtro)
-// queda como caso particular: solo `sync` bloquea todo contra todo.
+// locales divergentes.
 // Sin `server-only`: lo importan server actions, client components (cinta,
 // botones) y tests tsx.
 export type ScopeKind = "global" | "signal" | "customer" | "domain";
@@ -35,8 +34,6 @@ const LONE = new Set(["dispatcher", "analyst", "prospect", "profiler", "enrichme
 export function conflictsWith(aNew: NewOp, bActive: ActiveOp): boolean {
   const a = aNew.kind;
   const b = bActive.kind;
-  // `sync` bloquea todo (y todo bloquea `sync`).
-  if (a === "sync" || b === "sync") return true;
   // Cadena secuencial: scout → strategist → copywriter.
   if (CHAIN.has(a) && CHAIN.has(b)) return true;
   // El bulk redacta la misma piscina que el single y que regenerate.

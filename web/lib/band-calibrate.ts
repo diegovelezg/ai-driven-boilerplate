@@ -6,7 +6,7 @@
 // Patrón multitenant: el estado vive en Postgres (p_band_calibrated_at,
 // p_band_samples/events), nunca en archivos locales: N tenants × N réplicas
 // no deben recalibrar por su cuenta. Throttle 30d por tenant.
-// Enganche: `profile-recalibrate/service.ts` (post-sync, junto a closeWatch).
+// Enganche: `profile-recalibrate/service.ts` (post-import, junto a closeWatch).
 import { getSupabase } from "@/lib/supabase";
 import { getStoreProfile, resolveBandCuts } from "@/lib/store-profiles";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";

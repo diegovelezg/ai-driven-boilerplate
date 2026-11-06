@@ -6,7 +6,6 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
 import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
 import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
-import { applyScopeFilter, resolveMarketScope } from "@/lib/markets";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
@@ -28,7 +27,7 @@ export const instant = false;
 export default async function FinanzasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string; market?: string }>;
+  searchParams: Promise<{ store?: string }>;
 }) {
   // Request-time: usa Date.now()/new Date() en el render (Cache Components
   // no lo difiere con `instant = false`; ver nota en app/(dashboard)/page.tsx).
@@ -99,12 +98,7 @@ export default async function FinanzasPage({
   }
 
   const db = getSupabase();
-  const scope = await resolveMarketScope(active.id, sp.market).catch(() => ({
-    market: null,
-    countries: null,
-    customerIds: null,
-  }));
-  const viewCurrency = scope.market?.currency?.toUpperCase() ?? active.shop_currency;
+  const viewCurrency = active.shop_currency;
   // Timestamp fijo por request (igual que el Overview).
   const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
 
@@ -127,14 +121,12 @@ export default async function FinanzasPage({
     let revTruncated = false;
     const revRows: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
-      const { data: rpage, error: rErr } = await applyScopeFilter(
-        db
-          .from("proposed_actions")
-          .select("revenue_attributed,dispatched_at,created_at")
-          .eq("store_id", active.id)
-          .not("revenue_attributed", "is", null),
-        scope,
-      ).range(off, off + 999);
+      const { data: rpage, error: rErr } = await db
+        .from("proposed_actions")
+        .select("revenue_attributed,dispatched_at,created_at")
+        .eq("store_id", active.id)
+        .not("revenue_attributed", "is", null)
+        .range(off, off + 999);
       if (rErr) throw new Error(`revenue: ${rErr.message}`);
       const rows = (rpage ?? []) as Array<Record<string, unknown>>;
       revRows.push(...rows);
@@ -146,20 +138,14 @@ export default async function FinanzasPage({
     }
     const orows: Array<Record<string, unknown>> = [];
     for (let off = 0; ; off += 1000) {
-      // Mismo universo que get_store_summary/tools (issue #29): scope por
-      // país/customerIds vía applyScopeFilter (NULL-comodín), no por
-      // market_id manual (ese filtraba otro universo que revRows).
-      const oq = applyScopeFilter(
-        db
-          .from("orders")
-          .select("total_amount,currency,placed_at,items_json,customer_id,country")
-          .eq("store_id", active.id)
-          .gte("placed_at", yearAgoIso)
-          .order("placed_at", { ascending: false })
-          .order("id", { ascending: true }),
-        scope,
-      );
-      const { data: opage, error: qErr } = await oq.range(off, off + 999);
+      const { data: opage, error: qErr } = await db
+        .from("orders")
+        .select("total_amount,currency,placed_at,items_json,customer_id,country")
+        .eq("store_id", active.id)
+        .gte("placed_at", yearAgoIso)
+        .order("placed_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(off, off + 999);
       if (qErr) throw new Error(`orders: ${qErr.message}`);
       const rows = (opage ?? []) as Array<Record<string, unknown>>;
       orows.push(...rows);

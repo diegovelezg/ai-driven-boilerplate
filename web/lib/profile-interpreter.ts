@@ -60,15 +60,10 @@ const B2B_WORDS = [
   "empresas", "empresa", "corporativo", "corporativos", "oficinas", "oficina",
   "distribuidora", "distribuidor", "distribuidores", "mayorista", "mayoristas",
   "mayoreo", "por mayor", "b2b", "negocios", "companias", "compania",
-  "factura", "facturacion", "cotizacion", "cotizaciones", "ruc",
+  "factura", "facturacion", "cotizacion", "cotizaciones", "fiscal", "id fiscal",
   "clientes empresa", "restaurantes", "hoteles", "colegios", "clinicas",
 ];
-const B2C_WORDS = [
-  "personas", "consumidores", "consumidor", "familias", "familia", "hogares",
-  "publico general", "cliente final", "clientes finales", "b2c", "al detalle",
-  "tienda online", "retail",
-];
-const HYBRID_WORDS = ["ambos", "tanto ", "personas y empresas", "empresas y personas", "b2c y b2b", "b2b y b2c"];
+// B2B-only: B2C_WORDS/HYBRID_WORDS retirados (el sistema ya no distingue).
 
 const INDUSTRIES: Array<{ id: string; words: string[] }> = [
   { id: "alimentos", words: ["cafe", "cafes", "coffee", "alimentos", "comida", "restaurante", "panaderia", "pasteleria", "chocolate", "miel", "especias", "tostaduria"] },
@@ -125,27 +120,19 @@ export function interpretBusinessDescription(raw: string): DescriptionInterpreta
     companyRequired: false,
     confidence: "baja",
     understood: [],
-    questions: ["Cuéntame qué vendes y a quién se lo vendes."],
+    questions: ["Cuéntame qué vendes y a qué empresas se lo vendes."],
   };
   const text = norm(raw ?? "");
   if (text.trim().length < 10) return empty;
 
   const understood: string[] = [];
 
-  // Modelo
-  const hybridHit = HYBRID_WORDS.some((w) => text.includes(norm(w)));
+  // Modelo (B2B-only: todo se interpreta como empresas).
   const b2b = hits(text, B2B_WORDS.map(norm));
-  const b2c = hits(text, B2C_WORDS.map(norm));
   let businessModel: BusinessModel | null = null;
-  if (hybridHit || (b2b > 0 && b2c > 0)) {
-    businessModel = "hybrid";
-    understood.push("Vendes a personas y a empresas");
-  } else if (b2b > b2c && b2b > 0) {
+  if (text.trim().length >= 10) {
     businessModel = "b2b";
     understood.push("Vendes a empresas");
-  } else if (b2c > 0) {
-    businessModel = "b2c";
-    understood.push("Vendes a personas");
   }
 
   // Industria (mejor score)
@@ -173,34 +160,31 @@ export function interpretBusinessDescription(raw: string): DescriptionInterpreta
 
   // Arquetipo
   let archetype: ArchetypeId | null = null;
-  if (businessModel === "hybrid") archetype = "hibrido";
-  else if (businessModel === "b2b") {
+  if (businessModel === "b2b") {
     const recur = hits(text, ["reposicion", "recurrente", "mensual", "distribuidor", "distribuidora", "reabastecer", "pedido fijo", "frecuente"]);
     archetype = recur > 0 ? "b2b_recurrente" : "b2b_proyecto";
     understood.push(
       archetype === "b2b_recurrente" ? "Patrón: reposición recurrente" : "Patrón: compra por proyecto",
     );
-  } else if (businessModel === "b2c" || (!businessModel && catalogType)) {
-    if (catalogType === "moda_estacional") archetype = "b2c_moda";
-    else if (catalogType === "durable") archetype = "b2c_durable";
-    else if (catalogType) archetype = "b2c_consumible";
   }
-  // Sin modelo pero con industria de moda/durable, igual inferir lado B2C
+  // Sin arquetipo aún: por catálogo se elige variante B2B (proyecto vs recurrente).
   if (!archetype && catalogType === "moda_estacional") {
-    archetype = "b2c_moda";
-    businessModel = "b2c";
+    archetype = "b2b_proyecto";
+    businessModel = "b2b";
   } else if (!archetype && catalogType === "durable") {
-    archetype = "b2c_durable";
-    businessModel = "b2c";
+    archetype = "b2b_proyecto";
+    businessModel = "b2b";
+  } else if (!archetype && catalogType) {
+    archetype = "b2b_recurrente";
+    businessModel = "b2b";
   }
 
   const axes = [businessModel, industry, catalogType, cycleDays].filter(Boolean).length;
   const confidence = axes >= 3 ? "alta" : axes === 2 ? "media" : "baja";
 
   const questions: string[] = [];
-  if (!businessModel) questions.push("¿Vendes a personas, a empresas o a ambos?");
-  if (!catalogType) questions.push("¿Cada cuánto te vuelve a comprar un cliente?");
-  if (businessModel === "b2b" && !cycleDays) questions.push("¿Tus clientes te recompran fijo o por proyecto?");
+  if (!catalogType) questions.push("¿Cada cuánto te vuelve a comprar una empresa cliente?");
+  if (businessModel === "b2b" && !cycleDays) questions.push("¿Tus empresas cliente te recompran fijo o por proyecto?");
   if (questions.length === 0 && confidence !== "alta") {
     questions.push("¿Algo más que deba saber (temporadas, ticket alto, suscripción)?");
   }
@@ -208,13 +192,13 @@ export function interpretBusinessDescription(raw: string): DescriptionInterpreta
   return {
     businessModel,
     vertical: industry,
-    buyerType: businessModel === "b2b" ? "empresa" : businessModel === "b2c" ? "persona" : null,
+    buyerType: "empresa",
     cycleUnknown: false,
     industry,
     catalogType,
     archetype,
     cycleDays,
-    companyRequired: businessModel === "b2b",
+    companyRequired: true,
     confidence,
     understood,
     questions: questions.slice(0, 3),

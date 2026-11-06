@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# retain-apply.sh — migraciones a la BD de Coolify (plantilla Supabase one-click).
+# db-apply.sh — migraciones a la BD de Coolify (plantilla Supabase one-click).
 #
 # La plantilla NO corre supabase/migrations/*.sql: este script las aplica por
 # stdin contra el contenedor postgres (`docker exec -i -u postgres … psql`,
 # peer-auth, sin password y sin copiar archivos al VPS).
 #
 # Uso (desde la raíz del repo):
-#   DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh schema [VPS_IP=..] [SSHPASS=..]
-#   DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh data <public-data.sql> [auth.sql]
-#   DB_CONTAINER=supabase-db-<uuid> ./scripts/retain-apply.sh verify
+#   DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh schema [VPS_IP=..] [SSHPASS=..]
+#   DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh data <public-data.sql> [auth.sql]
+#   DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh verify
 #
 # - schema: aplica las migraciones pendientes en orden + tracking en
 #   public.schema_migrations (se crea si no existe). Idempotente: las ya
@@ -91,7 +91,7 @@ cmd_status() {
   if [ "$n_pending" -eq 0 ]; then
     echo "status: al día."
   else
-    echo "status: $n_pending pendiente(s) → correr: DB_CONTAINER=$DB_CONTAINER ./scripts/retain-apply.sh schema"
+    echo "status: $n_pending pendiente(s) → correr: DB_CONTAINER=$DB_CONTAINER ./scripts/db-apply.sh schema"
     exit 1
   fi
 }

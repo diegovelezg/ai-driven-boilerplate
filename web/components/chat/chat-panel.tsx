@@ -45,17 +45,14 @@ function pickRandomSuggestions(pool: string[], n = 3): string[] {
  *  (navegar a la vista filtrada: Review o Customers). Este panel nunca pinta datos. */
 export function ChatPanel({
   storeId,
-  marketId = null,
   onArtifact,
 }: {
   storeId: string;
-  /** Filtro global por mercado (?market= del header). */
-  marketId?: string | null;
   onArtifact: (artifact: ChatArtifact | null) => void;
 }) {
   const buildBody = useCallback(
-    (messages: ChatMessage[]) => ({ storeId, messages, marketId }),
-    [storeId, marketId],
+    (messages: ChatMessage[]) => ({ storeId, messages }),
+    [storeId],
   );
   const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
     url: "/api/chat",

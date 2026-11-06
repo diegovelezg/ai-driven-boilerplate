@@ -101,21 +101,21 @@ describe("agregados paginados con CAP + flag (nunca .length de ventana)", () => 
   });
 });
 
-describe("scope de mercado corto + NULL-comodín (nunca .in(miles de UUIDs))", () => {
-  it("todas las lecturas del agente pasan por withMarket/applyScopeFilter", () => {
+describe("lecturas directas a la tienda (sin scope de mercado)", () => {
+  it("ninguna lectura del agente pasa por withMarket/applyScopeFilter", () => {
     const t = tools();
     const froms = [...t.matchAll(/\.from\("(customers|orders|churn_signals|proposed_actions)"\)/g)].length;
-    const scoped = (t.match(/withMarket\(/g) ?? []).length;
     assert.ok(froms >= 8, `lecturas esperadas ≥8, hay ${froms}`);
-    assert.ok(scoped >= 8, `withMarket esperado ≥8, hay ${scoped}`);
+    assert.doesNotMatch(t, /withMarket\(/);
+    assert.doesNotMatch(t, /applyScopeFilter/);
   });
 
-  it("prohibido .in(customer_id, <ids>) directo en tools (solo vía effectiveScopeFilter o chunkIds)", () => {
+  it("prohibido .in(customer_id, <ids>) con listas en tools", () => {
     const t = tools();
-    // Rama chunkeada (chunkIds → .in("customer_id", c) con 200) sí está
-    // permitida: es el path seguro para scopes fallback grandes. Lo prohibido
-    // es meter la lista completa (ids/idList/miles de UUIDs) en una sola URL.
-    assert.doesNotMatch(t, /\.in\("customer_id",\s*(ids|idList)\b/);
+    // Sin scopes ya no hay listas de IDs que meter en la URL: ningún .in
+    // con ids/idList/chunks. Solo .in() con estados fijos (status) o ids
+    // puntuales ya resueltos (buyerRows/ranked).
+    assert.doesNotMatch(t, /\.in\("customer_id",\s*(ids|idList|c)\b/);
     assert.doesNotMatch(t, /customer_id,\s*<miles/);
   });
 });
@@ -200,16 +200,12 @@ describe("paginación estable (offset sin duplicados/ausentes)", () => {
       "lib/enrich.ts",
       "lib/classify.ts",
       "lib/review-actions.ts",
-      "lib/sync.ts",
     ];
     for (const f of files) {
       const body = src(f).replace(/\/\/.*$/gm, "");
       const ranges = (body.match(/\.range\(/g) ?? []).length;
-      // Sin offset no hay inestabilidad que chequear (sync usa returning en
-      // vez del re-read paginado desde KISS): solo sync está exento.
       if (ranges === 0) {
-        assert.equal(f, "lib/sync.ts", `${f}: sin .range, ¿offset sin tie-breaker o allowlist pendiente?`);
-        continue;
+        assert.fail(`${f}: sin .range, ¿offset sin tie-breaker o allowlist pendiente?`);
       }
       // Cada cadena con .range debe contener .order("id" en los 800 chars previos.
       const idxs: number[] = [];
@@ -230,35 +226,24 @@ describe("paginación estable (offset sin duplicados/ausentes)", () => {
   });
 });
 
-describe("scope fallback por IDs chunkeado (nunca URI too long)", () => {
-  it("markets expone chunkIds + isLargeIdScope + fetchIdChunks", () => {
-    const m = src("lib/market-utils.ts");
-    assert.match(m, /SCOPE_ID_CHUNK_SIZE\s*=\s*200/);
-    assert.match(m, /export function chunkIds/);
-    assert.match(m, /export function isLargeIdScope/);
-    assert.match(m, /export async function fetchIdChunks/);
+describe("sin scope por mercado (consultas directas, nunca URI too long)", () => {
+  it("tools no importan scope ni chunkean por IDs", () => {
+    const t = tools();
+    assert.doesNotMatch(t, /lib\/markets/);
+    assert.doesNotMatch(t, /isLargeIdScope/);
+    assert.doesNotMatch(t, /chunkIds\(/);
+    assert.doesNotMatch(t, /withMarket\(/);
   });
 
-  it("list_signals/list_actions usan rama chunkeada + mira pagina por chunk", () => {
+  it("list_signals/list_actions/get_inbox_summary consultan directo a la tienda", () => {
     const t = tools();
-    assert.match(t, /isLargeIdScope\(marketScope\)/);
-    assert.match(t, /chunkIds\(/);
-    const mira = src("lib/mira.ts");
-    assert.match(mira, /isLargeIdScope\(scope\)/);
-    assert.match(mira, /chunkIds\(/);
-  });
-
-  it("get_inbox_summary chunkea como list_*: null=country IS NULL, chunks por customer_id", () => {
-    const t = tools();
-    const i = t.indexOf('"get_inbox_summary"');
-    assert.ok(i >= 0, "get_inbox_summary existe");
-    const next = t.indexOf("\n  const ", i + 20);
-    const block = t.slice(i, next > i ? next : i + 6000);
-    // NULL-comodín es country, no customer_id (leads ni tiene esa columna).
-    assert.match(block, /\.is\("country", null\)/);
-    assert.match(block, /\.in\("customer_id", c\)/);
-    assert.doesNotMatch(block, /\.is\("customer_id"/);
-    assert.doesNotMatch(block, /idCol \?\? "customer_id"/);
+    for (const name of ["list_signals", "list_actions", "get_inbox_summary"]) {
+      const i = t.indexOf(`"${name}"`);
+      assert.ok(i >= 0, `${name} existe`);
+      const block = t.slice(i, i + 6000);
+      assert.doesNotMatch(block, /\.is\("country", null\)/, `${name} sin filtro country`);
+      assert.doesNotMatch(block, /\.in\("customer_id", c\)/, `${name} sin chunks por customer_id`);
+    }
   });
 });
 

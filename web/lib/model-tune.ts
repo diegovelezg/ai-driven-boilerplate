@@ -12,32 +12,24 @@
 //   lo respalda; si bajamos dormidos y nadie vuelve, el cambio empeoró
 //   aunque el dashboard se vea mejor.
 //
-// Se evalúa POR PARTICIÓN (market), espejando producción: misma asignación
-// `assignMarket`, mismas órdenes por partición (market null = compartida) y
-// solo clientes con compras reales. Nunca mezcla monedas ni comportamientos
-// entre particiones: cada una ajusta, valida y escribe su propia fila
-// (market_id; null = partición sin market, que además sirve de fallback
-// global por el contrato vigente de resolución). La predicción
+// Se evalúa SINGLE-PAÍS (una partición por tenant): mismos clientes y
+// órdenes que producción, solo clientes con compras reales. Un solo universo
+// monetario (moneda de la tienda). La predicción
 // diaria NUNCA reajusta: entre tunes los parámetros quedan fijos.
 // La mezcla candidata es la de nivel tienda y se evalúa y aplica en AMBOS
 // niveles (renovación y cohorte), igual que producción la aplicaría: el
 // backtest mide exactamente el artefacto desplegable, no un fit por nivel.
 //
-// Enganche: `profile-recalibrate/service.ts` (post-sync, junto a bandas),
-// con throttle propio de 30d por partición (`fitted_at` en Postgres de filas
+// Enganche: `profile-recalibrate/service.ts` (post-import, junto a bandas),
+// con throttle propio de 30d por tenant (`fitted_at` en Postgres de fila
 // de versión soportada) y fail-open total (nunca rompe el recalibrado).
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { isRealOrder } from "@/lib/medusa";
+import { isRealOrder } from "@/lib/canonical";
 import {
   ARCHETYPES,
   getStoreProfile,
   resolveTenantCycleDays,
 } from "@/lib/store-profiles";
-import {
-  assignMarket,
-  listStoreMarkets,
-  type TenantMarket,
-} from "@/lib/markets";
 import {
   EPISODE_VERSION,
   HORIZON_BY_ARCHETYPE,
@@ -95,72 +87,48 @@ export interface TuneOrder {
   at: number;
   ticketMinor: number;
   currency: string | null;
-  /** Market de la orden (null = compartida entre particiones, como producción). */
-  marketId?: string | null;
 }
 
-/** Cliente para asignación por market (solo id + país; las compras mandan). */
+/** Cliente del tune (solo id; single-país: sin asignación por market). */
 export interface TuneCustomer {
   id: string;
-  country: string | null;
 }
 
 export interface TunePartition {
+  /** Single-país: siempre null (una partición por tenant). */
   marketId: string | null;
-  /** Etiqueta humana para el reason (nombre del market o "sin market"). */
+  /** Etiqueta humana para el reason (siempre "tienda"). */
   label: string;
   customers: TuneCustomer[];
-  /** Todas las órdenes de la partición (cualquier fecha; el corte filtra). */
+  /** Todas las órdenes (cualquier fecha; el corte filtra). */
   orders: TuneOrder[];
 }
 
-/** Particiona el dataset como producción (issue #27 Paso 4 + #21 Paso 3):
- *  misma asignación `assignMarket` (mayoría ≤ corte, fallback país, null),
- *  misma regla de órdenes (market null = compartida con todas), y
- *  SOLO clientes con compras reales ≤ corte (sin sesiones no hay predicción,
- *  igual que el run diario). Nunca mezcla monedas ni comportamientos entre
- *  particiones: cada una se ajusta y valida por separado. */
+/** Particiona el dataset como producción: single-país, una sola partición
+ *  con todos los clientes con compras reales ≤ corte. Sin mezcla entre
+ *  tenants; dentro del tenant un solo universo monetario. */
 export function partitionTuneDataset(
   customers: TuneCustomer[],
   orders: TuneOrder[],
-  markets: TenantMarket[],
   cutoffMs: number,
 ): TunePartition[] {
-  const byCustOrders = new Map<string, TuneOrder[]>();
+  const idsWithOrders = new Set<string>();
   for (const o of orders) {
     if (!Number.isFinite(o.at)) continue;
-    const arr = byCustOrders.get(o.customerId) ?? [];
-    arr.push(o);
-    byCustOrders.set(o.customerId, arr);
+    if (o.at <= cutoffMs) idsWithOrders.add(o.customerId);
   }
-  const countryById = new Map(customers.map((c) => [c.id, c.country ?? null]));
-  const assignedById = new Map<string, string | null>();
-  for (const [cid, ords] of byCustOrders) {
-    const mids = ords.filter((o) => o.at <= cutoffMs).map((o) => o.marketId ?? null);
-    assignedById.set(cid, assignMarket(mids, countryById.get(cid) ?? null, markets));
-  }
-  const groups = new Map<string | null, { customers: TuneCustomer[]; orders: TuneOrder[] }>();
-  for (const [cid, ords] of byCustOrders) {
-    // Sin compras reales ≤ corte el cliente no participa (como producción).
-    if (!ords.some((o) => o.at <= cutoffMs)) continue;
-    const assigned = assignedById.get(cid) ?? null;
-    let g = groups.get(assigned);
-    if (!g) {
-      g = { customers: [], orders: [] };
-      groups.set(assigned, g);
-    }
-    g.customers.push({ id: cid, country: countryById.get(cid) ?? null });
-    for (const o of ords) {
-      if (assigned === null || o.marketId == null || o.marketId === assigned) g.orders.push(o);
-    }
-  }
-  const nameById = new Map(markets.map((m) => [m.id, m.name ?? m.id]));
-  return [...groups.entries()].map(([marketId, g]) => ({
-    marketId,
-    label: marketId === null ? "sin market" : (nameById.get(marketId) ?? marketId),
-    customers: g.customers,
-    orders: g.orders,
-  }));
+  const validIds = new Set(customers.map((c) => c.id));
+  const partCustomers: TuneCustomer[] = [...idsWithOrders]
+    .filter((id) => validIds.has(id))
+    .map((id) => ({ id }));
+  // Sin compras reales ≤ corte no hay tune (como producción).
+  if (partCustomers.length === 0) return [];
+  return [{
+    marketId: null,
+    label: "tienda",
+    customers: partCustomers,
+    orders: orders.filter((o) => Number.isFinite(o.at)),
+  }];
 }
 
 export interface TuneScored {
@@ -228,10 +196,9 @@ export interface TuneWfoWindow {
 export function evaluateTuneWFO(
   orders: TuneOrder[],
   customers: TuneCustomer[],
-  markets: TenantMarket[],
   cutoffs: number[],
   base: { cycleDays: number; sigma0: number },
-  currentFor: (marketId: string | null) => TuneCurrent,
+  currentFor: () => TuneCurrent,
   scoreHorizonDays: number,
 ): Map<string | null, { label: string; currentPooled: TuneScored[]; perWindow: TuneWfoWindow[] }> {
   const H = scoreHorizonDays > 0 && Number.isFinite(scoreHorizonDays) ? scoreHorizonDays : 30;
@@ -240,21 +207,17 @@ export function evaluateTuneWFO(
     currentPooled: TuneScored[];
     byWindow: Map<string, { window: number | null; mixture: MixtureLike | null; pooled: TuneScored[]; origins: TuneWfoWindow["origins"] }>;
   }>();
-  const labelOf = (m: string | null): string => {
-    if (m === null) return "sin market";
-    return markets.find((mk) => mk.id === m)?.name ?? m;
-  };
+  const labelOf = (): string => "tienda";
   cutoffs.forEach((C, oi) => {
-    // P2-2: la partición se rehace EN CADA origen con órdenes ≤ C (sin leak:
-    // ni la asignación ni los clientes usan información posterior al corte).
-    const partitions = partitionTuneDataset(customers, orders, markets, C);
+    // La partición se rehace EN CADA origen con órdenes ≤ C (sin leak).
+    const partitions = partitionTuneDataset(customers, orders, C);
     for (const part of partitions) {
       let e = byMarket.get(part.marketId);
       if (!e) {
-        e = { label: labelOf(part.marketId), currentPooled: [], byWindow: new Map() };
+        e = { label: labelOf(), currentPooled: [], byWindow: new Map() };
         byMarket.set(part.marketId, e);
       }
-      const current = currentFor(part.marketId);
+      const current = currentFor();
       const sessions = buildTuneSessions(part.orders, C);
       const b: TuneEvalBase = { asOf: C, cycleDays: base.cycleDays, horizonDays: H, sigma0: base.sigma0 };
       const curPreds = evaluateTuneCurrent(sessions, b, current);
@@ -662,8 +625,8 @@ export interface ModelTuneOutcome {
   partitions: TunePartitionOutcome[];
 }
 
-/** Tune mensual por partición (issue #27 Paso 4): re-aprende ventana+mezcla
- *  con backtest por market, sin mezclar particiones. Fail-open total. */
+/** Tune mensual del tenant (single-país): re-aprende ventana+mezcla
+ *  con backtest. Fail-open total. */
 export async function tuneModelParams(
   storeId: string,
   opts?: { dryRun?: boolean; nowMs?: number },
@@ -682,58 +645,49 @@ export async function tuneModelParams(
     const profile = await getStoreProfile(storeId).catch(() => null);
     if (!profile) return fail("Sin perfil de tenant: se conserva.");
     const cycleDays = await resolveTenantCycleDays(storeId).catch(() => null);
-    const archetype = profile.archetype ?? "b2c_consumible";
+    const archetype = profile.archetype ?? "b2b_recurrente";
     const cycle = cycleDays ?? ARCHETYPES[archetype]?.defaultCycleDays ?? 30;
     const horizon = HORIZON_BY_ARCHETYPE[archetype] ?? 60;
     const sigma0 = SIGMA0_BY_ARCHETYPE[archetype] ?? 0.7;
 
-    const [markets, custRows] = await Promise.all([
-      listStoreMarkets(storeId).catch(() => [] as TenantMarket[]),
-      db.from("customers").select("id,country").eq("store_id", storeId).then(
+    const custRows = await db.from("customers").select("id").eq("store_id", storeId).then(
         (r) => {
           if (r.error) throw new Error(`Customers read: ${r.error.message}`);
-          return (r.data ?? []) as Array<{ id: unknown; country: unknown }>;
+          return (r.data ?? []) as Array<{ id: unknown }>;
         },
-        () => [] as Array<{ id: unknown; country: unknown }>,
-      ),
-    ]);
+        () => [] as Array<{ id: unknown }>,
+      );
     const tuneCustomers: TuneCustomer[] = custRows.map((c) => ({
       id: String(c.id),
-      country: (c.country as string | null) ?? null,
     }));
 
-    // Throttle 30d POR PARTICIÓN sobre filas de versión SOPORTADA: una fila
-    // vieja/inválida (que el lector ignora) no frena el re-tune.
-    const fittedByMarket = new Map<string | null, number>();
+    // Throttle 30d sobre fila de versión SOPORTADA: una fila vieja/inválida
+    // (que el lector ignora) no frena el re-tune.
+    let fittedAt: number = NaN;
     try {
       const { data: fits } = await db
         .from("tenant_model_params")
-        .select("market_id,fitted_at,version")
+        .select("fitted_at,version")
         .eq("store_id", storeId)
         .order("fitted_at", { ascending: false })
-        .limit(50);
+        .limit(1);
       for (const r of (fits ?? []) as Array<Record<string, unknown>>) {
-        const key = (r.market_id as string | null) ?? null;
-        if (fittedByMarket.has(key)) continue;
         if (!isSupportedModelParamsVersion(r.version)) continue;
         const t = typeof r.fitted_at === "string" ? Date.parse(r.fitted_at) : NaN;
-        if (Number.isFinite(t)) fittedByMarket.set(key, t);
+        if (Number.isFinite(t)) fittedAt = t;
       }
     } catch {
       // Sin estado legible no se frena: se evalúa y el write lo sella.
     }
 
-    const currentParams = await resolveModelParams(storeId).catch(
-      () => new Map<string | null, TenantModelParams>(),
-    );
+    const currentParams = await resolveModelParams(storeId).catch(() => null);
 
     // Historia real completa (como producción); el corte parte en memoria.
-    // Incluye market_id por orden: la partición lo necesita.
     const orders: TuneOrder[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db
         .from("orders")
-        .select("customer_id,total_amount,currency,market_id,placed_at,status,payment_status,is_test")
+        .select("customer_id,total_amount,currency,placed_at,status,payment_status,is_test")
         .eq("store_id", storeId)
         .order("placed_at", { ascending: true })
         .range(from, from + 999);
@@ -755,7 +709,6 @@ export async function tuneModelParams(
           at: t,
           ticketMinor: Number(r.total_amount ?? 0),
           currency: (r.currency as string | null) ?? null,
-          marketId: (r.market_id as string | null) ?? null,
         });
       }
       if (!data || data.length < 1000) break;
@@ -763,17 +716,15 @@ export async function tuneModelParams(
 
     const validationH = tuneValidationHorizon(horizon);
     const origins = [1, 2, 3].map((k) => tuneCutoff(nowMs, k * validationH));
-    // WFO con partición por origen (P2-2): cada origen se particiona con
-    // órdenes ≤ su corte — ni la asignación ni las muestras usan futuro.
+    // WFO: cada origen se particiona con órdenes ≤ su corte (sin futuro).
     // Sin clientes con compras reales no hay tune.
     const wfoByMarket = evaluateTuneWFO(
       orders,
       tuneCustomers,
-      markets,
       origins,
       { cycleDays: cycle, sigma0 },
-      (marketId) => {
-        const { params: curParams } = paramsForPartition(currentParams, marketId);
+      () => {
+        const { params: curParams } = paramsForPartition(currentParams);
         const curMix = curParams?.mixture ? asValidMixtureFit(curParams.mixture) : null;
         return {
           window: curParams?.episodeWindowDays ?? null,
@@ -797,7 +748,7 @@ export async function tuneModelParams(
     for (const [marketId, wfo] of wfoByMarket) {
       const runOne = (): TunePartitionOutcome => {
         const label = wfo.label;
-        const lastMs = fittedByMarket.get(marketId) ?? NaN;
+        const lastMs = fittedAt;
         if (!dryRun && Number.isFinite(lastMs) && nowMs - lastMs < MODEL_TUNE_DAYS * DAY_MS) {
           const days = Math.max(0, Math.round((nowMs - lastMs) / DAY_MS));
           return {
@@ -807,7 +758,7 @@ export async function tuneModelParams(
             reason: `Tuneado hace ${days}d (<${MODEL_TUNE_DAYS}d): se conserva.`,
           };
         }
-        const { params: curParams } = paramsForPartition(currentParams, marketId);
+        const { params: curParams } = paramsForPartition(currentParams);
         const hasRow = curParams !== null;
         const curMix = curParams?.mixture ? asValidMixtureFit(curParams.mixture) : null;
         const current: TuneCurrent = {
@@ -882,7 +833,6 @@ export async function tuneModelParams(
             const version = mixture !== null ? MIXTURE_VERSION : EPISODE_VERSION;
             await writeModelParams(
               storeId,
-              po.marketId,
               { episodeWindowDays: cand.window, mixture },
               version,
               {
@@ -892,8 +842,6 @@ export async function tuneModelParams(
                   method: "wfo-3origins",
                   validation_horizon_days: validationH,
                   production_horizon_days: horizon,
-                  market_id: po.marketId,
-                  market_label: po.label,
                   origins: origins.map((c) => new Date(c).toISOString()),
                   windows_tried: enumerateTuneWindows(ctx.currentWindow),
                   current: {

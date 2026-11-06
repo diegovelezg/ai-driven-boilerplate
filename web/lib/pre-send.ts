@@ -3,7 +3,7 @@
 // gate con BD. La usan el dispatcher y el envío-al-aprobar: mismo criterio
 // en ambas vías, sin duplicar.
 import { getSupabase } from "@/lib/supabase";
-import { isRealDbOrder } from "@/lib/medusa";
+import { isRealDbOrder } from "@/lib/canonical";
 import { createLogger } from "@/lib/log";
 import {
   evaluatePreSend,

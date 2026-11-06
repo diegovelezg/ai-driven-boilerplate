@@ -7,7 +7,6 @@ import { AppCard } from "@/components/app-card";
 import { SectionHeading } from "@/components/section-heading";
 import { Button } from "@/components/ui/button";
 import { formatNumber, formatPercentPoints } from "@/lib/format";
-import { withMarketParam } from "@/lib/markets";
 
 export interface HealthInitial {
   duplicateCount: number;
@@ -28,11 +27,9 @@ const POLL_MS = 15_000;
  */
 export function HealthSection({
   storeId,
-  marketId,
   initial,
 }: {
   storeId: string;
-  marketId: string | null;
   initial: HealthInitial;
 }) {
   const [live, setLive] = useState<HealthInitial>(initial);
@@ -50,7 +47,6 @@ export function HealthSection({
     const signal = AbortSignal.any([ctrl.signal, AbortSignal.timeout(15_000)]);
     try {
       const qs = new URLSearchParams({ store: storeId });
-      if (marketId) qs.set("market", marketId);
       const r = await fetch(`/api/health?${qs.toString()}`, { cache: "no-store", signal });
       if (!r.ok) return;
       const j = (await r.json()) as {
@@ -69,7 +65,7 @@ export function HealthSection({
     } finally {
       if (inFlight.current === ctrl) inFlight.current = null;
     }
-  }, [storeId, marketId]);
+  }, [storeId]);
 
   useEffect(() => {
     timer.current = setInterval(() => void refresh(), POLL_MS);
@@ -140,7 +136,7 @@ export function HealthSection({
                   <strong>{formatNumber(sinCanal)}</strong>{" "}
                   {sinCanal === 1 ? "cliente" : "clientes"} sin canal utilizable: el motor no puede escribirles.
                 </p>
-                <Button render={<Link href={withMarketParam("/customers?decision=sin_canal", marketId)} />} nativeButton={false} size="sm">
+                <Button render={<Link href="/customers?decision=sin_canal" />} nativeButton={false} size="sm">
                   Ver sin canal
                 </Button>
               </div>
@@ -171,7 +167,7 @@ export function HealthSection({
         )}
         <p className="text-xs text-muted-foreground">
           La base por ritmo de recompra vive en{" "}
-          <Link href={withMarketParam("/customers?ritmo=con-ritmo", marketId)} className="underline">
+          <Link href="/customers?ritmo=con-ritmo" className="underline">
             Customers (filtro por ritmo)
           </Link>
           .

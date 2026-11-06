@@ -4,9 +4,8 @@ import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { AutoRefresh } from "@/components/auto-refresh";
-import { readConnections } from "@/lib/store";
 import { isSupabaseConfigured, getSupabase } from "@/lib/supabase";
-import { resolveStoreId } from "@/lib/customers-db";
+import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import {
   ReviewLists,
   HISTORY_PAGE_SIZE,
@@ -17,11 +16,6 @@ import {
 import { getRankedMira } from "@/lib/mira";
 import { resolveContact } from "@/lib/comms/contact";
 import { buildWaMeUrl } from "@/lib/comms/whatsapp/wame";
-import {
-  applyScopeFilter,
-  resolveMarketScope,
-} from "@/lib/markets";
-import { requireMyStoreAccess } from "@/lib/tenant";
 
 export const instant = false;
 
@@ -29,7 +23,6 @@ export default async function ReviewPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    market?: string;
     tab?: string;
     /** Filtro del chat ("muéstrame los 3"): IDs exactos por sección. */
     actionIds?: string;
@@ -40,8 +33,9 @@ export default async function ReviewPage({
     cpage?: string;
   }>;
 }) {
-  const conn = await readConnections();
-  const connected = Boolean(conn.medusaUrl);
+  const { active } = await getMyActiveStore(null).catch(() => ({ active: null as null }));
+  const activeStoreId = active?.id ?? null;
+  const connected = Boolean(activeStoreId);
   const dbReady = isSupabaseConfigured();
   const sp = await searchParams;
   const clampPage = (raw: string | undefined): number => {
@@ -73,7 +67,7 @@ export default async function ReviewPage({
   let error: string | null = null;
   /** Dominios que ya son customers (para el check “no es cliente actual”). */
   const customerDomains = new Set<string>();
-  let shopCurrency: string | null = null;
+  const shopCurrency: string | null = active?.shop_currency ?? null;
   let ultimaCompraLabel = "última compra";
   let isB2BReview = true;
   /** Gate del botón prospectar: solo B2B (fail-open en error; el backend veta). */
@@ -81,129 +75,91 @@ export default async function ReviewPage({
 
   if (connected && dbReady) {
     try {
-      const storeId = await resolveStoreId(conn.medusaUrl);
+      const storeId = activeStoreId!;
       if (!storeId) {
-        error = "Tienda aún sin sincronizar.";
+        error = "Sin tienda.";
       } else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda. Pide a tu admin que te agregue en merchant_users.";
       } else {
         const db = getSupabase();
-        // Filtro global por país/mercado (?market= del header). Acciones y
-        // señales filtran por sus customers; leads no tienen país (van todos).
-        const scope = await resolveMarketScope(storeId, sp.market).catch(() => null);
         const [{ data: a, error: aErr }, { data: ap, error: apErr }, { data: ar, error: arErr }, { data: ds, error: dsErr }, { count: dsTotal, error: dsCountErr }, { data: l, error: lErr }, { data: al, error: alErr }, { data: cl, error: clErr }, { count: clTotal, error: clCountErr }, { data: dl, error: dlErr }, { data: br }] =
           await Promise.all([
             (async () => {
-              const aq = applyScopeFilter(
-                db
+              const aq = db
                   .from("proposed_actions")
                   .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
-                  .eq("status", "pending_review"),
-                scope,
-              );
+                  .eq("status", "pending_review");
               return aq.order("created_at", { ascending: false }).limit(30);
             })(),
             (async () => {
-              const aq = applyScopeFilter(
-                db
+              const aq = db
                   .from("proposed_actions")
                   .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
                   .eq("status", "approved")
-                  .is("dispatched_at", null),
-                scope,
-              );
+                  .is("dispatched_at", null);
               return aq.order("created_at", { ascending: true }).limit(30);
             })(),
             (async () => {
-              const aq = applyScopeFilter(
-                db
+              const aq = db
                   .from("proposed_actions")
                   .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,rejected_by,rejected_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
-                  .eq("status", "rejected"),
-                scope,
-              );
+                  .eq("status", "rejected");
               return aq.order("created_at", { ascending: false }).limit(20);
             })(),
             (async () => {
-              const aq = applyScopeFilter(
-                db
+              const aq = db
                   .from("proposed_actions")
                   .select("id,customer_id,channel,subject,body,status,created_at,approved_by,approved_at,dispatched_at,revenue_attributed,evidence_json,customers(email,first_name,last_name,phone,country),churn_signals(reason,score,kind)")
                   .eq("store_id", storeId)
-                  .eq("status", "dispatched"),
-                scope,
-              );
+                  .eq("status", "dispatched");
               return aq
                 .order("dispatched_at", { ascending: false })
                 .range(sentPage * HISTORY_PAGE_SIZE, sentPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE - 1);
             })(),
             (async () => {
-              const cq = applyScopeFilter(
-                db
+              const cq = db
                   .from("proposed_actions")
                   .select("id", { count: "exact", head: true })
                   .eq("store_id", storeId)
-                  .eq("status", "dispatched"),
-                scope,
-              );
+                  .eq("status", "dispatched");
               return cq;
             })(),
-            applyScopeFilter(
-              db
+            db
                 .from("proposed_leads")
                 .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
-                .eq("status", "pending_review"),
-              scope,
-              null,
-            )
+                .eq("status", "pending_review")
               .order("icp_score", { ascending: false, nullsFirst: false })
               .limit(30),
             // Aprobados aún no contactados: "Ya lo contacté" los cierra.
-            applyScopeFilter(
-              db
+            db
                 .from("proposed_leads")
                 .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
-                .eq("status", "approved"),
-              scope,
-              null,
-            )
+                .eq("status", "approved")
               .order("created_at", { ascending: true })
               .limit(30),
             // Contactados (historial paginado con total exacto) y descartados.
-            applyScopeFilter(
-              db
+            db
                 .from("proposed_leads")
                 .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
-                .eq("status", "contacted"),
-              scope,
-              null,
-            )
+                .eq("status", "contacted")
               .order("created_at", { ascending: false })
               .range(contactedPage * HISTORY_PAGE_SIZE, contactedPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE - 1),
-            applyScopeFilter(
-              db
+            db
                 .from("proposed_leads")
                 .select("id", { count: "exact", head: true })
                 .eq("store_id", storeId)
                 .eq("status", "contacted"),
-              scope,
-              null,
-            ),
-            applyScopeFilter(
-              db
+            db
                 .from("proposed_leads")
                 .select("id,company,domain,url,contact,source,created_at,icp_score,reason,decided_by,decided_at,contacted_by,contacted_at,evidence_json")
                 .eq("store_id", storeId)
-                .in("status", ["rejected", "discarded"]),
-              scope,
-              null,
-            )
+                .in("status", ["rejected", "discarded"])
               .order("created_at", { ascending: false })
               .limit(20),
             // Corridas en curso: la sección vacía muestra skeleton, no un vacío engañoso.
@@ -373,28 +329,17 @@ export default async function ReviewPage({
         // Solo el check “ya es customer” se calcula en vivo (barato); el resto
         // viene guardado por el agente al crear el lead (evidence_json).
         try {
-          const [{ data: ce }, { data: st }] = await Promise.all([
-            db.from("customers").select("email").eq("store_id", storeId).limit(5000),
-            db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle(),
-          ]);
+          const { data: ce } = await db.from("customers").select("email").eq("store_id", storeId).limit(5000);
           const { domainFromEmail, classifyDomain } = await import("@/lib/domains");
           for (const c of ((ce ?? []) as Array<Record<string, unknown>>)) {
             const d = domainFromEmail(String(c.email ?? ""));
             if (d && classifyDomain(d).enrichable) customerDomains.add(d);
           }
-          shopCurrency = ((st ?? {}) as Record<string, unknown>).shop_currency as string | null ?? null;
-          // Con filtro de mercado los montos se leen en su moneda (MX→MXN).
-          if (scope?.market?.currency) shopCurrency = scope.market.currency.toUpperCase();
         } catch {
           // checks degradados: se muestra lo que haya
         }
         // Mismo ranking que el Overview (lib/mira): la #1 de Hoy es la #1 aquí.
-        // Universos monetarios: la foránea va después, no mezclada.
-        // Con filtro de mercado el market es el universo (foreign vacío).
-        const mira = await getRankedMira(storeId, 100, {
-          ...(scope ?? {}),
-          currency: scope?.market?.currency?.toUpperCase() ?? null,
-        });
+        const mira = await getRankedMira(storeId, 100);
         signals = [...mira.rows, ...mira.foreign].map((r) => ({
           id: r.signalId,
           kind: r.kind,
@@ -414,14 +359,11 @@ export default async function ReviewPage({
         // Descartadas recientes para "contactar igual" (issue #14 B3): la mira
         // solo trae open/prioritized y el descarte no tenía remedio.
         try {
-          const dq = applyScopeFilter(
-            db
+          const dq = db
               .from("churn_signals")
               .select("id,customer_id,kind,objective,score,reason,status,created_at,closed_by,closed_at,customers(email,first_name,last_name)")
               .eq("store_id", storeId)
-              .eq("status", "dismissed"),
-            scope,
-          );
+              .eq("status", "dismissed");
           const { data: dd } = await dq.order("closed_at", { ascending: false }).limit(20);
           dismissedSignals = ((dd ?? []) as Array<Record<string, unknown>>).map((r) => {
             const c = (r.customers ?? {}) as Record<string, unknown>;
@@ -529,7 +471,7 @@ export default async function ReviewPage({
     // Sin acceso al tenant no se resuelve elegibilidad (no filtrar datos).
     try {
       if (!error) {
-        const sid = conn.medusaUrl ? await resolveStoreId(conn.medusaUrl).catch(() => null) : null;
+        const sid = activeStoreId ?? null;
         if (sid && (await requireMyStoreAccess(sid).catch(() => null)) !== false) {
           const { prospectEligibility } = await import("@/lib/prospect");
           prospectEligible = (await prospectEligibility(sid)).eligible;
@@ -541,7 +483,7 @@ export default async function ReviewPage({
   }
 
   // Filtro del chat: IDs exactos ("muéstrame los 3"). Se aplica sobre lo ya
-  // cargado (respeta mercado); con IDs inexistentes la sección queda vacía.
+  // cargado; con IDs inexistentes la sección queda vacía.
   const parseIds = (raw: string | undefined): Set<string> | null => {
     if (!raw) return null;
     const set = new Set(
@@ -569,7 +511,6 @@ export default async function ReviewPage({
     actionFilter ? "actions" : leadFilter ? "leads" : signalFilter ? "signals"
     : sp.tab === "leads" || sp.tab === "signals" ? sp.tab : "actions";
   const clearParams = new URLSearchParams();
-  if (sp.market) clearParams.set("market", sp.market);
   if (sp.tab === "leads" || sp.tab === "signals") clearParams.set("tab", sp.tab);
   const clearQs = clearParams.toString();
   const clearChatFilter = `/review${clearQs ? `?${clearQs}` : ""}`;
@@ -608,7 +549,7 @@ export default async function ReviewPage({
       {(!connected || !dbReady) && (
         <AppCardState>
           {!connected
-            ? "Conecta Medusa en Settings para revisar propuestas."
+            ? "Sin tienda. Importa inventario en /inventario."
             : "Supabase no configurado (`supabase start` + `web/.env.local`)."}
         </AppCardState>
       )}
@@ -620,10 +561,10 @@ export default async function ReviewPage({
       {connected && dbReady && !error && (
         <>
           <ReviewLists
-            // Remount solo cuando cambia LO PEDIDO (filtro del chat o market):
+            // Remount solo cuando cambia LO PEDIDO (filtro del chat):
             // con `key={initialTab}` cada click en un tab desmontaba todo
             // (se perdía edición/selección y la página parpadeaba).
-            key={`${sp.market ?? ""}|${sp.actionIds ?? ""}|${sp.leadIds ?? ""}|${sp.signalIds ?? ""}`}
+            key={`${sp.actionIds ?? ""}|${sp.leadIds ?? ""}|${sp.signalIds ?? ""}`}
             actions={actions}
             approvedActions={approvedActions}
             rejectedActions={rejectedActions}
@@ -640,7 +581,6 @@ export default async function ReviewPage({
             dismissedSignals={dismissedSignals}
             visible={{ actions: showActions, leads: showLeads, signals: showSignals }}
             runningKinds={[...runningKinds]}
-            marketId={sp.market ?? null}
             customerDomains={[...customerDomains]}
             shopCurrency={shopCurrency}
             filtered={Boolean(chatFiltered)}

@@ -37,16 +37,14 @@ interface Props {
 }
 
 const MODELS: Array<{ value: BusinessModel; label: string }> = [
-  { value: "b2c", label: "B2C · vendo a personas" },
   { value: "b2b", label: "B2B · vendo a empresas" },
-  { value: "hybrid", label: "Híbrido · a ambos" },
 ];
 
-/** Arquetipo por defecto cuando el merchant cambia el modelo a mano. */
+/** Arquetipo por defecto B2B (sistema B2B-only). */
 const MODEL_DEFAULT_ARCHETYPE: Record<BusinessModel, ArchetypeId> = {
-  b2c: "b2c_consumible",
+  b2c: "b2b_recurrente",
   b2b: "b2b_recurrente",
-  hybrid: "hibrido",
+  hybrid: "b2b_recurrente",
 };
 
 /** Resumen del perfil guardado (reusado en resumen y como referencia en paso 1). */
@@ -114,7 +112,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
   // Confirmación visible
   const [model, setModel] = useState<BusinessModel>(profile?.businessModel ?? suggestion.businessModel);
   const [industry, setIndustry] = useState<string | null>(profile?.industry ?? null);
-  // Verdad del agente (primaria) + mapeo Shopify (derivado, nullable).
+  // Verdad del agente (primaria) + mapeo de taxonomía (derivado, nullable).
   const [verticalDetected, setVerticalDetected] = useState<string | null>(
     profile?.verticalDetected ?? null,
   );
@@ -173,7 +171,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
     return (
       <AppCard
         title="Perfil del negocio"
-        description="Conecta Medusa arriba (Guardar y conectar) para crear el store y describir tu negocio."
+        description="Describe tu negocio para calibrar el motor."
       >
         <span className="text-xs text-muted-foreground">Sin store todavía.</span>
       </AppCard>
@@ -469,7 +467,7 @@ export function TenantProfileForm({ storeId, profile, suggestion }: Props) {
                     }}
                     className="size-4 accent-primary"
                   />
-                  Mis clientes son empresas (pedir RUC/empresa)
+                  Mis clientes son empresas (pedir ID fiscal/empresa)
                 </label>
               </div>
 

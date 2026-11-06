@@ -173,55 +173,32 @@ describe("validateModelParams (issue #27 Paso 3)", () => {
 });
 
 describe("pickModelParams + paramsForPartition", () => {
-  it("market exacto manda; si es inválido cae a global; si no, frío", () => {
+  it("single-país: fila única vigente o frío", () => {
     const rows = [
-      { market_id: "m1", version: V_MIX, params_json: { episode_window_days: 14 } },
-      { market_id: null, version: V_MIX, params_json: { episode_window_days: 7 } },
+      { version: V_MIX, params_json: { episode_window_days: 14 } },
     ];
-    assert.equal(pickModelParams(rows, "m1")?.episodeWindowDays, 14);
-    assert.equal(pickModelParams(rows, "m2")?.episodeWindowDays, 7);
-    assert.equal(pickModelParams(rows, null)?.episodeWindowDays, 7);
-    assert.equal(pickModelParams([], "m1"), null);
-    // Market inválido ⇒ global, no legacy directo.
-    const badMarket = [
+    assert.equal(pickModelParams(rows)?.episodeWindowDays, 14);
+    assert.equal(pickModelParams([]), null);
+    // Fila inválida ⇒ null (frío).
+    const bad = [
       {
-        market_id: "m1",
         version: V_MIX,
         params_json: { mixture: { k: 9, components: [] } },
       },
-      { market_id: null, version: V_MIX, params_json: { episode_window_days: 7 } },
     ];
-    assert.equal(pickModelParams(badMarket, "m1")?.episodeWindowDays, 7);
-    // Global inválida ⇒ null (frío).
-    assert.equal(
-      pickModelParams(
-        [{ market_id: null, version: V_MIX, params_json: { mixture: { k: 9, components: [] } } }],
-        "m1",
-      ),
-      null,
-    );
-    // Versión desconocida en market ⇒ cae a global; si global también es
-    // vieja ⇒ frío (P2).
+    assert.equal(pickModelParams(bad), null);
+    // Versión desconocida ⇒ frío (P2).
     const oldVersion = [
-      { market_id: "m1", version: "mix0:legado", params_json: { episode_window_days: 14 } },
-      { market_id: null, version: V_MIX, params_json: { episode_window_days: 7 } },
+      { version: "mix0:legado", params_json: { episode_window_days: 14 } },
     ];
-    assert.equal(pickModelParams(oldVersion, "m1")?.episodeWindowDays, 7);
-    const allOld = [
-      { market_id: "m1", version: "mix0:legado", params_json: { episode_window_days: 14 } },
-    ];
-    assert.equal(pickModelParams(allOld, "m1"), null);
+    assert.equal(pickModelParams(oldVersion), null);
+    // Sin versión ⇒ frío.
+    assert.equal(pickModelParams([{ params_json: { episode_window_days: 7 } }]), null);
   });
 
-  it("paramsForPartition distingue market/global/arquetipo", () => {
-    const byKey = new Map([
-      [null, { episodeWindowDays: 7, mixture: null }],
-      ["m1", { episodeWindowDays: 14, mixture: null }],
-    ]);
-    assert.equal(paramsForPartition(byKey, "m1").source, "tienda:market");
-    assert.equal(paramsForPartition(byKey, "m2").source, "tienda:global");
-    assert.equal(paramsForPartition(new Map(), "m1").source, "arquetipo");
-    assert.equal(paramsForPartition(new Map(), null).source, "arquetipo");
+  it("paramsForPartition distingue tienda/arquetipo", () => {
+    assert.equal(paramsForPartition({ episodeWindowDays: 7, mixture: null }).source, "tienda");
+    assert.equal(paramsForPartition(null).source, "arquetipo");
   });
 });
 

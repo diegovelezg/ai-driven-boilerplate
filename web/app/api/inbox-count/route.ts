@@ -1,12 +1,11 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { getMyActiveStore } from "@/lib/tenant";
-import { applyScopeFilter, resolveMarketScope } from "@/lib/markets";
 
 /**
- * GET /api/inbox-count?store=<uuid>&market=<uuid>
+ * GET /api/inbox-count?store=<uuid>
  * Total del Review Inbox con el mismo criterio que /review y el home:
  * borradores pendientes + leads pendientes + señales abiertas/priorizadas,
- * respetando ?store= y ?market=. Sin badge quemado en el sidebar.
+ * respetando ?store=. Sin badge quemado en el sidebar.
  */
 export async function GET(req: Request) {
   if (!isSupabaseConfigured()) {
@@ -36,18 +35,12 @@ export async function GET(req: Request) {
   const access = await requireStoreAccess(active.id);
   if (access instanceof Response) return access;
   const db = getSupabase();
-  const scope = await resolveMarketScope(active.id, sp.get("market")).catch(() => null);
   const count = async (
     table: "proposed_actions" | "proposed_leads" | "churn_signals",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     apply: (q: any) => any,
-    idCol: string | null = "customer_id",
   ): Promise<number> => {
-    const q = applyScopeFilter(
-      apply(db.from(table).select("id", { count: "exact", head: true }).eq("store_id", active.id)),
-      scope,
-      idCol,
-    );
+    const q = apply(db.from(table).select("id", { count: "exact", head: true }).eq("store_id", active.id));
     const { count: n, error } = await q;
     if (error) throw new Error(error.message);
     return n ?? 0;
@@ -55,7 +48,7 @@ export async function GET(req: Request) {
   try {
     const [actions, leads, signals] = await Promise.all([
       count("proposed_actions", (q) => q.eq("status", "pending_review")),
-      count("proposed_leads", (q) => q.eq("status", "pending_review"), null),
+      count("proposed_leads", (q) => q.eq("status", "pending_review")),
       count("churn_signals", (q) => q.in("status", ["open", "prioritized"])),
     ]);
     return Response.json({

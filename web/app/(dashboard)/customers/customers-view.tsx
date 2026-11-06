@@ -19,7 +19,7 @@ import {
   DataTableTh,
   SortHeaderButton,
 } from "@/components/data-table";
-import type { CanonicalCustomer } from "@/lib/medusa";
+import type { CanonicalCustomer } from "@/lib/canonical";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type {
   CustomerFilters,
@@ -45,8 +45,6 @@ interface Props {
   sortDir: CustomersSortDir;
   filters: CustomerFilters;
   shopCurrency: string | null;
-  /** Filtro global por mercado (?market= del header): se preserva al navegar. */
-  marketId: string | null;
   /** Foto del día del motor por dbId (solo filas visibles). */
   preds: Record<string, CustomerPredictionLite>;
   /** Resumen "entran en ventana en 7 días" (solo con ?vista=ventana7). */
@@ -138,7 +136,7 @@ function EditableCell({
   }
   return (
     <span onClick={(e) => e.stopPropagation()} className="block">
-      <AppTooltip tip="Enter guarda · Escape cancela · vacío = valor de Medusa">
+      <AppTooltip tip="Enter guarda · Escape cancela · vacío = valor base">
         <Input
           autoFocus
           value={draft}
@@ -214,7 +212,6 @@ export function CustomersView({
   sortDir,
   filters,
   shopCurrency,
-  marketId,
   preds,
   ventana7,
   seguimiento,
@@ -260,10 +257,9 @@ export function CustomersView({
       if (ele) params.set("elegibilidad", ele);
       const dcl = overrides.decil !== undefined ? overrides.decil : filters.decil;
       if (dcl) params.set("decil", dcl);
-      if (marketId) params.set("market", marketId);
       return params.toString();
     },
-    [q, page, sortKey, sortDir, filters, marketId],
+    [q, page, sortKey, sortDir, filters],
   );
 
   // El sort ordena en servidor (Supabase) sobre todos los datos, no solo la página.
@@ -496,22 +492,19 @@ export function CustomersView({
         <FilterSelect
           value={filters.customerType ?? "all"}
           onChange={(v) => setFilter({ customerType: v === "all" ? null : v })}
-          ariaLabel="Filtrar por tipo de cliente"
+          ariaLabel="Filtrar por tipo de empresa"
           widthClass="w-36"
           placeholder="Tipo"
           display={(value) =>
             value === "all"
-              ? "B2B + B2C"
+              ? "B2B · Empresas"
               : value === "B2B"
                 ? "B2B · Empresas"
-                : value === "B2C"
-                  ? "B2C · Consumidores"
-                  : String(value)
+                : String(value)
           }
         >
-          <SelectItem value="all">B2B + B2C</SelectItem>
+          <SelectItem value="all">B2B · Empresas</SelectItem>
           <SelectItem value="B2B">B2B · Empresas</SelectItem>
-          <SelectItem value="B2C">B2C · Consumidores</SelectItem>
         </FilterSelect>
         {filtersActive && (
           <Button
@@ -547,7 +540,7 @@ export function CustomersView({
 
       {valorByType && (
         <p className="text-[13px] text-muted-foreground tabular-nums">
-          ¿Qué tipo vale más? B2B: {formatNumber(valorByType.b2b.n)} · {formatMoney(valorByType.b2b.minor, shopCurrency)} — B2C: {formatNumber(valorByType.b2c.n)} · {formatMoney(valorByType.b2c.minor, shopCurrency)} (facturación bruta acumulada{valorByType.truncated ? ", parcial: universo mayor al CAP" : ""}{valorByType.otherCurrency > 0 ? `; ${formatNumber(valorByType.otherCurrency)} en otra moneda fuera de la suma` : ""}).
+          Facturación bruta B2B: {formatNumber(valorByType.b2b.n)} empresas · {formatMoney(valorByType.b2b.minor, shopCurrency)} (acumulada{valorByType.truncated ? ", parcial: universo mayor al CAP" : ""}{valorByType.otherCurrency > 0 ? `; ${formatNumber(valorByType.otherCurrency)} en otra moneda fuera de la suma` : ""}).
         </p>
       )}
 
@@ -645,7 +638,7 @@ export function CustomersView({
             {rows.length === 0 && (
               <DataTableRow>
                 <DataTableTd colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
-                  {q ? `Sin resultados para “${q}”.` : "Sin customers en Medusa."}
+                  {q ? `Sin resultados para “${q}”.` : "Sin customers."}
                 </DataTableTd>
               </DataTableRow>
             )}
