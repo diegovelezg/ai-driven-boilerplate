@@ -4,13 +4,17 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import {
+  Cat,
+  Building2,
   CircleHelp,
-  GraphStar,
-  Inbox,
+  Contact,
+  FileText,
   LayoutDashboard,
   MessagesSquare,
-  Package,
+  MonitorPlay,
+  RotateCwClock,
   Settings,
+  Tag,
   TrendingUp,
   Users,
 } from "lucide-react";
@@ -34,10 +38,14 @@ import { useChatDock } from "@/components/chat/chat-dock";
 
 const nav = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/retencion", label: "Retención", icon: RotateCwClock },
   { href: "/finanzas", label: "Finanzas", icon: TrendingUp },
-  { href: "/review", label: "Review Inbox", icon: Inbox, badgeKey: "inbox" as const },
+  { href: "/inventario", label: "Inventario", icon: MonitorPlay },
+  { href: "/ordenes", label: "Órdenes", icon: FileText },
+  { href: "/empresas", label: "Empresas", icon: Building2 },
+  { href: "/marcas", label: "Marcas", icon: Tag },
+  { href: "/contactos", label: "Contactos", icon: Contact },
   { href: "/customers", label: "Customers", icon: Users },
-  { href: "/products", label: "Catálogo", icon: Package },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/ayuda", label: "Ayuda", icon: CircleHelp },
 ];
@@ -53,20 +61,18 @@ export function AppSidebar() {
 function AppSidebarNav() {
   const pathname = usePathname();
   const sp = useSearchParams();
-  // El filtro global por país (?market=) y tienda (?store=) debe persistir
-  // al navegar: los links del sidebar lo reinyectan en cada href.
+  // La tienda (?store=) persiste al navegar: los links del sidebar la
+  // reinyectan en cada href. Single-país: sin ?market=.
   const suffix = (() => {
     const kept = new URLSearchParams();
     const store = sp.get("store");
-    const market = sp.get("market");
     if (store) kept.set("store", store);
-    if (market) kept.set("market", market);
     const qs = kept.toString();
     return qs ? `?${qs}` : "";
   })();
   const { dock, toggleChat } = useChatDock();
   // Badge vivo del inbox con el mismo criterio que /review (no quemado):
-  // borradores + leads + señales del tenant/market actual.
+  // borradores + leads + señales del tenant actual.
   const [inboxTotal, setInboxTotal] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
@@ -88,13 +94,14 @@ function AppSidebarNav() {
             <SidebarMenuButton
               size="lg"
               render={<Link href={`/${suffix}`} />}
-              tooltip="AI Retention Engine"
+              tooltip="MEOW"
+              className="group-data-[collapsible=icon]:justify-center"
             >
               <span className="flex size-6 items-center justify-center rounded bg-primary text-primary-foreground">
-                <GraphStar className="size-4" strokeWidth={2} />
+                <Cat className="size-4" strokeWidth={2} />
               </span>
               <span className="text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-                AI Retention Engine
+                MEOW
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
