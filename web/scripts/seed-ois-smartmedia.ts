@@ -1,6 +1,8 @@
 // Seed inicial CRM/DOOH desde las 4 OIs de SMART MEDIA (Drive SMART MEDIA).
 // Uso: NODE_OPTIONS=--conditions=react-server npx tsx --env-file=.env.local scripts/seed-ois-smartmedia.ts
 // Idempotente: si existe NP-2026-001, no inserta nada.
+// Las NP-2026-00x son la numeración del cliente: la migración
+// 20261120 las renumera a numeración propia SM-2026-00x (se ignoran).
 // Modelo: companies.kind (agencia|anunciante|proveedor, obligatorio en CRM);
 // la fila NULL ("sm", red propia / operadora) respalda venues.company_id y
 // se excluye del listado de Empresas. La marca publicitada es metadato
@@ -398,6 +400,11 @@ async function main() {
   }
 
   // 4. IOs + líneas + campañas + bookings (hard hold).
+  const termsDays = (t: string): number | null => {
+    if (/contado/i.test(t)) return 0;
+    const m = t.match(/\d+/);
+    return m ? Number(m[0]) : null;
+  };
   for (const o of ORDERS) {
     const { data: io, error: ioerr } = await db
       .from("insertion_orders")
@@ -411,6 +418,7 @@ async function main() {
         starts_at: o.starts_at,
         ends_at: o.ends_at,
         payment_terms: o.payment_terms,
+        payment_terms_days: termsDays(o.payment_terms),
         service_clauses:
           "Smart Media podrá reubicar la pauta por fuerza mayor, siempre y cuando el cliente esté conforme con la reubicación. Todo arte pasa por aprobación de SM.",
         signed_by_agency: o.signed_by_agency,

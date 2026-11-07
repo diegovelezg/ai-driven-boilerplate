@@ -1226,7 +1226,7 @@ export function createRetainTools(ctx: AgentContext): BaseTool[] {
       // como el drawer). Asumir PEN mezclaba/ocultaba otras monedas.
       const shopCurrency = ((await resolveShopCurrency(storeId).catch(() => null)) ?? null)?.toUpperCase() ?? null;
       const viewCurrency = shopCurrency;
-      // Misma ventana que /finanzas (12m): año móvil para no mezclar historia vieja.
+      // Misma ventana que /finance (12m): año móvil para no mezclar historia vieja.
       const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
       const PAGE = 1000;
       const CAP = 20000;

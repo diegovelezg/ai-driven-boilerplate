@@ -2,6 +2,7 @@
 // con orderStage: volumen bajo (<200), sin paginación exacta que mentir.
 import { getSupabase } from "@/lib/supabase";
 import { orderStage, type OrderStageKey } from "@/lib/order-stage";
+import { billingStatus, type BillingStatusKey } from "@/lib/billing-status";
 
 export interface OrderRow {
   id: string;
@@ -16,6 +17,12 @@ export interface OrderRow {
   gross_minor: number;
   stage: OrderStageKey;
   stage_index: number;
+  has_om: boolean;
+  billing: BillingStatusKey;
+  invoiced_minor: number;
+  paid_minor: number;
+  pending_minor: number;
+  isPrepaid: boolean;
 }
 
 export const ORDER_STAGES: OrderStageKey[] = [
@@ -23,7 +30,6 @@ export const ORDER_STAGES: OrderStageKey[] = [
   "materiales",
   "al_aire",
   "por_certificar",
-  "por_cobrar",
   "cerrada",
   "cancelada",
 ];
@@ -32,13 +38,13 @@ const now = () => Date.now();
 
 export async function listOrders(
   storeId: string,
-  opts: { q?: string; stage?: OrderStageKey | null } = {},
+  opts: { q?: string; stage?: OrderStageKey | null; billing?: BillingStatusKey | null } = {},
 ): Promise<OrderRow[]> {
   const db = getSupabase();
   const { data, error } = await db
     .from("insertion_orders")
     .select(
-      "id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id",
+      "id,io_number,brand,status,starts_at,ends_at,payment_terms_days,advertiser_company_id,billing_company_id",
     )
     .eq("store_id", storeId)
     .order("starts_at", { ascending: false })
@@ -67,7 +73,7 @@ export async function listOrders(
     db.from("agency_orders").select("io_id").eq("store_id", storeId).in("io_id", ids),
     db.from("creatives").select("io_id,qc_status,legal_status").eq("store_id", storeId).in("io_id", ids),
     db.from("photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
-    db.from("invoices").select("io_id,status").eq("store_id", storeId).in("io_id", ids),
+    db.from("invoices").select("io_id,amount_minor,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
   ]);
   const nameBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
@@ -90,11 +96,13 @@ export async function listOrders(
     creaBy.set(k, prev);
   }
   const photoBy = new Set(((photos.data ?? []) as Array<Record<string, unknown>>).map((p) => String(p.io_id)));
-  const paidBy = new Set(
-    ((invs.data ?? []) as Array<Record<string, unknown>>)
-      .filter((v) => String(v.status) === "paid")
-      .map((v) => String(v.io_id)),
-  );
+  const invBy = new Map<string, Array<Record<string, unknown>>>();
+  for (const v of (invs.data ?? []) as Array<Record<string, unknown>>) {
+    const k = String(v.io_id);
+    const arr = invBy.get(k) ?? [];
+    arr.push(v);
+    invBy.set(k, arr);
+  }
 
   const t = now();
   const out: OrderRow[] = rows.map((r) => {
@@ -108,9 +116,22 @@ export async function listOrders(
       materialsOk: crea ? crea.any && !crea.pending : false,
       ended: Number.isFinite(endsAt) ? endsAt <= t : false,
       certified: photoBy.has(id),
-      paid: paidBy.has(id),
     });
     const agg = linesBy.get(id) ?? { n: 0, gross: 0 };
+    const invRows = invBy.get(id) ?? [];
+    const bill = billingStatus({
+      gross_minor: agg.gross,
+      invoices: invRows.map((v) => ({
+        amount_minor: Number(v.amount_minor ?? 0),
+        status: String(v.status ?? ""),
+        issue_date: (v.issue_date as string | null) ?? null,
+        due_date: (v.due_date as string | null) ?? null,
+      })),
+      starts_at: (r.starts_at as string | null) ?? null,
+      payment_terms_days:
+        typeof r.payment_terms_days === "number" ? (r.payment_terms_days as number) : null,
+      now: t,
+    });
     return {
       id,
       io_number: String(r.io_number ?? ""),
@@ -124,19 +145,29 @@ export async function listOrders(
       gross_minor: agg.gross,
       stage,
       stage_index: index,
+      has_om: omBy.has(id),
+      billing: bill.status,
+      invoiced_minor: bill.invoiced_minor,
+      paid_minor: bill.paid_minor,
+      pending_minor: bill.pending_minor,
+      isPrepaid: bill.isPrepaid,
     };
   });
-  return opts.stage ? out.filter((r) => r.stage === opts.stage) : out;
+  let filtered = opts.stage ? out.filter((r) => r.stage === opts.stage) : out;
+  if (opts.billing) filtered = filtered.filter((r) => r.billing === opts.billing);
+  return filtered;
 }
 
 export interface OrderDetail {
   order: Record<string, unknown>;
   advertiser_name: string | null;
   billing_name: string | null;
+  billing_kind: string | null;
   lines: Array<Record<string, unknown>>;
   agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
   bookings_count: number;
+  photos: Array<Record<string, unknown>>;
   photos_count: number;
   invoices: Array<Record<string, unknown>>;
 }
@@ -153,7 +184,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   if (!order) return null;
   const o = order as Record<string, unknown>;
   const [cos, lines, oms, creas, bookings, photos, invs] = await Promise.all([
-    db.from("companies").select("id,name").eq("store_id", storeId).in(
+    db.from("companies").select("id,name,kind").eq("store_id", storeId).in(
       "id",
       [o.advertiser_company_id, o.billing_company_id].filter(Boolean).map(String),
     ),
@@ -163,33 +194,57 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
       .eq("store_id", storeId)
       .eq("io_id", id)
       .order("starts_at", { ascending: true }),
-    db.from("agency_orders").select("id,kind,code,portal,issued_at,notes").eq("store_id", storeId).eq("io_id", id),
-    db.from("creatives").select("id,name,qc_status,legal_status,file_url").eq("store_id", storeId).eq("io_id", id),
+    db.from("agency_orders").select("id,kind,code,portal,issued_at,document_url,notes,created_by").eq("store_id", storeId).eq("io_id", id),
+    db.from("creatives").select("id,name,qc_status,legal_status,file_url,created_by").eq("store_id", storeId).eq("io_id", id),
     db.from("bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
-    db.from("photo_checks").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("io_id", id),
+    db.from("photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
     db.from("invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),
   ]);
   const nameBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
   );
+  const kindBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), typeof c.kind === "string" ? c.kind : null]),
+  );
   const lineRows = ((lines.data ?? []) as Array<Record<string, unknown>>);
   const screenIds = [...new Set(lineRows.map((l) => String(l.screen_id)).filter(Boolean))];
-  let screenBy = new Map<string, string>();
+  let screenBy = new Map<string, { name: string; detail: string | null }>();
   if (screenIds.length > 0) {
-    const { data: screens } = await db.from("screens").select("id,name").eq("store_id", storeId).in("id", screenIds);
+    const { data: screens } = await db
+      .from("screens")
+      .select("id,name,external_ref,technology,width_px,height_px,venues(name)")
+      .eq("store_id", storeId)
+      .in("id", screenIds);
     screenBy = new Map(
-      ((screens ?? []) as Array<Record<string, unknown>>).map((s) => [String(s.id), String(s.name ?? "")]),
+      ((screens ?? []) as Array<Record<string, unknown>>).map((s) => {
+        const v = s.venues as unknown as { name?: unknown } | null;
+        const venue = typeof v?.name === "string" ? v.name : "";
+        const w = Number(s.width_px);
+        const h = Number(s.height_px);
+        const res = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? `${w}×${h}` : "";
+        const detail = [s.external_ref, venue, s.technology, res]
+          .map((x) => String(x ?? "").trim())
+          .filter(Boolean)
+          .join(" · ");
+        return [String(s.id), { name: String(s.name ?? ""), detail: detail || null }];
+      }),
     );
   }
+  const photoRows = ((photos.data ?? []) as Array<Record<string, unknown>>);
   return {
     order: o,
     advertiser_name: o.advertiser_company_id ? (nameBy.get(String(o.advertiser_company_id)) ?? null) : null,
     billing_name: o.billing_company_id ? (nameBy.get(String(o.billing_company_id)) ?? null) : null,
-    lines: lineRows.map((l) => ({ ...l, screen_name: screenBy.get(String(l.screen_id)) ?? null })),
+    billing_kind: o.billing_company_id ? (kindBy.get(String(o.billing_company_id)) ?? null) : null,
+    lines: lineRows.map((l) => {
+      const s = screenBy.get(String(l.screen_id));
+      return { ...l, screen_name: s?.name ?? null, screen_detail: s?.detail ?? null };
+    }),
     agency_orders: (oms.data ?? []) as Array<Record<string, unknown>>,
     creatives: (creas.data ?? []) as Array<Record<string, unknown>>,
     bookings_count: bookings.count ?? 0,
-    photos_count: photos.count ?? 0,
+    photos: photoRows,
+    photos_count: photoRows.length,
     invoices: (invs.data ?? []) as Array<Record<string, unknown>>,
   };
 }

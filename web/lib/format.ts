@@ -111,6 +111,14 @@ export function formatMoney(
   return `${symbol} ${body}`;
 }
 
+/** Etiqueta de condición de pago desde días (fuente numérica).
+ *  0 → "Contado", N → "N días", null → "—". El cálculo (vencimientos)
+ *  usa el entero; el texto es solo display. */
+export function paymentTermsLabel(days: number | null | undefined): string {
+  if (days === null || days === undefined) return "—";
+  return days === 0 ? "Contado" : `${formatNumber(days)} días`;
+}
+
 /** Siglas que se conservan en mayúsculas en `toTitleCase` (con o sin puntos). */
 const TITLE_ACRONYMS = new Set(["SAC", "SA", "SRL", "EIRL", "SAA", "ID", "DNI"]);
 

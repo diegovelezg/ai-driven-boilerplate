@@ -1,5 +1,6 @@
--- Numeración automática de órdenes: PREFIJO-AÑO-NNNN (ej. SM-2026-0005).
--- Las NP-2026-00x del seed quedan como legado; el correlativo 2026 arranca
+-- Numeración autogenerada de órdenes: PREFIJO-AÑO-NNNN (ej. SM-2026-0005).
+-- Las NP-2026-00x del seed eran numeración del cliente y se renumeran a
+-- SM-2026-00x en 20261120 (numeración propia); el correlativo 2026 arranca
 -- después de lo ya existente para no reutilizar números con sentido.
 alter table stores add column if not exists io_prefix text not null default 'OI'
   check (io_prefix ~ '^[A-Z]{2,4}$');

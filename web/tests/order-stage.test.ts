@@ -9,7 +9,6 @@ const base = {
   materialsOk: true,
   ended: false,
   certified: false,
-  paid: false,
 };
 
 describe("orderStage", () => {
@@ -28,12 +27,15 @@ describe("orderStage", () => {
   it("terminada sin foto → por certificar", () => {
     assert.deepEqual(orderStage({ ...base, ended: true }), { index: 4, stage: "por_certificar" });
   });
-  it("certificada sin pago → por cobrar", () => {
-    assert.deepEqual(orderStage({ ...base, ended: true, certified: true }), { index: 5, stage: "por_cobrar" });
+  it("certificada → cerrada (el cobro va en carril paralelo)", () => {
+    assert.deepEqual(orderStage({ ...base, ended: true, certified: true }), {
+      index: 5,
+      stage: "cerrada",
+    });
   });
-  it("pagada → cerrada completo", () => {
-    assert.deepEqual(orderStage({ ...base, ended: true, certified: true, paid: true }), {
-      index: 6,
+  it("paid legacy se ignora (no frena el cierre operativo)", () => {
+    assert.deepEqual(orderStage({ ...base, ended: true, certified: true, paid: false }), {
+      index: 5,
       stage: "cerrada",
     });
   });

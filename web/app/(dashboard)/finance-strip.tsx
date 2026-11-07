@@ -290,7 +290,7 @@ export function FinanceStrip({
   kpis: FinanceKpis;
   currency: string | null;
   /** Ingreso atribuido a recuperación (para el % sobre ventas 30d).
-   *  Omitido = se oculta la línea (p. ej. en /finanzas, que no lo consulta). */
+   *  Omitido = se oculta la línea (p. ej. en /finance, que no lo consulta). */
   recoveredMinor?: number;
   rescate?: RescateBucket[] | null;
   cycleDays?: number | null;

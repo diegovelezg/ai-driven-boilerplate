@@ -14,7 +14,7 @@ import { connection } from "next/server";
 // La chrome del dashboard es siempre dinámica (auth + tenant por request),
 // así que se permite la ruta bloqueante. Sin esto, el `connection()` de
 // abajo hace fallar el prerender con `blocking-prerender-dynamic`
-// (p. ej. Route "/inventario").
+// (p. ej. Route "/screens").
 export const instant = false;
 
 // Chrome del dashboard: sidebar + header + toasts de background.

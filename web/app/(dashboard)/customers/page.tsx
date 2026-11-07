@@ -30,7 +30,7 @@ const PAGE_SIZE = 20;
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; ritmo?: string; tipo?: string; customer_type?: string; ventana?: string; banda?: string; elegibilidad?: string; decil?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; sort?: string; dir?: string; decision?: string; vista?: string; view?: string; ritmo?: string; tipo?: string; type?: string; customer_type?: string; ventana?: string; banda?: string; elegibilidad?: string; decil?: string }>;
 }) {
   // Request-time: la page usa Date.now() y Cache Components no lo difiere
   // con `instant = false` — sin esto, el prerender falla con
@@ -47,8 +47,10 @@ export default async function CustomersPage({
   const filters: CustomerFilters = parseCustomerFilters({
     decision: sp.decision,
     vista: sp.vista,
+    view: sp.view,
     ritmo: sp.ritmo,
     tipo: sp.tipo,
+    type: sp.type,
     customer_type: sp.customer_type,
     ventana: sp.ventana,
     banda: sp.banda,
@@ -157,7 +159,7 @@ export default async function CustomersPage({
       {!connected && (
         <AppCard>
           <p className="text-sm text-muted-foreground">
-            Sin tienda. Importa inventario en /inventario.
+            Sin tienda. Importa inventario en /screens.
           </p>
         </AppCard>
       )}

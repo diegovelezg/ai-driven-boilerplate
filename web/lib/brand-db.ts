@@ -14,20 +14,31 @@ export interface BrandRow {
   active: boolean;
 }
 
-export type BrandsSortKey = "marca" | "ios" | "inversion" | "ultima" | "pantallas" | "agencias";
+export type BrandsSortKey = "brand" | "ios" | "investment" | "last" | "screens" | "agencies";
 export type BrandsSortDir = "asc" | "desc";
+
+const BRANDS_SORT_ALIASES: Record<string, BrandsSortKey> = {
+  brand: "brand",
+  marca: "brand",
+  ios: "ios",
+  investment: "investment",
+  inversion: "investment",
+  last: "last",
+  ultima: "last",
+  screens: "screens",
+  pantallas: "screens",
+  agencies: "agencies",
+  agencias: "agencies",
+};
 
 export function parseBrandsSort(sp: { sort?: string; dir?: string }): {
   key: BrandsSortKey;
   dir: BrandsSortDir;
 } {
-  const key: BrandsSortKey =
-    sp.sort === "ios" || sp.sort === "inversion" || sp.sort === "ultima" || sp.sort === "pantallas" || sp.sort === "agencias"
-      ? sp.sort
-      : "marca";
+  const key: BrandsSortKey = BRANDS_SORT_ALIASES[sp.sort ?? ""] ?? "brand";
   if (sp.dir === "asc" || sp.dir === "desc") return { key, dir: sp.dir };
   // Texto ASC primero; métricas DESC primero (lo más relevante).
-  return { key, dir: key === "marca" ? "asc" : "desc" };
+  return { key, dir: key === "brand" ? "asc" : "desc" };
 }
 
 export async function listBrands(
@@ -91,8 +102,8 @@ export async function listBrands(
     if (sc) row.screensSet.add(sc);
   }
   const q = (opts.q ?? "").trim().toLowerCase();
-  const sortKey = opts.sortKey ?? "marca";
-  const ascending = (opts.sortDir ?? (sortKey === "marca" ? "asc" : "desc")) === "asc";
+  const sortKey = opts.sortKey ?? "brand";
+  const ascending = (opts.sortDir ?? (sortKey === "brand" ? "asc" : "desc")) === "asc";
   const out = [...byBrand.values()]
     .filter((r) =>
       !q ||
@@ -108,10 +119,10 @@ export async function listBrands(
   const cmp = (a: BrandRow, b: BrandRow): number => {
     switch (sortKey) {
       case "ios": return a.ios - b.ios;
-      case "inversion": return a.total_minor - b.total_minor;
-      case "ultima": return (a.last_end ?? "") < (b.last_end ?? "") ? -1 : (a.last_end ?? "") > (b.last_end ?? "") ? 1 : 0;
-      case "pantallas": return a.screens.length - b.screens.length;
-      case "agencias": return a.agencies.length - b.agencies.length;
+      case "investment": return a.total_minor - b.total_minor;
+      case "last": return (a.last_end ?? "") < (b.last_end ?? "") ? -1 : (a.last_end ?? "") > (b.last_end ?? "") ? 1 : 0;
+      case "screens": return a.screens.length - b.screens.length;
+      case "agencies": return a.agencies.length - b.agencies.length;
       default: return a.brand.localeCompare(b.brand, "es");
     }
   };

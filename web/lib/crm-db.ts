@@ -27,31 +27,50 @@ export interface CrmContact {
   phone: string | null;
   job_title: string | null;
   is_primary: boolean;
+  created_by?: string | null;
+  updated_by?: string | null;
 }
 
-export type EmpresasSortKey = "nombre" | "tipo" | "contactos" | "tax_id";
-export type EmpresasSortDir = "asc" | "desc";
+export type CompaniesSortKey = "name" | "type" | "contacts" | "tax_id";
+export type CompaniesSortDir = "asc" | "desc";
 
-export function parseEmpresasSort(sp: { sort?: string; dir?: string }): {
-  key: EmpresasSortKey;
-  dir: EmpresasSortDir;
+/** @deprecated Use CompaniesSortKey (renamed route i18n). */
+export type EmpresasSortKey = CompaniesSortKey;
+/** @deprecated Use CompaniesSortDir (renamed route i18n). */
+export type EmpresasSortDir = CompaniesSortDir;
+
+const COMPANIES_SORT_ALIASES: Record<string, CompaniesSortKey> = {
+  name: "name",
+  nombre: "name",
+  type: "type",
+  tipo: "type",
+  contacts: "contacts",
+  contactos: "contacts",
+  tax_id: "tax_id",
+};
+
+export function parseCompaniesSort(sp: { sort?: string; dir?: string }): {
+  key: CompaniesSortKey;
+  dir: CompaniesSortDir;
 } {
-  const key: EmpresasSortKey =
-    sp.sort === "tipo" || sp.sort === "contactos" || sp.sort === "tax_id" ? sp.sort : "nombre";
+  const key: CompaniesSortKey = COMPANIES_SORT_ALIASES[sp.sort ?? ""] ?? "name";
   if (sp.dir === "asc" || sp.dir === "desc") return { key, dir: sp.dir };
   // Texto ASC primero; conteos DESC primero (lo más relevante).
-  return { key, dir: key === "contactos" ? "desc" : "asc" };
+  return { key, dir: key === "contacts" ? "desc" : "asc" };
 }
+
+/** @deprecated Use parseCompaniesSort (renamed route i18n). */
+export const parseEmpresasSort = parseCompaniesSort;
 
 export async function listCrmCompanies(
   storeId: string,
-  opts: { q?: string; kind?: CompanyKind | null; sortKey?: EmpresasSortKey; sortDir?: EmpresasSortDir; page?: number; pageSize?: number } = {},
+  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number } = {},
 ): Promise<{ rows: CrmCompany[]; total: number }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
   const page = Math.max(1, opts.page ?? 1);
-  const sortKey = opts.sortKey ?? "nombre";
-  const sortDir = opts.sortDir ?? (sortKey === "contactos" ? "desc" : "asc");
+  const sortKey = opts.sortKey ?? "name";
+  const sortDir = opts.sortDir ?? (sortKey === "contacts" ? "desc" : "asc");
   const ascending = sortDir === "asc";
   const like = (() => {
     const q = (opts.q ?? "").trim();
@@ -74,8 +93,8 @@ export async function listCrmCompanies(
   if (like) query = query.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
   if (opts.kind) query = query.eq("kind", opts.kind);
   // contactos es conteo calculado: se ordena en JS tras leer la página.
-  if (sortKey === "nombre") query = query.order("name", { ascending });
-  else if (sortKey === "tipo") query = query.order("kind", { ascending });
+  if (sortKey === "name") query = query.order("name", { ascending });
+  else if (sortKey === "type") query = query.order("kind", { ascending });
   else if (sortKey === "tax_id") query = query.order("tax_id", { ascending });
   else query = query.order("name", { ascending: true });
   const from = (page - 1) * pageSize;
@@ -109,7 +128,7 @@ export async function listCrmCompanies(
     external_ref: (r.external_ref as string | null) ?? null,
     contacts_count: countBy.get(String(r.id)) ?? 0,
   }));
-  if (sortKey === "contactos") {
+  if (sortKey === "contacts") {
     out.sort((a, b) => (ascending ? a.contacts_count - b.contacts_count : b.contacts_count - a.contacts_count));
   }
   return { rows: out, total };
@@ -127,7 +146,7 @@ export async function listCrmContacts(
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   let query = db
     .from("contacts")
-    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,companies(name)")
+    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,companies(name)")
     .eq("store_id", storeId)
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -195,7 +214,7 @@ export async function getCrmCompany(
   if (error) throw new Error(`CRM read: ${error.message}`);
   if (!data) return null;
   const [{ data: contacts }, { data: campaigns }, { data: ios }] = await Promise.all([
-    db.from("contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
+    db.from("contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
     db.from("campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
     db.from("insertion_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
   ]);

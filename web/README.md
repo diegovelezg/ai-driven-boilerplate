@@ -38,7 +38,7 @@ npm run worker -- --once --kinds=morning
 
 ## Ingesta DOOH
 
-- `/inventario` → Importar desde Google Sheet URL o CSV (kinds: companies → contacts → venues → screens → slots).
+- `/screens` → Importar desde Google Sheet URL o CSV (kinds: companies → contacts → venues → screens → slots).
 - Prod: el cron Coolify corre `morning` diario 11:00 UTC (ver `docs/coolify.md` §3b).
 
 ## Modelo de datos (implementado, no solo Fase 1)
@@ -82,11 +82,11 @@ Versiones GEN vigentes: `retention:v3:episodes-mixture`, `scout:v2:retention`,
 - `/` Hoy: actuar/vigilar, embudo, por revisar, recuperado, feed enviados.
 - `/customers`: cartera + `customer_predictions`, drawer, chat ADK, duplicados.
 - `/review`: inbox actions/leads/signals (approve/reject, wa.me, cambio canal).
-- `/finanzas`: KPIs 12m + en juego probabilístico.
+- `/finance`: KPIs 12m + en juego probabilístico.
 - `/products`: catálogo + `product_stats` por moneda.
 - `/settings`: negocio (perfil, arquetipo,
   recalibración) / motor (ciclo, H, bandas) / email.
-- `/ayuda`, `/login`.
+- `/help`, `/login`.
 
 ## SearXNG local (prospector + rescue de enriquecimiento)
 

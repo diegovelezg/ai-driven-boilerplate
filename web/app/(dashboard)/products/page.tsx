@@ -87,7 +87,7 @@ export default async function ProductsPage({
           }
         >
           <p className="text-sm text-muted-foreground">
-            Sin tienda. Importa inventario en /inventario.
+            Sin tienda. Importa inventario en /screens.
           </p>
         </AppCard>
       )}

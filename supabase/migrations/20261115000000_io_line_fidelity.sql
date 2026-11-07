@@ -52,8 +52,8 @@ set cant_dias = 4,
       case s.external_ref when 'MI010' then 'S/ 3,000' when 'MI001' then 'S/ 4,500' end ||
       '; total línea ' ||
       case s.external_ref when 'MI010' then 'S/ 2,000.' when 'MI001' then 'S/ 3,000.' end
-from insertion_orders o join screens s on s.id = l.screen_id
-where l.io_id = o.id and o.io_number = 'NP-2026-001'
+from insertion_orders o, screens s
+where l.io_id = o.id and s.id = l.screen_id and o.io_number = 'NP-2026-001'
   and s.external_ref in ('MI010', 'MI001');
 
 --    Toyota NP-2026-002 P1 (24/09-30/09 +1d): 7 días.
@@ -63,8 +63,8 @@ set cant_dias = 7,
       when 'MI001' then 546000 when 'MI004' then 546000 else 385000 end,
     rate_minor = case s.external_ref
       when 'MI001' then 127400 when 'MI004' then 127400 else 89833 end
-from insertion_orders o join screens s on s.id = l.screen_id
-where l.io_id = o.id and o.io_number = 'NP-2026-002'
+from insertion_orders o, screens s
+where l.io_id = o.id and s.id = l.screen_id and o.io_number = 'NP-2026-002'
   and date(timezone('America/Lima', l.starts_at)) = date '2026-09-24';
 
 --    Toyota NP-2026-002 P2 (01/10-20/10 +1d): 20 días.
@@ -74,8 +74,8 @@ set cant_dias = 20,
       when 'MI001' then 546000 when 'MI004' then 546000 else 385000 end,
     rate_minor = case s.external_ref
       when 'MI001' then 364000 when 'MI004' then 364000 else 256667 end
-from insertion_orders o join screens s on s.id = l.screen_id
-where l.io_id = o.id and o.io_number = 'NP-2026-002'
+from insertion_orders o, screens s
+where l.io_id = o.id and s.id = l.screen_id and o.io_number = 'NP-2026-002'
   and date(timezone('America/Lima', l.starts_at)) = date '2026-10-01';
 
 --    Pacífico NP-2026-003: 1 mes / 28 días.
@@ -84,8 +84,8 @@ set cant_meses = 1,
     cant_dias = 28,
     tarifa_regular_minor = case s.external_ref when 'MI001' then 600000 else 480000 end,
     rate_minor = case s.external_ref when 'MI001' then 560000 else 448000 end
-from insertion_orders o join screens s on s.id = l.screen_id
-where l.io_id = o.id and o.io_number = 'NP-2026-003';
+from insertion_orders o, screens s
+where l.io_id = o.id and s.id = l.screen_id and o.io_number = 'NP-2026-003';
 
 --    Qroma NP-2026-004: 1 mes, tarifa 5500, total 4400 por pantalla.
 update insertion_order_lines l
@@ -98,6 +98,6 @@ where l.io_id = o.id and o.io_number = 'NP-2026-004';
 -- 3. signed_at a medianoche Lima (el seed inicial mandó fecha sin zona y PG la
 --    dejó en 00:00 UTC = día anterior 19:00 en Lima).
 update insertion_orders
-set signed_at = (signed_at::date)::text || 'T00:00:00-05:00'
+set signed_at = ((signed_at::date)::text || 'T00:00:00-05:00')::timestamptz
 where io_number in ('NP-2026-001', 'NP-2026-002', 'NP-2026-003', 'NP-2026-004')
   and date_part('hour', signed_at) = 0 and extract(timezone from signed_at) = 0;

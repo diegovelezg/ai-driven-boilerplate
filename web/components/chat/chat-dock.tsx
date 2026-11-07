@@ -161,9 +161,9 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
         const qs = new URLSearchParams();
         if (f.q) qs.set("q", f.q);
         if (f.decision) qs.set("decision", f.decision);
-        if (f.vista) qs.set("vista", f.vista);
+        if (f.vista) qs.set("view", f.vista);
         if (f.ritmo) qs.set("ritmo", f.ritmo);
-        if (tipo) qs.set("tipo", tipo);
+        if (tipo) qs.set("type", tipo);
         if (f.ventana) qs.set("ventana", f.ventana);
         if (f.banda) qs.set("banda", f.banda);
         if (f.elegibilidad) qs.set("elegibilidad", f.elegibilidad);

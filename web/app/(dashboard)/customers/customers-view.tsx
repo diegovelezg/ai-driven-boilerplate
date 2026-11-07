@@ -244,11 +244,11 @@ export function CustomersView({
       const dec = overrides.decision !== undefined ? overrides.decision : filters.decision;
       if (dec) params.set("decision", dec);
       const vis = overrides.vista !== undefined ? overrides.vista : filters.vista;
-      if (vis) params.set("vista", vis);
+      if (vis) params.set("view", vis);
       const rit = overrides.ritmo !== undefined ? overrides.ritmo : filters.ritmo;
       if (rit) params.set("ritmo", rit);
       const tip = overrides.customerType !== undefined ? overrides.customerType : filters.customerType;
-      if (tip) params.set("tipo", tip);
+      if (tip) params.set("type", tip);
       const ven = overrides.ventana !== undefined ? overrides.ventana : filters.ventana;
       if (ven) params.set("ventana", ven);
       const ban = overrides.banda !== undefined ? overrides.banda : filters.banda;

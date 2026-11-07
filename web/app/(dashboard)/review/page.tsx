@@ -549,7 +549,7 @@ export default async function ReviewPage({
       {(!connected || !dbReady) && (
         <AppCardState>
           {!connected
-            ? "Sin tienda. Importa inventario en /inventario."
+            ? "Sin tienda. Importa inventario en /screens."
             : "Supabase no configurado (`supabase start` + `web/.env.local`)."}
         </AppCardState>
       )}

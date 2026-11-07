@@ -1,0 +1,385 @@
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { PageHeader } from "@/components/page-header";
+import { AutoRefresh } from "@/components/auto-refresh";
+import { SectionHeading } from "@/components/section-heading";
+import { getPredEnJuegoByMonth, toEditableCustomer, type EditableCustomer } from "@/lib/customers-db";
+import { bucketMonthly, computeFinanceKpis, computeRetentionKpis, last12MonthKeys, monthEndMs, rankCustomers, rankItems, rescateMonthly, type AttributedRevenue, type ItemRanking } from "@/lib/finance";
+import { formatMoney, formatNumber } from "@/lib/format";
+import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
+import { connection } from "next/server";
+import { FinanceStrip } from "../finance-strip";
+import { ItemsRanking } from "./items-ranking";
+import { TopCustomers } from "./top-customers";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableHeader,
+  DataTableRow,
+  DataTableTd,
+  DataTableTh,
+} from "@/components/data-table";
+
+export const instant = false;
+
+export default async function FinanzasPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ store?: string }>;
+}) {
+  // Request-time: usa Date.now()/new Date() en el render (Cache Components
+  // no lo difiere con `instant = false`; ver nota en app/(dashboard)/page.tsx).
+  await connection();
+  if (!isSupabaseConfigured()) {
+    return (
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCardState>
+            Supabase no configurado (`supabase start` + `web/.env.local`).
+        </AppCardState>
+      </div>
+    );
+  }
+
+  const sp = await searchParams;
+  let stores: TenantStore[] = [];
+  let active: TenantStore | null = null;
+  try {
+    const resolved = await getMyActiveStore(sp.store);
+    stores = resolved.stores;
+    active = resolved.active;
+  } catch (e) {
+    return (
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCardState>
+            Stores read: {e instanceof Error ? e.message : "DB read failed"}
+        </AppCardState>
+      </div>
+    );
+  }
+  if (stores.length === 0 || !active) {
+    const myIds = await getMyStoreIds().catch(() => null);
+    const noAccess = Array.isArray(myIds) && myIds.length === 0;
+    return (
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+        <PageHeader
+          eyebrow="Dinero y retención"
+          title="Finanzas"
+          description="Ventas, recupero y salud del negocio."
+        />
+        <AppCard
+          footer={
+            noAccess ? undefined : (
+              <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
+                Ir a Settings
+              </Button>
+            )
+          }
+        >
+          <p className="text-[13px] text-muted-foreground">
+            {noAccess
+              ? "Tu usuario no tiene tiendas asignadas. Pide a tu admin que te agregue en merchant_users."
+              : "Conecta tu tienda para ver tus finanzas."}
+          </p>
+        </AppCard>
+      </div>
+    );
+  }
+
+  const db = getSupabase();
+  const viewCurrency = active.shop_currency;
+  // Timestamp fijo por request (igual que el Overview).
+  const yearAgoIso = new Date(Date.now() - 400 * 86_400_000).toISOString();
+
+  let buckets: ReturnType<typeof bucketMonthly> = [];
+  let kpis: ReturnType<typeof computeFinanceKpis> | null = null;
+  let items: ItemRanking = { top: [], bottom: [] };
+  let topCustomers: Array<{ customer: EditableCustomer; revenueMinor: number; orders: number }> = [];
+  let recoveredMinor = 0;
+  let error: string | null = null;
+  // Bloque probabilístico (issue #14 B4): /finance mostraba el strip
+  // clásico porque no le pasaba props. Se replica la foto del día.
+  let rescate: ReturnType<typeof rescateMonthly> | undefined;
+  let retention: ReturnType<typeof computeRetentionKpis> | null = null;
+  let cycleDays: number | null = null;
+  let enJuegoProb: { minor: number; low: number; high: number; count: number } | null = null;
+  let organicosEnAuto: number | null = null;
+  let dataPartial = false;
+  try {
+    let ordersTruncated = false;
+    let revTruncated = false;
+    const revRows: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 1000) {
+      const { data: rpage, error: rErr } = await db
+        .from("proposed_actions")
+        .select("revenue_attributed,dispatched_at,created_at")
+        .eq("store_id", active.id)
+        .not("revenue_attributed", "is", null)
+        .range(off, off + 999);
+      if (rErr) throw new Error(`revenue: ${rErr.message}`);
+      const rows = (rpage ?? []) as Array<Record<string, unknown>>;
+      revRows.push(...rows);
+      if (rows.length < 1000) break;
+      if (revRows.length >= 20000) {
+        revTruncated = true;
+        break;
+      }
+    }
+    const orows: Array<Record<string, unknown>> = [];
+    for (let off = 0; ; off += 1000) {
+      const { data: opage, error: qErr } = await db
+        .from("orders")
+        .select("total_amount,currency,placed_at,items_json,customer_id,country")
+        .eq("store_id", active.id)
+        .gte("placed_at", yearAgoIso)
+        .order("placed_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(off, off + 999);
+      if (qErr) throw new Error(`orders: ${qErr.message}`);
+      const rows = (opage ?? []) as Array<Record<string, unknown>>;
+      orows.push(...rows);
+      if (rows.length < 1000) break;
+      if (orows.length >= 20000) {
+        ordersTruncated = true;
+        break;
+      }
+    }
+    if (ordersTruncated || revTruncated) {
+      const { createLogger } = await import("@/lib/log");
+      createLogger("finanzas")(`store ${active.id} CAP 20k (orders_trunc=${ordersTruncated} rev_trunc=${revTruncated}): KPIs parciales`);
+      dataPartial = true;
+    }
+    const data = orows;
+    const finOrders = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      total_amount: Number(r.total_amount ?? 0),
+      currency: (r.currency as string | null) ?? null,
+      placed_at: (r.placed_at as string | null) ?? null,
+      items_json: r.items_json,
+      customer_id: r.customer_id,
+    }));
+    buckets = bucketMonthly(finOrders, viewCurrency);
+    kpis = computeFinanceKpis(finOrders, viewCurrency);
+    items = rankItems(finOrders, viewCurrency, 10);
+    const attributed: AttributedRevenue[] = (
+      (revRows ?? []) as Array<Record<string, unknown>>
+    ).map((r) => ({
+      amount: Number(r.revenue_attributed ?? 0),
+      at: ((r.dispatched_at as string | null) ?? (r.created_at as string | null) ?? null),
+    }));
+    recoveredMinor = attributed.reduce((a, r) => a + r.amount, 0);
+    const { resolveTenantCycleDays } = await import("@/lib/store-profiles");
+    cycleDays = await resolveTenantCycleDays(active.id).catch(() => null);
+    if (cycleDays !== null) {
+      const predSnap = await getPredEnJuegoByMonth(
+        active.id,
+        last12MonthKeys(Date.now()).map((k) => ({ key: k.key, endMs: monthEndMs(k.key) })),
+        viewCurrency,
+      ).catch(() => new Map<string, { minor: number; count: number }>());
+      rescate = rescateMonthly(finOrders, attributed, cycleDays, viewCurrency, Date.now(), predSnap);
+      retention = computeRetentionKpis(finOrders, attributed, cycleDays, viewCurrency);
+    }
+    // Foto del día para En juego (esperado): actuar+vigilar intra-moneda.
+    try {
+      const dayStart = new Date(
+        Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()),
+      ).toISOString();
+      const { data: predDay } = await db
+        .from("customer_predictions")
+        .select("customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency")
+        .eq("store_id", active.id)
+        .gte("as_of", dayStart)
+        .order("model_version", { ascending: false })
+        .limit(5000);
+      let rows = (predDay ?? []) as Array<Record<string, unknown>>;
+      if (rows.length === 0) {
+        const { data: last } = await db
+          .from("customer_predictions")
+          .select("customer_id,decision,valor_esperado_minor,p_low,p_high,ticket_esperado_minor,currency,as_of")
+          .eq("store_id", active.id)
+          .order("as_of", { ascending: false })
+          .order("model_version", { ascending: false })
+          .limit(5000);
+        const all = (last ?? []) as Array<Record<string, unknown>>;
+        const maxAsOf = all.length > 0 ? String(all[0].as_of ?? "") : null;
+        rows = maxAsOf ? all.filter((r) => String(r.as_of ?? "") === maxAsOf) : [];
+      }
+      let minor = 0;
+      let low = 0;
+      let high = 0;
+      let count = 0;
+      let organicos = 0;
+      // v1+v2 conviven el día del deploy: un cliente, un voto (prefiere v2).
+      const seenFin = new Set<string>();
+      for (const r of rows) {
+        const cid = String(r.customer_id ?? "");
+        if (!cid || seenFin.has(cid)) continue;
+        seenFin.add(cid);
+        const d = String(r.decision ?? "");
+        if (d === "organico") organicos += 1;
+        if (d !== "actuar" && d !== "revision_humana" && d !== "vigilar") continue;
+        const cur = (r.currency as string | null) ?? null;
+        if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency.toUpperCase()) continue;
+        const v = r.valor_esperado_minor == null ? null : Number(r.valor_esperado_minor);
+        if (v === null) continue;
+        minor += v;
+        count += 1;
+        const tk = r.ticket_esperado_minor == null ? null : Number(r.ticket_esperado_minor);
+        if (tk !== null) {
+          low += Number(r.p_low ?? 0) * tk;
+          high += Number(r.p_high ?? 0) * tk;
+        }
+      }
+      if (count > 0) enJuegoProb = { minor: Math.round(minor), low: Math.round(low), high: Math.round(high), count };
+      organicosEnAuto = organicos;
+    } catch {
+      // Sin predicciones: el strip cae al clásico, no se rompe.
+    }
+    // Fichas del top: una sola query por ~10 ids (nunca miles).
+    // toEditableCustomer ya aplica propercase (misma regla que Customers).
+    const ranked = rankCustomers(finOrders, viewCurrency, 10);
+    if (ranked.length > 0) {
+      const { data: custRows, error: custErr } = await db
+        .from("customers")
+        .select(
+          "id,external_id,email,first_name,last_name,phone,company_name,customer_type,country,external_created_at,orders_count,total_spent,currency,stats_by_currency,manual_edits",
+        )
+        .eq("store_id", active.id)
+        .in(
+          "id",
+          ranked.map((r) => r.customerId),
+        );
+      if (custErr) throw new Error(`customers: ${custErr.message}`);
+      const byId = new Map(
+        ((custRows ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]),
+      );
+      topCustomers = ranked.flatMap((r) => {
+        const c = byId.get(r.customerId);
+        if (!c) return [];
+        return [{ customer: toEditableCustomer(c), revenueMinor: r.revenueMinor, orders: r.orders }];
+      });
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : "DB read failed";
+  }
+
+  // Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite.
+  const closed = buckets.slice(0, -1);
+  const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
+  const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <AutoRefresh ms={60_000} />
+      <PageHeader
+        eyebrow="Dinero y retención"
+        title={`Finanzas · ${displayStoreName(active)}`}
+        description={`Ventas, órdenes y ticket por mes${dataPartial ? ` · muestra parcial (CAP ${formatNumber(20000)})` : ""}`}
+      />
+
+      {error && (
+        <AppCardState>{error}</AppCardState>
+      )}
+
+      {kpis && (
+        <FinanceStrip
+          buckets={buckets}
+          kpis={kpis}
+          currency={viewCurrency}
+          recoveredMinor={recoveredMinor}
+          rescate={rescate}
+          cycleDays={cycleDays}
+          retention={retention ?? undefined}
+          enJuegoProb={enJuegoProb}
+          organicosEnAuto={organicosEnAuto}
+        />
+      )}
+
+      {buckets.length > 0 && (
+        <section aria-label="Detalle mensual">
+          <SectionHeading
+            title="Detalle mensual"
+            hint="Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite."
+            tone="sky"
+          />
+          <AppCard variant="table">
+            <DataTable>
+              <DataTableHeader>
+                <DataTableTh>Mes</DataTableTh>
+                <DataTableTh numeric>Ventas</DataTableTh>
+                <DataTableTh numeric>Órdenes</DataTableTh>
+                <DataTableTh numeric>Ticket</DataTableTh>
+              </DataTableHeader>
+              <DataTableBody className="tabular-nums">
+                {[...buckets].reverse().map((b, i) => (
+                  <DataTableRow key={b.key}>
+                    <DataTableTd className="capitalize">
+                      {`${b.label} ${b.key.slice(0, 4)}`}
+                      {i === 0 && (
+                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                          en curso
+                        </span>
+                      )}
+                      {b.key === bestKey && (
+                        <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                          mejor
+                        </span>
+                      )}
+                      {b.key === worstKey && b.key !== bestKey && (
+                        <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
+                          peor
+                        </span>
+                      )}
+                    </DataTableTd>
+                    <DataTableTd numeric>{formatMoney(b.salesMinor, viewCurrency)}</DataTableTd>
+                    <DataTableTd numeric>{formatNumber(b.orders)}</DataTableTd>
+                    <DataTableTd numeric>
+                      {b.orders > 0
+                        ? formatMoney(Math.round(b.salesMinor / b.orders), viewCurrency)
+                        : "—"}
+                    </DataTableTd>
+                  </DataTableRow>
+                ))}
+              </DataTableBody>
+            </DataTable>
+          </AppCard>
+        </section>
+      )}
+
+      {items.top.length > 0 && (
+        <section aria-label="Items que más y menos venden">
+          <SectionHeading
+            title="Qué más y qué menos vende"
+            hint={`Entre lo que sí se vendió (sin feed no se ven los cero). Montos en ${(viewCurrency ?? "PEN").toUpperCase()}.`}
+            tone="violet"
+          />
+          <ItemsRanking top={items.top} bottom={items.bottom} currency={viewCurrency} />
+        </section>
+      )}
+      {items.top.length === 0 && buckets.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Tus órdenes no traen detalle de items (títulos/cantidades), así que no hay ranking por producto todavía.
+        </p>
+      )}
+
+      <section aria-label="Mejores clientes">
+        <SectionHeading
+          title="Tus mejores clientes"
+          hint={`Por revenue en los últimos 12 meses, en ${(viewCurrency ?? "PEN").toUpperCase()}. Clic para ver la ficha.`}
+          tone="emerald"
+        />
+        <TopCustomers rows={topCustomers} currency={viewCurrency} />
+      </section>
+    </div>
+  );
+}

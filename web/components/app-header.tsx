@@ -9,12 +9,12 @@ import { UsagePill } from "@/components/usage-pill";
 import type { MemberRole } from "@/lib/roles";
 
 const titles = [
-  { href: "/finanzas", label: "Finanzas" },
+  { href: "/finance", label: "Finanzas" },
   { href: "/review", label: "Review Inbox" },
   { href: "/customers", label: "Customers" },
   { href: "/campaigns", label: "Campaigns" },
   { href: "/settings", label: "Settings" },
-  { href: "/ayuda", label: "Ayuda" },
+  { href: "/help", label: "Ayuda" },
   { href: "/", label: "Dashboard" },
 ];
 

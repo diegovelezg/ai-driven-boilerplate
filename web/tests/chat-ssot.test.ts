@@ -17,6 +17,9 @@ const SSOT = [
   "components/ui/message-scroller.tsx",
   "components/ui/input-group.tsx",
 ];
+// Vendor shadcn: Command y Combobox usan InputGroup en su buscador interno.
+// No es chat: se conservan verbatim del registry.
+const VENDOR_UI = new Set(["components/ui/command.tsx", "components/ui/combobox.tsx"]);
 const NATIVES = [
   "components/ui/message",
   "components/ui/bubble",
@@ -64,7 +67,7 @@ describe("SSOT Chat", () => {
 
   it("nadie importa los primitivos de chat fuera del SSOT", () => {
     const bad = files
-      .filter((f) => !SSOT.includes(rel(f)))
+      .filter((f) => !SSOT.includes(rel(f)) && !VENDOR_UI.has(rel(f)))
       .filter((f) => NATIVES.some((n) => readFileSync(f, "utf8").includes(n)));
     assert.deepEqual(bad.map(rel), [], `importan primitivos de chat directo: ${bad.map(rel).join(", ")}`);
   });

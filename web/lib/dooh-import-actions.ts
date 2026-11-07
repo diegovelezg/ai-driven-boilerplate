@@ -78,8 +78,8 @@ export async function commitSheetUrlImportAction(input: {
   const dl = await fetchCsvText(csvUrl);
   if (!dl.ok) return { ok: false, message: dl.error };
   const r = await commitImport(t.storeId, input.kind, dl.text, "sheet", input.url.trim());
-  revalidatePath("/inventario");
-  revalidatePath("/empresas");
+  revalidatePath("/screens");
+  revalidatePath("/companies");
   return {
     ok: r.rows_failed === 0,
     message: `Importadas ${r.rows_ok}/${r.rows_seen} filas (${r.rows_failed} errores).`,
@@ -99,8 +99,8 @@ export async function commitCsvTextImportAction(input: {
   const t = await resolveTenantStoreId();
   if ("error" in t) return { ok: false, message: t.error };
   const r = await commitImport(t.storeId, input.kind, input.csv, "csv");
-  revalidatePath("/inventario");
-  revalidatePath("/empresas");
+  revalidatePath("/screens");
+  revalidatePath("/companies");
   return {
     ok: r.rows_failed === 0,
     message: `Importadas ${r.rows_ok}/${r.rows_seen} filas (${r.rows_failed} errores).`,

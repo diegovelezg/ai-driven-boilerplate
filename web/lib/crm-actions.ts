@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { isCompanyKind, normalizeCompany, normalizeContact, type CompanyKind } from "@/lib/crm";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
+import { resolveActor } from "@/lib/actor";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 
 export interface CrmState {
@@ -60,17 +61,20 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
   if (!parsed.ok) return { ok: false, message: parsed.error };
   try {
     const db = getSupabase();
+    const actor = await resolveActor();
     const { data, error } = await db
       .from("companies")
       .insert({
         store_id: t.storeId,
         ...parsed.value,
         ...(hasCommissionInput ? { agency_commission_pct: commissionPct } : {}),
+        created_by: actor,
+        updated_by: actor,
       })
       .select("id")
       .maybeSingle();
     if (error || !data) return { ok: false, message: `DB write: ${error?.message ?? "sin id"}` };
-    revalidatePath("/empresas");
+    revalidatePath("/companies");
     return { ok: true, message: "Empresa creada." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
@@ -85,12 +89,12 @@ export async function setCompanyKindAction(input: { companyId: string; kind: Com
     const db = getSupabase();
     const { error } = await db
       .from("companies")
-      .update({ kind: input.kind })
+      .update({ kind: input.kind, updated_by: await resolveActor(), updated_at: new Date().toISOString() })
       .eq("store_id", t.storeId)
       .eq("id", input.companyId);
     if (error) return { ok: false, message: `DB write: ${error.message}` };
-    revalidatePath("/empresas");
-    revalidatePath(`/empresas/${input.companyId}`);
+    revalidatePath("/companies");
+    revalidatePath(`/companies/${input.companyId}`);
     return { ok: true, message: "Tipo actualizado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
@@ -130,12 +134,12 @@ export async function setAgencyCommissionAction(input: {
     }
     const { error } = await db
       .from("companies")
-      .update({ agency_commission_pct: pct })
+      .update({ agency_commission_pct: pct, updated_by: await resolveActor(), updated_at: new Date().toISOString() })
       .eq("store_id", t.storeId)
       .eq("id", input.companyId);
     if (error) return { ok: false, message: `DB write: ${error.message}` };
-    revalidatePath("/empresas");
-    revalidatePath(`/empresas/${input.companyId}`);
+    revalidatePath("/companies");
+    revalidatePath(`/companies/${input.companyId}`);
     return { ok: true, message: pct === null ? "Comisión eliminada." : "Comisión actualizada." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
@@ -184,25 +188,26 @@ export async function createContactAction(form: FormData): Promise<CrmState> {
         .maybeSingle();
       if (dupe) return { ok: true, message: "Contacto ya existía." };
     }
+    const actor = await resolveActor();
     if (parsed.value.is_primary) {
-      await db.from("contacts").update({ is_primary: false }).eq("company_id", companyId).eq("is_primary", true);
+      await db.from("contacts").update({ is_primary: false, updated_by: actor, updated_at: new Date().toISOString() }).eq("company_id", companyId).eq("is_primary", true);
     }
-    const { error } = await db.from("contacts").insert({ store_id: t.storeId, ...parsed.value });
+    const { error } = await db.from("contacts").insert({ store_id: t.storeId, ...parsed.value, created_by: actor, updated_by: actor });
     if (error) return { ok: false, message: `DB write: ${error.message}` };
-    revalidatePath(`/empresas/${companyId}`);
-    revalidatePath("/empresas");
-    revalidatePath("/contactos");
+    revalidatePath(`/companies/${companyId}`);
+    revalidatePath("/companies");
+    revalidatePath("/contacts");
     return { ok: true, message: "Contacto agregado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
 
-// Variante para `useActionState` en /empresas/nueva: en éxito redirige
+// Variante para `useActionState` en /companies/new: en éxito redirige
 // al listado; en error devuelve el mensaje sin navegar.
 export async function createCompanyRedirectAction(_prev: CrmState, form: FormData): Promise<CrmState> {
   const res = await createCompanyAction(form);
-  if (res.ok) redirect("/empresas");
+  if (res.ok) redirect("/companies");
   return res;
 }
 // `(formData: FormData) => void | Promise<void>`, y el `action` debe ser

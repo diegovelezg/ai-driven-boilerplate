@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { getScreenConflicts, getScreenOccupancy, type ScreenConflict } from "@/lib/availability";
+import { resolveActor } from "@/lib/actor";
 import type { CrmState } from "@/lib/crm-actions";
 
 async function resolveTenantStore(): Promise<{ storeId: string } | { error: string }> {
@@ -35,7 +37,13 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
   const company = String(form.get("company_id") ?? "").trim() || null;
   if (!company) return { ok: false, message: "Empresa requerida." };
   const brand = String(form.get("brand") ?? "").trim() || null;
-  const payment_terms = String(form.get("payment_terms") ?? "").trim() || null;
+  // Condición de pago en días (0 = Contado). Fuente numérica para vencimientos:
+  // due_date = issue_date + N días. El texto es solo display (paymentTermsLabel).
+  const termsRaw = String(form.get("payment_terms_days") ?? "").trim();
+  const payment_terms_days = termsRaw === "" ? null : Number(termsRaw);
+  if (payment_terms_days !== null && (!Number.isInteger(payment_terms_days) || payment_terms_days < 0)) {
+    return { ok: false, message: "Condición de pago inválida." };
+  }
   // Líneas: mismo largo en los 5 arreglos (una fila por pantalla).
   const screens = form.getAll("screen_id").map((v) => String(v).trim());
   const inis = form.getAll("line_starts_at").map((v) => String(v).trim());
@@ -72,6 +80,19 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
   }
   try {
     const db = getSupabase();
+    // Anti-sobreventa en la venta: el cliente no es la garantía (carrera entre
+    // dos vendedores). Si una pantalla se ocupó después del chequeo UI, se
+    // rechaza aquí con mensaje amable (el trigger es la última línea).
+    const conflicts = await getScreenConflicts(
+      t.storeId,
+      inis.reduce((a, b) => (a < b ? a : b)),
+      fins.reduce((a, b) => (a > b ? a : b)),
+    );
+    const hit = conflicts.find((c) => screens.includes(c.screen_id));
+    if (hit) {
+      const who = [hit.io_number, hit.brand].filter(Boolean).join(" · ");
+      return { ok: false, message: `Pantalla ocupada en ese periodo${who ? ` por ${who}` : ""}.` };
+    }
     // Las contrapartes deben pertenecer al tenant.
     const { data: cos, error: coerr } = await db
       .from("companies")
@@ -86,6 +107,9 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     const isAgency = (cos as Record<string, unknown>).kind === "agencia";
     const billing = company;
     const advertiser = isAgency ? null : company;
+    // Auditoría: quién crea (y primer editor). Todo update futuro de la orden
+    // (editar, firmar, cancelar) debe sellar updated_by + updated_at.
+    const actor = await resolveActor();
     const base = {
       store_id: t.storeId,
       advertiser_company_id: advertiser,
@@ -95,7 +119,9 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       // Periodo de la OI = envolvente de sus líneas (fechas inclusivas).
       starts_at: inis.reduce((a, b) => (a < b ? a : b)),
       ends_at: fins.reduce((a, b) => (a > b ? a : b)),
-      payment_terms,
+      payment_terms_days,
+      created_by: actor,
+      updated_by: actor,
     };
     // Valida pantallas del tenant antes de insertar.
     const { data: scs, error: scerr } = await db
@@ -141,7 +167,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
         await db.from("insertion_orders").delete().eq("id", ioId);
         return { ok: false, message: `DB write líneas: ${lerr.message}` };
       }
-      revalidatePath("/ordenes");
+      revalidatePath("/orders");
       return { ok: true, message: "Orden creada." };
     }
     return { ok: false, message: "Colisión de numeración, reintenta." };
@@ -152,6 +178,54 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
 
 export async function createOrderRedirectAction(_prev: CrmState, form: FormData): Promise<CrmState> {
   const res = await createOrderAction(form);
-  if (res.ok) redirect("/ordenes");
+  if (res.ok) redirect("/orders");
   return res;
+}
+
+export interface AvailabilityState {
+  ok: boolean;
+  conflicts: ScreenConflict[];
+  message: string;
+}
+
+/** Disponibilidad por periodo para el formulario (el server action revalida al crear). */
+export async function checkAvailabilityAction(input: {
+  starts: string;
+  ends: string;
+}): Promise<AvailabilityState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, conflicts: [], message: t.error };
+  const valid = /^\d{4}-\d{2}-\d{2}$/;
+  if (!valid.test(input.starts) || !valid.test(input.ends) || input.ends < input.starts) {
+    return { ok: false, conflicts: [], message: "Periodo inválido." };
+  }
+  try {
+    return { ok: true, conflicts: await getScreenConflicts(t.storeId, input.starts, input.ends), message: "" };
+  } catch (e) {
+    return { ok: false, conflicts: [], message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+export interface OccupancyState {
+  ok: boolean;
+  occupancy: Record<string, Array<{ starts: string; ends: string }>>;
+  message: string;
+}
+
+/** Rangos ocupados por pantalla (calendarios de disponibilidad, próximo hueco). */
+export async function getScreenOccupancyAction(input: {
+  screenIds: string[];
+  from: string;
+}): Promise<OccupancyState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, occupancy: {}, message: t.error };
+  const ids = [...new Set((input.screenIds ?? []).map(String).filter(Boolean))].slice(0, 200);
+  if (ids.length === 0 || !/^\d{4}-\d{2}-\d{2}$/.test(input.from)) {
+    return { ok: false, occupancy: {}, message: "Parámetros inválidos." };
+  }
+  try {
+    return { ok: true, occupancy: await getScreenOccupancy(t.storeId, ids, input.from), message: "" };
+  } catch (e) {
+    return { ok: false, occupancy: {}, message: e instanceof Error ? e.message : "Error." };
+  }
 }

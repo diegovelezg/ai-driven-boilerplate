@@ -101,8 +101,8 @@ ok("29 tools: exponen product_index_truncated", tools.includes("product_index_tr
 ok("29 drawer: expone productIndexTruncated", src("lib/product-detail.ts").includes("productIndexTruncated") && src("app/(dashboard)/products/product-drawer.tsx").includes("índice 5k"));
 ok("29 tools: sin toLowerCase crudo en top", !tools.includes("rawTitle.toLowerCase()") && !tools.includes('String(it.title ?? "").trim().toLowerCase()'));
 ok("29 finance: sin toLowerCase crudo", !src("lib/finance.ts").includes("toLowerCase() || \"sin-titulo\""));
-ok("29 finanzas page: sin scope manual market_id", !src("app/(dashboard)/finanzas/page.tsx").includes("market_id.eq"));
-ok("29 finanzas page: usa applyScopeFilter", src("app/(dashboard)/finanzas/page.tsx").includes("applyScopeFilter"));
+ok("29 finanzas page: sin scope manual market_id", !src("app/(dashboard)/finance/page.tsx").includes("market_id.eq"));
+ok("29 finanzas page: usa applyScopeFilter", src("app/(dashboard)/finance/page.tsx").includes("applyScopeFilter"));
 ok("29 drawer scanned honesto", src("lib/product-detail.ts").includes("scanned = órdenes reales"));
 
 // --- ISSUE 30: envelope + paginación + drift ---

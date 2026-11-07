@@ -1,14 +1,14 @@
-// Etapa de una orden: derivada de las hijas, no columna (evita desync).
-// Stepper: Firmada → Autorizada → Materiales → Al aire → Por certificar →
-// Por cobrar → Cerrada. "Autorizada" es hito (se marca ✓ al registrar el OM);
-// la orden descansa en "Materiales" hasta QC+legal aprobados.
+// Etapa operativa de una orden: derivada de las hijas, no columna (evita desync).
+// Carril operativo: Firmada → Autorizada (hito) → Materiales → Al aire →
+// Por certificar → Cerrada. El cobro va en carril paralelo
+// (lib/billing-status.ts): admite upfront y abonos a mitad de pauta.
+// "Autorizada" es hito (se marca ✓ al registrar el OM); no es etapa filtrable.
 export const ORDER_STEPS = [
   "Firmada",
   "Autorizada",
   "Materiales",
   "Al aire",
   "Por certificar",
-  "Por cobrar",
 ] as const;
 
 export type OrderStageKey =
@@ -16,7 +16,6 @@ export type OrderStageKey =
   | "materiales"
   | "al_aire"
   | "por_certificar"
-  | "por_cobrar"
   | "cerrada"
   | "cancelada";
 
@@ -25,7 +24,6 @@ export const ORDER_STAGE_LABELS: Record<OrderStageKey, string> = {
   materiales: "Materiales",
   al_aire: "Al aire",
   por_certificar: "Por certificar",
-  por_cobrar: "Por cobrar",
   cerrada: "Cerrada",
   cancelada: "Cancelada",
 };
@@ -37,18 +35,18 @@ export interface StageInput {
   materialsOk: boolean;
   ended: boolean;
   certified: boolean;
-  paid: boolean;
+  /** Legacy: se ignora. El cobro vive en billing-status (carril paralelo). */
+  paid?: boolean;
 }
 
-/** Índice para <Steps/> (0-5 paso activo, 6 = completo, -1 = cancelada). */
+/** Índice para <Steps/> (0-4 paso activo, 5 = completo, -1 = cancelada). */
 export function orderStage(input: StageInput): { index: number; stage: OrderStageKey } {
   if (input.status === "cancelled") return { index: -1, stage: "cancelada" };
   if (!input.signed || !input.hasOm) return { index: input.signed ? 1 : 0, stage: "firmada" };
   if (!input.materialsOk) return { index: 2, stage: "materiales" };
   if (!input.ended) return { index: 3, stage: "al_aire" };
   if (!input.certified) return { index: 4, stage: "por_certificar" };
-  if (!input.paid) return { index: 5, stage: "por_cobrar" };
-  return { index: 6, stage: "cerrada" };
+  return { index: 5, stage: "cerrada" };
 }
 
 /** Prefijo por tenant: iniciales de las dos primeras palabras (espeja el

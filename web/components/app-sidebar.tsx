@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, Fragment, useEffect, useState } from "react";
 import {
   Cat,
   Building2,
   CircleHelp,
   Contact,
   FileText,
+  Inbox,
   LayoutDashboard,
   MessagesSquare,
   MonitorPlay,
@@ -36,18 +37,52 @@ import {
 } from "@/components/ui/sidebar";
 import { useChatDock } from "@/components/chat/chat-dock";
 
-const nav = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/retencion", label: "Retención", icon: RotateCwClock },
-  { href: "/finanzas", label: "Finanzas", icon: TrendingUp },
-  { href: "/inventario", label: "Inventario", icon: MonitorPlay },
-  { href: "/ordenes", label: "Órdenes", icon: FileText },
-  { href: "/empresas", label: "Empresas", icon: Building2 },
-  { href: "/marcas", label: "Marcas", icon: Tag },
-  { href: "/contactos", label: "Contactos", icon: Contact },
-  { href: "/customers", label: "Customers", icon: Users },
-  { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/ayuda", label: "Ayuda", icon: CircleHelp },
+type NavItem = {
+  href: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  badgeKey?: "inbox";
+};
+
+type NavGroup = {
+  label: string | null;
+  items: NavItem[];
+};
+
+// Reorga: ritmo de uso, no alfabeto.
+// - Principal: vista diaria.
+// - Operación: donde se mueve plata (órdenes, recupero, inbox, finanzas).
+// - Base comercial: maestros que cambian poco (inventario, empresas,
+//   personas, marcas, clientes). Se configuran una vez, se consultan.
+// - Sistema: config + ayuda.
+const groups: NavGroup[] = [
+  { label: null, items: [{ href: "/", label: "Dashboard", icon: LayoutDashboard }] },
+  {
+    label: "Operación",
+    items: [
+      { href: "/orders", label: "Órdenes", icon: FileText },
+      { href: "/retention", label: "Retención", icon: RotateCwClock },
+      { href: "/review", label: "Inbox", icon: Inbox, badgeKey: "inbox" },
+      { href: "/finance", label: "Finanzas", icon: TrendingUp },
+    ],
+  },
+  {
+    label: "Base comercial",
+    items: [
+      { href: "/screens", label: "Inventario", icon: MonitorPlay },
+      { href: "/companies", label: "Empresas", icon: Building2 },
+      { href: "/contacts", label: "Contactos", icon: Contact },
+      { href: "/brands", label: "Marcas", icon: Tag },
+      { href: "/customers", label: "Customers", icon: Users },
+    ],
+  },
+  {
+    label: "Sistema",
+    items: [
+      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/help", label: "Ayuda", icon: CircleHelp },
+    ],
+  },
 ];
 
 export function AppSidebar() {
@@ -107,47 +142,57 @@ function AppSidebarNav() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {nav.map((item) => {
-                const active =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href);
-                const badge =
-                  "badgeKey" in item && item.badgeKey === "inbox" && (inboxTotal ?? 0) > 0
-                    ? formatNumber(inboxTotal)
-                    : null;
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      render={<Link href={`${item.href}${suffix}`} />}
-                      isActive={active}
-                      tooltip={
-                        badge ? `${item.label} (${badge})` : item.label
-                      }
-                    >
-                      <item.icon strokeWidth={1.75} />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                    {badge && (
-                      <>
-                        <SidebarMenuBadge>{badge}</SidebarMenuBadge>
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute top-1 right-1 hidden size-2 rounded-full bg-destructive ring-2 ring-sidebar group-data-[collapsible=icon]:block"
-                        />
-                      </>
-                    )}
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarSeparator />
+      <SidebarContent className="gap-1 py-2">
+        {groups.map((group, i) => (
+          <Fragment key={group.label ?? "principal"}>
+            {i > 0 && <SidebarSeparator className="mx-2 my-2" />}
+            <SidebarGroup className="px-2 py-1.5">
+              {group.label && (
+                <SidebarGroupLabel className="px-2 pb-1.5 tracking-wide uppercase">
+                  {group.label}
+                </SidebarGroupLabel>
+              )}
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => {
+                  const active =
+                    item.href === "/"
+                      ? pathname === "/"
+                      : pathname.startsWith(item.href);
+                  const badge =
+                    item.badgeKey === "inbox" && (inboxTotal ?? 0) > 0
+                      ? formatNumber(inboxTotal)
+                      : null;
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        render={<Link href={`${item.href}${suffix}`} />}
+                        isActive={active}
+                        tooltip={
+                          badge ? `${item.label} (${badge})` : item.label
+                        }
+                      >
+                        <item.icon strokeWidth={1.75} />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                      {badge && (
+                        <>
+                          <SidebarMenuBadge>{badge}</SidebarMenuBadge>
+                          <span
+                            aria-hidden="true"
+                            className="pointer-events-none absolute top-1 right-1 hidden size-2 rounded-full bg-destructive ring-2 ring-sidebar group-data-[collapsible=icon]:block"
+                          />
+                        </>
+                      )}
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+            </SidebarGroup>
+          </Fragment>
+        ))}
+        <SidebarSeparator className="mx-2 my-2" />
         <SidebarGroup>
           <SidebarGroupLabel>Asistente</SidebarGroupLabel>
           <SidebarGroupContent>

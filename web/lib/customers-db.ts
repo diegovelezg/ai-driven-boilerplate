@@ -315,8 +315,10 @@ const DECISION_VALUES = new Set([
 export function parseCustomerFilters(sp: {
   decision?: string;
   vista?: string;
+  view?: string;
   ritmo?: string;
   tipo?: string;
+  type?: string;
   customer_type?: string;
   ventana?: string;
   banda?: string;
@@ -325,9 +327,10 @@ export function parseCustomerFilters(sp: {
 }): CustomerFilters {
   const decision =
     sp.decision && DECISION_VALUES.has(sp.decision) ? sp.decision : null;
-  const vista = sp.vista === "ventana7" || sp.vista === "seguimiento" ? sp.vista : null;
+  const vistaRaw = sp.view ?? sp.vista;
+  const vista = vistaRaw === "ventana7" || vistaRaw === "seguimiento" ? vistaRaw : null;
   const ritmo = sp.ritmo && RITMO_VALUES.has(sp.ritmo) ? sp.ritmo : null;
-  const rawTipo = (sp.tipo ?? sp.customer_type ?? "").trim().toUpperCase();
+  const rawTipo = (sp.type ?? sp.tipo ?? sp.customer_type ?? "").trim().toUpperCase();
   const customerType = rawTipo === "B2B" || rawTipo === "B2C" ? rawTipo : null;
   const ventana = sp.ventana && VENTANA_VALUES.has(sp.ventana) ? sp.ventana : null;
   const banda = sp.banda && BANDA_VALUES.has(sp.banda) ? sp.banda : null;

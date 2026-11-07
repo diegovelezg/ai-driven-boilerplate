@@ -16,6 +16,11 @@ import { join, relative } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..");
 const SSOT = "lib/format.ts";
+// Archivo de vendor: componente Calendar oficial de shadcn (react-day-picker).
+// Su `.toLocaleString` formatea el nombre del mes (fecha, no número/moneda,
+// fuera del alcance del SSOT numérico) y se conserva verbatim del registry
+// para que `shadcn add --overwrite` siga aplicándose limpio.
+const VENDOR_DATE_UI = new Set(["components/ui/calendar.tsx"]);
 
 function walk(dir: string, ext: RegExp, out: string[] = []): string[] {
   let entries: string[] = [];
@@ -54,7 +59,8 @@ describe("SSOT formato numérico", () => {
   it("no hay toLocaleString fuera del SSOT", () => {
     const bad: string[] = [];
     for (const f of files) {
-      if (rel(f) === SSOT) continue;
+      const r = rel(f);
+      if (r === SSOT || VENDOR_DATE_UI.has(r)) continue;
       const src = readFileSync(f, "utf8");
       if (src.includes(".toLocaleString(")) bad.push(rel(f));
     }
