@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   Bot,
   Building2,
@@ -15,7 +15,8 @@ import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { AppCard } from "@/components/app-card";
+import { AppCard, AppCardState } from "@/components/app-card";
+import { CustomerCategoryBadge, CustomerContactStatusBadge, CustomerDecisionBadge, CustomerTypeBadge } from "@/components/customer-badges";
 import { SectionHeading } from "@/components/section-heading";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -936,28 +937,43 @@ function ComprasTab({
   } | null>(null);
   const predDecision = mpred?.decision ?? null;
 
-  useEffect(() => {
-    let alive = true;
+  const load = useCallback(() => {
+    setError(null);
     fetch(`/api/customers/${dbId}/orders`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const j = (await res.json()) as { orders?: CustomerOrder[]; summary?: CustomerRfm };
-        if (alive) {
-          setOrders(j.orders ?? []);
-          setSummary(j.summary ?? null);
-        }
+        setOrders(j.orders ?? []);
+        setSummary(j.summary ?? null);
       })
       .catch((e: unknown) => {
-        if (alive) setError(e instanceof Error ? e.message : "No se pudo cargar.");
+        setError(e instanceof Error ? e.message : "No se pudo cargar.");
       });
-    return () => {
-      alive = false;
-    };
   }, [dbId]);
 
-  if (error) return <p className="px-8 py-6 text-sm text-destructive">{error}</p>;
+  useEffect(() => {
+    setOrders(null);
+    setSummary(null);
+    load();
+  }, [load, dbId]);
+
+  if (error)
+    return (
+      <div className="grid gap-3 px-8 py-6">
+        <AppCardState>{error}</AppCardState>
+        <Button variant="outline" size="sm" className="w-fit" onClick={load}>
+          Reintentar
+        </Button>
+      </div>
+    );
   if (!orders || !summary)
-    return <p className="px-8 py-6 text-sm text-muted-foreground">Cargando compras…</p>;
+    return (
+      <div className="grid gap-2 px-8 py-6" aria-busy="true" aria-label="Cargando compras">
+        <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+        <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+        <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+      </div>
+    );
 
   const recencyLabel =
     summary.recencyDays === null
@@ -1070,6 +1086,7 @@ function ComprasTab({
         hint="Ritmo, ticket y total acumulado."
         tone="sky"
         className="mb-0"
+        right={<CustomerDecisionBadge decision={predDecision} />}
       />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <DecisionCard mpred={mpred} />
@@ -1177,7 +1194,9 @@ function ComprasTab({
         />
       )}
       {orders.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Sin compras registradas.</p>
+        <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+          <p className="text-[13px] text-muted-foreground">Sin compras registradas.</p>
+        </div>
       ) : (
         <DrawerTable className="table-fixed">
           <DrawerTableHeader>
@@ -1215,12 +1234,9 @@ function ComprasTab({
                             <div className="break-words text-[12px]">
                               {it.contiene}
                               {it.categoria && (
-                                <Badge
-                                  variant="secondary"
-                                  className="ml-1.5 border-primary/30 bg-primary/10 align-middle text-[11px] font-normal text-primary"
-                                >
-                                  {it.categoria}
-                                </Badge>
+                                <span className="ml-1.5">
+                                  <CustomerCategoryBadge label={it.categoria} />
+                                </span>
                               )}
                             </div>
                           )}
@@ -1237,32 +1253,20 @@ function ComprasTab({
                 </DrawerTableTd>
               </DrawerTableRow>
             ))}
+            <DrawerTableRow className="bg-muted/30 font-medium">
+              <DrawerTableTd colSpan={2}>
+                Total · {formatNumber(orders.length)} compra{orders.length === 1 ? "" : "s"}
+              </DrawerTableTd>
+              <DrawerTableTd numeric className="tabular-nums">
+                {formatMoney(summary.monetary, summary.currency)}
+              </DrawerTableTd>
+            </DrawerTableRow>
           </DrawerTableBody>
         </DrawerTable>
       )}
     </div>
   );
 }
-
-const CONTACT_STATUS_LABEL: Record<string, string> = {
-  dispatched: "Enviado",
-  approved: "Aprobado, esperando envío",
-  pending_review: "Borrador sin aprobar",
-  rejected: "Rechazado",
-  contacted: "Contactado por mi cuenta",
-  discarded: "Descartado (rejected canónico)",
-};
-
-const CONTACT_STATUS_CLASS: Record<string, string> = {
-  dispatched:
-    "border-transparent bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  approved: "border-transparent bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  pending_review:
-    "border-transparent bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  rejected: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
-  contacted: "border-transparent bg-teal-500/10 text-teal-600 dark:text-teal-400",
-  discarded: "border-transparent bg-rose-500/10 text-rose-600 dark:text-rose-400",
-};
 
 /** Issue #14 B3: "contactar igual" en la ficha. Reabre la última señal
  *  descartada del cliente (el descarte la escondía 30d sin remedio). */
@@ -1297,21 +1301,23 @@ function ContactarIgual({ dbId }: { dbId: string }) {
 function ContactosTab({ dbId }: { dbId: string }) {
   const [contacts, setContacts] = useState<CustomerContactDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
+  const load = useCallback(() => {
+    setError(null);
     fetch(`/api/customers/${dbId}/contacts`)
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const j = (await res.json()) as { contacts?: CustomerContactDTO[] };
-        if (alive) setContacts(j.contacts ?? []);
+        setContacts(j.contacts ?? []);
       })
       .catch((e: unknown) => {
-        if (alive) setError(e instanceof Error ? e.message : "No se pudo cargar.");
+        setError(e instanceof Error ? e.message : "No se pudo cargar.");
       });
-    return () => {
-      alive = false;
-    };
   }, [dbId]);
+
+  useEffect(() => {
+    setContacts(null);
+    load();
+  }, [load, dbId]);
 
   if (error) {
     return (
@@ -1322,7 +1328,10 @@ function ContactosTab({ dbId }: { dbId: string }) {
           tone="sky"
           className="mb-0"
         />
-        <p className="text-sm text-destructive">{error}</p>
+        <AppCardState>{error}</AppCardState>
+        <Button variant="outline" size="sm" className="w-fit" onClick={load}>
+          Reintentar
+        </Button>
       </div>
     );
   }
@@ -1335,7 +1344,10 @@ function ContactosTab({ dbId }: { dbId: string }) {
           tone="sky"
           className="mb-0"
         />
-        <p className="text-sm text-muted-foreground">Cargando contactos…</p>
+        <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando contactos">
+          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+        </div>
       </div>
     );
   }
@@ -1348,10 +1360,14 @@ function ContactosTab({ dbId }: { dbId: string }) {
           tone="sky"
           className="mb-0"
         />
-        <p className="text-sm text-muted-foreground">
-          Nunca se le envió un mensaje desde acá.
-        </p>
-        <ContactarIgual dbId={dbId} />
+        <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+          <p className="text-[13px] text-muted-foreground">
+            Nunca se le envió un mensaje desde acá.
+          </p>
+          <div>
+            <ContactarIgual dbId={dbId} />
+          </div>
+        </div>
       </div>
     );
   }
@@ -1381,17 +1397,7 @@ function ContactosTab({ dbId }: { dbId: string }) {
                   {c.channel === "whatsapp" ? "WhatsApp" : "Email"} · {when}
                 </span>
               }
-              action={
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "font-normal",
-                    CONTACT_STATUS_CLASS[c.status] ?? "text-muted-foreground",
-                  )}
-                >
-                  {CONTACT_STATUS_LABEL[c.status] ?? c.status}
-                </Badge>
-              }
+              action={<CustomerContactStatusBadge status={c.status} />}
               footer={
                 (c.status === "approved" || c.status === "dispatched") || c.status === "dispatched" ? (
                   <span className="flex flex-col gap-1">
@@ -1475,17 +1481,15 @@ export function CustomerDrawer({
       title={displayName || "Sin nombre"}
       description={customer.email}
       badges={
-        <>
-          <Badge variant="secondary" className="font-normal">
-            B2B · Empresa
-          </Badge>
+        <span className="flex flex-wrap items-center gap-1.5" aria-label={`Empresa B2B${customer.country ? `, ${customer.country}` : ""}${customer.manualFields.length > 0 ? ", con ediciones manuales" : ""}`}>
+          <CustomerTypeBadge />
           {customer.country && (
             <span className="text-[11px] text-muted-foreground">{customer.country}</span>
           )}
           {customer.manualFields.length > 0 && (
             <span className="text-[11px] text-muted-foreground">· editado</span>
           )}
-        </>
+        </span>
       }
       tabs={drawerTabs}
       tab={tab}

@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/page-header";
+import { connection } from "next/server";
 import { readConnections, toSafeConnections } from "@/lib/store";
 import { ARCHETYPES, getProfileSignals, getStoreProfile, suggestArchetype } from "@/lib/store-profiles";
 import { HORIZON_BY_ARCHETYPE } from "@/lib/retention-model";
@@ -43,6 +44,10 @@ export default async function SettingsPage({
 }: {
   searchParams?: Promise<{ tab?: string; store?: string }>;
 }) {
+  // Request-time: algo del árbol usa Date.now() y Cache Components no lo
+  // difiere con `instant = false` — sin esto, el prerender falla con
+  // blocking-prerender-current-time (igual que customers).
+  await connection();
   const sp = searchParams ? await searchParams : null;
   const requestedStore = sp?.store ?? null;
   // Tenant activo (?store= validado + membresía); legacy: JSON global.

@@ -1,12 +1,10 @@
-import Link from "next/link";
-import { AppCard, AppCardState } from "@/components/app-card";
+import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { listCrmCompanies, listCrmContacts } from "@/lib/crm-db";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
-import { formatNumber, toTitleCase } from "@/lib/format";
 import { connection } from "next/server";
+import { ContactsList } from "./contacts-list";
 
 // Request-time: usa el cliente Supabase (timers/Date internos) en el render.
 // Cache Components no lo difiere con `instant = false`; ver nota en
@@ -16,12 +14,13 @@ export const instant = false;
 export default async function ContactosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; company?: string; empresa?: string }>;
+  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const companyId = ((sp.company ?? sp.empresa) ?? "").trim() || null;
+  const selectedId = ((sp.contact ?? sp.contacto) ?? "").trim() || null;
 
   const dbReady = isSupabaseConfigured();
   const activeStoreId = await resolveActiveStoreId();
@@ -56,7 +55,6 @@ export default async function ContactosPage({
         eyebrow="CRM"
         title="Contactos"
         description="Personas de las empresas: quién firma, quién paga, quién aprueba. El detalle y la creación viven en cada empresa."
-        right={<span className="text-xs text-muted-foreground">{formatNumber(rows.length)} en vista</span>}
       />
 
       {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
@@ -64,68 +62,13 @@ export default async function ContactosPage({
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (
-        <>
-          <AppCard title="Buscar / filtrar" description="Por nombre, email, cargo o empresa.">
-            <form method="get" className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-xs">
-                Buscar
-                <input name="q" defaultValue={q} placeholder="nombre, email, cargo…" className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
-              </label>
-              <label className="flex flex-col gap-1 text-xs">
-                Empresa
-                <select name="company" defaultValue={companyId ?? ""} className="h-8 rounded-lg border border-border bg-background px-2 text-sm">
-                  <option value="">Todas</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>{toTitleCase(c.name)}</option>
-                  ))}
-                </select>
-              </label>
-              <Button type="submit" size="sm" variant="outline">Filtrar</Button>
-              {(q || companyId) && <Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="ghost">Limpiar</Button>}
-            </form>
-          </AppCard>
-
-          {rows.length === 0 ? (
-            <AppCardState>Aún no hay contactos. Se crean desde cada empresa.</AppCardState>
-          ) : (
-            <AppCard variant="table" title="Contactos" description={`${rows.length} en vista`}>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="px-4 py-2">Nombre</th>
-                    <th className="px-4 py-2">Empresa</th>
-                    <th className="px-4 py-2">Cargo</th>
-                    <th className="px-4 py-2">Email</th>
-                    <th className="px-4 py-2">Principal</th>
-                    <th className="px-4 py-2">Creada por</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((c) => (
-                    <tr key={c.id} className="border-b last:border-0 hover:bg-muted/40">
-                      <td className="px-4 py-2 font-medium">
-                        {[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}
-                      </td>
-                      <td className="px-4 py-2">
-                        {c.company_id ? (
-                          <Link href={`/companies?company=${c.company_id}`} className="underline-offset-4 hover:underline">
-                            {c.company_name ? toTitleCase(c.company_name) : "—"}
-                          </Link>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-xs">{c.job_title ?? "—"}</td>
-                      <td className="px-4 py-2 text-xs text-muted-foreground">{c.email ?? c.phone ?? "—"}</td>
-                      <td className="px-4 py-2 text-xs">{c.is_primary ? "Sí" : "—"}</td>
-                      <td className="px-4 py-2 text-xs text-muted-foreground">{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </AppCard>
-          )}
-        </>
+        <ContactsList
+          rows={rows}
+          companies={companies.map((c) => ({ id: c.id, name: c.name }))}
+          q={q}
+          companyId={companyId}
+          initialSelectedId={selectedId}
+        />
       )}
     </div>
   );

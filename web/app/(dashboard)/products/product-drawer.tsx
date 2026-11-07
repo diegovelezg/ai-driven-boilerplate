@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Bot, ChevronDown, Package, ShoppingBag, Users, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SortHeaderButton, type SortDir } from "@/components/data-table";
-import { DrawerShell } from "@/components/drawer-shell";
+import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
+import { AppCard, AppCardState } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { SectionHeading } from "@/components/section-heading";
 import {
@@ -16,6 +17,7 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { formatMoney, formatNumber } from "@/lib/format";
+import { ProductStatusBadge } from "@/components/product-badges";
 import type { ProductWithStats } from "@/lib/product-stats";
 import type { ProductDetailDTO } from "@/app/api/products/[id]/detail/route";
 import { ProductChat } from "./product-chat";
@@ -71,50 +73,54 @@ function DrawerPager({ page, totalPages, total, onPrev, onNext }: { page: number
 
 function ResumenTab({ summary, detail }: { summary: ProductWithStats; detail: ProductDetailDTO | null }) {
   return (
-    <div className="flex flex-col gap-7">
-      <section aria-label="Ventas">
-        <SectionHeading title="Lo vendido" tone="emerald" />
-        <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-          {[
-            { label: "Cant. total", value: formatNumber(summary.qty_all) },
-            { label: "Monto total", value: summary.currency ? formatMoney(summary.revenue_all, summary.currency) : "—" },
-            { label: "Cant. 30d", value: formatNumber(summary.qty_30d) },
-            { label: "Compradores", value: formatNumber(summary.buyers_all) },
-          ].map((k) => (
-            <div key={k.label} className="rounded-lg border px-3 py-2.5">
-              <p className="text-[11px] tracking-wide text-muted-foreground uppercase">{k.label}</p>
-              <p className="mt-0.5 text-base font-semibold tabular-nums">{k.value}</p>
-            </div>
-          ))}
-        </div>
-        {detail && detail.statsByCurrency.length > 1 && (
-          <div className="mt-2">
-            <DrawerTable>
-              <DrawerTableHeader>
-                <DrawerTableTh>Moneda</DrawerTableTh>
-                <DrawerTableTh numeric>Cant.</DrawerTableTh>
-                <DrawerTableTh numeric>Monto</DrawerTableTh>
-                <DrawerTableTh numeric>30d</DrawerTableTh>
-              </DrawerTableHeader>
-              <DrawerTableBody>
-                {detail.statsByCurrency.map((s) => (
-                  <DrawerTableRow key={s.currency}>
-                    <DrawerTableTd>{s.currency.toUpperCase()}</DrawerTableTd>
-                    <DrawerTableTd numeric>{formatNumber(s.qtyAll)}</DrawerTableTd>
-                    <DrawerTableTd numeric>{formatMoney(s.revenueAll, s.currency)}</DrawerTableTd>
-                    <DrawerTableTd numeric>{formatNumber(s.qty30d)}</DrawerTableTd>
-                  </DrawerTableRow>
-                ))}
-              </DrawerTableBody>
-            </DrawerTable>
+    <AppCard
+      title="Lo vendido"
+      description="Cantidades y montos acumulados del ítem."
+      tone="emerald"
+      aria-label="Ventas del ítem"
+    >
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        {[
+          { label: "Cant. total", value: formatNumber(summary.qty_all) },
+          { label: "Monto total", value: summary.currency ? formatMoney(summary.revenue_all, summary.currency) : "—" },
+          { label: "Cant. 30d", value: formatNumber(summary.qty_30d) },
+          { label: "Compradores", value: formatNumber(summary.buyers_all) },
+        ].map((k) => (
+          <div key={k.label} className="rounded-lg border px-3 py-2.5">
+            <p className="text-[11px] tracking-wide text-muted-foreground uppercase">{k.label}</p>
+            <p className="mt-0.5 text-base font-semibold tabular-nums">{k.value}</p>
           </div>
-        )}
-      </section>
-
-      {!detail && (
-        <p className="text-[13px] text-muted-foreground">Cargando detalle…</p>
+        ))}
+      </div>
+      {detail && detail.statsByCurrency.length > 1 && (
+        <div className="mt-3">
+          <DrawerTable>
+            <DrawerTableHeader>
+              <DrawerTableTh>Moneda</DrawerTableTh>
+              <DrawerTableTh numeric>Cant.</DrawerTableTh>
+              <DrawerTableTh numeric>Monto</DrawerTableTh>
+              <DrawerTableTh numeric>30d</DrawerTableTh>
+            </DrawerTableHeader>
+            <DrawerTableBody>
+              {detail.statsByCurrency.map((s) => (
+                <DrawerTableRow key={s.currency}>
+                  <DrawerTableTd>{s.currency.toUpperCase()}</DrawerTableTd>
+                  <DrawerTableTd numeric>{formatNumber(s.qtyAll)}</DrawerTableTd>
+                  <DrawerTableTd numeric>{formatMoney(s.revenueAll, s.currency)}</DrawerTableTd>
+                  <DrawerTableTd numeric>{formatNumber(s.qty30d)}</DrawerTableTd>
+                </DrawerTableRow>
+              ))}
+            </DrawerTableBody>
+          </DrawerTable>
+        </div>
       )}
-    </div>
+      {!detail && (
+        <div className="mt-3 flex flex-col gap-2" aria-busy="true" aria-label="Cargando detalle">
+          <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+          <div className="h-16 animate-pulse rounded-lg bg-muted/60" />
+        </div>
+      )}
+    </AppCard>
   );
 }
 
@@ -167,14 +173,25 @@ function MovimientosTab({ detail, summary }: { detail: ProductDetailDTO | null; 
     });
   }, [detail, query, sortKey, sortDir]);
 
-  if (!detail) return <p className="text-[13px] text-muted-foreground">Cargando movimientos…</p>;
+  if (!detail) {
+    return (
+      <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando movimientos">
+        <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+        <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+      </div>
+    );
+  }
 
   const totalPages = Math.max(1, Math.ceil(rows.length / DRAWER_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const paged = rows.slice((safePage - 1) * DRAWER_PAGE_SIZE, safePage * DRAWER_PAGE_SIZE);
 
   if (detail.movements.length === 0) {
-    return <p className="text-[13px] text-muted-foreground">Sin ventas registradas para este ítem.</p>;
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+        <p className="text-[13px] text-muted-foreground">Sin ventas registradas para este ítem.</p>
+      </div>
+    );
   }
   // La lista trae TODOS los movimientos de lo escaneado (paginados de 20 en
   // 20): su suma sí es comparable con "Cant." de la tabla. Solo difiere si el
@@ -303,9 +320,20 @@ function ClientesTab({ detail }: { detail: ProductDetailDTO | null }) {
     });
   }, [detail, query, sortKey, sortDir]);
 
-  if (!detail) return <p className="text-[13px] text-muted-foreground">Cargando compradores…</p>;
+  if (!detail) {
+    return (
+      <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando compradores">
+        <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+        <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+      </div>
+    );
+  }
   if (detail.buyers.length === 0) {
-    return <p className="text-[13px] text-muted-foreground">Sin compradores identificados para este ítem.</p>;
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+        <p className="text-[13px] text-muted-foreground">Sin compradores identificados para este ítem.</p>
+      </div>
+    );
   }
 
   const totalPages = Math.max(1, Math.ceil(rows.length / DRAWER_PAGE_SIZE));
@@ -366,49 +394,45 @@ export function ProductDrawer({
   const [detail, setDetail] = useState<ProductDetailDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setDetail(null);
+  const load = useCallback(async () => {
     setError(null);
-    fetch(`/api/products/${summary.id}/detail`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => null) as { error?: string } | null)?.error ?? "No se pudo cargar el detalle.");
-        return (await r.json()) as ProductDetailDTO;
-      })
-      .then((d) => { if (!cancelled) setDetail(d); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "No se pudo cargar el detalle."); });
-    return () => { cancelled = true; };
+    try {
+      const r = await fetch(`/api/products/${summary.id}/detail`);
+      if (!r.ok) throw new Error((await r.json().catch(() => null) as { error?: string } | null)?.error ?? "No se pudo cargar el detalle.");
+      setDetail((await r.json()) as ProductDetailDTO);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo cargar el detalle.");
+    }
   }, [summary.id]);
 
-  const drawerTabs = [
+  useEffect(() => {
+    setTab("resumen");
+    setDetail(null);
+    void load();
+  }, [load]);
+
+  const drawerTabs: DrawerTabDef[] = [
     { id: "resumen", label: "Resumen", icon: Package },
-    { id: "movimientos", label: "Movimientos", icon: ShoppingBag },
-    { id: "clientes", label: "Clientes", icon: Users },
+    { id: "movimientos", label: `Movimientos${detail ? ` (${formatNumber(detail.movements.length)})` : ""}`, icon: ShoppingBag },
+    { id: "clientes", label: `Clientes${detail ? ` (${formatNumber(detail.buyers.length)})` : ""}`, icon: Users },
     { id: "agentes", label: "Agentes", icon: Bot },
-  ] as const;
+  ];
 
   return (
     <DrawerShell
       onClose={onClose}
+      size="wide"
       avatar={<Package className="size-5" aria-hidden />}
       title={summary.title}
       description={
-        [(detail?.product.platformStatus ?? summary.platform_status), detail?.product.handle].filter(Boolean).join(" · ") || undefined
+        [(detail?.product.platformStatus ?? summary.platform_status), detail?.product.handle].filter(Boolean).join(" · ") || "Cargando…"
       }
       badges={
-        <>
-          <span
-            className={
-              summary.is_active
-                ? "inline-block rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-600"
-                : "inline-block rounded-full bg-zinc-500/15 px-2 py-0.5 text-xs text-zinc-500"
-            }
-          >
-            {summary.is_active ? "activo" : "inactivo"}
-          </span>
-        </>
+        <span className="flex flex-wrap items-center gap-1.5" aria-label={`Producto ${summary.is_active ? "activo" : "inactivo"}`}>
+          <ProductStatusBadge isActive={summary.is_active} />
+        </span>
       }
-      tabs={[...drawerTabs]}
+      tabs={drawerTabs}
       tab={tab}
       onTabChange={(id) => setTab(id as Tab)}
       tabListLabel="Detalle del ítem"
@@ -419,9 +443,14 @@ export function ProductDrawer({
       ) : (
         <>
           {error && (
-            <p className="text-[13px] text-destructive">{error}</p>
+            <div className="flex flex-col gap-3">
+              <AppCardState>{error}</AppCardState>
+              <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
+                Reintentar
+              </Button>
+            </div>
           )}
-          {tab === "resumen" && !error && <ResumenTab summary={summary} detail={detail} />}
+          {!error && tab === "resumen" && <ResumenTab summary={summary} detail={detail} />}
           {tab === "movimientos" && !error && (
             <div className="flex flex-col gap-3">
               <SectionHeading

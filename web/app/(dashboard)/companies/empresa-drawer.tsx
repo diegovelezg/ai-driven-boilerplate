@@ -2,10 +2,8 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { Building2, Bot, FileText, UserRound } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AppCardState } from "@/components/app-card";
-import { SectionHeading } from "@/components/section-heading";
+import { AppCard, AppCardState } from "@/components/app-card";
 import {
   DrawerShell,
   type DrawerTabDef,
@@ -20,6 +18,7 @@ import {
 } from "@/components/drawer-table";
 import { createContactAction, type CrmState } from "@/lib/crm-actions";
 import { kindLabel } from "@/lib/crm";
+import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { toTitleCase } from "@/lib/format";
@@ -135,6 +134,8 @@ export function EmpresaDrawer({
   }, [companyId]);
 
   useEffect(() => {
+    setTab("ficha");
+    setDetail(null);
     void load();
   }, [load]);
 
@@ -176,12 +177,12 @@ export function EmpresaDrawer({
       }
       badges={
         detail && (
-          <>
-            <Badge variant="secondary" className="font-normal">{kindLabel(kind)}</Badge>
+          <span className="flex flex-wrap items-center gap-1.5" aria-label={`Empresa ${kindLabel(kind)}, ${contacts.length} contactos, ${ios.length} pedidos`}>
+            <CompanyKindBadge kind={kind} />
             <span className="text-[11px] text-muted-foreground">
               {contacts.length} contacto{contacts.length === 1 ? "" : "s"} · {ios.length} pedido{ios.length === 1 ? "" : "s"}
             </span>
-          </>
+          </span>
         )
       }
       tabs={tabs}
@@ -197,44 +198,71 @@ export function EmpresaDrawer({
         />
       ) : (
         <>
-      {error && <AppCardState>{error}</AppCardState>}
-      {!error && !detail && <AppCardState>Cargando ficha…</AppCardState>}
+      {error && (
+        <div className="flex flex-col gap-3">
+          <AppCardState>{error}</AppCardState>
+          <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
+            Reintentar
+          </Button>
+        </div>
+      )}
+      {!error && !detail && (
+        <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando empresa">
+          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+          <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+          <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+        </div>
+      )}
 
       {detail && tab === "ficha" && (
         <>
-          <section className="flex flex-col gap-2">
-            <SectionHeading title="Datos" />
-            <dl className="grid gap-2 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">RUT / tax_id</dt><dd>{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Dominio</dt><dd className="text-xs">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="text-xs">{typeof company?.email === "string" && company.email ? company.email : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="text-xs">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="text-xs">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="text-xs">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Creada por</dt><dd className="text-xs">{typeof company?.created_by === "string" && company.created_by ? company.created_by : "—"}</dd></div>
+          <AppCard
+            title="Datos"
+            description="Identidad y contacto de la contraparte."
+            aria-label="Datos de la empresa"
+          >
+            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs text-muted-foreground">RUT / tax_id</dt><dd className="mt-0.5 text-[13px]">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Dominio</dt><dd className="mt-0.5 text-[13px]">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="mt-0.5 text-[13px]">{typeof company?.email === "string" && company.email ? company.email : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="mt-0.5 text-[13px]">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-0.5 text-[13px]">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Creada</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.created_by === "string" && company.created_by ? company.created_by : "—"}</dd></div>
               {typeof company?.updated_by === "string" && company.updated_by && company.updated_by !== company.created_by && (
-                <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="text-xs">{company.updated_by}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="mt-0.5 text-[13px]">{String(company.updated_by)}</dd></div>
               )}
             </dl>
-          </section>
-          <section className="flex flex-col gap-2">
-            <SectionHeading title="Tipo" hint="Naturaleza de la contraparte." />
+          </AppCard>
+          <AppCard
+            title="Tipo"
+            description="Naturaleza de la contraparte."
+            aria-label="Tipo de empresa"
+          >
             <KindForm companyId={companyId} initial={typeof company?.kind === "string" ? company.kind : null} onSaved={() => void load()} />
-          </section>
+          </AppCard>
           {isAgency && canViewCommission && (
-            <section className="flex flex-col gap-2">
-              <SectionHeading title="Comisión agencia" hint="Acuerdo por defecto (% sobre bruto). Solo owner/admin." />
+            <AppCard
+              title="Comisión agencia"
+              description="Acuerdo por defecto (% sobre bruto). Solo owner/admin."
+              aria-label="Comisión de agencia"
+            >
               <AgencyCommissionForm companyId={companyId} initial={commissionInitial} onSaved={() => void load()} />
-            </section>
+            </AppCard>
           )}
         </>
       )}
 
       {detail && tab === "contactos" && (
-        <section className="flex flex-col gap-4">
-          <SectionHeading title={`Contactos (${contacts.length})`} hint="N contactos por empresa. Solo uno puede ser principal." />
+        <AppCard
+          title={`Contactos (${contacts.length})`}
+          description="Varios contactos por empresa. Solo uno puede ser principal."
+          aria-label="Contactos de la empresa"
+        >
           {contacts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin contactos. Agrega el primero abajo.</p>
+            <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <p className="text-[13px] text-muted-foreground">Sin contactos. Agrega el primero abajo.</p>
+            </div>
           ) : (
             <DrawerTable>
               <DrawerTableHeader>
@@ -243,32 +271,39 @@ export function EmpresaDrawer({
                 <DrawerTableTh>Teléfono</DrawerTableTh>
                 <DrawerTableTh>Cargo</DrawerTableTh>
                 <DrawerTableTh>Principal</DrawerTableTh>
-                <DrawerTableTh>Creada por</DrawerTableTh>
+                <DrawerTableTh>Agregado por</DrawerTableTh>
               </DrawerTableHeader>
               <DrawerTableBody>
                 {contacts.map((c) => (
                   <DrawerTableRow key={c.id}>
                     <DrawerTableTd className="font-medium">{contactName(c)}</DrawerTableTd>
                     <DrawerTableTd className="text-xs">{c.email ?? c.phone ?? "—"}</DrawerTableTd>
-                    <DrawerTableTd className="text-xs">{c.phone ?? "—"}</DrawerTableTd>
+                    <DrawerTableTd className="text-xs tabular-nums">{c.phone ?? "—"}</DrawerTableTd>
                     <DrawerTableTd className="text-xs">{c.job_title ?? "—"}</DrawerTableTd>
-                    <DrawerTableTd className="text-xs">{c.is_primary ? "Sí" : "—"}</DrawerTableTd>
-                    <DrawerTableTd className="text-xs text-muted-foreground">{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
+                    <DrawerTableTd><CompanyPrincipalBadge isPrimary={c.is_primary} /></DrawerTableTd>
+                    <DrawerTableTd className="text-xs text-muted-foreground" title={typeof c.created_by === "string" && c.created_by ? `Agregado por ${c.created_by}` : undefined}>{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
                   </DrawerTableRow>
                 ))}
               </DrawerTableBody>
             </DrawerTable>
           )}
-          <NewContactForm companyId={companyId} onSaved={() => void load()} />
-        </section>
+          <div className="mt-3">
+            <NewContactForm companyId={companyId} onSaved={() => void load()} />
+          </div>
+        </AppCard>
       )}
 
       {detail && tab === "pedidos" && (
         <>
-          <section className="flex flex-col gap-2">
-            <SectionHeading title={`Pedidos (${ios.length})`} hint="IOs donde es anunciante o facturación. La marca va en el pedido." />
+          <AppCard
+            title={`Pedidos (${ios.length})`}
+            description="IOs donde es anunciante o facturación. La marca va en el pedido."
+            aria-label="Pedidos de la empresa"
+          >
             {ios.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sin pedidos: aún no es cliente.</p>
+              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+                <p className="text-[13px] text-muted-foreground">Sin pedidos: aún no es cliente.</p>
+              </div>
             ) : (
               <DrawerTable>
                 <DrawerTableHeader>
@@ -280,18 +315,23 @@ export function EmpresaDrawer({
                   {ios.map((o) => (
                     <DrawerTableRow key={o.id}>
                       <DrawerTableTd className="font-medium">{o.io_number}</DrawerTableTd>
-                      <DrawerTableTd>{toTitleCase(o.brand ?? "—")}</DrawerTableTd>
-                      <DrawerTableTd className="text-xs">{o.status}</DrawerTableTd>
+                      <DrawerTableTd className="text-[13px]">{toTitleCase(o.brand ?? "—")}</DrawerTableTd>
+                      <DrawerTableTd><CompanyIOBadge status={o.status} /></DrawerTableTd>
                     </DrawerTableRow>
                   ))}
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
-          <section className="flex flex-col gap-2">
-            <SectionHeading title={`Campañas (${campaigns.length})`} hint="Donde la empresa es anunciante." />
+          </AppCard>
+          <AppCard
+            title={`Campañas (${campaigns.length})`}
+            description="Donde la empresa es anunciante."
+            aria-label="Campañas de la empresa"
+          >
             {campaigns.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sin campañas.</p>
+              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+                <p className="text-[13px] text-muted-foreground">Sin campañas.</p>
+              </div>
             ) : (
               <DrawerTable>
                 <DrawerTableHeader>
@@ -302,13 +342,13 @@ export function EmpresaDrawer({
                   {campaigns.map((m) => (
                     <DrawerTableRow key={m.id}>
                       <DrawerTableTd className="font-medium">{m.name}</DrawerTableTd>
-                      <DrawerTableTd className="text-xs">{m.status}</DrawerTableTd>
+                      <DrawerTableTd><CompanyCampaignBadge status={m.status} /></DrawerTableTd>
                     </DrawerTableRow>
                   ))}
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
+          </AppCard>
         </>
       )}
         </>
