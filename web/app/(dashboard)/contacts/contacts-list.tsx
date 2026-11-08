@@ -2,9 +2,10 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { FilterX, LayoutGrid, List as ListIcon } from "lucide-react";
+import { FilterX, LayoutGrid, List as ListIcon, Star, Users } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
+import { SectionHeading } from "@/components/section-heading";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import {
@@ -95,22 +96,28 @@ export function ContactsList({
 
   return (
     <div className="flex flex-col gap-4">
-      <MetricRow columns={2} className="py-1" aria-label="Resumen">
-        <Metric
-          label="En vista"
-          value={formatNumber(summary.total)}
-          hint={
-            truncated
-              ? `Muestra parcial de ${formatNumber(totalCount ?? summary.total)} en total`
-              : "Contactos con los filtros actuales"
-          }
-        />
-        <Metric
-          label="Principales"
-          value={formatNumber(summary.primary)}
-          hint="Contacto de referencia en su empresa"
-        />
-      </MetricRow>
+      <section aria-label="Resumen · contactos">
+        <SectionHeading title="Resumen" hint="Contactos en vista con los filtros actuales." tone="emerald" />
+        <MetricRow columns={2} aria-label="Resumen">
+          <Metric
+            label="En vista"
+            icon={Users}
+            value={formatNumber(summary.total)}
+            hint={
+              truncated
+                ? `Muestra parcial de ${formatNumber(totalCount ?? summary.total)} en total`
+                : "Contactos con los filtros actuales"
+            }
+          />
+          <Metric
+            label="Principales"
+            icon={Star}
+            value={formatNumber(summary.primary)}
+            hint="Contacto de referencia en su empresa"
+            tone={summary.primary > 0 ? "primary" : "default"}
+          />
+        </MetricRow>
+      </section>
 
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de contactos">
         <FilterSearch

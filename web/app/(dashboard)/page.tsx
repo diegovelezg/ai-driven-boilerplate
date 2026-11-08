@@ -1,17 +1,16 @@
 import Link from "next/link";
 import { connection } from "next/server";
-import { Camera, FileText, Package, Plus, RefreshCw, type LucideIcon } from "lucide-react";
+import { Camera, FileText, Package, Plus, Radio, RefreshCw, Wallet, Gauge, type LucideIcon } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
 import { PageHeader } from "@/components/page-header";
+import { SectionHeading } from "@/components/section-heading";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { formatMoney, formatNumber, formatPercent } from "@/lib/format";
 import { getDashboardSnapshot, type AlertKind } from "@/lib/dashboard";
-import { InsightsWall } from "@/components/insights-wall";
-import type { WallInsight } from "@/lib/insights";
 
 export const instant = false;
 
@@ -45,7 +44,6 @@ export default async function DashboardPage() {
   const connected = Boolean(activeStoreId);
 
   let snap: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
-  let wall: WallInsight[] = [];
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -55,10 +53,6 @@ export default async function DashboardPage() {
         error = "Sin acceso a esta tienda.";
       } else {
         snap = await getDashboardSnapshot(storeId);
-        // Muro de insights (issue #11): feed persistido debajo de los KPIs.
-        // Best-effort: si la migración aún no corrió, Hoy sigue con KPIs.
-        const { getWallAction } = await import("@/lib/insights-actions");
-        wall = await getWallAction().catch(() => []);
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
@@ -85,13 +79,12 @@ export default async function DashboardPage() {
 
       {snap && (
         <>
-          <AppCard
-            title="Salud comercial · mes en curso"
-            contentClassName="flex flex-col gap-5"
-          >
+          <section aria-label="Salud comercial · mes en curso">
+            <SectionHeading title="Salud comercial · mes en curso" tone="emerald" />
             <MetricRow columns={5}>
               <Metric
                 label="Comprometido mes"
+                icon={Wallet}
                 value={(() => {
                   const entries = Object.entries(snap.byCurrency ?? {}).filter(([, v]) => v.comprometidoMesMinor > 0);
                   if (entries.length === 0) return "—";
@@ -105,23 +98,27 @@ export default async function DashboardPage() {
               />
               <Metric
                 label="Ocupación 14d"
+                icon={Gauge}
                 value={snap.ocupacion14d.ratio === null ? "—" : formatPercent(snap.ocupacion14d.ratio)}
                 hint={`${formatNumber(snap.ocupacion14d.diasVendidos)} de ${formatNumber(snap.ocupacion14d.diasDisponibles)} pantalla-día`}
                 tone="primary"
               />
               <Metric
                 label="Al aire hoy"
+                icon={Radio}
                 value={`${formatNumber(snap.alAire.ois)} órdenes`}
                 hint={`${formatNumber(snap.alAire.pantallas)} pantallas`}
               />
               <Metric
                 label="Por certificar"
+                icon={Camera}
                 value={formatNumber(snap.porCertificar)}
                 hint="Terminadas sin evidencia fotográfica"
                 tone={snap.porCertificar > 0 ? "warning" : "default"}
               />
               <Metric
                 label="Relevo 30d"
+                icon={RefreshCw}
                 value={
                   snap.renovacion30d.ratio === null
                     ? "—"
@@ -130,9 +127,7 @@ export default async function DashboardPage() {
                 hint={`${formatNumber(snap.renovacion30d.conRelevo)} de ${formatNumber(snap.renovacion30d.total)} con siguiente orden`}
               />
             </MetricRow>
-          </AppCard>
-
-          {wall.length > 0 && <InsightsWall initial={wall} />}
+          </section>
 
           <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
             <AppCard

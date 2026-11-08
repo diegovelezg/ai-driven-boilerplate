@@ -1,20 +1,9 @@
+import { Receipt, ShoppingCart, TrendingUp } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import type { FinanceKpis, MonthBucket } from "@/lib/finance";
-import { formatMoney, formatNumber, formatPercentPoints } from "@/lib/format";
-
-function Delta({ pct }: { pct: number | null }) {
-  if (pct === null)
-    return <span className="text-xs text-muted-foreground">sin base previa</span>;
-  if (pct === 0) return <span className="text-xs text-muted-foreground">igual que antes</span>;
-  const up = pct > 0;
-  return (
-    <span className={`text-xs tabular-nums ${up ? "text-green-600" : "text-red-500"}`}>
-      {up ? "▲" : "▼"} {formatPercentPoints(Math.abs(pct))} vs 30d previos
-    </span>
-  );
-}
+import { formatMoney, formatNumber } from "@/lib/format";
 
 /**
  * Facturación 12m: ventas (línea) + órdenes (barras), una sola escala.
@@ -162,33 +151,31 @@ export function FinanceStrip({
   const total12 = buckets.reduce((a, b) => a + b.salesMinor, 0);
   if (total12 === 0 && kpis.orders30d === 0) return null;
   return (
-    <section aria-label="Salud del negocio">
+    <section aria-label="Salud del negocio" className="flex flex-col gap-4">
+      <MetricRow columns={3} aria-label="Salud del negocio · últimos 30 días">
+        <Metric
+          label="Ventas 30d"
+          icon={TrendingUp}
+          value={formatMoney(kpis.sales30dMinor, currency)}
+          delta={kpis.salesDeltaPct}
+        />
+        <Metric
+          label="Órdenes 30d"
+          icon={ShoppingCart}
+          value={formatNumber(kpis.orders30d)}
+          delta={kpis.ordersDeltaPct}
+        />
+        <Metric
+          label="Ticket medio"
+          icon={Receipt}
+          value={formatMoney(kpis.ticket30dMinor, currency)}
+          hint="Por orden, últimos 30 días"
+        />
+      </MetricRow>
       <AppCard
-        title={
-          <span className="flex items-center gap-1.5">
-            <span aria-hidden className="size-1.5 rounded-full bg-emerald-500" />
-            Salud del negocio · últimos 12 meses
-          </span>
-        }
+        title="Facturación · últimos 12 meses"
         contentClassName="flex flex-col gap-4"
       >
-        <MetricRow columns={3}>
-          <Metric
-            label="Ventas 30d"
-            value={formatMoney(kpis.sales30dMinor, currency)}
-            hint={<Delta pct={kpis.salesDeltaPct} />}
-          />
-          <Metric
-            label="Órdenes 30d"
-            value={formatNumber(kpis.orders30d)}
-            hint={<Delta pct={kpis.ordersDeltaPct} />}
-          />
-          <Metric
-            label="Ticket medio"
-            value={formatMoney(kpis.ticket30dMinor, currency)}
-            hint="Por orden, últimos 30 días"
-          />
-        </MetricRow>
         <Trend buckets={buckets} currency={currency} />
         <p className="text-xs text-muted-foreground tabular-nums">
           {(() => {

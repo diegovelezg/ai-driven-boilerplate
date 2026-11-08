@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AlertTriangle, Settings2 } from "lucide-react";
+import { AlertTriangle, BadgeCheck, FileText, Hourglass, Settings2, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
@@ -401,32 +401,35 @@ export default async function FinanzasPage({
                   hint="Facturado, cobrado y lo que sigue pendiente."
                   tone="emerald"
                 />
-                <AppCard>
-                  <MetricRow columns={4}>
-                    <Metric
-                      label="Facturado"
-                      value={formatMoney(fin.invoicedMinor, fin.currency)}
-                      hint="Total emitido"
-                    />
-                    <Metric
-                      label="Cobrado"
-                      value={formatMoney(fin.paidMinor, fin.currency)}
-                      hint="Pagos confirmados"
-                      tone="success"
-                    />
-                    <Metric
-                      label="Pendiente"
-                      value={formatMoney(fin.pendingMinor, fin.currency)}
-                      hint="Facturado por cobrar"
-                    />
-                    <Metric
-                      label="Vencido"
-                      value={formatMoney(fin.overdueMinor, fin.currency)}
-                      hint={`${formatNumber(fin.overdueCount)} ${fin.overdueCount === 1 ? "factura" : "facturas"}`}
-                      tone={fin.overdueMinor > 0 ? "danger" : "default"}
-                    />
-                  </MetricRow>
-                </AppCard>
+                <MetricRow columns={4}>
+                  <Metric
+                    label="Facturado"
+                    icon={FileText}
+                    value={formatMoney(fin.invoicedMinor, fin.currency)}
+                    hint="Total emitido"
+                  />
+                  <Metric
+                    label="Cobrado"
+                    icon={BadgeCheck}
+                    value={formatMoney(fin.paidMinor, fin.currency)}
+                    hint="Pagos confirmados"
+                    tone="success"
+                  />
+                  <Metric
+                    label="Pendiente"
+                    icon={Hourglass}
+                    value={formatMoney(fin.pendingMinor, fin.currency)}
+                    hint="Facturado por cobrar"
+                    tone={fin.pendingMinor > 0 ? "warning" : "default"}
+                  />
+                  <Metric
+                    label="Vencido"
+                    icon={TriangleAlert}
+                    value={formatMoney(fin.overdueMinor, fin.currency)}
+                    hint={`${formatNumber(fin.overdueCount)} ${fin.overdueCount === 1 ? "factura" : "facturas"}`}
+                    tone={fin.overdueMinor > 0 ? "danger" : "default"}
+                  />
+                </MetricRow>
               </section>
             )}
 

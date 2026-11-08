@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
+import { BarChart3, Bot, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
 import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +24,7 @@ import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { formatDecimal, formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 
-type TabId = "ficha" | "comercial" | "geo";
+type TabId = "ficha" | "comercial" | "geo" | "agentes";
 
 interface ScreenDetail {
   screen: Record<string, unknown>;
@@ -79,7 +79,7 @@ function Kpi({ label, value, hint }: { label: string; value: ReactNode; hint?: R
   return (
     <div className="min-w-0">
       <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
-      <p className="mt-1 text-xl font-semibold tracking-tight tabular-nums">{value}</p>
+      <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
       {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">{hint}</p>}
     </div>
   );
@@ -147,6 +147,7 @@ function Chip({ children }: { children: ReactNode }) {
 }
 
 import { ScreenMap } from "./screen-map";
+import { PantallaChat } from "./pantalla-chat";
 
 export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClose: () => void }) {
   const router = useRouter();
@@ -291,6 +292,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
     { id: "ficha", label: "Ficha", icon: Monitor },
     { id: "comercial", label: "Comercial", icon: BarChart3 },
     { id: "geo", label: "Entorno", icon: MapPin },
+    { id: "agentes", label: "Agentes", icon: Bot },
   ];
 
   // Derivados comerciales
@@ -493,7 +495,12 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
       tab={tab}
       onTabChange={(id) => setTab(id as TabId)}
       tabListLabel="Detalle de pantalla"
+      fill={tab === "agentes"}
     >
+      {tab === "agentes" ? (
+        <PantallaChat screenId={screenId} screenLabel={s ? toTitleCase(String(s.name ?? "Pantalla")) : "Pantalla"} />
+      ) : (
+      <>
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
@@ -803,6 +810,8 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             Resumen inteligente: {enriching ? "generándose…" : detail.has_embedding ? "listo" : "no disponible"}.
           </p>
         </>
+      )}
+      </>
       )}
       <Dialog open={delOpen} onOpenChange={(v) => !v && setDelOpen(false)}>
         <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">

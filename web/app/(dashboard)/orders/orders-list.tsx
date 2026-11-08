@@ -2,8 +2,9 @@
 
 import { useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { FilterX } from "lucide-react";
+import { FilterX, Radio, TriangleAlert, Camera, Wallet } from "lucide-react";
 import { AppCard } from "@/components/app-card";
+import { SectionHeading } from "@/components/section-heading";
 import { Metric, MetricRow } from "@/components/metric";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,22 +103,27 @@ export function OrdersList({
 
   return (
     <div className="flex flex-col gap-4">
-      <MetricRow columns={4} className="py-1">
-        <Metric label="Bruto listado" value={summary.brutoLabel} hint="Contratado en las órdenes visibles" />
-        <Metric label="Al aire" value={formatNumber(summary.alAire)} hint="Órdenes pautando hoy" />
-        <Metric
-          label="Por certificar"
-          value={formatNumber(summary.porCertificar)}
-          hint="Terminadas sin evidencia"
-          tone={summary.porCertificar > 0 ? "warning" : "default"}
-        />
-        <Metric
-          label="Vencido"
-          value={formatNumber(summary.vencidas)}
-          hint={summary.vencidas > 0 ? `${summary.vencidoLabel} pendiente de cobro` : "Sin cobros vencidos"}
-          tone={summary.vencidas > 0 ? "danger" : "default"}
-        />
-      </MetricRow>
+      <section aria-label="Resumen · órdenes visibles">
+        <SectionHeading title="Resumen" hint="Acumulado de la tabla con los filtros actuales." tone="emerald" />
+        <MetricRow columns={4}>
+          <Metric label="Bruto listado" icon={Wallet} value={summary.brutoLabel} hint="Contratado en las órdenes visibles" />
+          <Metric label="Al aire" icon={Radio} value={formatNumber(summary.alAire)} hint="Órdenes pautando hoy" />
+          <Metric
+            label="Por certificar"
+            icon={Camera}
+            value={formatNumber(summary.porCertificar)}
+            hint="Terminadas sin evidencia"
+            tone={summary.porCertificar > 0 ? "warning" : "default"}
+          />
+          <Metric
+            label="Vencido"
+            icon={TriangleAlert}
+            value={formatNumber(summary.vencidas)}
+            hint={summary.vencidas > 0 ? `${summary.vencidoLabel} pendiente de cobro` : "Sin cobros vencidos"}
+            tone={summary.vencidas > 0 ? "danger" : "default"}
+          />
+        </MetricRow>
+      </section>
 
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de órdenes">
         <FilterSearch
