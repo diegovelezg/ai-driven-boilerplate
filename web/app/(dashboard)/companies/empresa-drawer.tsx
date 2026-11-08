@@ -21,6 +21,7 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { createContactAction, type CrmState } from "@/lib/crm-actions";
+import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
@@ -73,7 +74,9 @@ function contactName(c: DrawerContact): string {
 
 function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: string; siblingJobTitles: string[]; onSaved: () => void }) {
   const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const { invalid, mark, clear, bad } = useInvalidFields<"email" | "phone">();
   const [jobTitle, setJobTitle] = useState("");
   const [isPrimary, setIsPrimary] = useState(false);
   const [globalTitles, setGlobalTitles] = useState<string[]>([]);
@@ -105,16 +108,40 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
   }, [siblingJobTitles, globalTitles]);
 
   async function submit(form: FormData) {
-    setMsg(null);
+    const em = String(form.get("email") ?? "").trim();
+    const ph = String(form.get("phone") ?? "").trim();
+    if (!em && !ph) {
+      mark(["email", "phone"]);
+      toastFormError("Revisa los campos marcados", "Email o teléfono requerido.");
+      return;
+    }
+    if (em && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
+      mark(["email"]);
+      toastFormError("Revisa el campo marcado", "Email inválido.");
+      return;
+    }
     startTransition(async () => {
       const res: CrmState = await createContactAction(form);
-      setMsg(res.message);
-      if (res.ok) onSaved();
+      if (!res.ok) {
+        const keys: Array<"email" | "phone"> = /teléfono|telefono/i.test(res.message) && /email/i.test(res.message)
+          ? ["email", "phone"]
+          : /email/i.test(res.message)
+            ? ["email"]
+            : /teléfono|telefono/i.test(res.message)
+              ? ["phone"]
+              : [];
+        mark(keys);
+        toastFormError("No se pudo agregar el contacto", res.message);
+        return;
+      }
+      onSaved();
     });
   }
 
+  const ready = email.trim() !== "" || phone.trim() !== "";
+
   return (
-    <form action={submit} className="flex flex-wrap items-end gap-3">
+    <form action={submit} noValidate className="flex flex-wrap items-end gap-3">
       <input type="hidden" name="company_id" value={companyId} />
       <label className="flex flex-col gap-1 text-xs">
         Nombre
@@ -126,11 +153,11 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
       </label>
       <label className="flex flex-col gap-1 text-xs">
         Email
-        <input name="email" maxLength={320} className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
+        <input name="email" maxLength={320} value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} aria-invalid={invalid.has("email")} className={`h-8 rounded-lg border border-border bg-background px-2.5 text-sm${bad("email")}`} />
       </label>
       <label className="flex flex-col gap-1 text-xs">
         Teléfono
-        <input name="phone" maxLength={40} className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
+        <input name="phone" maxLength={40} value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} aria-invalid={invalid.has("phone")} className={`h-8 rounded-lg border border-border bg-background px-2.5 text-sm${bad("phone")}`} />
       </label>
       <div className="flex min-w-36 flex-col gap-1 text-xs">
         Cargo
@@ -159,8 +186,7 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
           Principal
         </Label>
       </div>
-      <Button type="submit" disabled={pending}>{pending ? "Agregando…" : "Agregar"}</Button>
-      {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
+      <Button type="submit" disabled={pending || !ready} title={!ready ? "Agrega email o teléfono" : undefined}>{pending ? "Agregando…" : "Agregar"}</Button>
     </form>
   );
 }

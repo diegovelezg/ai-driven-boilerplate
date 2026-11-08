@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { setAgencyCommissionAction } from "@/lib/crm-actions";
+import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 /** Comisión de agencia: solo visible/gestionable por owner/admin (el padre hace gating). */
 export function AgencyCommissionForm({
@@ -17,13 +18,13 @@ export function AgencyCommissionForm({
 }) {
   const [value, setValue] = useState<string>(initial !== null ? String(initial) : "");
   const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
+  const { invalid, mark, clear, bad } = useInvalidFields<"commission">();
 
   function save() {
-    setMsg(null);
     const trimmed = value.trim();
     if (trimmed !== "" && normalizeCommissionPct(trimmed) === null) {
-      setMsg("Comisión inválida (entero 0-100).");
+      mark(["commission"]);
+      toastFormError("Revisa el campo marcado", "Comisión inválida (entero 0-100).");
       return;
     }
     startTransition(async () => {
@@ -31,8 +32,12 @@ export function AgencyCommissionForm({
         companyId,
         pct: trimmed === "" ? null : trimmed,
       });
-      setMsg(res.message);
-      if (res.ok) onSaved?.();
+      if (!res.ok) {
+        mark(["commission"]);
+        toastFormError("No se pudo guardar la comisión", res.message);
+        return;
+      }
+      onSaved?.();
     });
   }
 
@@ -43,12 +48,15 @@ export function AgencyCommissionForm({
           <span className="flex items-center gap-1">
             <input
               value={value}
-              onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, ""))}
+              onChange={(e) => {
+                setValue(e.target.value.replace(/[^0-9]/g, ""));
+                clear("commission");
+              }}
               inputMode="numeric"
-              pattern="[0-9]*"
               placeholder="p. ej. 15"
               aria-label="Comisión agencia en porcentaje"
-              className="h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums"
+              aria-invalid={invalid.has("commission")}
+              className={`h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums${bad("commission")}`}
             />
             <span className="text-muted-foreground">%</span>
           </span>
@@ -56,7 +64,6 @@ export function AgencyCommissionForm({
         <Button onClick={save} disabled={pending}>
           {pending ? "Guardando…" : "Guardar"}
         </Button>
-        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
       <p className="text-[11px] text-muted-foreground">
         Vacío = sin acuerdo (0% efectivo).

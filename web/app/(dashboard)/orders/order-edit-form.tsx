@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { updateOrderAction } from "@/lib/order-actions";
-import type { CrmState } from "@/lib/crm-actions";
+import { toastFormError } from "@/components/ui/form-feedback";
 
 const TERMS = ["0", "30", "60", "90"] as const;
 
@@ -30,12 +30,10 @@ export function OrderEditForm({
   const [terms, setTerms] = useState(initial.payment_terms_days === "" ? "__none" : initial.payment_terms_days);
   const [notes, setNotes] = useState(initial.notes);
   const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
 
   function save() {
-    setMsg(null);
     startTransition(async () => {
-      const res: CrmState = await updateOrderAction({
+      const res = await updateOrderAction({
         orderId,
         patch: {
           brand: brand.trim() || null,
@@ -43,8 +41,11 @@ export function OrderEditForm({
           notes: notes.trim() || null,
         },
       });
-      setMsg(res.message);
-      if (res.ok) onSaved?.();
+      if (!res.ok) {
+        toastFormError("No se pudo guardar la orden", res.message);
+        return;
+      }
+      onSaved?.();
     });
   }
 
@@ -80,7 +81,6 @@ export function OrderEditForm({
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={save} disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
         <Button variant="outline" onClick={onCancel} disabled={pending}>Cancelar</Button>
-        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { SectionHeading } from "@/components/section-heading";
 import { MEMBER_ROLES, MEMBER_ROLE_LABELS, type MemberRole } from "@/lib/roles";
 import { updateMemberRoleAction } from "@/lib/members-actions";
+import { toastFormError } from "@/components/ui/form-feedback";
 import type { StoreMember } from "@/lib/members";
 
 function MemberRow({
@@ -21,7 +22,6 @@ function MemberRow({
 }) {
   const [role, setRole] = useState<MemberRole>(member.role);
   const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
 
   return (
     <tr className="border-b last:border-0">
@@ -35,7 +35,6 @@ function MemberRow({
             value={role}
             onChange={(e) => {
               setRole(e.target.value as MemberRole);
-              setMsg(null);
             }}
             disabled={pending}
             className="h-7 rounded-lg border border-border bg-background px-1.5 text-xs"
@@ -65,14 +64,13 @@ function MemberRow({
                   userId: member.user_id,
                   role,
                 }).catch(() => ({ ok: false, message: "Error." }));
-                setMsg(res.message);
+                if (!res.ok) toastFormError("No se pudo guardar el rol", res.message);
               })
             }
           >
             {pending ? "Guardando…" : "Guardar"}
           </Button>
         )}
-        {msg && <span className="ml-2 text-xs text-muted-foreground">{msg}</span>}
       </td>
     </tr>
   );

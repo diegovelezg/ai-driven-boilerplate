@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { updateContactAction, type CrmState } from "@/lib/crm-actions";
+import { updateContactAction } from "@/lib/crm-actions";
+import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 export interface ContactEditInitial {
   first_name: string;
@@ -34,16 +35,24 @@ export function ContactEditForm({
   const [jobTitle, setJobTitle] = useState(initial.job_title);
   const [isPrimary, setIsPrimary] = useState(initial.is_primary);
   const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
+  const { invalid, mark, clear, bad } = useInvalidFields<"email" | "phone">();
+
+  const ready = email.trim() !== "" || phone.trim() !== "";
 
   function save() {
-    setMsg(null);
-    if (!email.trim() && !phone.trim()) {
-      setMsg("Email o teléfono requerido.");
+    const keys: Array<"email" | "phone"> = [];
+    if (!email.trim() && !phone.trim()) keys.push("email", "phone");
+    else if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) keys.push("email");
+    if (keys.length > 0) {
+      mark(keys);
+      toastFormError(
+        keys.length === 1 ? "Revisa el campo marcado" : "Revisa los campos marcados",
+        keys.includes("email") && email.trim() ? "Email inválido." : "Email o teléfono requerido.",
+      );
       return;
     }
     startTransition(async () => {
-      const res: CrmState = await updateContactAction({
+      const res = await updateContactAction({
         contactId,
         patch: {
           first_name: firstName.trim() || null,
@@ -54,8 +63,19 @@ export function ContactEditForm({
           is_primary: isPrimary,
         },
       });
-      setMsg(res.message);
-      if (res.ok) onSaved?.();
+      if (!res.ok) {
+        const ks: Array<"email" | "phone"> = /teléfono|telefono/i.test(res.message) && /email/i.test(res.message)
+          ? ["email", "phone"]
+          : /email/i.test(res.message)
+            ? ["email"]
+            : /teléfono|telefono/i.test(res.message)
+              ? ["phone"]
+              : [];
+        mark(ks);
+        toastFormError("No se pudo guardar el contacto", res.message);
+        return;
+      }
+      onSaved?.();
     });
   }
 
@@ -74,11 +94,11 @@ export function ContactEditForm({
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} maxLength={320} disabled={pending} className={inputCls} />
+          <input value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} maxLength={320} disabled={pending} aria-invalid={invalid.has("email")} className={`${inputCls}${bad("email")}`} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Teléfono
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={40} disabled={pending} className={inputCls} />
+          <input value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} maxLength={40} disabled={pending} aria-invalid={invalid.has("phone")} className={`${inputCls}${bad("phone")}`} />
         </label>
         <label className="flex flex-col gap-1 text-xs sm:col-span-2">
           Cargo
@@ -98,9 +118,8 @@ export function ContactEditForm({
         </Label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={save} disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
+        <Button onClick={save} disabled={pending || !ready} title={!ready ? "Agrega email o teléfono para continuar" : undefined}>{pending ? "Guardando…" : "Guardar"}</Button>
         <Button variant="outline" onClick={onCancel} disabled={pending}>Cancelar</Button>
-        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
     </div>
   );
