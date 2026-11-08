@@ -112,7 +112,7 @@ export function DrawerShell({
         )}
 
         <div className="scroll-fade-b scrollbar-thin scrollbar-gutter-stable flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-          {fill ? children : <div className="flex flex-col gap-7 px-8 pb-8">{children}</div>}
+          {fill ? children : <div className="flex flex-col gap-7 px-8 pt-2 pb-8">{children}</div>}
         </div>
       </SheetContent>
     </Sheet>

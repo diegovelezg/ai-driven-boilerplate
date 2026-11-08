@@ -257,9 +257,9 @@ export function CompaniesList({
                 {formatNumber(c.contacts_count)} contacto{c.contacts_count === 1 ? "" : "s"}
                 {c.tax_id ? ` · ID fiscal ${c.tax_id}` : ""}
               </p>
-              {(c.email || c.city) && (
+              {(c.domain || c.city) && (
                 <p className="mt-2 truncate text-xs text-muted-foreground">
-                  {[c.email, c.city].filter(Boolean).join(" · ")}
+                  {[c.domain, c.city].filter(Boolean).join(" · ")}
                 </p>
               )}
             </article>

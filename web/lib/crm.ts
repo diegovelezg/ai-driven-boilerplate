@@ -70,7 +70,7 @@ export function normalizeCompany(input: CompanyInput): { ok: true; value: Requir
   const name = cleanStr(input.name, 200);
   if (!name) return { ok: false, error: "Nombre de empresa requerido (máx 200)." };
   const domain = input.domain === undefined || input.domain === null || input.domain === "" ? null : normalizeDomain(input.domain);
-  if (input.domain && domain === null) return { ok: false, error: "Dominio inválido." };
+  if (input.domain && domain === null) return { ok: false, error: "Web inválida (p. ej. acme.pe)." };
   const email = cleanStr(input.email, 320);
   if (input.email && !email) return { ok: false, error: "Email inválido." };
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Email inválido." };

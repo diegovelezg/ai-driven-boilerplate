@@ -305,7 +305,6 @@ export function EmpresaDrawer({
                   name: typeof company?.name === "string" ? company.name : "",
                   tax_id: typeof company?.tax_id === "string" ? company.tax_id : "",
                   domain: typeof company?.domain === "string" ? company.domain : "",
-                  email: typeof company?.email === "string" ? company.email : "",
                   phone: typeof company?.phone === "string" ? company.phone : "",
                   city: typeof company?.city === "string" ? company.city : "",
                   country: typeof company?.country === "string" ? company.country : "",
@@ -321,11 +320,10 @@ export function EmpresaDrawer({
             ) : (
             <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
               <div><dt className="text-xs text-muted-foreground">ID fiscal</dt><dd className="mt-0.5 text-[13px]">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Dominio</dt><dd className="mt-0.5 text-[13px]">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="mt-0.5 text-[13px]">{typeof company?.email === "string" && company.email ? company.email : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Web</dt><dd className="mt-0.5 text-[13px]">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="mt-0.5 text-[13px]">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-0.5 text-[13px]">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="mt-0.5 text-[13px]">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Creada</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.created_by === "string" && company.created_by ? company.created_by : "—"}</dd></div>
               {typeof company?.updated_by === "string" && company.updated_by && company.updated_by !== company.created_by && (
                 <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="mt-0.5 text-[13px]">{String(company.updated_by)}</dd></div>

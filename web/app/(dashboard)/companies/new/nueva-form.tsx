@@ -26,66 +26,66 @@ export function NuevaEmpresaForm({ canManageCommission = true }: { canManageComm
         Nombre *
         <input name="name" required maxLength={200} placeholder="Acme S.A.C." className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
       </label>
-      <div className="flex flex-col gap-1 text-xs">
-        Tipo
-        <input type="hidden" name="kind" value={kind} />
-        <Select
-          value={kind}
-          onValueChange={(v) => {
-            if (v) setKind(v);
-          }}
-          items={Object.fromEntries(
-            COMPANY_KINDS.map((k) => [k, COMPANY_KIND_LABELS[k]]),
-          )}
-          disabled={pending}
-        >
-          <SelectTrigger aria-label="Tipo">
-            <SelectValue placeholder="Elegir tipo…" />
-          </SelectTrigger>
-          <SelectContent>
-            {COMPANY_KINDS.map((k) => (
-              <SelectItem key={k} value={k}>{COMPANY_KIND_LABELS[k]}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1 text-xs">
+          Tipo
+          <input type="hidden" name="kind" value={kind} />
+          <Select
+            value={kind}
+            onValueChange={(v) => {
+              if (v) setKind(v);
+            }}
+            items={Object.fromEntries(
+              COMPANY_KINDS.map((k) => [k, COMPANY_KIND_LABELS[k]]),
+            )}
+            disabled={pending}
+          >
+            <SelectTrigger aria-label="Tipo">
+              <SelectValue placeholder="Elegir tipo…" />
+            </SelectTrigger>
+            <SelectContent>
+              {COMPANY_KINDS.map((k) => (
+                <SelectItem key={k} value={k}>{COMPANY_KIND_LABELS[k]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {showCommission && (
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="flex flex-wrap items-center gap-2">
+              Comisión %
+              <RestrictedVisibilityBadge minRole="admin" />
+            </span>
+            <span className="flex items-center gap-1">
+              <input
+                name="agency_commission_pct"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="p. ej. 15"
+                aria-label="Comisión agencia en porcentaje"
+                className="h-9 w-32 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums"
+              />
+              <span className="text-muted-foreground">%</span>
+            </span>
+          </label>
+        )}
       </div>
-      {showCommission && (
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="flex flex-wrap items-center gap-2">
-            <RestrictedVisibilityBadge minRole="admin" />
-          </span>
-          <span className="flex items-center gap-1">
-            <input
-              name="agency_commission_pct"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="p. ej. 15"
-              aria-label="Comisión agencia en porcentaje"
-              className="h-9 w-32 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums"
-            />
-            <span className="text-muted-foreground">%</span>
-          </span>
-          <span className="text-[11px] text-muted-foreground">
-            Solo agencias. Vacío = sin acuerdo (0% efectivo).
-          </span>
-        </label>
-      )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs">
           ID fiscal
           <input name="tax_id" maxLength={40} placeholder="20123456789" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
         </label>
         <label className="flex flex-col gap-1 text-xs">
-          Dominio
-          <input name="domain" maxLength={253} placeholder="acme.pe" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
-        </label>
-        <label className="flex flex-col gap-1 text-xs">
-          Email
-          <input name="email" maxLength={320} placeholder="contacto@acme.pe" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          Web
+          <input name="domain" maxLength={253} placeholder="acme.pe" inputMode="url" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Teléfono
-          <input name="phone" maxLength={40} placeholder="+51…" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          <input name="phone" type="tel" maxLength={40} placeholder="+51…" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+          Dirección
+          <input name="address" maxLength={300} placeholder="Av. …" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Ciudad
@@ -93,13 +93,9 @@ export function NuevaEmpresaForm({ canManageCommission = true }: { canManageComm
         </label>
         <label className="flex flex-col gap-1 text-xs">
           País (ISO2)
-          <input name="country" maxLength={2} placeholder="PE" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          <input name="country" maxLength={2} minLength={2} pattern="[A-Za-z]{2}" placeholder="PE" autoComplete="country" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm uppercase" />
         </label>
       </div>
-      <label className="flex flex-col gap-1 text-xs">
-        Dirección
-        <input name="address" maxLength={300} className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
-      </label>
       {state.message && (
         <p className="text-xs text-destructive" role="alert">{state.message}</p>
       )}

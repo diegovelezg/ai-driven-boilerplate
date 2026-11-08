@@ -53,6 +53,7 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
     domain: String(form.get("domain") ?? "") || null,
     email: String(form.get("email") ?? "") || null,
     phone: String(form.get("phone") ?? "") || null,
+    address: String(form.get("address") ?? "") || null,
     city: String(form.get("city") ?? "") || null,
     country: String(form.get("country") ?? "") || null,
     notes: String(form.get("notes") ?? "") || null,

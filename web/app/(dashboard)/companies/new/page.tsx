@@ -3,12 +3,14 @@ import { AppCard } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { NuevaEmpresaForm } from "./nueva-form";
+import { connection } from "next/server";
 import { getMyActiveStore } from "@/lib/tenant";
 
 // Request-time: ver nota en app/(dashboard)/page.tsx.
 export const instant = false;
 
 export default async function NuevaEmpresaPage() {
+  await connection();
   // La comisión solo la gestionan owner/admin: la page (server) resuelve el
   // rol y el form solo pinta el campo cuando corresponde. El server action
   // vuelve a exigirlo (nunca confiar solo en el gating de UI).

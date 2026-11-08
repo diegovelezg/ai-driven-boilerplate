@@ -8,7 +8,6 @@ export interface CompanyEditInitial {
   name: string;
   tax_id: string;
   domain: string;
-  email: string;
   phone: string;
   city: string;
   country: string;
@@ -30,7 +29,6 @@ export function CompanyEditForm({
   const [name, setName] = useState(initial.name);
   const [taxId, setTaxId] = useState(initial.tax_id);
   const [domain, setDomain] = useState(initial.domain);
-  const [email, setEmail] = useState(initial.email);
   const [phone, setPhone] = useState(initial.phone);
   const [city, setCity] = useState(initial.city);
   const [country, setCountry] = useState(initial.country);
@@ -51,7 +49,6 @@ export function CompanyEditForm({
           name: name.trim(),
           tax_id: taxId.trim() || null,
           domain: domain.trim() || null,
-          email: email.trim() || null,
           phone: phone.trim() || null,
           city: city.trim() || null,
           country: country.trim() || null,
@@ -77,16 +74,16 @@ export function CompanyEditForm({
           <input value={taxId} onChange={(e) => setTaxId(e.target.value)} maxLength={40} disabled={pending} className={inputCls} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
-          Dominio
+          Web
           <input value={domain} onChange={(e) => setDomain(e.target.value)} maxLength={253} placeholder="acme.pe" disabled={pending} className={inputCls} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
-          Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} maxLength={320} disabled={pending} className={inputCls} />
-        </label>
-        <label className="flex flex-col gap-1 text-xs">
           Teléfono
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={40} disabled={pending} className={inputCls} />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" maxLength={40} disabled={pending} className={inputCls} />
+        </label>
+        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+          Dirección
+          <input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={300} disabled={pending} className={inputCls} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Ciudad
@@ -94,11 +91,7 @@ export function CompanyEditForm({
         </label>
         <label className="flex flex-col gap-1 text-xs">
           País (ISO2)
-          <input value={country} onChange={(e) => setCountry(e.target.value)} maxLength={2} placeholder="PE" disabled={pending} className={inputCls} />
-        </label>
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-          Dirección
-          <input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={300} disabled={pending} className={inputCls} />
+          <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2))} maxLength={2} placeholder="PE" disabled={pending} className={`${inputCls} uppercase`} />
         </label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
