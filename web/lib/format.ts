@@ -151,3 +151,28 @@ export function toTitleCase(value: string | null | undefined): string {
     })
     .join(" ");
 }
+
+/** Tiempo relativo corto (es) para feeds: "ahora mismo" · "hace N min/h" ·
+ *  "hace N d" · "dd/mm". Inválido o futuro → "—" / "ahora mismo". */
+export function formatTimeAgo(iso: string | null | undefined, nowMs = Date.now()): string {
+  if (typeof iso !== "string" || !iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const min = Math.floor(Math.max(0, nowMs - t) / 60_000);
+  if (min < 1) return "ahora mismo";
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `hace ${d} d`;
+  const dt = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}`;
+}
+
+/** Día/mes corto para vigencias ("2026-11-08" → "08/11"). Inválido → "—". */
+export function formatDayMonth(iso: string | null | undefined): string {
+  if (typeof iso !== "string") return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}/${m[2]}` : "—";
+}

@@ -14,6 +14,11 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "").trim();
   if (!email || !password) return { ok: false, message: "Falta email o password." };
+  const { checkRateLimit, pruneRateLimits } = await import("@/lib/rate-limit");
+  pruneRateLimits();
+  if (!checkRateLimit(`login:${email.toLowerCase()}`, 10, 60_000)) {
+    return { ok: false, message: "Demasiados intentos. Espera un momento." };
+  }
   let supabase;
   try {
     supabase = await createServerSupabase();
@@ -22,8 +27,9 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
   }
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
+    // Mensaje genérico (no expone detalle del proveedor: evita enumeración).
     console.error("[login] signInWithPassword:", error.status, error.message);
-    return { ok: false, message: `Credenciales inválidas. (${error.message})` };
+    return { ok: false, message: "Credenciales inválidas." };
   }
   const { data, error: membersError } = await supabase
     .from("sys_memberships")

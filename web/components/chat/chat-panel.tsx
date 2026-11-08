@@ -6,16 +6,19 @@ import type { ChatArtifact } from "@/components/chat/types";
 import { useStreamChat } from "@/components/chat/use-stream-chat";
 import type { ChatMessage } from "@/components/chat/types";
 
-/** Pool de presets Fase 2 (DOOH, sin motor de retención): resumen de tienda,
- *  órdenes, inventario y empresas. Cada apertura muestra 3 al azar.
+/** Pool de presets Fase 2 (DOOH, sin motor de retención): resumen, operación
+ *  (órdenes al aire + atención), inventario, empresas y finanzas (ventas +
+ *  cobranza). Cada apertura muestra 3 al azar.
  *  (Histórico: los presets del loop scout/copywriter/prospector se retiraron
  *  con el motor extirpado en 20261122.) */
 const SUGGESTION_POOL = [
   "Dame el resumen de la tienda",
-  "¿Qué órdenes están en curso?",
-  "Muéstrame el inventario disponible",
+  "¿Qué órdenes están al aire?",
+  "¿Qué necesita mi atención hoy?",
+  "¿Qué pantallas están libres los próximos 14 días?",
   "¿Qué empresas son anunciantes activos?",
-  "¿Cuál es la facturación bruta?",
+  "¿Cuánto vendimos en los últimos 30 días?",
+  "¿Cómo va la cobranza?",
 ];
 
 /** 3 al azar sin repetir (Fisher-Yates parcial). */

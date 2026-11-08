@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatDecimal, formatMoney, formatNumber, formatPercent, formatPercentPoints, toTitleCase } from "@/lib/format";
+import { formatDecimal, formatDayMonth, formatMoney, formatNumber, formatPercent, formatPercentPoints, formatTimeAgo, toTitleCase } from "@/lib/format";
 
 describe("formato numérico único (es: miles '.' y decimales ',')", () => {
   it("formatNumber agrupa miles con punto y 0 decimales por defecto", () => {
@@ -68,5 +68,24 @@ describe("toTitleCase", () => {
     assert.equal(toTitleCase("  Toyota  "), "Toyota");
     assert.equal(toTitleCase(null), "—");
     assert.equal(toTitleCase(""), "—");
+  });
+});
+
+describe("formatTimeAgo", () => {
+  it("relativo corto en español para feeds", () => {
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    assert.equal(formatTimeAgo(new Date(now - 30_000).toISOString(), now), "ahora mismo");
+    assert.equal(formatTimeAgo(new Date(now - 5 * 60_000).toISOString(), now), "hace 5 min");
+    assert.equal(formatTimeAgo(new Date(now - 3 * 3_600_000).toISOString(), now), "hace 3 h");
+    assert.equal(formatTimeAgo(new Date(now - 2 * 86_400_000).toISOString(), now), "hace 2 d");
+    assert.equal(formatTimeAgo(null, now), "—");
+    assert.equal(formatTimeAgo("no-fecha", now), "—");
+  });
+
+  it("formatDayMonth para vigencias", () => {
+    assert.equal(formatDayMonth("2026-11-08"), "08/11");
+    assert.equal(formatDayMonth("2026-11-08T00:00:00-05:00"), "08/11");
+    assert.equal(formatDayMonth(null), "—");
+    assert.equal(formatDayMonth("no-fecha"), "—");
   });
 });

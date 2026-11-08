@@ -3,8 +3,11 @@ import { z } from "zod";
 import { getSupabase } from "@/lib/supabase";
 import { getCrmCompany, listCrmCompanies } from "@/lib/crm-db";
 import { getOrderDetail, listOrders } from "@/lib/orders-db";
-import { listScreens } from "@/lib/screens-db";
-import { getScreenConflicts } from "@/lib/availability";
+import { getScreenDetail, listScreens } from "@/lib/screens-db";
+import { getScreenConflicts, getScreenOccupancy } from "@/lib/availability";
+import { addDays, todayLima } from "@/lib/availability-utils";
+import { getLlmConfig } from "@/lib/ai/llm-config";
+import { resolveModelInstance } from "@/lib/ai/model-resolver";
 import { bucketMonthly, computeFinanceKpis } from "@/lib/finance";
 import { getDashboardSnapshot } from "@/lib/dashboard";
 import { ORDER_STAGE_LABELS, orderStage } from "@/lib/order-stage";
@@ -15,6 +18,10 @@ export interface AgentContext {
   storeId: string | null;
   customerId?: string | null;
   companyId?: string | null;
+  contactId?: string | null;
+  orderId?: string | null;
+  screenId?: string | null;
+  brandName?: string | null;
   view?: string | null;
   focusLabel?: string | null;
 }
@@ -23,12 +30,13 @@ export const CUSTOMER_AGENT_NAME = "dooh_agent";
 
 const DOOH_INSTRUCTION = `Eres dooh_agent, el asistente comercial DOOH de la tienda (único agente del día a día).
 Respondes sobre empresas (anunciantes, agencias, proveedores), órdenes de inserción, pantallas/inventario y finanzas.
-Tienes 5 tools de SOLO LECTURA: get_company, get_order, search_inventory, get_finance, explain_kpi. Úsalas antes de afirmar cifras.
+Tienes 6 tools de SOLO LECTURA: get_company, get_order, get_screen, search_inventory, get_finance, explain_kpi. Úsalas antes de afirmar cifras.
 Nunca inventes montos, fechas ni disponibilidad: si la tool devuelve vacío o error, dilo en honesto.
 No hablas de churn, predicciones, winback ni scoring: ese motor no existe en este producto.
 No escribes en base de datos: para crear/editar se usan las server actions existentes de la UI, nunca INSERT desde el chat.
 Moneda siempre explícita (PEN/USD según la orden o la vista); nunca mezcles monedas ni heredes en silencio.
-En accionables, enlaza a la vista real: /orders/:id, /screens, /companies/:id.`;
+En accionables, enlaza a la vista real: /orders/:id, /screens, /companies/:id.
+Reglas de foco: si el contexto indica una pantalla, empresa, orden, contacto o marca concreta, responde sobre ella sin pedir su id; usa get_screen/get_company/get_order con ese id primero. Para "próximos 14 días" calcula desde hoy (Lima) y evalúa ocupación con from/to explícitos; si no dan periodo, usa hoy→hoy+13. Responde en español, breve y con cifras exactas de las tools.`;
 
 function needStore(ctx: AgentContext): string | null {
   return ctx.storeId ?? null;
@@ -208,6 +216,100 @@ function getOrderTool(ctx: AgentContext) {
         };
       } catch (e) {
         return { error: e instanceof Error ? e.message : "Lectura de orden falló." };
+      }
+    },
+  });
+}
+
+function getScreenTool(ctx: AgentContext) {
+  return new FunctionTool({
+    name: "get_screen",
+    description:
+      "Ficha de una pantalla del inventario con precio, impacto/CPM, reservas y ocupación en un periodo. Para '¿está libre?' usa from/to (por defecto hoy→hoy+13 Lima). Acepta screen_id exacto o texto q.",
+    parameters: z.object({
+      screen_id: z.string().uuid().describe("ID exacto de la pantalla (inv_screens.id).").optional(),
+      q: z.string().min(2).max(120).describe("Texto a buscar (pantalla, venue, distrito, marca).").optional(),
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Inicio inclusivo yyyy-mm-dd.").optional(),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Fin inclusivo yyyy-mm-dd.").optional(),
+    }),
+    execute: async ({
+      screen_id,
+      q,
+      from,
+      to,
+    }: {
+      screen_id?: string;
+      q?: string;
+      from?: string;
+      to?: string;
+    }) => {
+      const storeId = needStore(ctx);
+      if (!storeId) return { error: "Sin tienda en contexto." };
+      const start = from ?? todayLima();
+      const end = to ?? addDays(start, 13);
+      if (end < start) return { error: `Rango inválido: ${start} > ${end}.` };
+      try {
+        let targetId = screen_id ?? ctx.screenId ?? null;
+        if (!targetId) {
+          if (!q) return { error: "Pasa screen_id o q." };
+          const found = await listScreens(storeId, { q, pageSize: 5 });
+          if (found.total === 0) return { error: `Sin pantallas para "${q}".` };
+          if (found.rows.length > 1 && !from && !to) {
+            return {
+              found: found.total,
+              candidates: found.rows.map((s) => ({ id: s.id, name: s.name, city: s.city })),
+              hint: "Varias coincidencias: reintenta con screen_id exacto.",
+            };
+          }
+          targetId = found.rows[0].id;
+        }
+        const [detail, occupancy] = await Promise.all([
+          getScreenDetail(storeId, targetId!),
+          getScreenOccupancy(storeId, [targetId!], start).catch(() => ({})),
+        ]);
+        if (!detail) return { error: "Pantalla no encontrada." };
+        const s = detail.screen as Record<string, unknown>;
+        const v = (detail.venue ?? {}) as Record<string, unknown>;
+        const price =
+          typeof s.price_pen === "number"
+            ? s.price_pen
+            : typeof s.price_pen === "string" && s.price_pen !== ""
+              ? Number(s.price_pen)
+              : null;
+        const impact =
+          typeof s.impact_day === "number"
+            ? s.impact_day
+            : typeof s.impact_day === "string" && s.impact_day !== ""
+              ? Number(s.impact_day)
+              : null;
+        const cpm = price !== null && impact !== null && impact > 0 ? Math.round((price / impact) * 1000) : null;
+        const ranges = (occupancy as Record<string, Array<{ starts: string; ends: string }>>)[targetId!] ?? [];
+        const conflicts = await getScreenConflicts(storeId, start, end).catch(() => []);
+        const mine = conflicts.filter((c) => c.screen_id === targetId);
+        return {
+          id: targetId,
+          name: (s.name as string | null) ?? null,
+          is_active: s.is_active === true,
+          supplier: detail.supplier_name,
+          external_ref: (s.external_ref as string | null) ?? null,
+          venue: {
+            address: (v.full_address as string | null) ?? (v.address as string | null) ?? null,
+            district: (v.district as string | null) ?? null,
+            city: (v.city as string | null) ?? null,
+          },
+          price_pen: price,
+          impact_day: impact,
+          cpm_pen: cpm,
+          period: { from: start, to: end },
+          free: mine.length === 0,
+          conflicts: mine.slice(0, 5),
+          occupancy_next_400d: ranges.slice(0, 20),
+          bookings_count: detail.bookings_count,
+          lines_count: detail.lines_count,
+          deep_link: `/screens?screen=${targetId}`,
+        };
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : "Lectura de pantalla falló." };
       }
     },
   });
@@ -487,25 +589,64 @@ function explainKpiTool(ctx: AgentContext) {
 }
 
 export function createDoohTools(ctx: AgentContext) {
-  return [getCompanyTool(ctx), getOrderTool(ctx), searchInventoryTool(ctx), getFinanceTool(ctx), explainKpiTool(ctx)];
+  return [
+    getCompanyTool(ctx),
+    getOrderTool(ctx),
+    getScreenTool(ctx),
+    searchInventoryTool(ctx),
+    getFinanceTool(ctx),
+    explainKpiTool(ctx),
+  ];
+}
+
+/** Bloque de contexto inyectado a la instrucción (foco de ficha + fecha Lima). */
+export function buildScopeBlock(ctx: AgentContext): string {
+  const today = todayLima();
+  const focus: string[] = [];
+  if (ctx.screenId) focus.push(`pantalla enfocada: ${ctx.screenId}`);
+  if (ctx.companyId) focus.push(`empresa enfocada: ${ctx.companyId}`);
+  if (ctx.orderId) focus.push(`orden enfocada: ${ctx.orderId}`);
+  if (ctx.contactId) focus.push(`contacto enfocado: ${ctx.contactId}`);
+  if (ctx.brandName) focus.push(`marca enfocada: ${ctx.brandName}`);
+  if (ctx.focusLabel) focus.push(`etiqueta: ${ctx.focusLabel}`);
+  if (ctx.view) focus.push(`vista: ${ctx.view}`);
+  return [
+    `Contexto operativo: tienda=${ctx.storeId ?? "sin-tienda"} hoy=${today} (America/Lima) periodo por defecto=${today}→${addDays(today, 13)}.`,
+    focus.length > 0 ? `Foco: ${focus.join(" · ")}.` : "Foco: general de la tienda.",
+  ].join("\n");
 }
 
 /**
  * Agente DOOH único del día a día (negocio/empresas/órdenes/inventario/finanzas).
- * 5 tools read-only cableadas; escrituras vía server actions existentes.
+ * 6 tools read-only cableadas; escrituras vía server actions existentes.
+ * Cablea el modelo del proceso `customer_chat` (primario + fallback) y el
+ * metering por tenant vía generateContentConfig (storeId/process).
  */
 export function getCustomerAgent(ctx?: AgentContext) {
   const safe: AgentContext = {
     storeId: ctx?.storeId ?? null,
     customerId: ctx?.customerId ?? null,
     companyId: ctx?.companyId ?? null,
+    contactId: ctx?.contactId ?? null,
+    orderId: ctx?.orderId ?? null,
+    screenId: ctx?.screenId ?? null,
+    brandName: ctx?.brandName ?? null,
     view: ctx?.view ?? null,
     focusLabel: ctx?.focusLabel ?? null,
   };
+  const cfg = getLlmConfig("customer_chat");
+  const model = resolveModelInstance(cfg);
   return new LlmAgent({
     name: CUSTOMER_AGENT_NAME,
     description: "Asistente comercial DOOH: empresas, órdenes, inventario y finanzas.",
-    instruction: DOOH_INSTRUCTION,
+    instruction: `${DOOH_INSTRUCTION}\n\n${buildScopeBlock(safe)}`,
+    model,
     tools: createDoohTools(safe),
+    generateContentConfig: {
+      temperature: cfg.temperature,
+      maxOutputTokens: cfg.maxTokens,
+      storeId: safe.storeId,
+      process: "customer_chat",
+    } as unknown as ConstructorParameters<typeof LlmAgent>[0]["generateContentConfig"],
   });
 }

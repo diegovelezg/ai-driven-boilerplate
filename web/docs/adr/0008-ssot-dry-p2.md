@@ -9,7 +9,7 @@ Fecha: 2026-11-07. Alcance mínimo y seguro: centralizar sin reescribir.
 | Badges crudos (paid/overdue, paused/draft, Borrador fantasma, b2c/B2B) | `lib/ui-badges.tsx`: `invoiceBadgeDisplay`, `companyIoBadgeDisplay`, `campaignBadgeDisplay`, `MODEL_LABEL` | `components/order-badges.tsx`, `components/company-badges.tsx`, `components/profile-chat.tsx` |
 | Estado activo/inactivo y en-pauta en listas | `components/ui/badge.tsx` (`success`/`secondary`) directo | `screens-list.tsx`, `brands-list.tsx` |
 | Chats de ficha ×4 | `lib/entity-chat.tsx` (`EntityChat` sobre `ChatShell` + `useStreamChat`) | `empresa-chat.tsx`, `marca-chat.tsx`, `contact-chat.tsx`, `orden-chat.tsx`. `profile-chat.tsx` NO migra (server actions + propuesta) |
-| Rutas chat 501 ×5 | `lib/api/chat-route.ts` (`createChatRoute`) | `app/api/chat/route.ts`, `companies/[id]/chat`, `contacts/[id]/chat`, `orders/[id]/chat`, `brands/[name]/chat` |
+| Rutas chat 501 ×6 | `lib/api/chat-route.ts` (`createChatRoute`) | `app/api/chat/route.ts`, `companies/[id]/chat`, `contacts/[id]/chat`, `orders/[id]/chat`, `brands/[name]/chat`, `screens/[id]/chat` |
 | `SORT_ALIASES` ×3 | `lib/sort.ts` (+ `resolveSortAlias` genérico) | `lib/crm-db.ts`, `lib/screens-db.ts`, `lib/brand-db.ts` (re-exportan por compat) |
 | `startOfDayUTC` ×2 | `lib/dates.ts` | `lib/dashboard.ts`, `lib/billing-status.ts` |
 | `resolveTenantStore` ×3 | `lib/tenant.ts` (`resolveTenantStoreAction`) | `lib/crm-actions.ts`, `lib/order-actions.ts`, `lib/screens-actions.ts` (alias local, misma firma). `dooh-import-actions.ts` NO migra (lógica legacy distinta: best-effort + crea tenant) |

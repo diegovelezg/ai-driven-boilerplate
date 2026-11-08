@@ -21,6 +21,10 @@ export async function POST(req: Request) {
     if ((await requireMyStoreAccess(active.id).catch(() => false)) === false) {
       return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
     }
+    const { checkRateLimit } = await import("@/lib/rate-limit");
+    if (!checkRateLimit(`brief:${active.id}`, 5, 60_000)) {
+      return Response.json({ error: "Demasiadas corridas. Espera un momento." }, { status: 429 });
+    }
     if (!force) {
       const { getLastFinishedAt } = await import("@/lib/background");
       const { startOfDayUTC } = await import("@/lib/dates");

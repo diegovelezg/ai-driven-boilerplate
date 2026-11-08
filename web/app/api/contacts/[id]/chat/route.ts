@@ -1,6 +1,5 @@
-// Chat del drawer de contacto: mismo agente generalista con foco en la persona.
-// Fase 2: agente DOOH en construcción (501 honesto hasta que aterrice).
-// SSOT del esqueleto en lib/api/chat-route.ts (issue #8 P2).
+// Chat del drawer de contacto: agente con foco en el contacto.
+// SSOT del handler en lib/api/chat-route.ts.
 import { createChatRoute } from "@/lib/api/chat-route";
 
-export const POST = createChatRoute();
+export const POST = createChatRoute({ scope: "contact" });

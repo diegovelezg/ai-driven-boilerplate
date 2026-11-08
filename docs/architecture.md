@@ -5,7 +5,8 @@
 > `customer_predictions/churn_signals/proposed_actions/proposed_leads`,
 > ecommerce legacy `customers/orders/channels/products`). Migración
 > `20261122000000_drop_retention_engine.sql`. Sin morning pipeline (worker no-op,
-> cron desactivado), chat en pausa (501) hasta el agente DOOH. Lo que sigue
+> cron desactivado). Chat DOOH en vivo (`dooh_agent`, 6 tools read-only,
+> streaming SSE en `web/lib/api/chat-route.ts`). Lo que sigue
 > describe el sistema DOOH vigente + historia del motor extirpado.
 
 > **Estado (Fase 2):** bloque HISTÓRICO. Describía `main` a 2026-10-22, cuando el
@@ -218,23 +219,16 @@ npm install @google/adk
 npm install -D @google/adk-devtools
 ```
 
-## 7. Chat (ADK, en pausa 501 hasta el agente DOOH)
+## 7. Chat (ADK, en vivo: dooh_agent + SSE)
 
-> Nota Fase 2 (20261122): el motor de retención quedó retirado —
-> `retain-tools.ts`, `review/`, `customers/`, `products/` del motor y
-> `conversations/messages` se extirparon. El agente generalista vive en
-> `lib/adk/agents/customer-agent.ts`. Rutas: `app/api/chat`,
-> `companies/[id]/chat`, `orders/[id]/chat`, `contacts/[id]/chat` (501).
-
-> Nota Fase 2 (20261122): el motor de retención quedó retirado —
-> `lib/adk/tools/retain-tools.ts`, `review/`, `customers/`, `products/` y
-> `conversations/messages` se extirparon. El agente generalista vive en
-> `lib/adk/agents/customer-agent.ts`. Rutas: `app/api/chat`,
-> `companies/[id]/chat`, `orders/[id]/chat`, `contacts/[id]/chat`.
-
-- **Chat:** `lib/adk/agents/customer-agent.ts` (`customer_chat`, en pausa 501).
-  Rutas `app/api/chat`, `orders/[id]/chat`, `companies/[id]/chat`,
-  `contacts/[id]/chat` (501 hasta el agente DOOH). Lo que sigue es histórico:
+- **Chat:** `lib/adk/agents/customer-agent.ts` (`dooh_agent`, proceso
+  `customer_chat` en `config/llm_models.json`, 6 tools read-only:
+  `get_company/get_order/get_screen/search_inventory/get_finance/explain_kpi`).
+  Handler SSOT `lib/api/chat-route.ts` (auth + tenant del lado servidor,
+  sesión ADK por usuario×tienda×foco, streaming SSE que `sse.ts` ya parsea).
+  Rutas `app/api/chat` (store), `screens/[id]/chat`, `companies/[id]/chat`,
+  `orders/[id]/chat`, `contacts/[id]/chat`, `brands/[name]/chat`.
+  Lo que sigue es histórico:
 - **Tools — HISTÓRICO (22, `lib/adk/tools/retain-tools.ts`, extirpado):** ~~`get_store_summary, get_recovery_stats,
   list_signals, list_actions, approve_actions, reject_actions, find_customer,
   filter_customers, get_customer_profile, get_customer_orders, get_customer_firmographics,

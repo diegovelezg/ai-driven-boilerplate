@@ -38,6 +38,7 @@ import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
 import { es } from "react-day-picker/locale";
 import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
+import { filterPickScreens } from "@/lib/screen-pick";
 import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
 import { PantallaDrawer } from "../../screens/pantalla-drawer";
 import type { ScreenConflict } from "@/lib/availability";
@@ -189,13 +190,7 @@ function ScreenMultiSelect({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return screens;
-    return screens.filter((s) =>
-      `${s.name} ${s.detail ?? ""}`.toLowerCase().includes(needle),
-    );
-  }, [screens, q]);
+  const filtered = useMemo(() => filterPickScreens(screens, q), [screens, q]);
   const visible = useMemo(
     () => (availableOnly && periodReady ? filtered.filter((s) => occupiedOf(s.id).length === 0) : filtered),
     [filtered, availableOnly, periodReady, occupiedOf],

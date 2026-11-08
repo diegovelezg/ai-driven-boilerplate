@@ -260,7 +260,7 @@ export function EmpresaDrawer({
     { id: "ficha", label: "Ficha", icon: Building2 },
     { id: "perfil", label: "Perfil", icon: Globe },
     { id: "contactos", label: `Contactos (${contacts.length})`, icon: UserRound },
-    { id: "pedidos", label: `Pedidos (${ios.length})`, icon: FileText },
+    { id: "pedidos", label: `Órdenes (${ios.length})`, icon: FileText },
     { id: "agentes", label: "Agentes", icon: Bot },
   ];
 

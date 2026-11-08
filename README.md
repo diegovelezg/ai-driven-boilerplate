@@ -7,7 +7,7 @@
 > **Fase 2 (2026-11-07):** se extirpó el motor de retención original
 > (modelo probabilístico + loop scout→strategist→copywriter→dispatcher→analyst).
 > Migración `20261122000000_drop_retention_engine.sql`. Sin morning pipeline,
-> sin cron (worker no-op), chat en pausa (501) hasta el agente DOOH.
+> sin cron (worker no-op). Chat DOOH en vivo (`dooh_agent`, streaming SSE).
 
 ## Qué es (y qué no es)
 
@@ -82,8 +82,8 @@ Mapeo:
   `dooh-import`), hard hold anti-sobreventa (`io_check_hold_overlap`),
   autonumeración de IOs (`io_mint_number`), flujo orden→cobro, marcas.
 - **Dashboard Next.js 16 (App Router)**: Hoy, Órdenes, Finanzas, Inventario,
-  Empresas, Contactos, Marcas, Settings, Ayuda. Chat en pausa (501) hasta el
-  agente DOOH; worker no-op sin cron (`docs/coolify.md` §3b DESACTIVADO).
+  Empresas, Contactos, Marcas, Settings, Ayuda. Chat DOOH en vivo
+  (`dooh_agent`, 6 tools read-only, SSE); worker no-op sin cron (`docs/coolify.md` §3b DESACTIVADO).
 - **Transversales vivos**: metering LLM por tenant (`ai_llm_usage`),
   perfiles de tienda, matriz de conflictos `operations.ts` (kind+scope),
   slot atómico `sys_run_start()`, schema-guard, i18n pendiente (issue #1).

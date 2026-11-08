@@ -59,7 +59,7 @@ export interface ChatShellProps {
   error: string | null;
   /** Reintento del último turno (el hook reenvía sin duplicar la burbuja). */
   onRetry?: () => void;
-  /** Trabajo en curso del orquestador; si llega, reemplaza a thinkingLabel. */
+  /** Trabajo en curso del agente; si llega, reemplaza a thinkingLabel. */
   status?: string | null;
   /** Deshabilita input + sugerencias (p.ej. perfil ya completado). */
   disabled?: boolean;

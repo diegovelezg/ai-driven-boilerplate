@@ -5,8 +5,10 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  audienceMentions,
   buildBriefFacts,
   dedupeKey,
+  describeContextShort,
   isMine,
   mapAudience,
   MAX_POSTS_PER_DAY,
@@ -95,6 +97,22 @@ describe("muro de insights (issue #11)", () => {
     assert.equal(isMine(aud, { userId: "u9", email: "b@x.pe", role: null }), false);
     assert.equal(isMine({ roles: ["seller"] }, { userId: "u9", email: null, role: "seller" }), true);
     assert.equal(isMine({ roles: ["admin"] }, { userId: "u9", email: null, role: "seller" }), false);
+  });
+
+  it("taggeo visible: menciones @usuario y @rol, sin duplicados", () => {
+    assert.deepEqual(audienceMentions({ emails: ["Ana@x.pe", "ana@x.pe"], roles: ["seller"] }), ["@ana", "@seller"]);
+    assert.deepEqual(audienceMentions({ emails: [], roles: [] }), []);
+    assert.deepEqual(audienceMentions({}), []);
+  });
+
+  it("contexto humano: solo cifras exactas, nunca estimadas", () => {
+    assert.equal(
+      describeContextShort({ company: "Alicorp", brand: "Tottus", screens: 3, amountMinor: 420000, currency: "PEN", startsAt: "2026-11-12", endsAt: "2026-11-30" }),
+      "Cliente: Alicorp · Tottus · Pantallas: 3 · Monto: S/ 4.200 · Vigencia: 12/11 → 30/11",
+    );
+    assert.equal(describeContextShort({ company: null, brand: null, screens: 1, amountMinor: null, currency: null, startsAt: null, endsAt: null }), "Pantallas: 1");
+    assert.equal(describeContextShort(null), null);
+    assert.equal(describeContextShort({ company: null, brand: null, screens: null, amountMinor: 0, currency: "PEN", startsAt: null, endsAt: null }), null);
   });
 
   it("migración crea sys_insights + sys_insight_reads con RLS por tenant", () => {

@@ -4,7 +4,7 @@ import { EntityChat } from "@/lib/entity-chat";
 
 const SUGGESTED = [
   "Resúmeme este contacto",
-  "¿Qué pedidos tiene su empresa?",
+  "¿Qué órdenes tiene su empresa?",
   "¿Es la persona que firma o aprueba?",
   "¿Qué le escribirías y por qué?",
 ];
@@ -21,7 +21,7 @@ export function ContactChat({
       url={`/api/contacts/${contactId}/chat`}
       suggestions={SUGGESTED}
       emptyTitle="Pregunta por este contacto"
-      emptySubtitle="Leo su ficha, su empresa y sus pedidos para responder."
+      emptySubtitle="Leo su ficha, su empresa y sus órdenes para responder."
       avatarLetter={contactLabel}
       placeholder="Pregunta por este contacto…"
       inputAriaLabel="Pregunta por este contacto"

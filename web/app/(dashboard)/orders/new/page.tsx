@@ -46,18 +46,34 @@ export default async function NuevaOrdenPage() {
           normalizeCurrency((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN");
         const { data: sc } = await db
           .from("inv_screens")
-          .select("id,name,external_ref,technology,width_px,height_px,price_pen,inv_venues(name)")
+          .select("id,name,external_ref,technology,width_px,height_px,price_pen,supplier_company_id,inv_venues(name,district,city)")
           .eq("store_id", storeId)
           .eq("is_active", true)
           .order("name", { ascending: true })
           .limit(200);
-        screens = ((sc ?? []) as Array<Record<string, unknown>>).map((s) => {
-          const v = s.venues as unknown as { name?: unknown } | null;
+        const screenRows = ((sc ?? []) as Array<Record<string, unknown>>);
+        // Proveedores en batch (mismo patrón que listScreensLegacy): el
+        // picker indexa proveedor como la vista principal de screens.
+        const supIds = [...new Set(screenRows.map((s) => s.supplier_company_id).filter((v): v is string => !!v))];
+        let supBy = new Map<string, string>();
+        if (supIds.length > 0) {
+          const { data: sups } = await db
+            .from("crm_companies")
+            .select("id,name")
+            .eq("store_id", storeId)
+            .in("id", supIds);
+          supBy = new Map(((sups ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]));
+        }
+        screens = screenRows.map((s) => {
+          const v = s.inv_venues as unknown as { name?: unknown; district?: unknown; city?: unknown } | null;
           const venue = typeof v?.name === "string" ? v.name : "";
+          const district = typeof v?.district === "string" ? v.district : "";
+          const city = typeof v?.city === "string" ? v.city : "";
+          const supplier = typeof s.supplier_company_id === "string" ? (supBy.get(s.supplier_company_id) ?? "") : "";
           const w = Number(s.width_px);
           const h = Number(s.height_px);
           const res = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? `${w}×${h}` : "";
-          const detail = [s.external_ref, venue, s.technology, res]
+          const detail = [s.external_ref, venue, district, city, supplier, s.technology, res]
             .map((x) => String(x ?? "").trim())
             .filter(Boolean)
             .join(" · ");

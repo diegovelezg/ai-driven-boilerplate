@@ -1,6 +1,5 @@
-// Chat del drawer de marca: paridad con /api/companies/[id]/chat.
-// Fase 2: agente DOOH en construcción (501 honesto hasta que aterrice).
-// SSOT del esqueleto en lib/api/chat-route.ts (issue #8 P2).
+// Chat del drawer de marca: agente con foco en la marca.
+// SSOT del handler en lib/api/chat-route.ts.
 import { createChatRoute } from "@/lib/api/chat-route";
 
-export const POST = createChatRoute();
+export const POST = createChatRoute({ scope: "brand" });

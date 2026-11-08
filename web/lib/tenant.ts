@@ -9,6 +9,9 @@
 // usuario actual vía cliente RLS (cualquier miembro del tenant ve todo el
 // tenant, y solo sus tenants).
 //
+// Solo server (service_role vía lib/supabase): nunca importar en cliente.
+import "server-only";
+
 // SSOT (issue #8 P2): shop_currency siempre vía normalizeCurrency
 // (nunca `String(x ?? 'PEN')` a mano); resolveTenantStoreAction unifica el
 // resolve de server actions (antes copiado en crm/order/screens-actions).

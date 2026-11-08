@@ -96,7 +96,7 @@ export function MarcaDrawer({
   const tabs: DrawerTabDef[] = [
     { id: "ficha", label: "Ficha", icon: Megaphone },
     { id: "perfil", label: "Perfil", icon: Globe },
-    { id: "pedidos", label: `Pedidos (${ios.length})`, icon: FileText },
+    { id: "pedidos", label: `Órdenes (${ios.length})`, icon: FileText },
     { id: "empresas", label: `Empresas (${companies.length})`, icon: Building2 },
     { id: "agentes", label: "Agentes", icon: Bot },
   ];

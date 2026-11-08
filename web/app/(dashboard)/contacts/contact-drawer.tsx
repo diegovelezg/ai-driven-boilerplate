@@ -89,7 +89,7 @@ export function ContactDrawer({
 
   const drawerTabs: DrawerTabDef[] = [
     { id: "resumen", label: "Resumen", icon: UserRound },
-    { id: "pedidos", label: `Pedidos${ios ? ` (${ios.length})` : ""}`, icon: FileText },
+    { id: "pedidos", label: `Órdenes${ios ? ` (${ios.length})` : ""}`, icon: FileText },
     { id: "agentes", label: "Agentes", icon: Bot },
   ];
 

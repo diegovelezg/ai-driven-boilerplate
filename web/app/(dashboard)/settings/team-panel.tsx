@@ -1,9 +1,18 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Save } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/toast";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SectionHeading } from "@/components/section-heading";
 import { MEMBER_ROLES, MEMBER_ROLE_LABELS, type MemberRole } from "@/lib/roles";
 import { updateMemberRoleAction } from "@/lib/members-actions";
@@ -23,6 +32,7 @@ function MemberRow({
 }) {
   const [role, setRole] = useState<MemberRole>(member.role);
   const [pending, start] = useTransition();
+  const router = useRouter();
 
   return (
     <tr className="border-b last:border-0">
@@ -32,21 +42,30 @@ function MemberRow({
       </td>
       <td className="px-4 py-2 text-xs">
         {canEdit ? (
-          <select
+          <Select
             value={role}
-            onChange={(e) => {
-              setRole(e.target.value as MemberRole);
+            onValueChange={(v) => {
+              if (v) setRole(v as MemberRole);
             }}
+            items={Object.fromEntries(
+              MEMBER_ROLES.map((r) => [r, MEMBER_ROLE_LABELS[r]]),
+            )}
             disabled={pending}
-            className="h-7 rounded-lg border border-border bg-background px-1.5 text-xs"
-            aria-label={`Rol de ${member.email ?? member.user_id}`}
           >
-            {MEMBER_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {MEMBER_ROLE_LABELS[r]}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              size="sm"
+              aria-label={`Rol de ${member.email ?? member.user_id}`}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MEMBER_ROLES.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {MEMBER_ROLE_LABELS[r]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : (
           MEMBER_ROLE_LABELS[member.role]
         )}
@@ -65,7 +84,12 @@ function MemberRow({
                   userId: member.user_id,
                   role,
                 }).catch(() => ({ ok: false, message: "Error." }));
-                if (!res.ok) toastFormError("No se pudo guardar el rol", res.message);
+                if (!res.ok) {
+                  toastFormError("No se pudo guardar el rol", res.message);
+                  return;
+                }
+                toast.add({ title: "Rol actualizado", description: res.message, type: "success" });
+                router.refresh();
               })
             }
           >
@@ -118,7 +142,7 @@ export function TeamPanel({
             </thead>
             <tbody>
               {members.map((m) => (
-                <MemberRow key={m.user_id} member={m} storeId={storeId} canEdit={canEdit && storeId !== null} isSelf={myUserId === m.user_id} />
+                <MemberRow key={`${m.user_id}-${m.role}`} member={m} storeId={storeId} canEdit={canEdit && storeId !== null} isSelf={myUserId === m.user_id} />
               ))}
             </tbody>
           </table>

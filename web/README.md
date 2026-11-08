@@ -2,7 +2,8 @@
 
 > **Fase 2 (2026-11-07):** gestión comercial DOOH. Motor de retención
 > extirpado (`20261122000000_drop_retention_engine.sql`): sin morning
-> pipeline, sin cron (worker no-op), chat en pausa (501) hasta el agente DOOH.
+> pipeline, sin cron (worker no-op). Chat DOOH en vivo (ADK `dooh_agent`,
+> 6 tools read-only, streaming SSE).
 
 Dashboard merchant multi-tenant (inventario DOOH vía Sheet/CSV) a Supabase.
 Las vistas leen desde BD.
@@ -13,7 +14,8 @@ Las vistas leen desde BD.
 - Supabase local (Postgres + PostgREST) vía CLI + Docker; misma migración corre en cloud
   (93 migraciones en `supabase/migrations/` —incl. `20261208000000_currency_ssot.sql`—, 24 tablas vivas + vista `ai_llm_usage_daily`)
 - Ingesta DOOH vía Sheet/CSV (`lib/sheet-import.ts` + `lib/dooh-import.ts`)
-- ADK `@google/adk@^2.3.0` (pausado: chat 501 hasta el agente DOOH), modelos en
+- ADK `@google/adk@^2.3.0` (chat DOOH en vivo: `dooh_agent` + 6 tools
+  read-only + Runner SSE en `lib/api/chat-route.ts`), modelos en
   `config/llm_models.json`
 - Worker `worker.ts`: no-op intencional (sale 0 sin hacer nada); **sin cron**
   (`docs/coolify.md` §3b DESACTIVADO — esta es la fuente vigente; cualquier

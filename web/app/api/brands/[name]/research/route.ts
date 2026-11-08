@@ -53,6 +53,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ name: s
   const { name } = await params;
   const g = await guard();
   if ("error" in g) return g.error;
+  const { checkRateLimit } = await import("@/lib/rate-limit");
+  if (!checkRateLimit(`research:brand:${g.storeId}`, 12, 60_000)) {
+    return Response.json({ error: "Demasiadas investigaciones. Espera un momento." }, { status: 429 });
+  }
   let body: { domains?: unknown; force?: unknown } = {};
   try {
     body = (await req.json()) as typeof body;

@@ -1,7 +1,7 @@
 "use client";
 
-// SSOT visual de chats de ficha (issue #8 P2): empresa, marca, contacto y
-// orden calcaban el mismo bloque useStreamChat + ChatShell (avatar inicial,
+// SSOT visual de chats de ficha (issue #8 P2): empresa, marca, contacto,
+// orden y pantalla calcaban el mismo bloque useStreamChat + ChatShell (avatar inicial,
 // sugerencias, títulos). Lo distinto va por props; este wrapper es el único
 // que toca ChatShell/useStreamChat para fichas.
 // profile-chat NO migra: usa server actions + tarjeta de propuesta propias.

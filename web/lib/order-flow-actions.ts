@@ -36,7 +36,7 @@ export async function signOrderAction(input: {
     if (error || !data) return { ok: false, message: "No encontrada." };
     const row = data as Record<string, unknown>;
     const storeId = String(row.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
       return { ok: false, message: "No encontrada." };
     }
     if (String(row.status ?? "") === "cancelled") {
@@ -92,7 +92,7 @@ export async function createAgencyOrderAction(input: {
     if (error || !data) return { ok: false, message: "No encontrada." };
     const row = data as Record<string, unknown>;
     const storeId = String(row.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
       return { ok: false, message: "No encontrada." };
     }
     if (String(row.status ?? "") !== "signed") {
@@ -140,7 +140,7 @@ async function orderStore(
   if (error || !data) return { error: "No encontrada." as const };
   const row = data as Record<string, unknown>;
   const storeId = String(row.store_id ?? "");
-  if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+  if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
     return { error: "No encontrada." as const };
   }
   const denied = await denyViewer(storeId);
@@ -163,7 +163,7 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
     const { data, error } = await db.from("io_agency_orders").select("id,store_id,io_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "No encontrada." };
     const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
+    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
       return { ok: false, message: "No encontrada." };
     }
     const denied = await denyViewer(String(r.store_id ?? ""));
@@ -266,7 +266,7 @@ export async function deleteCreativeAction(input: { creativeId: string }): Promi
     const { data, error } = await db.from("io_creatives").select("id,store_id,io_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "No encontrada." };
     const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
+    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
       return { ok: false, message: "No encontrada." };
     }
     const denied = await denyViewer(String(r.store_id ?? ""));
@@ -326,7 +326,7 @@ export async function deletePhotoAction(input: { photoId: string }): Promise<Ord
     const { data, error } = await db.from("io_photo_checks").select("id,store_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "No encontrada." };
     const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
+    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
       return { ok: false, message: "No encontrada." };
     }
     const denied = await denyViewer(String(r.store_id ?? ""));

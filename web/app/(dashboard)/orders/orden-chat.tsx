@@ -6,7 +6,7 @@ const SUGGESTED = [
   "Resúmeme esta orden",
   "¿En qué etapa está y qué falta para avanzar?",
   "¿Cómo va la cobranza?",
-  "¿Falta material o certificación?",
+  "¿Quién anuncia y quién paga esta orden?",
 ];
 
 export function OrdenChat({

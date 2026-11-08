@@ -2,15 +2,17 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense, Fragment } from "react";
+import { Suspense, Fragment, useEffect, useState } from "react";
 import {
   Cat,
   Building2,
+  CalendarDays,
   CircleHelp,
   Contact,
   FileText,
   Inbox,
   LayoutDashboard,
+  MessagesSquare,
   MonitorPlay,
   Settings,
   Tag,
@@ -30,6 +32,7 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
+import { useChatDock } from "@/components/chat/chat-dock";
 
 type NavItem = {
   href: string;
@@ -55,6 +58,7 @@ const groups: NavGroup[] = [
     items: [
       { href: "/orders", label: "Órdenes", icon: FileText },
       { href: "/finance", label: "Finanzas", icon: TrendingUp },
+      { href: "/occupancy", label: "Ocupación", icon: CalendarDays },
     ],
   },
   {
@@ -95,6 +99,29 @@ function AppSidebarNav() {
     const qs = kept.toString();
     return qs ? `?${qs}` : "";
   })();
+  // Badge del Muro: avisos activos (no descartados). Se recarga al navegar
+  // y cuando el muro avisa mutación (`muro:update` tras descartar/restaurar).
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const { getUnreadWallCountAction } = await import("@/lib/insights-actions");
+        const n = await getUnreadWallCountAction();
+        if (alive) setUnread(n);
+      } catch {
+        // Sin badge antes que sin página.
+      }
+    };
+    void load();
+    const onUpdate = () => void load();
+    window.addEventListener("muro:update", onUpdate);
+    return () => {
+      alive = false;
+      window.removeEventListener("muro:update", onUpdate);
+    };
+  }, [pathname, suffix]);
+  const { dock, toggleChat } = useChatDock();
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -142,6 +169,15 @@ function AppSidebarNav() {
                       >
                         <item.icon strokeWidth={1.75} />
                         <span>{item.label}</span>
+                        {item.href === "/muro" && unread > 0 && (
+                          <span
+                            className="ms-auto flex min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums group-data-[collapsible=icon]:hidden"
+                            aria-label={`${unread} avisos sin leer`}
+                            role="status"
+                          >
+                            {unread > 9 ? "9+" : unread}
+                          </span>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
@@ -151,6 +187,28 @@ function AppSidebarNav() {
             </SidebarGroup>
           </Fragment>
         ))}
+        <SidebarSeparator className="mx-2 my-2" />
+        <SidebarGroup className="px-2 py-1.5">
+          <SidebarGroupLabel className="px-2 pb-1.5 tracking-wide uppercase">
+            Asistente
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                {/* No navega: abre el dock y la vista actual queda a la derecha.
+                    Activo = dock abierto. */}
+                <SidebarMenuButton
+                  onClick={toggleChat}
+                  isActive={dock !== null}
+                  tooltip="Chat"
+                >
+                  <MessagesSquare strokeWidth={1.75} />
+                  <span>Chat</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
         <div className="flex items-center justify-between px-1 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-2">

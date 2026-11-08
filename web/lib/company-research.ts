@@ -113,7 +113,12 @@ export async function getDomainProfiles(domains: string[]): Promise<Map<string, 
 
 export type ResearchStatus = "ok" | "cached" | "no-homepage" | "error";
 
-/** Investiga un dominio y lo persiste en `domains` (upsert por PK). */
+/** Investiga un dominio y lo persiste en `domains` (upsert por PK).
+ *  Caché global por diseño: solo guarda firmographics públicos de la homepage
+ *  (company/industry/description/size/location/source/model/confidence).
+ *  Nunca persiste emails de contactos ni PII del tenant (los candidatos por
+ *  email solo derivan el dominio y se descartan). Por eso la lectura global
+ *  `authenticated` no filtra por store_id. */
 export async function researchDomain(
   domain: string,
   opts: { storeId?: string | null; force?: boolean } = {},

@@ -21,7 +21,7 @@ interface ChatDockState {
 interface ChatDockContextValue {
   dock: ChatDockState | null;
   /** Abre (o reemplaza) el dock con tienda explícita. Sin foco: el
-   *  orquestador rutea solo. */
+   *  agente dooh_agent responde solo. */
   openDock: (input: {
     storeId: string;
     storeName: string;
@@ -207,7 +207,7 @@ function DockRoot({ dock, onClose }: { dock: ChatDockState; onClose: () => void 
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-start justify-between gap-2 border-b px-4 py-3">
               <div className="min-w-0">
-                <p className="text-sm font-semibold tracking-tight">Pregunta a tu equipo de agentes</p>
+                <p className="text-sm font-semibold tracking-tight">Pregunta a tu asistente DOOH</p>
               </div>
               <div className="flex shrink-0 items-center">
                 <AppTooltip tip="Cerrar chat">
