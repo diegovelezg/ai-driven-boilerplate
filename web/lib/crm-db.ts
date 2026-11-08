@@ -1,5 +1,5 @@
 // Lecturas CRM (service_role, como customers-db). Escrituras en crm-actions.ts.
-import { getSupabase } from "@/lib/supabase";
+import { getSupabase, isSupabaseMissingFunction } from "@/lib/supabase";
 import type { CompanyKind } from "@/lib/crm";
 
 export interface CrmCompany {
@@ -71,6 +71,54 @@ export async function listCrmCompanies(
   const page = Math.max(1, opts.page ?? 1);
   const sortKey = opts.sortKey ?? "name";
   const sortDir = opts.sortDir ?? (sortKey === "contacts" ? "desc" : "asc");
+  const q = (opts.q ?? "").trim();
+
+  // Vía rápida: un roundtrip con ranking + total exacto en Postgres.
+  const rpc = await db.rpc("crm_search_companies", {
+    p_store: storeId,
+    p_q: q || null,
+    p_kind: opts.kind ?? null,
+    p_sort: sortKey,
+    p_dir: sortDir,
+    p_limit: pageSize,
+    p_offset: (page - 1) * pageSize,
+  });
+  if (!rpc.error) {
+    const data = (rpc.data ?? []) as Array<Record<string, unknown>>;
+    const total = data.length > 0 ? Number(data[0].total ?? 0) : 0;
+    return {
+      rows: data.map((r) => ({
+        id: String(r.id),
+        store_id: String(r.store_id),
+        name: String(r.name ?? ""),
+        kind: (r.kind as CompanyKind | null) ?? null,
+        tax_id: (r.tax_id as string | null) ?? null,
+        domain: (r.domain as string | null) ?? null,
+        email: (r.email as string | null) ?? null,
+        phone: (r.phone as string | null) ?? null,
+        city: (r.city as string | null) ?? null,
+        country: (r.country as string | null) ?? null,
+        external_ref: (r.external_ref as string | null) ?? null,
+        contacts_count: Number(r.contacts_count ?? 0),
+      })),
+      total: Number.isFinite(total) ? total : 0,
+    };
+  }
+  if (!isSupabaseMissingFunction(rpc.error as { code?: string; message?: string })) {
+    throw new Error(`CRM read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
+  }
+  return listCrmCompaniesLegacy(storeId, opts);
+}
+
+async function listCrmCompaniesLegacy(
+  storeId: string,
+  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number } = {},
+): Promise<{ rows: CrmCompany[]; total: number }> {
+  const db = getSupabase();
+  const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
+  const page = Math.max(1, opts.page ?? 1);
+  const sortKey = opts.sortKey ?? "name";
+  const sortDir = opts.sortDir ?? (sortKey === "contacts" ? "desc" : "asc");
   const ascending = sortDir === "asc";
   const like = (() => {
     const q = (opts.q ?? "").trim();
@@ -78,7 +126,7 @@ export async function listCrmCompanies(
   })();
   // Total exacto para paginar (mismos filtros, sin orden ni rango).
   // La casa (kind IS NULL, red propia) nunca lista: no es contraparte.
-  let countQuery = db.from("companies").select("id", { count: "exact", head: true }).eq("store_id", storeId).not("kind", "is", null);
+  let countQuery = db.from("crm_companies").select("id", { count: "exact", head: true }).eq("store_id", storeId).not("kind", "is", null);
   if (like) countQuery = countQuery.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
   if (opts.kind) countQuery = countQuery.eq("kind", opts.kind);
   const { count, error: countError } = await countQuery;
@@ -86,7 +134,7 @@ export async function listCrmCompanies(
   const total = count ?? 0;
   if (total === 0) return { rows: [], total };
   let query = db
-    .from("companies")
+    .from("crm_companies")
     .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref")
     .eq("store_id", storeId)
     .not("kind", "is", null);
@@ -105,7 +153,7 @@ export async function listCrmCompanies(
   const countBy = new Map<string, number>();
   if (ids.length > 0) {
     const { data: counts } = await db
-      .from("contacts")
+      .from("crm_contacts")
       .select("company_id")
       .eq("store_id", storeId)
       .in("company_id", ids);
@@ -138,15 +186,72 @@ export interface CrmContactListItem extends CrmContact {
   company_name: string | null;
 }
 
+/** Cargos distintos ya usados en la tienda (para autocomplete sin repetir). */
+export async function listDistinctJobTitles(storeId: string, limit = 200): Promise<string[]> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("crm_contacts")
+    .select("job_title")
+    .eq("store_id", storeId)
+    .not("job_title", "is", null)
+    .limit(500);
+  if (error) throw new Error(`CRM read: ${error.message}`);
+  const seen = new Map<string, string>();
+  for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
+    const raw = typeof r.job_title === "string" ? r.job_title.trim() : "";
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (!seen.has(key)) seen.set(key, raw);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "es")).slice(0, Math.min(Math.max(limit, 1), 500));
+}
+
 export async function listCrmContacts(
   storeId: string,
   opts: { q?: string; companyId?: string; limit?: number } = {},
 ): Promise<CrmContactListItem[]> {
   const db = getSupabase();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
+  const q = (opts.q ?? "").trim();
+
+  // Vía rápida: un roundtrip que cruza persona + empresa en Postgres.
+  const rpc = await db.rpc("crm_search_contacts", {
+    p_store: storeId,
+    p_q: q || null,
+    p_company: opts.companyId ?? null,
+    p_limit: limit,
+  });
+  if (!rpc.error) {
+    return ((rpc.data ?? []) as Array<Record<string, unknown>>).map((c) => ({
+      id: String(c.id),
+      store_id: String(c.store_id),
+      company_id: (c.company_id as string | null) ?? null,
+      first_name: (c.first_name as string | null) ?? null,
+      last_name: (c.last_name as string | null) ?? null,
+      email: (c.email as string | null) ?? null,
+      phone: (c.phone as string | null) ?? null,
+      job_title: (c.job_title as string | null) ?? null,
+      is_primary: c.is_primary === true,
+      created_by: (c.created_by as string | null) ?? null,
+      updated_by: (c.updated_by as string | null) ?? null,
+      company_name: (c.company_name as string | null) ?? null,
+    }));
+  }
+  if (!isSupabaseMissingFunction(rpc.error as { code?: string; message?: string })) {
+    throw new Error(`CRM read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
+  }
+  return listCrmContactsLegacy(storeId, opts);
+}
+
+async function listCrmContactsLegacy(
+  storeId: string,
+  opts: { q?: string; companyId?: string; limit?: number } = {},
+): Promise<CrmContactListItem[]> {
+  const db = getSupabase();
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   let query = db
-    .from("contacts")
-    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,companies(name)")
+    .from("crm_contacts")
+    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,crm_companies(name)")
     .eq("store_id", storeId)
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -159,7 +264,7 @@ export async function listCrmContacts(
   const companyIds = [...new Set(rows.map((r) => r.company_id as string | null).filter((v): v is string => !!v))];
   let names = new Map<string, string>();
   if (companyIds.length > 0) {
-    const { data: cos, error: coerr } = await db.from("companies").select("id,name").eq("store_id", storeId).in("id", companyIds);
+    const { data: cos, error: coerr } = await db.from("crm_companies").select("id,name").eq("store_id", storeId).in("id", companyIds);
     if (coerr) throw new Error(`CRM read: ${coerr.message}`);
     names = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]));
   }
@@ -176,6 +281,8 @@ export async function listCrmContacts(
       phone: (c.phone as string | null) ?? null,
       job_title: (c.job_title as string | null) ?? null,
       is_primary: c.is_primary === true,
+      created_by: (c.created_by as string | null) ?? null,
+      updated_by: (c.updated_by as string | null) ?? null,
       company_name: (embedded && typeof embedded.name === "string" ? embedded.name : null) ?? (cid ? (names.get(cid) ?? null) : null),
     };
   });
@@ -206,7 +313,7 @@ export async function getCrmCompany(
 ): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string }> } | null> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("companies")
+    .from("crm_companies")
     .select("*")
     .eq("store_id", storeId)
     .eq("id", companyId)
@@ -214,9 +321,9 @@ export async function getCrmCompany(
   if (error) throw new Error(`CRM read: ${error.message}`);
   if (!data) return null;
   const [{ data: contacts }, { data: campaigns }, { data: ios }] = await Promise.all([
-    db.from("contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
-    db.from("campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
-    db.from("insertion_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
+    db.from("crm_contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
+    db.from("io_campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
+    db.from("io_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
   ]);
   return {
     company: data as Record<string, unknown>,

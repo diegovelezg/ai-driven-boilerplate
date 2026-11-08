@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
@@ -17,6 +17,7 @@ import {
 import { FilterSearch } from "@/components/filter-search";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { BrandsSortDir, BrandsSortKey, BrandRow } from "@/lib/brand-db";
+import { MarcaDrawer } from "./marca-drawer";
 
 export function BrandsList({
   rows,
@@ -31,6 +32,7 @@ export function BrandsList({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
 
   const buildParams = useCallback(
     (overrides: { q?: string; sort?: string; dir?: string }) => {
@@ -127,7 +129,20 @@ export function BrandsList({
           </DataTableHeader>
           <DataTableBody>
             {rows.map((r) => (
-              <DataTableRow key={r.brand}>
+              <DataTableRow
+                key={r.brand}
+                tabIndex={0}
+                role="button"
+                aria-label={`Abrir marca ${r.brand}`}
+                onClick={() => setSelectedBrand(r.brand)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedBrand(r.brand);
+                  }
+                }}
+                className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
                 <DataTableTd className="max-w-[220px] truncate px-3 py-4 font-medium">{r.brand}</DataTableTd>
                 <DataTableTd className="px-3 py-4">
                   <span
@@ -175,6 +190,8 @@ export function BrandsList({
           </DataTableBody>
         </DataTable>
       </AppCard>
+
+      {selectedBrand && <MarcaDrawer key={selectedBrand} brandName={selectedBrand} onClose={() => setSelectedBrand(null)} />}
     </div>
   );
 }

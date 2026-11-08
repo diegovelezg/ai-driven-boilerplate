@@ -69,12 +69,14 @@ export async function runProfiler(
   log(`pipeline investigator vertical=${investigator.vertical} model=${investigator.businessModel} conf=${investigator.confidence}`);
   onStage?.({ done: 1, label: "Negocio investigado" });
 
-  const [sectorCached, stats, icpRes] = await Promise.all([
+  // NOTA: icp_description se extirpó en 20261122; se usa `description`
+  // (columna viva) como contexto persistido del negocio, o null.
+  const [sectorCached, stats, descRes] = await Promise.all([
     getVerticalProfile(investigator.taxonomyId, investigator.vertical ?? description.slice(0, 80)),
     tenantStats(storeId),
     getSupabase()
-      .from("store_profiles")
-      .select("icp_description")
+      .from("sys_store_profiles")
+      .select("description")
       .eq("store_id", storeId)
       .maybeSingle(),
   ]);
@@ -96,8 +98,8 @@ export async function runProfiler(
     }
   }
   const icp =
-    (icpRes.data as { icp_description?: unknown } | null)?.icp_description != null
-      ? String((icpRes.data as { icp_description?: unknown }).icp_description)
+    (descRes.data as { description?: unknown } | null)?.description != null
+      ? String((descRes.data as { description?: unknown }).description)
       : null;
   log(`pipeline stats buyers=${stats.buyers}/${stats.customers} ticket=${stats.ticketMedian} gaps->synthesize`);
   onStage?.({ done: 2, label: "Datos y sector cruzados" });

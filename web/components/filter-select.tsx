@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { cn } from "cn";
 import {
   Select,
   SelectContent,
@@ -14,14 +13,13 @@ export { SelectItem };
 
 /**
  * SSOT del select de filtro (filtros de Customers/Catálogo).
- * Trigger estándar (`bg-background`, ancho configurable) + items por
+ * Trigger default sin overrides + items por
  * children. `display` personaliza la etiqueta (ver filtros de Customers).
  */
 export function FilterSelect({
   value,
   onChange,
   ariaLabel,
-  widthClass = "w-44",
   placeholder,
   display,
   items,
@@ -31,7 +29,6 @@ export function FilterSelect({
   value: string;
   onChange: (value: string) => void;
   ariaLabel: string;
-  widthClass?: string;
   placeholder?: string;
   display?: (value: string) => ReactNode;
   /** Mapa id→etiqueta para Base UI (trigger) cuando el popup aún no montó items. */
@@ -48,11 +45,7 @@ export function FilterSelect({
       items={items}
       disabled={disabled}
     >
-      <SelectTrigger
-        size="sm"
-        className={cn(widthClass, "bg-background text-[0.8rem]")}
-        aria-label={ariaLabel}
-      >
+      <SelectTrigger aria-label={ariaLabel}>
         <SelectValue placeholder={placeholder}>{display}</SelectValue>
       </SelectTrigger>
       <SelectContent>{children}</SelectContent>

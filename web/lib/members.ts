@@ -13,7 +13,7 @@ export interface StoreMember {
 export async function listStoreMembers(storeId: string): Promise<StoreMember[]> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("merchant_users")
+    .from("sys_memberships")
     .select("user_id,role,created_at")
     .eq("store_id", storeId)
     .order("created_at", { ascending: true });

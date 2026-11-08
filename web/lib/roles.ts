@@ -1,6 +1,6 @@
 // Roles de usuario por tenant (B2B). Puro: sin BD, testeable con tsx --test.
 // Jerarquía: owner(4) > admin(3) > seller(2) > viewer(1).
-// El rol vive en `merchant_users.role` (una fila por tienda+usuario).
+// El rol vive en `sys_memberships.role` (una fila por tienda+usuario).
 // Para separar features por rol más adelante: FEATURE_MIN_ROLE + hasMinRole.
 
 export const MEMBER_ROLES = ["owner", "admin", "seller", "viewer"] as const;

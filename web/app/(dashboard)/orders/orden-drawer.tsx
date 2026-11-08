@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { Bot, FileText, Package, Plus, Receipt, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bot, FileText, Package, Pencil, Plus, Receipt, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,8 @@ import { ORDER_STEPS, orderStage } from "@/lib/order-stage";
 import { BILLING_LABELS, billingStatus } from "@/lib/billing-status";
 import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction } from "@/lib/order-flow-actions";
 import { OrdenChat } from "./orden-chat";
+import { OrderEditForm } from "./order-edit-form";
+import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
 
 interface Detail {
@@ -32,7 +35,7 @@ interface Detail {
   billing_name: string | null;
   billing_kind: string | null;
   lines: Array<Record<string, unknown>>;
-  agency_orders: Array<Record<string, unknown>>;
+  io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
   bookings_count: number;
   photos: Array<Record<string, unknown>>;
@@ -107,10 +110,12 @@ function by(v: Record<string, unknown>): string | null {
   return typeof a === "string" && a ? a : null;
 }
 
-export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myRole: MemberRole | null; onClose: () => void }) {
+  const router = useRouter();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"resumen" | "produccion" | "cobranza" | "agentes">("resumen");
+  const [editingFicha, setEditingFicha] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [signOpen, setSignOpen] = useState(false);
   const [omOpen, setOmOpen] = useState(false);
@@ -135,6 +140,7 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
   useEffect(() => {
     setTab("resumen");
     setDetail(null);
+    setEditingFicha(false);
     void load();
   }, [load]);
 
@@ -228,7 +234,7 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
 
   const o = detail?.order;
   const lines = detail?.lines ?? [];
-  const oms = detail?.agency_orders ?? [];
+  const oms = detail?.io_agency_orders ?? [];
   const creatives = detail?.creatives ?? [];
   const photos = detail?.photos ?? [];
   const invoices = detail?.invoices ?? [];
@@ -282,7 +288,9 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
   const progress = bill && gross > 0 ? Math.min(100, Math.round((bill.paid_minor / gross) * 100)) : 0;
   const isDraft = String(o?.status ?? "") === "draft";
   const isCancelled = String(o?.status ?? "") === "cancelled";
-  const canEdit = !isCancelled;
+  // Sin auth (dev: myRole null) se permite editar; viewer = solo lectura.
+  const canEditRole = myRole === null || (isMemberRole(myRole) && hasMinRole(myRole, "seller"));
+  const canEdit = canEditRole && !isCancelled;
   const drawerTabs: DrawerTabDef[] = [
     { id: "resumen", label: "Resumen", icon: FileText },
     { id: "produccion", label: "Producción", icon: Package },
@@ -347,7 +355,7 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
 
           {tab === "resumen" && (
           <>
-          {isDraft && (
+          {isDraft && canEdit && (
             <section aria-label="Firmar orden" className="flex flex-col gap-2 rounded-xl border border-dashed px-4 py-3">
               <p className="text-[13px] font-medium">Borrador: esperando la firma del cliente</p>
               <p className="text-xs leading-relaxed text-muted-foreground">
@@ -364,7 +372,31 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
             title="Ficha"
             description="Mismos datos de Nueva orden: contratante, marca, periodo y pago."
             aria-label="Ficha de la orden"
+            action={
+              canEdit && !editingFicha ? (
+                <Button variant="outline" size="sm" onClick={() => setEditingFicha(true)}>
+                  <Pencil className="size-3.5" aria-hidden /> Editar
+                </Button>
+              ) : undefined
+            }
           >
+            {editingFicha ? (
+              <OrderEditForm
+                key={orderId}
+                orderId={orderId}
+                initial={{
+                  brand: typeof o.brand === "string" ? o.brand : "",
+                  payment_terms_days: typeof o.payment_terms_days === "number" ? String(o.payment_terms_days) : "",
+                  notes: typeof o.notes === "string" ? o.notes : "",
+                }}
+                onSaved={() => {
+                  setEditingFicha(false);
+                  router.refresh();
+                  void load();
+                }}
+                onCancel={() => setEditingFicha(false)}
+              />
+            ) : (
             <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
               <div><dt className="text-xs text-muted-foreground">Contratante</dt><dd className="mt-0.5 text-[13px] font-medium">{contratante ? `${toTitleCase(contratante)}${contratanteKind ? ` · ${contratanteKind}` : ""}` : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Marca</dt><dd className="mt-0.5 text-[13px]">{brand ? toTitleCase(brand) : "—"}</dd></div>
@@ -391,6 +423,7 @@ export function OrdenDrawer({ orderId, onClose }: { orderId: string; onClose: ()
                 </div>
               )}
             </dl>
+            )}
           </AppCard>
 
           {lines.length === 0 ? (

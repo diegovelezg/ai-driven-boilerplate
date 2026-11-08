@@ -92,7 +92,7 @@ export function ComboboxField({
         placeholder={placeholder}
         disabled={disabled}
         aria-label={ariaLabel}
-        className="h-9 w-full"
+        className="w-full"
         onBlur={() => {
           if (allowCustom && query.trim() && !allItems.includes(query.trim())) commitCustom(query);
         }}

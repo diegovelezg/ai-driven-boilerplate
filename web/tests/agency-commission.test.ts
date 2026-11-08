@@ -16,6 +16,13 @@ describe("agency commission", () => {
     assert.equal(normalizeCommissionPct(150), null);
   });
 
+  it("solo enteros 0-100", () => {
+    assert.equal(normalizeCommissionPct(15), 15);
+    assert.equal(normalizeCommissionPct("15"), 15);
+    assert.equal(normalizeCommissionPct(15.5), null);
+    assert.equal(normalizeCommissionPct("15.5"), null);
+    assert.equal(normalizeCommissionPct("  "), null);
+  });
   it("marca directa no es deal de agencia", () => {
     assert.equal(isAgencyDeal("a", "a"), false);
     assert.equal(isAgencyDeal("a", null), false);

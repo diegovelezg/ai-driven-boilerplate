@@ -1,6 +1,7 @@
 // Lecturas de órdenes (service_role, como crm-db). La etapa se deriva en JS
 // con orderStage: volumen bajo (<200), sin paginación exacta que mentir.
 import { getSupabase } from "@/lib/supabase";
+import { joinHaystack, matchScore, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 import { orderStage, type OrderStageKey } from "@/lib/order-stage";
 import { billingStatus, type BillingStatusKey } from "@/lib/billing-status";
 
@@ -42,7 +43,7 @@ export async function listOrders(
 ): Promise<OrderRow[]> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("insertion_orders")
+    .from("io_orders")
     .select(
       "id,io_number,brand,status,starts_at,ends_at,payment_terms_days,advertiser_company_id,billing_company_id",
     )
@@ -50,34 +51,58 @@ export async function listOrders(
     .order("starts_at", { ascending: false })
     .limit(200);
   if (error) throw new Error(`Orders read: ${error.message}`);
-  let rows = (data ?? []) as Array<Record<string, unknown>>;
-  const q = (opts.q ?? "").trim().toLowerCase();
-  if (q) {
-    rows = rows.filter((r) =>
-      [r.io_number, r.brand].some((v) => String(v ?? "").toLowerCase().includes(q)),
-    );
-  }
-  if (rows.length === 0) return [];
-  const ids = rows.map((r) => String(r.id));
+  const allRows = (data ?? []) as Array<Record<string, unknown>>;
+  if (allRows.length === 0) return [];
 
-  const [cos, lines, oms, creas, photos, invs] = await Promise.all([
-    db
-      .from("companies")
+  // Nombres primero: el filtro fuzzy cruza IO + marca + anunciante + facturación.
+  const preIds = [
+    ...new Set(
+      allRows.flatMap((r) => [r.advertiser_company_id, r.billing_company_id].filter(Boolean)).map(String),
+    ),
+  ];
+  const nameByPre = new Map<string, string>();
+  if (preIds.length > 0) {
+    const { data: preCos, error: preCosError } = await db
+      .from("crm_companies")
       .select("id,name")
       .eq("store_id", storeId)
-      .in(
-        "id",
-        [...new Set(rows.flatMap((r) => [r.advertiser_company_id, r.billing_company_id]).filter(Boolean))].map(String),
-      ),
-    db.from("insertion_order_lines").select("io_id,rate_minor").eq("store_id", storeId).in("io_id", ids),
-    db.from("agency_orders").select("io_id").eq("store_id", storeId).in("io_id", ids),
-    db.from("creatives").select("io_id,qc_status,legal_status").eq("store_id", storeId).in("io_id", ids),
-    db.from("photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
-    db.from("invoices").select("io_id,amount_minor,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
+      .in("id", preIds);
+    if (preCosError) throw new Error(`Orders read: ${preCosError.message}`);
+    for (const c of (preCos ?? []) as Array<Record<string, unknown>>) {
+      nameByPre.set(String(c.id), String(c.name ?? ""));
+    }
+  }
+  // Fuzzy en JS (etapa y cobro se derivan aquí): tildes, multi-token y ranking.
+  const tokens = tokenizeSearch(opts.q ?? "");
+  const qNorm = normalizeSearch(opts.q ?? "");
+  const ranked = allRows
+    .map((r) => {
+      if (tokens.length === 0) return { r, score: 0 };
+      const hay = joinHaystack([
+        r.io_number,
+        r.brand,
+        nameByPre.get(String(r.advertiser_company_id ?? "")),
+        nameByPre.get(String(r.billing_company_id ?? "")),
+      ]);
+      if (!matchTokens(hay, tokens)) return { r, score: -1 };
+      return { r, score: matchScore(hay, tokens, qNorm) };
+    })
+    .filter((s) => s.score >= 0);
+  if (ranked.length === 0) return [];
+  // Con búsqueda: relevancia primero (estable: conserva fecha dentro del score).
+  if (tokens.length > 0) ranked.sort((a, b) => b.score - a.score);
+  const rows = ranked.map((s) => s.r);
+  const ids = rows.map((r) => String(r.id));
+
+  const [lines, oms, creas, photos, invs] = await Promise.all([
+    db.from("io_lines").select("io_id,rate_minor").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_agency_orders").select("io_id").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_creatives").select("io_id,qc_status,legal_status").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_invoices").select("io_id,amount_minor,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
   ]);
-  const nameBy = new Map(
-    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
-  );
+  // Nombres ya resueltos arriba para el filtro (mismo mapa).
+  const nameBy = nameByPre;
   const linesBy = new Map<string, { n: number; gross: number }>();
   for (const l of (lines.data ?? []) as Array<Record<string, unknown>>) {
     const k = String(l.io_id);
@@ -164,7 +189,7 @@ export interface OrderDetail {
   billing_name: string | null;
   billing_kind: string | null;
   lines: Array<Record<string, unknown>>;
-  agency_orders: Array<Record<string, unknown>>;
+  io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
   bookings_count: number;
   photos: Array<Record<string, unknown>>;
@@ -175,7 +200,7 @@ export interface OrderDetail {
 export async function getOrderDetail(storeId: string, id: string): Promise<OrderDetail | null> {
   const db = getSupabase();
   const { data: order, error } = await db
-    .from("insertion_orders")
+    .from("io_orders")
     .select("*")
     .eq("store_id", storeId)
     .eq("id", id)
@@ -184,21 +209,21 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   if (!order) return null;
   const o = order as Record<string, unknown>;
   const [cos, lines, oms, creas, bookings, photos, invs] = await Promise.all([
-    db.from("companies").select("id,name,kind").eq("store_id", storeId).in(
+    db.from("crm_companies").select("id,name,kind").eq("store_id", storeId).in(
       "id",
       [o.advertiser_company_id, o.billing_company_id].filter(Boolean).map(String),
     ),
     db
-      .from("insertion_order_lines")
+      .from("io_lines")
       .select("id,starts_at,ends_at,rate_minor,tarifa_regular_minor,cant_meses,cant_dias,notes,screen_id")
       .eq("store_id", storeId)
       .eq("io_id", id)
       .order("starts_at", { ascending: true }),
-    db.from("agency_orders").select("id,kind,code,portal,issued_at,document_url,notes,created_by").eq("store_id", storeId).eq("io_id", id),
-    db.from("creatives").select("id,name,qc_status,legal_status,file_url,created_by").eq("store_id", storeId).eq("io_id", id),
-    db.from("bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
-    db.from("photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
-    db.from("invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),
+    db.from("io_agency_orders").select("id,kind,code,portal,issued_at,document_url,notes,created_by").eq("store_id", storeId).eq("io_id", id),
+    db.from("io_creatives").select("id,name,qc_status,legal_status,file_url,created_by").eq("store_id", storeId).eq("io_id", id),
+    db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
+    db.from("io_photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
+    db.from("io_invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),
   ]);
   const nameBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
@@ -211,8 +236,8 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   let screenBy = new Map<string, { name: string; detail: string | null }>();
   if (screenIds.length > 0) {
     const { data: screens } = await db
-      .from("screens")
-      .select("id,name,external_ref,technology,width_px,height_px,venues(name)")
+      .from("inv_screens")
+      .select("id,name,external_ref,technology,width_px,height_px,inv_venues(name)")
       .eq("store_id", storeId)
       .in("id", screenIds);
     screenBy = new Map(
@@ -240,7 +265,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
       const s = screenBy.get(String(l.screen_id));
       return { ...l, screen_name: s?.name ?? null, screen_detail: s?.detail ?? null };
     }),
-    agency_orders: (oms.data ?? []) as Array<Record<string, unknown>>,
+    io_agency_orders: (oms.data ?? []) as Array<Record<string, unknown>>,
     creatives: (creas.data ?? []) as Array<Record<string, unknown>>,
     bookings_count: bookings.count ?? 0,
     photos: photoRows,

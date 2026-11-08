@@ -47,7 +47,7 @@ export function KindForm({ companyId, initial, onSaved }: { companyId: string; i
             )}
             disabled={pending}
           >
-            <SelectTrigger aria-label="Tipo" className="h-8 w-56 bg-background text-sm">
+            <SelectTrigger aria-label="Tipo">
               <SelectValue placeholder="Elegir tipo…" />
             </SelectTrigger>
             <SelectContent>
@@ -57,7 +57,7 @@ export function KindForm({ companyId, initial, onSaved }: { companyId: string; i
             </SelectContent>
           </Select>
         </div>
-        <Button size="sm" onClick={save} disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
+        <Button onClick={save} disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
         {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
     </div>

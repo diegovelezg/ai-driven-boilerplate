@@ -1,107 +1,138 @@
+import { connection } from "next/server";
+import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { AppCard, AppCardState } from "@/components/app-card";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { IMPORT_TEMPLATES, type ImportKind } from "@/lib/sheet-import";
-import { ImportForm } from "./import-form";
-
-const KIND_LABEL: Record<ImportKind, string> = {
-  companies: "Empresas (cliente / proveedor)",
-  contacts: "Contactos",
-  venues: "Recintos (venues)",
-  screens: "Pantallas (screens + loop)",
-  slots: "Slots sueltos",
-};
+import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { ScreensList } from "./screens-list";
+import { listScreenFilterOptions, listScreens, parseScreensSort } from "@/lib/screens-db";
 
 // Ruta autenticada multi-tenant (lee Supabase por request a través del
 // layout): se permite el render bloqueante como el resto del dashboard.
 export const instant = false;
 
-async function getSummary() {
-  if (!isSupabaseConfigured()) return null;
-  const db = getSupabase();
-  const counts: Record<string, number> = {};
-  for (const t of ["venues", "screens", "inventory_slots", "bookings", "campaigns", "companies", "contacts", "import_runs"]) {
-    const { count } = await db.from(t).select("id", { count: "exact", head: true });
-    counts[t] = count ?? 0;
-  }
-  const { data: venues } = await db
-    .from("venues")
-    .select("id,name,venue_type,city,ownership")
-    .order("created_at", { ascending: false })
-    .limit(20);
-  const { data: runs } = await db
-    .from("import_runs")
-    .select("kind,source,rows_seen,rows_ok,rows_failed,created_at")
-    .order("created_at", { ascending: false })
-    .limit(10);
-  return { counts, venues: (venues ?? []) as Array<Record<string, unknown>>, runs: (runs ?? []) as Array<Record<string, unknown>> };
-}
+const VIEW_ALIASES: Record<string, "table" | "grid"> = {
+  table: "table",
+  tabla: "table",
+  grid: "grid",
+  grilla: "grid",
+};
 
-export default async function InventarioPage() {
-  const summary = await getSummary().catch(() => null);
+const ACTIVE_ALIASES: Record<string, "all" | "active" | "inactive"> = {
+  all: "all",
+  todas: "all",
+  active: "active",
+  activas: "active",
+  inactive: "inactive",
+  inactivas: "inactive",
+};
+
+export default async function InventarioPage({
+  searchParams,
+}: {
+  searchParams: Promise<{
+    q?: string;
+    proveedor?: string;
+    ciudad?: string;
+    estado?: string;
+    view?: string;
+    vista?: string;
+    sort?: string;
+    dir?: string;
+    page?: string;
+    pantalla?: string;
+    screen?: string;
+  }>;
+}) {
+  await connection();
+  const sp = await searchParams;
+  const q = (sp.q ?? "").trim();
+  const supplierId = (sp.proveedor ?? "").trim() || null;
+  const city = (sp.ciudad ?? "").trim() || null;
+  const active = ACTIVE_ALIASES[sp.estado ?? ""] ?? "all";
+  const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
+  const { key: sortKey, dir: sortDir } = parseScreensSort({ sort: sp.sort, dir: sp.dir });
+  const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10) || 1);
+  const selectedId = ((sp.pantalla ?? sp.screen) ?? "").trim() || null;
+  const PAGE_SIZE = 20;
+
+  const dbReady = isSupabaseConfigured();
+  const activeStoreId = await resolveActiveStoreId();
+  const connected = Boolean(activeStoreId);
+
+  let rows: Awaited<ReturnType<typeof listScreens>>["rows"] = [];
+  let totalCount = 0;
+  let suppliers: Array<{ id: string; name: string }> = [];
+  let cities: string[] = [];
+  let counts: Record<string, number> = {};
+  let error: string | null = null;
+
+  if (connected && dbReady) {
+    try {
+      const storeId = activeStoreId!;
+      if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
+        error = "Sin acceso a esta tienda.";
+      } else {
+        const [list, opts] = await Promise.all([
+          listScreens(storeId, { q, supplierId, city, active, sortKey, sortDir, page, pageSize: PAGE_SIZE }),
+          listScreenFilterOptions(storeId),
+        ]);
+        rows = list.rows;
+        totalCount = list.total;
+        suppliers = opts.suppliers;
+        cities = opts.cities;
+        const db = getSupabase();
+        const tables = ["inv_venues", "inv_screens", "inv_slots"] as const;
+        const settled = await Promise.all(
+          tables.map((t) => db.from(t).select("id", { count: "exact", head: true }).eq("store_id", storeId)),
+        );
+        counts = Object.fromEntries(tables.map((t, i) => [t, settled[i]?.count ?? 0]));
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : "DB read failed";
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="DOOH"
         title="Inventario publicitario"
-        description="Gestión comercial de espacios: Empresas (cliente/proveedor) + Contactos + Recintos → Pantallas → Loop → Slots → Reservas. Ingesta solo desde Google Sheet URL o CSV. Solo Sheet/CSV."
+        description="Espacios publicitarios: recintos → pantallas → slots → reservas. Cada pantalla pertenece a un proveedor."
         right={
-          summary ? (
+          connected && dbReady && !error ? (
             <span className="text-xs text-muted-foreground">
-              {summary.counts.venues ?? 0} recintos · {summary.counts.screens ?? 0} pantallas ·{" "}
-              {summary.counts.inventory_slots ?? 0} slots
+              {counts.inv_venues ?? 0} recintos · {counts.inv_screens ?? 0} pantallas · {counts.inv_slots ?? 0} slots
             </span>
           ) : undefined
         }
       />
 
-      <AppCard
-        title="Importar desde Google Sheet o CSV"
-        description="Pega el link del Sheet (cualquier pestaña: se exporta a CSV) o pega el CSV. kinds: companies → contacts → venues → screens → slots (en ese orden, por dependencias)."
-      >
-        <ImportForm templates={IMPORT_TEMPLATES} labels={KIND_LABEL} />
-      </AppCard>
+      {!connected && <AppCardState>Sin tienda.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {error && <AppCardState>{error}</AppCardState>}
 
-      {!summary && <AppCardState>Supabase no configurado.</AppCardState>}
-
-      {summary && (
+      {connected && dbReady && !error && (
         <>
-          <AppCard title="Recintos recientes" description="Venue → pantallas. ownership own = red propia, supplier = proveedor.">
-            {summary.venues.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Sin recintos. Importa venues primero.</p>
-            ) : (
-              <ul className="divide-y divide-border text-sm">
-                {summary.venues.map((v) => (
-                  <li key={String(v.id)} className="flex items-center justify-between gap-3 py-2">
-                    <span className="font-medium">{String(v.name)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {[v.venue_type, v.city, v.ownership].filter(Boolean).map(String).join(" · ")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </AppCard>
-
-          <AppCard title="Últimas importaciones" description="Auditoría en import_runs.">
-            {summary.runs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Aún no hay importaciones.</p>
-            ) : (
-              <ul className="divide-y divide-border text-sm">
-                {summary.runs.map((r, i) => (
-                  <li key={i} className="flex items-center justify-between gap-3 py-2">
-                    <span>
-                      {String(r.kind)} ({String(r.source)}): {String(r.rows_ok)}/{String(r.rows_seen)} ok
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {Number(r.rows_failed) > 0 ? `${String(r.rows_failed)} errores · ` : ""}
-                      {new Date(String(r.created_at)).toISOString().slice(0, 16).replace("T", " ")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </AppCard>
+          {totalCount === 0 && !q && !supplierId && !city && active === "all" ? (
+            <AppCardState>Aún no hay pantallas.</AppCardState>
+          ) : (
+            <ScreensList
+              rows={rows}
+              totalCount={totalCount}
+              page={page}
+              pageSize={PAGE_SIZE}
+              q={q}
+              supplierId={supplierId}
+              suppliers={suppliers}
+              city={city}
+              cities={cities}
+              active={active}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              initialView={vista}
+              initialSelectedId={selectedId}
+            />
+          )}
         </>
       )}
     </div>

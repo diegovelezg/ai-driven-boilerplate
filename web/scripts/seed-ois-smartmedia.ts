@@ -6,7 +6,7 @@
 // Modelo: companies.kind (agencia|anunciante|proveedor, obligatorio en CRM);
 // la fila NULL ("sm", red propia / operadora) respalda venues.company_id y
 // se excluye del listado de Empresas. La marca publicitada es metadato
-// (insertion_orders.brand), no empresa.
+// (io_orders.brand), no empresa.
 // Fuentes:
 //   NP-2026-001 Tottus Pre Navidad  <- "NP - Compra Nov - Navidad.pdf"
 //   NP-2026-002 Toyota bz4x          <- "NP - Toyota Híbridos.xlsx"
@@ -252,7 +252,7 @@ async function main() {
   const db = getSupabase();
 
   const existing = await db
-    .from("insertion_orders")
+    .from("io_orders")
     .select("io_number")
     .eq("store_id", storeId)
     .in("io_number", ORDERS.map((o) => o.io_number));
@@ -267,7 +267,7 @@ async function main() {
   const companyIds = new Map<string, string>();
   for (const c of COMPANIES) {
     const { data, error } = await db
-      .from("companies")
+      .from("crm_companies")
       .insert({
         store_id: storeId,
         name: c.name,
@@ -290,7 +290,7 @@ async function main() {
 
   // 2. Contactos.
   for (const c of CONTACTS) {
-    const { error } = await db.from("contacts").insert({
+    const { error } = await db.from("crm_contacts").insert({
       store_id: storeId,
       company_id: companyIds.get(c.company) ?? null,
       first_name: c.first_name,
@@ -310,17 +310,17 @@ async function main() {
   let venueId: string;
   {
     const found = await db
-      .from("venues")
+      .from("inv_venues")
       .select("id")
       .eq("store_id", storeId)
       .eq("external_ref", "venue-miraflores-01")
       .maybeSingle();
     if (found.data) {
       venueId = found.data.id as string;
-      await db.from("venues").update({ company_id: companyIds.get("sm") ?? null }).eq("id", venueId);
+      await db.from("inv_venues").update({ company_id: companyIds.get("sm") ?? null }).eq("id", venueId);
     } else {
       const { data: venue, error: verr } = await db
-        .from("venues")
+        .from("inv_venues")
         .insert({
           store_id: storeId,
           company_id: companyIds.get("sm") ?? null,
@@ -349,7 +349,7 @@ async function main() {
   const slotBusy = new Map<string, Array<{ s: number; e: number }>>(); // slot id -> rangos ms
   for (const s of SCREENS) {
     const { data, error } = await db
-      .from("screens")
+      .from("inv_screens")
       .insert({
         store_id: storeId,
         venue_id: venueId,
@@ -369,7 +369,7 @@ async function main() {
     const ids: string[] = [];
     for (let i = 1; i <= SLOTS_PER_SCREEN; i++) {
       const { data: slot, error: serr } = await db
-        .from("inventory_slots")
+        .from("inv_slots")
         .insert({
           store_id: storeId,
           screen_id: data.id,
@@ -407,7 +407,7 @@ async function main() {
   };
   for (const o of ORDERS) {
     const { data: io, error: ioerr } = await db
-      .from("insertion_orders")
+      .from("io_orders")
       .insert({
         store_id: storeId,
         io_number: o.io_number,
@@ -428,11 +428,11 @@ async function main() {
       })
       .select("id")
       .single();
-    if (ioerr) throw new Error(`insertion_orders ${o.io_number}: ${ioerr.message}`);
+    if (ioerr) throw new Error(`io_orders ${o.io_number}: ${ioerr.message}`);
 
     const budget = o.lines.reduce((a, l) => a + Math.round(l.total * 100), 0);
     const { data: camp, error: cerr } = await db
-      .from("campaigns")
+      .from("io_campaigns")
       .insert({
         store_id: storeId,
         advertiser_company_id: o.advertiser ? (companyIds.get(o.advertiser) ?? null) : null,
@@ -452,7 +452,7 @@ async function main() {
       const screenId = screenIds.get(l.screen);
       if (!screenId) throw new Error(`pantalla desconocida: ${l.screen}`);
       const slotId = pickSlot(l.screen, l.starts_at, l.ends_at);
-      const { error: lerr } = await db.from("insertion_order_lines").insert({
+      const { error: lerr } = await db.from("io_lines").insert({
         store_id: storeId,
         io_id: io.id,
         screen_id: screenId,
@@ -466,7 +466,7 @@ async function main() {
         notes: l.note ?? `Tarifa regular S/ ${l.rate_regular}; total línea S/ ${l.total}.`,
       });
       if (lerr) throw new Error(`lines ${o.io_number}/${l.screen}: ${lerr.message}`);
-      const { error: berr } = await db.from("bookings").insert({
+      const { error: berr } = await db.from("inv_bookings").insert({
         store_id: storeId,
         slot_id: slotId,
         campaign_id: camp.id,
@@ -489,17 +489,19 @@ async function main() {
     { kind: "slots", rows: SCREENS.length * 4 },
   ];
   for (const a of audits) {
-    const { error } = await db.from("import_runs").insert({
+    const { error } = await db.from("sys_runs").insert({
       store_id: storeId,
-      kind: a.kind,
-      source: "sheet",
-      source_url: DRIVE_FOLDER,
-      rows_seen: a.rows,
-      rows_ok: a.rows,
-      rows_failed: 0,
-      errors_json: [],
+      kind: "import",
+      label: `import:${a.kind}`,
+      total: a.rows,
+      processed: a.rows,
+      failed: 0,
+      current: null,
+      status: "done",
+      summary: `seed ${a.kind}: ${a.rows}/${a.rows} ok`,
+      finished_at: new Date().toISOString(),
     });
-    if (error) throw new Error(`import_runs ${a.kind}: ${error.message}`);
+    if (error) throw new Error(`seed audit ${a.kind}: ${error.message}`);
   }
   console.log(`seed OK: ${companyIds.size} empresas, ${CONTACTS.length} contactos, 4 OIs, 14 líneas, 4 campañas, 14 bookings.`);
 }

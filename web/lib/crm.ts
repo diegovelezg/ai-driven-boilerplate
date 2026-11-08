@@ -6,7 +6,7 @@
 // La casa (red propia / operadora) NO es una empresa del CRM: vive en
 // venues/company_id y se excluye del listado (kind IS NULL filtrado en
 // listCrmCompanies). Por eso el tipo es requerido en todos los ingresos.
-// La marca publicitada es METADATO del pedido (insertion_orders.brand), no
+// La marca publicitada es METADATO del pedido (io_orders.brand), no
 // una empresa: la misma marca puede venir vía agencia o directo.
 // Cliente/prospecto NO se guardan: se derivan (¿tiene IO firmada?).
 

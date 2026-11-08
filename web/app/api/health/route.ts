@@ -1,13 +1,9 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { getMyActiveStore } from "@/lib/tenant";
-import { countDuplicateEmails } from "@/lib/duplicates";
-import { pendingDomains } from "@/lib/enrich";
 
 /**
  * GET /api/health?store=<uuid>
- * Números vivos de "Salud de tu cartera" para el componente reactivo:
- * duplicados, dominios pendientes (fresco, sin caché de 5min) y compradores.
- * Respeta ?store= como el home.
+ * Fase 2 DOOH: conteos vivos (empresas, contactos, IOs, pantallas).
  */
 export async function GET(req: Request) {
   if (!isSupabaseConfigured()) {
@@ -26,22 +22,26 @@ export async function GET(req: Request) {
     );
   }
   if (!active) {
-    return Response.json({ store_id: null, duplicateCount: 0, enrichPending: 0, buyers: 0 });
+    return Response.json({ store_id: null, companies: 0, contacts: 0, orders: 0, screens: 0 });
   }
   const { requireStoreAccess } = await import("@/lib/api/guard");
   const access = await requireStoreAccess(active.id);
   if (access instanceof Response) return access;
   const db = getSupabase();
+  const countOf = async (table: string): Promise<number> => {
+    try {
+      const { count } = await db.from(table).select("id", { count: "exact", head: true }).eq("store_id", active.id);
+      return count ?? 0;
+    } catch {
+      return 0;
+    }
+  };
   try {
-    const [dupN, enrichN, buyersN, schema] = await Promise.all([
-      countDuplicateEmails(active.id).catch(() => 0),
-      pendingDomains(active.id, undefined, { fresh: true }).then((d) => d.length).catch(() => 0),
-      (async () => {
-        const { count: n } = await db.from("customers").select("id", { count: "exact", head: true }).eq("store_id", active.id).gt("orders_count", 0);
-        return n ?? 0;
-      })().catch(() => 0),
-      // Gate visible (best-effort, nunca tumba el health): si la DB va por
-      // detrás del código, la UI/cron lo ve aquí sin leer logs.
+    const [comp, cont, ios, scr, schema] = await Promise.all([
+      countOf("crm_companies"),
+      countOf("crm_contacts"),
+      countOf("io_orders"),
+      countOf("inv_screens"),
       (async () => {
         const { checkSchema } = await import("@/lib/schema-guard");
         const gaps = await checkSchema(db);
@@ -50,9 +50,10 @@ export async function GET(req: Request) {
     ]);
     return Response.json({
       store_id: active.id,
-      duplicateCount: dupN,
-      enrichPending: enrichN,
-      buyers: buyersN,
+      companies: comp,
+      contacts: cont,
+      orders: ios,
+      screens: scr,
       schemaOk: schema.ok,
       schemaGaps: schema.gaps,
     });

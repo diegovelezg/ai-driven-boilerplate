@@ -20,13 +20,13 @@ const KINDS: ImportKind[] = ["companies", "contacts", "venues", "screens", "slot
 async function resolveTenantStoreId(): Promise<{ storeId: string } | { error: string }> {
   const db = getSupabase();
   // Intenta cualquier store accesible (best-effort multi-tenant legacy).
-  const { data } = await db.from("stores").select("id").limit(25);
+  const { data } = await db.from("sys_stores").select("id").limit(25);
   for (const s of (data ?? []) as Array<{ id: string }>) {
     if ((await requireMyStoreAccess(s.id).catch(() => null)) === true) return { storeId: s.id };
   }
   // Crea tenant DOOH local.
   const { data: created, error } = await db
-    .from("stores")
+    .from("sys_stores")
     .insert({ platform: "sheet", shop_url: "dooh://local", shop_currency: "PEN", name: "Inventario DOOH" })
     .select("id")
     .maybeSingle();

@@ -10,6 +10,14 @@ export interface OrderFlowState {
   message: string;
 }
 
+/** Mutaciones del drawer: requieren vendedor o superior (viewer = solo lectura).
+ *  null = sin auth (dev: permite). */
+async function denyViewer(storeId: string): Promise<string | null> {
+  const { requireMinRole } = await import("@/lib/tenant");
+  const allowed = await requireMinRole(storeId, "seller").catch(() => false);
+  return allowed === false ? "Requiere rol vendedor o superior." : null;
+}
+
 /** Pasa la OI de borrador a firmada (el cliente la firmó). */
 export async function signOrderAction(input: {
   orderId: string;
@@ -21,7 +29,7 @@ export async function signOrderAction(input: {
   try {
     const db = getSupabase();
     const { data, error } = await db
-      .from("insertion_orders")
+      .from("io_orders")
       .select("id,store_id,status")
       .eq("id", orderId)
       .maybeSingle();
@@ -34,13 +42,15 @@ export async function signOrderAction(input: {
     if (String(row.status ?? "") === "cancelled") {
       return { ok: false, message: "La orden está cancelada." };
     }
+    const denied = await denyViewer(storeId);
+    if (denied) return { ok: false, message: denied };
     if (String(row.status ?? "") === "signed") {
       return { ok: false, message: "La orden ya está firmada." };
     }
     const actor = await resolveActor();
     const now = new Date().toISOString();
     const { error: werr } = await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({
         status: "signed",
         signed_at: now,
@@ -75,7 +85,7 @@ export async function createAgencyOrderAction(input: {
   try {
     const db = getSupabase();
     const { data, error } = await db
-      .from("insertion_orders")
+      .from("io_orders")
       .select("id,store_id,status")
       .eq("id", orderId)
       .maybeSingle();
@@ -88,9 +98,11 @@ export async function createAgencyOrderAction(input: {
     if (String(row.status ?? "") !== "signed") {
       return { ok: false, message: "Marca la orden como firmada primero." };
     }
+    const denied = await denyViewer(storeId);
+    if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
     const now = new Date().toISOString();
-    const { error: werr } = await db.from("agency_orders").insert({
+    const { error: werr } = await db.from("io_agency_orders").insert({
       store_id: storeId,
       io_id: orderId,
       kind,
@@ -106,7 +118,7 @@ export async function createAgencyOrderAction(input: {
       return { ok: false, message: `DB write: ${werr.message}` };
     }
     await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ updated_at: now, updated_by: actor })
       .eq("id", orderId);
     revalidatePath("/orders");
@@ -121,7 +133,7 @@ async function orderStore(
   orderId: string,
 ): Promise<{ row: Record<string, unknown>; storeId: string } | { error: string }> {
   const { data, error } = await db
-    .from("insertion_orders")
+    .from("io_orders")
     .select("id,store_id,status")
     .eq("id", orderId)
     .maybeSingle();
@@ -131,6 +143,8 @@ async function orderStore(
   if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
     return { error: "Sin acceso a esta tienda." as const };
   }
+  const denied = await denyViewer(storeId);
+  if (denied) return { error: denied };
   return { row, storeId };
 }
 
@@ -146,17 +160,19 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
   if (!id) return { ok: false, message: "Falta el registro." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("agency_orders").select("id,store_id,io_id").eq("id", id).maybeSingle();
+    const { data, error } = await db.from("io_agency_orders").select("id,store_id,io_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "Registro no encontrado." };
     const r = data as Record<string, unknown>;
     if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
       return { ok: false, message: "Sin acceso a esta tienda." };
     }
+    const denied = await denyViewer(String(r.store_id ?? ""));
+    if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
-    const { error: derr } = await db.from("agency_orders").delete().eq("id", id);
+    const { error: derr } = await db.from("io_agency_orders").delete().eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
       .eq("id", String(r.io_id ?? ""));
     revalidatePath("/orders");
@@ -190,7 +206,7 @@ export async function attachCreativeAction(input: {
     if ("error" in chk) return { ok: false, message: chk.error };
     if (String(chk.row.status ?? "") === "cancelled") return { ok: false, message: "La orden está cancelada." };
     const actor = await resolveActor();
-    const { error: werr } = await db.from("creatives").insert({
+    const { error: werr } = await db.from("io_creatives").insert({
       store_id: chk.storeId,
       io_id: orderId,
       created_by: actor,
@@ -201,7 +217,7 @@ export async function attachCreativeAction(input: {
     });
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
     await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
       .eq("id", orderId);
     revalidatePath("/orders");
@@ -217,17 +233,19 @@ export async function deleteCreativeAction(input: { creativeId: string }): Promi
   if (!id) return { ok: false, message: "Falta la pieza." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("creatives").select("id,store_id,io_id").eq("id", id).maybeSingle();
+    const { data, error } = await db.from("io_creatives").select("id,store_id,io_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "Pieza no encontrada." };
     const r = data as Record<string, unknown>;
     if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
       return { ok: false, message: "Sin acceso a esta tienda." };
     }
+    const denied = await denyViewer(String(r.store_id ?? ""));
+    if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
-    const { error: derr } = await db.from("creatives").delete().eq("id", id);
+    const { error: derr } = await db.from("io_creatives").delete().eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
       .eq("id", String(r.io_id ?? ""));
     revalidatePath("/orders");
@@ -250,7 +268,7 @@ export async function attachPhotoAction(input: { orderId: string; url: string })
     if ("error" in chk) return { ok: false, message: chk.error };
     if (String(chk.row.status ?? "") === "cancelled") return { ok: false, message: "La orden está cancelada." };
     const actor = await resolveActor();
-    const { error: werr } = await db.from("photo_checks").insert({
+    const { error: werr } = await db.from("io_photo_checks").insert({
       store_id: chk.storeId,
       io_id: orderId,
       photo_url: isVideo ? null : url,
@@ -258,7 +276,7 @@ export async function attachPhotoAction(input: { orderId: string; url: string })
       created_by: actor,
     });
     await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor ?? null })
       .eq("id", orderId);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
@@ -275,13 +293,15 @@ export async function deletePhotoAction(input: { photoId: string }): Promise<Ord
   if (!id) return { ok: false, message: "Falta el registro." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("photo_checks").select("id,store_id").eq("id", id).maybeSingle();
+    const { data, error } = await db.from("io_photo_checks").select("id,store_id").eq("id", id).maybeSingle();
     if (error || !data) return { ok: false, message: "Registro no encontrado." };
     const r = data as Record<string, unknown>;
     if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => null)) === false) {
       return { ok: false, message: "Sin acceso a esta tienda." };
     }
-    const { error: derr } = await db.from("photo_checks").delete().eq("id", id);
+    const denied = await denyViewer(String(r.store_id ?? ""));
+    if (denied) return { ok: false, message: denied };
+    const { error: derr } = await db.from("io_photo_checks").delete().eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     revalidatePath("/orders");
     return { ok: true, message: "Adjunto eliminado." };
@@ -302,7 +322,7 @@ export async function cancelOrderAction(input: { orderId: string }): Promise<Ord
     const actor = await resolveActor();
     const now = new Date().toISOString();
     const { error: werr } = await db
-      .from("insertion_orders")
+      .from("io_orders")
       .update({ status: "cancelled", updated_at: now, updated_by: actor })
       .eq("id", orderId);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };

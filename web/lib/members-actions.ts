@@ -25,7 +25,7 @@ export async function updateMemberRoleAction(input: {
 
     const db = getSupabase();
     const { data: caller } = await db
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("role")
       .eq("store_id", input.storeId)
       .eq("user_id", user.id)
@@ -35,7 +35,7 @@ export async function updateMemberRoleAction(input: {
       return { ok: false, message: "Requiere rol admin o propietario." };
     }
     const { data: target } = await db
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("role")
       .eq("store_id", input.storeId)
       .eq("user_id", input.userId)
@@ -50,7 +50,7 @@ export async function updateMemberRoleAction(input: {
     // Nunca quedarse sin owner.
     if (targetRole === "owner" && input.role !== "owner") {
       const { count } = await db
-        .from("merchant_users")
+        .from("sys_memberships")
         .select("user_id", { count: "exact", head: true })
         .eq("store_id", input.storeId)
         .eq("role", "owner");
@@ -60,7 +60,7 @@ export async function updateMemberRoleAction(input: {
     }
     if (targetRole === input.role) return { ok: true, message: "Sin cambios." };
     const { error } = await db
-      .from("merchant_users")
+      .from("sys_memberships")
       .update({ role: input.role })
       .eq("store_id", input.storeId)
       .eq("user_id", input.userId);

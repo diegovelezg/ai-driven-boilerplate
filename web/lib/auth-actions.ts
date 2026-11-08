@@ -26,11 +26,11 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
     return { ok: false, message: `Credenciales inválidas. (${error.message})` };
   }
   const { data, error: membersError } = await supabase
-    .from("merchant_users")
+    .from("sys_memberships")
     .select("store_id")
     .order("created_at", { ascending: true });
   if (membersError) {
-    console.error("[login] merchant_users:", membersError.message);
+    console.error("[login] sys_memberships:", membersError.message);
     redirect(safeNext(next) ?? "/");
   }
   const memberIds = ((data ?? []) as Array<{ store_id: unknown }>)

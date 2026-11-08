@@ -69,7 +69,7 @@ export function parseChatUsage(data: unknown): ParsedUsage | null {
 }
 
 /**
- * Inserta una fila en `llm_usage`. Nunca lanza: sin store_id o sin Supabase
+ * Inserta una fila en `ai_llm_usage`. Nunca lanza: sin store_id o sin Supabase
  * solo advierte (criterio de aceptacion: no perderse en silencio).
  * Fire-and-forget desde los call-sites: `void logLlmUsage(...).catch(()=>{})`.
  */
@@ -83,7 +83,7 @@ export async function logLlmUsage(row: LlmUsageRow): Promise<void> {
       warn(`skip sin supabase store=${row.storeId} process=${row.process}`);
       return;
     }
-    const { error } = await getSupabase().from("llm_usage").insert({
+    const { error } = await getSupabase().from("ai_llm_usage").insert({
       store_id: row.storeId,
       process: row.process,
       provider: row.provider,

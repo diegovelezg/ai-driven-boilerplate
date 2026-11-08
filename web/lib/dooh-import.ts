@@ -1,6 +1,6 @@
 // Persistencia de importaciones Sheet/CSV → Supabase (server-only, service_role).
 // Upsert-only por external_ref cuando existe; si no, inserta.
-// kind=slots crea inventory_slots con loop default (60s/6×10s) si la pantalla no tiene.
+// kind=slots crea inv_slots con loop default (60s/6×10s) si la pantalla no tiene.
 import { getSupabase } from "@/lib/supabase";
 import {
   headerIndex,
@@ -38,14 +38,14 @@ async function resolveCompanyId(
   const r = ref.trim();
   if (!r) return null;
   const { data: byRef } = await db
-    .from("companies")
+    .from("crm_companies")
     .select("id")
     .eq("store_id", storeId)
     .eq("external_ref", r)
     .maybeSingle();
   if (byRef) return (byRef as { id: string }).id;
   const { data: byTax } = await db
-    .from("companies")
+    .from("crm_companies")
     .select("id")
     .eq("store_id", storeId)
     .eq("tax_id", r)
@@ -53,14 +53,14 @@ async function resolveCompanyId(
   if (byTax) return (byTax as { id: string }).id;
   const low = r.toLowerCase();
   const { data: byDomain } = await db
-    .from("companies")
+    .from("crm_companies")
     .select("id")
     .eq("store_id", storeId)
     .eq("domain", low)
     .maybeSingle();
   if (byDomain) return (byDomain as { id: string }).id;
   const { data: byName } = await db
-    .from("companies")
+    .from("crm_companies")
     .select("id")
     .eq("store_id", storeId)
     .ilike("name", r)
@@ -105,7 +105,7 @@ export async function commitImport(
       const v = parsed.value;
       if (v.external_ref) {
         const { data } = await db
-          .from("companies")
+          .from("crm_companies")
           .select("id")
           .eq("store_id", storeId)
           .eq("external_ref", v.external_ref)
@@ -114,7 +114,7 @@ export async function commitImport(
       }
       if (!companyId && v.tax_id) {
         const { data } = await db
-          .from("companies")
+          .from("crm_companies")
           .select("id")
           .eq("store_id", storeId)
           .eq("tax_id", v.tax_id)
@@ -123,7 +123,7 @@ export async function commitImport(
       }
       if (!companyId && v.domain) {
         const { data } = await db
-          .from("companies")
+          .from("crm_companies")
           .select("id")
           .eq("store_id", storeId)
           .eq("domain", v.domain)
@@ -132,7 +132,7 @@ export async function commitImport(
       }
       if (!companyId) {
         const { data } = await db
-          .from("companies")
+          .from("crm_companies")
           .select("id")
           .eq("store_id", storeId)
           .ilike("name", v.name)
@@ -142,7 +142,7 @@ export async function commitImport(
       }
       if (!companyId) {
         const { data, error } = await db
-          .from("companies")
+          .from("crm_companies")
           .insert({ store_id: storeId, ...v })
           .select("id")
           .maybeSingle();
@@ -154,14 +154,14 @@ export async function commitImport(
       } else if (v.external_ref) {
         // Completa external_ref si la empresa ya existía sin él (import viejo).
         await db
-          .from("companies")
+          .from("crm_companies")
           .update({ external_ref: v.external_ref })
           .eq("id", companyId)
           .is("external_ref", null);
       }
       // Tipo: se fija si venía en la fila y la empresa aún no tiene.
       if (v.kind) {
-        await db.from("companies").update({ kind: v.kind }).eq("id", companyId).is("kind", null);
+        await db.from("crm_companies").update({ kind: v.kind }).eq("id", companyId).is("kind", null);
       }
       ok++;
     }
@@ -186,7 +186,7 @@ export async function commitImport(
       let dupe = false;
       if (parsed.value.email) {
         const { data } = await db
-          .from("contacts")
+          .from("crm_contacts")
           .select("id")
           .eq("company_id", companyId)
           .ilike("email", parsed.value.email)
@@ -196,7 +196,7 @@ export async function commitImport(
       }
       if (!dupe && parsed.value.phone) {
         const { data } = await db
-          .from("contacts")
+          .from("crm_contacts")
           .select("id")
           .eq("company_id", companyId)
           .eq("phone", parsed.value.phone)
@@ -210,9 +210,9 @@ export async function commitImport(
       }
       if (parsed.value.is_primary) {
         // Solo un principal por empresa: degrada el anterior.
-        await db.from("contacts").update({ is_primary: false }).eq("company_id", companyId).eq("is_primary", true);
+        await db.from("crm_contacts").update({ is_primary: false }).eq("company_id", companyId).eq("is_primary", true);
       }
-      const { error } = await db.from("contacts").insert({ store_id: storeId, ...parsed.value });
+      const { error } = await db.from("crm_contacts").insert({ store_id: storeId, ...parsed.value });
       if (error) {
         errors.push({ row: i + 1, message: `DB: ${error.message}` });
         continue;
@@ -250,11 +250,11 @@ export async function commitImport(
       };
       const { error } = n.value.external_ref
         ? await db
-            .from("venues")
+            .from("inv_venues")
             .upsert(payload, { onConflict: "store_id,external_ref" })
             .then((r) => ({ error: r.error }))
         : await db
-            .from("venues")
+            .from("inv_venues")
             .insert(payload)
             .then((r) => ({ error: r.error }));
       if (error) {
@@ -273,7 +273,7 @@ export async function commitImport(
       // venue por external_ref o nombre.
       let venueId: string | null = null;
       const { data: v1 } = await db
-        .from("venues")
+        .from("inv_venues")
         .select("id")
         .eq("store_id", storeId)
         .eq("external_ref", n.value.venue_ref)
@@ -281,7 +281,7 @@ export async function commitImport(
       if (v1) venueId = (v1 as { id: string }).id;
       if (!venueId) {
         const { data: v2 } = await db
-          .from("venues")
+          .from("inv_venues")
           .select("id")
           .eq("store_id", storeId)
           .eq("name", n.value.venue_ref)
@@ -314,7 +314,7 @@ export async function commitImport(
       let screenId: string | null = null;
       if (n.value.external_ref) {
         const { data, error } = await db
-          .from("screens")
+          .from("inv_screens")
           .upsert(payload, { onConflict: "store_id,external_ref" })
           .select("id")
           .maybeSingle();
@@ -324,7 +324,7 @@ export async function commitImport(
         }
         screenId = data ? (data as { id: string }).id : null;
       } else {
-        const { data, error } = await db.from("screens").insert(payload).select("id").maybeSingle();
+        const { data, error } = await db.from("inv_screens").insert(payload).select("id").maybeSingle();
         if (error || !data) {
           errors.push({ row: i + 1, message: `DB: ${error?.message ?? "sin id"}` });
           continue;
@@ -334,7 +334,7 @@ export async function commitImport(
       // Loop + slots auto: si el CSV trae loop_*, crea/asegura template y slots.
       if (screenId && n.value.loop_slots && n.value.loop_duration_ms && n.value.slot_duration_ms) {
         const { data: tpl } = await db
-          .from("loop_templates")
+          .from("inv_loop_templates")
           .insert({
             store_id: storeId,
             name: `${n.value.name} · ${n.value.loop_slots}×${n.value.slot_duration_ms}ms`,
@@ -347,7 +347,7 @@ export async function commitImport(
         const tplId = tpl ? (tpl as { id: string }).id : null;
         const sov = Number((100 / n.value.loop_slots).toFixed(2));
         for (let s = 1; s <= n.value.loop_slots; s++) {
-          await db.from("inventory_slots").upsert(
+          await db.from("inv_slots").upsert(
             {
               store_id: storeId,
               screen_id: screenId,
@@ -374,7 +374,7 @@ export async function commitImport(
       }
       let screenId: string | null = null;
       const { data: s1 } = await db
-        .from("screens")
+        .from("inv_screens")
         .select("id")
         .eq("store_id", storeId)
         .eq("external_ref", ref)
@@ -382,7 +382,7 @@ export async function commitImport(
       if (s1) screenId = (s1 as { id: string }).id;
       if (!screenId) {
         const { data: s2 } = await db
-          .from("screens")
+          .from("inv_screens")
           .select("id")
           .eq("store_id", storeId)
           .eq("name", ref)
@@ -393,7 +393,7 @@ export async function commitImport(
         errors.push({ row: i + 1, message: `pantalla no encontrada: ${ref}` });
         continue;
       }
-      const { error } = await db.from("inventory_slots").upsert(
+      const { error } = await db.from("inv_slots").upsert(
         {
           store_id: storeId,
           screen_id: screenId,
@@ -427,15 +427,21 @@ async function logRun(
   errors: ImportRowError[],
 ) {
   try {
-    await getSupabase().from("import_runs").insert({
+    // Unificado en sys_runs (kind='import'): import_runs se eliminó
+    // en la higiene 20261124. Un solo sistema de runs con recibo honesto.
+    // summary es TEXT (una línea): el detalle de errores va resumido.
+    const firstErr = errors.length > 0 ? String(errors[0]?.message ?? "") : "";
+    await getSupabase().from("sys_runs").insert({
       store_id: storeId,
-      kind,
-      source,
-      source_url: sourceUrl ?? null,
-      rows_seen: seen,
-      rows_ok: rOk,
-      rows_failed: failed,
-      errors_json: errors,
+      kind: "import",
+      label: `import:${kind}`,
+      total: seen,
+      processed: rOk,
+      failed,
+      current: null,
+      status: "done",
+      summary: `import ${kind} ${source}: ${rOk}/${seen} ok${failed > 0 ? `, ${failed} errores${firstErr ? ` (1º: ${firstErr.slice(0, 160)})` : ""}` : ""}`,
+      finished_at: new Date().toISOString(),
     });
   } catch {
     // auditoría best-effort

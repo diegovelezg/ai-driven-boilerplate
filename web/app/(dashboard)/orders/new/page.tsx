@@ -20,7 +20,7 @@ export default async function NuevaOrdenPage() {
   const connected = Boolean(activeStoreId);
 
   let companies: Array<{ id: string; name: string; kind: string | null }> = [];
-  let screens: Array<{ id: string; name: string; detail: string | null }> = [];
+  let screens: Array<{ id: string; name: string; detail: string | null; price_pen: number | null }> = [];
   let brands: string[] = [];
   let error: string | null = null;
 
@@ -35,8 +35,8 @@ export default async function NuevaOrdenPage() {
         const { getSupabase } = await import("@/lib/supabase");
         const db = getSupabase();
         const { data: sc } = await db
-          .from("screens")
-          .select("id,name,external_ref,technology,width_px,height_px,venues(name)")
+          .from("inv_screens")
+          .select("id,name,external_ref,technology,width_px,height_px,price_pen,inv_venues(name)")
           .eq("store_id", storeId)
           .eq("is_active", true)
           .order("name", { ascending: true })
@@ -55,9 +55,10 @@ export default async function NuevaOrdenPage() {
             id: String(s.id),
             name: String(s.name ?? ""),
             detail: detail || null,
+            price_pen: s.price_pen === null || s.price_pen === undefined ? null : Number(s.price_pen),
           };
         });
-        const { data: bm } = await db.from("insertion_orders").select("brand").eq("store_id", storeId).not("brand", "is", null).limit(200);
+        const { data: bm } = await db.from("io_orders").select("brand").eq("store_id", storeId).not("brand", "is", null).limit(200);
         brands = [...new Set(((bm ?? []) as Array<Record<string, unknown>>).map((r) => String(r.brand ?? "").trim()).filter(Boolean))].sort((a, b) =>
           a.localeCompare(b, "es"),
         );

@@ -22,6 +22,7 @@ import type { BillingStatusKey } from "@/lib/billing-status";
 import { OrderAutorizadaBadge, OrderBillingBadge, OrderStageBadge } from "@/components/order-badges";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { OrderRow } from "@/lib/orders-db";
+import type { MemberRole } from "@/lib/roles";
 import { OrdenDrawer } from "./orden-drawer";
 
 function fmtCorto(v: string | null): string {
@@ -38,12 +39,14 @@ export function OrdersList({
   stage,
   billing,
   initialSelectedId,
+  myRole,
 }: {
   rows: OrderRow[];
   q: string;
   stage: OrderStageKey | null;
   billing: BillingStatusKey | null;
   initialSelectedId: string | null;
+  myRole: MemberRole | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const router = useRouter();
@@ -113,7 +116,7 @@ export function OrdersList({
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de órdenes">
         <FilterSearch
           initialValue={q}
-          placeholder="Buscar por IO o marca…"
+          placeholder="Buscar IO, marca o empresa…"
           ariaLabel="Buscar órdenes"
           onSearch={(value) => go({ q: value })}
         />
@@ -122,7 +125,6 @@ export function OrdersList({
           onChange={(v) => go({ stage: v === "all" ? null : v })}
           ariaLabel="Filtrar por etapa operativa"
           placeholder="Etapa"
-          widthClass="w-44"
           display={(value) => (value === "all" ? "Etapa: todas" : `Etapa: ${ORDER_STAGE_LABELS[value as OrderStageKey] ?? value}`)}
         >
           <SelectItem value="all">Toda etapa</SelectItem>
@@ -137,7 +139,6 @@ export function OrdersList({
           onChange={(v) => go({ billing: v === "all" ? null : v })}
           ariaLabel="Filtrar por estado de cobro"
           placeholder="Cobro"
-          widthClass="w-44"
           display={(value) => (value === "all" ? "Cobro: todo" : `Cobro: ${BILLING_LABELS[value as BillingStatusKey] ?? value}`)}
         >
           <SelectItem value="all">Todo cobro</SelectItem>
@@ -252,7 +253,7 @@ export function OrdersList({
         </DataTable>
       </AppCard>
 
-      {selectedId && <OrdenDrawer orderId={selectedId} onClose={() => setSelectedId(null)} />}
+      {selectedId && <OrdenDrawer orderId={selectedId} myRole={myRole} onClose={() => setSelectedId(null)} />}
     </div>
   );
 }

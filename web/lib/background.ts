@@ -83,7 +83,7 @@ function mapRun(r: Record<string, unknown>): BackgroundRun {
 export async function getLatestRun(storeId: string): Promise<BackgroundRun | null> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .select("*")
     .eq("store_id", storeId)
     .order("started_at", { ascending: false })
@@ -97,7 +97,7 @@ export async function getLatestRun(storeId: string): Promise<BackgroundRun | nul
 export async function getLastFinishedAt(storeId: string, kind: string): Promise<string | null> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .select("started_at,finished_at")
     .eq("store_id", storeId)
     .eq("kind", kind)
@@ -119,7 +119,7 @@ export async function hasRunningRun(
   if (!filter) {
     const db = getSupabase();
     const { data, error } = await db
-      .from("background_runs")
+      .from("sys_runs")
       .select("id")
       .eq("store_id", storeId)
       .eq("status", "running")
@@ -141,7 +141,7 @@ export async function hasRunningRun(
 async function getRunningRuns(storeId: string): Promise<BackgroundRun[]> {
   const db = getSupabase();
   const { data, error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .select("*")
     .eq("store_id", storeId)
     .eq("status", "running")
@@ -155,7 +155,7 @@ export async function getActiveRuns(storeId: string, finishedLimit = 3): Promise
   const running = await getRunningRuns(storeId);
   const db = getSupabase();
   const { data, error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .select("*")
     .eq("store_id", storeId)
     .neq("status", "running")
@@ -195,7 +195,7 @@ async function reapStaleRuns(storeId: string): Promise<number> {
     const db = getSupabase();
     const cutoff = Date.now() - STALE_RUN_MINUTES * 60_000;
     const { data, error } = await db
-      .from("background_runs")
+      .from("sys_runs")
       .select("id,started_at,updated_at")
       .eq("store_id", storeId)
       .eq("status", "running");
@@ -210,7 +210,7 @@ async function reapStaleRuns(storeId: string): Promise<number> {
       .filter(Boolean);
     if (dead.length === 0) return 0;
     await db
-      .from("background_runs")
+      .from("sys_runs")
       .update({
         status: "error",
         error: `Stuck sin cierre ni heartbeat en ${STALE_RUN_MINUTES}min (reap automático)`,
@@ -238,13 +238,13 @@ export async function startRun(
   const scopeId = opts?.scopeId ?? null;
   // Migración 20261021000000: si la DB aún no la tiene, reintenta legacy.
   const { data, error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .insert({ store_id: storeId, kind, label, total, status: "running", scope_kind: scopeKind, scope_id: scopeId })
     .select("id")
     .single();
   if (!error && data) return String(data.id);
   const legacy = await db
-    .from("background_runs")
+    .from("sys_runs")
     .insert({ store_id: storeId, kind, label, total, status: "running" })
     .select("id")
     .single();
@@ -254,7 +254,7 @@ export async function startRun(
 
 /**
  * Slot atómico de corrida (issue #24, workers concurrentes): check de la
- * matriz #16 + insert en UNA transacción (`start_run_if_free`, advisory lock
+ * matriz #16 + insert en UNA transacción (`sys_run_start`, advisory lock
  * por store). Devuelve el run id, o `null` si hay ocupación (el caller
  * omite en vez de duplicar: el trabajo ya lo cubre la corrida en curso).
  * Sin RPC = error fuerte (corte sin-cola: DB sin migrar no se tolera).
@@ -267,7 +267,7 @@ export async function claimRunSlot(
 ): Promise<string | null> {
   await reapStaleRuns(storeId).catch(() => {});
   const db = getSupabase();
-  const { data, error } = await db.rpc("start_run_if_free", {
+  const { data, error } = await db.rpc("sys_run_start", {
     p_store_id: storeId,
     p_kind: kind,
     p_label: label,
@@ -280,7 +280,7 @@ export async function claimRunSlot(
 /** Actualiza el total de una corrida en curso (para progreso honesto 0/0 → N). */
 export async function setRunTotal(runId: string, total: number): Promise<void> {
   const db = getSupabase();
-  await db.from("background_runs").update({ total }).eq("id", runId);
+  await db.from("sys_runs").update({ total }).eq("id", runId);
 }
 
 /** Actualiza el progreso en vivo de una corrida (con heartbeat). En DBs
@@ -292,17 +292,17 @@ export async function advanceRun(
   const db = getSupabase();
   const now = new Date().toISOString();
   const { error } = await db
-    .from("background_runs")
+    .from("sys_runs")
     .update({ current: p.current, processed: p.processed, failed: p.failed, updated_at: now })
     .eq("id", runId);
   if (!error) return;
   await db
-    .from("background_runs")
+    .from("sys_runs")
     .update({ current: p.current, processed: p.processed, failed: p.failed })
     .eq("id", runId);
 }
 
-/** Error compacto con stack para background_runs.error (text): si un worker
+/** Error compacto con stack para sys_runs.error (text): si un worker
  *  falla en prod, el origen queda en la DB sin adivinar (deuda 2026-10-21:
  *  prospect moría con "Cannot read properties of undefined (reading
  *  'bind')" sin frames). Solo mensaje + 3 frames, cap 600. */
@@ -346,7 +346,7 @@ export async function finishRun(
     // Migraciones 20261019000000/20261021000000: si la DB aún no las
     // tiene, reintenta sin ellas.
     const { error } = await db
-      .from("background_runs")
+      .from("sys_runs")
       .update({
         ...base,
         ...(p.pulseState ? { pulse_state: p.pulseState } : null),
@@ -355,5 +355,5 @@ export async function finishRun(
       .eq("id", runId);
     if (!error) return;
   }
-  await db.from("background_runs").update(base).eq("id", runId);
+  await db.from("sys_runs").update(base).eq("id", runId);
 }

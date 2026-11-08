@@ -1,8 +1,12 @@
+import Link from "next/link";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { listCrmCompanies, listCrmContacts } from "@/lib/crm-db";
+import { listContactDuplicateGroups } from "@/lib/contact-duplicates";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { requireMyStoreAccess, resolveActiveStoreId, getMyStoreRole } from "@/lib/tenant";
+import type { MemberRole } from "@/lib/roles";
 import { connection } from "next/server";
 import { ContactsList } from "./contacts-list";
 
@@ -11,16 +15,28 @@ import { ContactsList } from "./contacts-list";
 // app/(dashboard)/page.tsx.
 export const instant = false;
 
+const VIEW_ALIASES: Record<string, "table" | "grid"> = {
+  table: "table",
+  tabla: "table",
+  lista: "table",
+  list: "table",
+  grid: "grid",
+  grilla: "grid",
+  cards: "grid",
+  tarjetas: "grid",
+};
+
 export default async function ContactosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string }>;
+  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string; view?: string; vista?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
   const companyId = ((sp.company ?? sp.empresa) ?? "").trim() || null;
   const selectedId = ((sp.contact ?? sp.contacto) ?? "").trim() || null;
+  const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
 
   const dbReady = isSupabaseConfigured();
   const activeStoreId = await resolveActiveStoreId();
@@ -28,6 +44,8 @@ export default async function ContactosPage({
 
   let rows: Awaited<ReturnType<typeof listCrmContacts>> = [];
   let companies: Awaited<ReturnType<typeof listCrmCompanies>>["rows"] = [];
+  let dupeGroups = 0;
+  let myRole: MemberRole | null = null;
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -37,12 +55,15 @@ export default async function ContactosPage({
       else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda.";
       } else {
-        const [contactsRes, companiesRes] = await Promise.all([
+        myRole = await getMyStoreRole(storeId).catch(() => null);
+        const [contactsRes, companiesRes, dupesRes] = await Promise.all([
           listCrmContacts(storeId, { q, companyId: companyId ?? undefined }),
           listCrmCompanies(storeId, { pageSize: 200 }),
+          listContactDuplicateGroups(storeId).catch(() => ({ groups: [] })),
         ]);
         rows = contactsRes;
         companies = companiesRes.rows;
+        dupeGroups = dupesRes.groups.length;
       }
     } catch (e) {
       error = e instanceof Error ? e.message : "DB read failed";
@@ -54,7 +75,19 @@ export default async function ContactosPage({
       <PageHeader
         eyebrow="CRM"
         title="Contactos"
-        description="Personas de las empresas: quién firma, quién paga, quién aprueba. El detalle y la creación viven en cada empresa."
+        description="Personas de las empresas: quién firma, quién paga, quién aprueba. También se agregan desde el drawer de cada empresa, tab Contactos."
+        right={
+          <span className="flex items-center gap-2">
+            {dupeGroups > 0 && (
+              <Button render={<Link href="/contacts/duplicates" />} nativeButton={false} variant="outline" size="sm">
+                Revisar duplicados · {dupeGroups}
+              </Button>
+            )}
+            <Button render={<Link href="/contacts/new" />} nativeButton={false} size="sm">
+              Nuevo contacto
+            </Button>
+          </span>
+        }
       />
 
       {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
@@ -67,7 +100,9 @@ export default async function ContactosPage({
           companies={companies.map((c) => ({ id: c.id, name: c.name }))}
           q={q}
           companyId={companyId}
+          initialView={vista}
           initialSelectedId={selectedId}
+          myRole={myRole}
         />
       )}
     </div>

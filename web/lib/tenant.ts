@@ -4,7 +4,7 @@
 //
 // Multiuser por tenant: las lecturas SSR usan service_role (bypassa RLS),
 // así que el aislamiento se enforcea en esta capa filtrando por membresía
-// (`merchant_users`). `listStores`/`getActiveStore` = sin filtro (workers y
+// (`sys_memberships`). `listStores`/`getActiveStore` = sin filtro (workers y
 // contextos sin sesión). `listMyStores`/`getMyActiveStore` = filtrado por el
 // usuario actual vía cliente RLS (cualquier miembro del tenant ve todo el
 // tenant, y solo sus tenants).
@@ -14,8 +14,6 @@ import type { MemberRole } from "@/lib/roles";
 export interface TenantStore {
   id: string;
   name: string | null;
-  shop_url: string;
-  platform: string;
   shop_currency: string;
   shop_country: string | null;
 }
@@ -26,8 +24,8 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
   const db = getSupabase();
   if (requestedId) {
     const { data: one } = await db
-      .from("stores")
-      .select("id,name,shop_url,platform,shop_currency,shop_country")
+      .from("sys_stores")
+      .select("id,name,shop_currency,shop_country")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) {
@@ -35,16 +33,14 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
       return [{
         id: String(r.id),
         name: (r.name as string | null) ?? null,
-        shop_url: String(r.shop_url ?? ""),
-        platform: String(r.platform ?? ""),
         shop_currency: String(r.shop_currency ?? "PEN"),
         shop_country: (r.shop_country as string | null) ?? null,
       }];
     }
   }
   const { data, error, count } = await db
-    .from("stores")
-    .select("id,name,shop_url,platform,shop_currency,shop_country", { count: "exact" })
+    .from("sys_stores")
+    .select("id,name,shop_currency,shop_country", { count: "exact" })
     .order("created_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Stores read: ${error.message}`);
@@ -55,8 +51,6 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     name: (r.name as string | null) ?? null,
-    shop_url: String(r.shop_url ?? ""),
-    platform: String(r.platform ?? ""),
     shop_currency: String(r.shop_currency ?? "PEN"),
     shop_country: (r.shop_country as string | null) ?? null,
   }));
@@ -96,17 +90,10 @@ export async function getActiveStore(
   return { stores, active: await resolveActiveStore(stores, requestedId) };
 }
 
-/** Nombre propio: stores.name, si no deriva del host. Nunca la URL cruda. */
-export function displayStoreName(s: { name: string | null; shop_url: string }): string {
-  if (s.name?.trim()) return s.name.trim();
-  try {
-    const host = new URL(s.shop_url).hostname.replace(/^(www|api)\./, "");
-    const first = host.split(".")[0];
-    if (first) return first.charAt(0).toUpperCase() + first.slice(1);
-  } catch {
-    // shop_url sin protocolo: se muestra tal cual
-  }
-  return s.shop_url;
+/** Nombre propio: sys_stores.name. Sin fallback: si está vacío es un
+ *  dato por fijar en DB, no algo que la UI deba inventar. */
+export function displayStoreName(s: { name: string | null }): string {
+  return s.name?.trim() ?? "";
 }
 
 /** IDs de tiendas del usuario actual (vía RLS: `merchant_users_self_read`).
@@ -127,7 +114,7 @@ export async function getMyStoreIds(): Promise<string[] | null> {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return [];
     const { data } = await supabase
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("store_id")
       .eq("user_id", user.id);
     return ((data ?? []) as Array<Record<string, unknown>>)
@@ -162,7 +149,7 @@ export async function getMyStoreRoles(): Promise<Map<string, MemberRole> | null>
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return new Map();
     const { data } = await supabase
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("store_id,role")
       .eq("user_id", user.id);
     const out = new Map<string, MemberRole>();
@@ -207,8 +194,8 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
   if (requestedId) {
     if (!ids.includes(requestedId)) return listMyStores();
     const { data: one } = await db
-      .from("stores")
-      .select("id,name,shop_url,platform,shop_currency,shop_country")
+      .from("sys_stores")
+      .select("id,name,shop_currency,shop_country")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) {
@@ -216,8 +203,6 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
       return [{
         id: String(r.id),
         name: (r.name as string | null) ?? null,
-        shop_url: String(r.shop_url ?? ""),
-        platform: String(r.platform ?? ""),
         shop_currency: String(r.shop_currency ?? "PEN"),
         shop_country: (r.shop_country as string | null) ?? null,
       }];
@@ -225,16 +210,14 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
     return [];
   }
   const { data, error } = await db
-    .from("stores")
-    .select("id,name,shop_url,platform,shop_currency,shop_country")
+    .from("sys_stores")
+    .select("id,name,shop_currency,shop_country")
     .in("id", ids)
     .order("created_at", { ascending: true });
   if (error) throw new Error(`Stores read: ${error.message}`);
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     name: (r.name as string | null) ?? null,
-    shop_url: String(r.shop_url ?? ""),
-    platform: String(r.platform ?? ""),
     shop_currency: String(r.shop_currency ?? "PEN"),
     shop_country: (r.shop_country as string | null) ?? null,
   }));

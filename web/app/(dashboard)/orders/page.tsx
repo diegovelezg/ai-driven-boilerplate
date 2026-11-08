@@ -4,7 +4,8 @@ import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { requireMyStoreAccess, resolveActiveStoreId, getMyStoreRole } from "@/lib/tenant";
+import type { MemberRole } from "@/lib/roles";
 import type { OrderStageKey } from "@/lib/order-stage";
 import type { BillingStatusKey } from "@/lib/billing-status";
 import { listOrders } from "@/lib/orders-db";
@@ -50,6 +51,7 @@ export default async function OrdenesPage({
   const connected = Boolean(activeStoreId);
 
   let rows: Awaited<ReturnType<typeof listOrders>> = [];
+  let myRole: MemberRole | null = null;
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -58,6 +60,7 @@ export default async function OrdenesPage({
       if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda.";
       } else {
+        myRole = await getMyStoreRole(storeId).catch(() => null);
         rows = await listOrders(storeId, { q, stage, billing });
       }
     } catch (e) {
@@ -83,7 +86,7 @@ export default async function OrdenesPage({
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (
-        <OrdersList rows={rows} q={q} stage={stage} billing={billing} initialSelectedId={selectedId} />
+        <OrdersList rows={rows} q={q} stage={stage} billing={billing} initialSelectedId={selectedId} myRole={myRole} />
       )}
     </div>
   );

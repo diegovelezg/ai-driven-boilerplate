@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
   output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
+  images: {
+    // Fotos del catálogo (S3). Sin esto next/image rechaza los hosts remotos.
+    remotePatterns: [
+      { protocol: "https", hostname: "tupantalla-uploads-prod.s3.us-east-1.amazonaws.com" },
+    ],
+  },
   // @google/adk hace requires opcionales (telemetría GCP) que Turbopack no puede
   // resolver al bundlear; se deja como paquete externo del servidor.
   // @crawlee/cheerio igual: bundleado en el chunk SSR, su _getStorageClientFactories

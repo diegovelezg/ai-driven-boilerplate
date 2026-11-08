@@ -147,34 +147,11 @@ Coolify → New → Application → Public Repository:
   el env viejo).
 - No tocar `web/Dockerfile` (standalone, ya ignora tracking con `web/.dockerignore`).
 
-## 3b. Cron diario (Scheduled Task sobre `web`, sin recurso worker)
+## 3b. Cron diario (Fase 2: DESACTIVADO — worker no-op)
 
-Coolify → Scheduled Task contra el recurso `web`, todos los días 11:00 UTC
-(= 06:00 Lima, sin DST):
-
-* Name: `retention-daily`
-* Schedule: `0 11 * * *`
-* Command (binario directo, sin `npm`: un nivel menos de procesos y el
-  exit code es el real del worker, no el de npm):
-```
-./node_modules/.bin/tsx worker.ts -- --once --kinds=morning
-```
-* Timeout: `3600` (el full secuencial de 3-5 tiendas con pasos LLM supera
-  los 300s del default y la task lo mata a medias dejando solo la cabecera).
-* Container: el de la app `web`.
-
-```
-./node_modules/.bin/tsx worker.ts -- --once --kinds=morning
-```
-
-Sin `--store`: todas las tiendas. `claimRunSlot` reclama slot atómico
-por tienda: no duplica. Exit 1 si alguna tienda falló (visible en la tarea).
-Tras guardar: run manual y buscar en el log `start stores=N` … `done
-failed=0`. Si solo salen las líneas de `npm`/avisos de Node = el worker
-murió antes de arrancar (exit 0 falso): ver §7.
-Sin cola: la web corre el pipeline directo en `after()` (respuesta <200ms);
-el cron es solo el programador diario + las corridas manuales usan el mismo
-comando con `--store=<uuid>` opcional.
+Fase 2 DOOH: sin pipeline programado, el worker sale 0 sin hacer nada.
+La Scheduled Task `retention-daily` debe pausarse/eliminarse en Coolify.
+Si a futuro hay pipeline (vencimientos, alertas), se reintroduce el cron aquí.
 
 ## 3c. Scheduler (notas)
 
@@ -199,7 +176,7 @@ DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh status     # solo lectura:
 DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh schema     # todas las migraciones en orden + tracking public.schema_migrations
 DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh relations  # solo lectura: tablas/columnas que el código asume
 DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh data <public-data.sql> [auth.sql]  # data-only (sin tracking)
-DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh verify     # esperado: stores=1 customers=953 orders=699 merchant_users=1 auth.users=1 auth.identities=1
+DB_CONTAINER=supabase-db-<uuid> ./scripts/db-apply.sh verify     # esperado: sys_stores=1 crm_companies=N io_orders=N sys_memberships=1 auth.users=1 auth.identities=1
 ```
 
 Tras `schema` con DDL (tablas/columnas nuevas): el propio script ya envía
@@ -281,17 +258,17 @@ Probar una acción de enriquecimiento (usa `SEARXNG_URL`, `web/lib/retrieval.ts`
 ### Pipeline sin login (issue #24)
 
 ```sql
--- Studio → SQL editor. La cinta es background_runs (la tabla jobs está
--- retirada como artefacto histórico y siempre sale vacía, no la uses):
+-- Studio → SQL editor. La cinta es sys_runs:
 select kind, status, summary, started_at
-  from background_runs order by started_at desc limit 10;
--- Esperado a las 06:05 Lima sin ningún login en 24h: filas scout +
--- strategist + copywriter + prospect en done para cada store.
+  from sys_runs order by started_at desc limit 10;
+-- Esperado a las 06:05 Lima sin ningún login en 24h: filas del pipeline
+-- en done para cada store (kinds vigentes en web/worker.ts; el motor de
+-- retención scout/strategist/copywriter/prospect se retiró en 20261122).
 -- Slot atómico (sin duplicados entre réplicas):
 select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public' and proname = 'start_run_if_free';
+ where n.nspname = 'public' and proname = 'sys_run_start';
 -- Debe devolver 1 fila; si sale vacía, aplicar
--- supabase/migrations/20261029000001_run_slot.sql (ver §4 / script).
+-- supabase/migrations/20261125000000_prefix_rename.sql (ver §4 / script).
 ```
 
 Criterios: sin login en 24h el pipeline corre 1 vez por store; redeploy a
@@ -323,8 +300,8 @@ Worker local: `cd web && npm run worker` (otra terminal, con `web/.env.local`).
      quedó un `${...}` entre recursos o falta redeploy). Ojo: el task en
      Success no significa nada (el `fetch` a `/health` no lanza con 401);
      Kong exige `apikey` hasta en `/auth/v1/health`.
-  2. `[worker] Run slot: Could not find the function public.start_run_if_free`:
-     falta aplicar `20261029000001_run_slot.sql` en la BD prod (ver §6).
+  2. `[worker] Run slot: Could not find the function public.sys_run_start`:
+     falta aplicar `20261125000000_prefix_rename.sql` en la BD prod (ver §6).
   3. `[worker] Node.js detected but native WebSocket not found` (o silencio
      total con exit 0 en tsx): `createClient` de supabase-js lanzaba en Node 20
      sin WebSocket global (imagen vieja `node:20`; actual `node:22` + polyfill).

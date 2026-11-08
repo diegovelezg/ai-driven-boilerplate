@@ -3,7 +3,7 @@ import { getSupabase } from "@/lib/supabase";
 
 /** Resuelve la primera tienda (sin ecommerce). */
 export async function resolveStoreId(): Promise<string | null> {
-  const { data } = await getSupabase().from("stores").select("id").order("created_at", { ascending: true }).limit(1).maybeSingle();
+  const { data } = await getSupabase().from("sys_stores").select("id").order("created_at", { ascending: true }).limit(1).maybeSingle();
   return (data?.id as string) ?? null;
 }
 
@@ -24,7 +24,7 @@ export function fail(tag: string, e: unknown): never {
 export async function loadServiceStore() {
   const { createClient } = await import("@supabase/supabase-js");
   const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  const { data: store } = await db.from("stores").select("id").order("created_at", { ascending: true }).limit(1).maybeSingle();
+  const { data: store } = await db.from("sys_stores").select("id").order("created_at", { ascending: true }).limit(1).maybeSingle();
   if (!store) throw new Error("Sin stores.");
   return { db, storeId: (store as { id: string }).id as string };
 }

@@ -22,7 +22,7 @@ async function mintIoNumber(
   db: ReturnType<typeof getSupabase>,
   storeId: string,
 ): Promise<string> {
-  const { data, error } = await db.rpc("mint_io_number", { p_store: storeId });
+  const { data, error } = await db.rpc("io_mint_number", { p_store: storeId });
   if (error || typeof data !== "string" || !data) {
     throw new Error(`No se pudo numerar la orden: ${error?.message ?? "sin número"}`);
   }
@@ -95,7 +95,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     }
     // Las contrapartes deben pertenecer al tenant.
     const { data: cos, error: coerr } = await db
-      .from("companies")
+      .from("crm_companies")
       .select("id,kind")
       .eq("store_id", t.storeId)
       .eq("id", company)
@@ -125,7 +125,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     };
     // Valida pantallas del tenant antes de insertar.
     const { data: scs, error: scerr } = await db
-      .from("screens")
+      .from("inv_screens")
       .select("id")
       .eq("store_id", t.storeId)
       .in("id", [...new Set(parsedLines.map((l) => l.screen))]);
@@ -136,7 +136,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     // Reintento único ante colisión de numeración (carrera entre dos creaciones).
     for (let attempt = 0; attempt < 2; attempt++) {
       const { data: io, error } = await db
-        .from("insertion_orders")
+        .from("io_orders")
         .insert({ ...base, io_number: await mintIoNumber(db, t.storeId) })
         .select("id")
         .maybeSingle();
@@ -148,7 +148,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       }
       const ioId = String((io as Record<string, unknown>).id);
       // slot_id null: el slot se asigna al confirmar la orden (etapa Autorizada).
-      const { error: lerr } = await db.from("insertion_order_lines").insert(
+      const { error: lerr } = await db.from("io_lines").insert(
         parsedLines.map((l) => ({
           store_id: t.storeId,
           io_id: ioId,
@@ -164,7 +164,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
         })),
       );
       if (lerr) {
-        await db.from("insertion_orders").delete().eq("id", ioId);
+        await db.from("io_orders").delete().eq("id", ioId);
         return { ok: false, message: `DB write líneas: ${lerr.message}` };
       }
       revalidatePath("/orders");
@@ -180,6 +180,68 @@ export async function createOrderRedirectAction(_prev: CrmState, form: FormData)
   const res = await createOrderAction(form);
   if (res.ok) redirect("/orders");
   return res;
+}
+
+/**
+ * Edición inline de la ficha (drawer): marca, condición de pago y notas.
+ * No toca líneas ni fechas (afectan disponibilidad/inventario).
+ * Requiere rol vendedor o superior; bloqueada si la orden está cancelada.
+ */
+export async function updateOrderAction(input: {
+  orderId: string;
+  patch: {
+    brand?: string | null;
+    payment_terms_days?: number | string | null;
+    notes?: string | null;
+  };
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { requireMinRole } = await import("@/lib/tenant");
+  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
+  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const orderId = String(input.orderId ?? "").trim();
+  if (!orderId) return { ok: false, message: "Falta la orden." };
+  try {
+    const db = getSupabase();
+    const { data: existing, error: rerr } = await db
+      .from("io_orders")
+      .select("id,status")
+      .eq("store_id", t.storeId)
+      .eq("id", orderId)
+      .maybeSingle();
+    if (rerr || !existing) return { ok: false, message: "Orden no encontrada en esta tienda." };
+    if (String((existing as Record<string, unknown>).status ?? "") === "cancelled") {
+      return { ok: false, message: "La orden está cancelada." };
+    }
+    const p = (input.patch ?? {}) as Record<string, unknown>;
+    const brand = p.brand !== undefined ? String(p.brand ?? "").trim() || null : undefined;
+    let terms: number | null | undefined;
+    if (p.payment_terms_days !== undefined) {
+      const raw = p.payment_terms_days;
+      terms = raw === null || raw === "" ? null : Number(raw);
+      if (terms !== null && (!Number.isInteger(terms) || terms < 0)) {
+        return { ok: false, message: "Condición de pago inválida." };
+      }
+    }
+    const notes = p.notes !== undefined ? String(p.notes ?? "").trim() || null : undefined;
+    const patch: Record<string, unknown> = {};
+    if (brand !== undefined) patch.brand = brand;
+    if (terms !== undefined) patch.payment_terms_days = terms;
+    if (notes !== undefined) patch.notes = notes;
+    if (Object.keys(patch).length === 0) return { ok: true, message: "Sin cambios." };
+    const actor = await resolveActor();
+    const { error } = await db
+      .from("io_orders")
+      .update({ ...patch, updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", t.storeId)
+      .eq("id", orderId);
+    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    revalidatePath("/orders");
+    return { ok: true, message: "Orden actualizada." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
 }
 
 export interface AvailabilityState {

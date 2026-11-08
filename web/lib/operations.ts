@@ -1,15 +1,9 @@
-// Matriz de compatibilidad de operaciones (issue #16, Fase 0). Módulo puro
-// y testeable (sin I/O): decide qué puede correr contra qué, sin estados
-// locales divergentes.
-// Sin `server-only`: lo importan server actions, client components (cinta,
-// botones) y tests tsx.
+// Matriz de compatibilidad (Fase 2: sin pipeline programado).
+// Se conserva el módulo por compatibilidad de imports: sin cadena
+// secuencial ni workers pesados, nada conflicta con nada.
 export type ScopeKind = "global" | "signal" | "customer" | "domain";
 
 export type ErrorCode = "judge_veto" | "busy" | "llm_fail" | "stale" | "conflict";
-
-/** Kinds con corrida en `background_runs`. Los instantáneos (`approve`,
- *  `reject`, `dismiss`) no crean run: no participan del lock.
- *  (Referencia: los kinds se usan como string literals en llamadas.) */
 
 export interface ActiveOp {
   kind: string;
@@ -24,67 +18,26 @@ export interface NewOp {
   scopeId?: string | null;
 }
 
-/** Cadena secuencial del loop (misma piscina de señales). */
-const CHAIN = new Set(["scout", "strategist", "copywriter"]);
-
-/** Kinds que nunca duplican corrida de sí mismos. */
-const LONE = new Set(["dispatcher", "analyst", "prospect", "profiler", "enrichment", "regenerate"]);
-
-/** ¿Estas dos operaciones son incompatibles (no pueden correr a la vez)? */
-export function conflictsWith(aNew: NewOp, bActive: ActiveOp): boolean {
-  const a = aNew.kind;
-  const b = bActive.kind;
-  // Cadena secuencial: scout → strategist → copywriter.
-  if (CHAIN.has(a) && CHAIN.has(b)) return true;
-  // El bulk redacta la misma piscina que el single y que regenerate.
-  if (a === "copywriter" && (b === "copywriter_single" || b === "regenerate")) return true;
-  if (b === "copywriter" && (a === "copywriter_single" || a === "regenerate")) return true;
-  if ((a === "copywriter_single" && b === "regenerate") || (a === "regenerate" && b === "copywriter_single")) {
-    return true;
-  }
-  if (a === "regenerate" && b === "regenerate") return true;
-  // Puntuales: solo contra su misma unidad (una señal, un dominio).
-  if (a === "copywriter_single" && b === "copywriter_single") {
-    return (aNew.scopeId ?? null) !== null && aNew.scopeId === bActive.scopeId;
-  }
-  if (a === "enrich_single" && b === "enrich_single") {
-    return (aNew.scopeId ?? null) !== null && aNew.scopeId === bActive.scopeId;
-  }
-  // El bulk de enriquecimiento cubre el dominio puntual.
-  if ((a === "enrich_single" && b === "enrichment") || (a === "enrichment" && b === "enrich_single")) {
-    return true;
-  }
-  // Sin duplicados del mismo worker pesado.
-  if (a === b && LONE.has(a)) return true;
+export function conflictsWith(_aNew: NewOp, _bActive: ActiveOp): boolean {
   return false;
 }
 
-/** ¿Esta operación puede arrancar contra los activos? */
-export function isCompatible(nuevo: NewOp, activos: ActiveOp[]): boolean {
-  return !activos.some((b) => conflictsWith(nuevo, b));
+export function isCompatible(_nuevo: NewOp, _activos: ActiveOp[]): boolean {
+  return true;
 }
 
-/** Primer activo incompatible (para nombrar el conflicto: `En curso: X…`). */
-export function findConflict(nuevo: NewOp, activos: ActiveOp[]): ActiveOp | null {
-  return activos.find((b) => conflictsWith(nuevo, b)) ?? null;
+export function findConflict(_nuevo: NewOp, _activos: ActiveOp[]): ActiveOp | null {
+  return null;
 }
 
-/** Mensaje humano de rechazo por lock (`En curso: Copywriter…`). */
 export function conflictMessage(conflict: ActiveOp): string {
   return `En curso: ${conflict.label}…`;
 }
 
-/** Alias de `conflictMessage`: una corrida en curso (BackgroundRun u otro
- *  objeto con kind/scope/label) es un ActiveOp por estructura, así que se
- *  puede pasar directo. Vive aquí (módulo puro) y no en `lib/background.ts`:
- *  los archivos "use server" solo pueden exportar funciones async, y
- *  `background.ts` debe exportar solo async + tipos para no romper el
- *  server-actions loader ("found object" en dev). */
 export function busyMessage(conflict: ActiveOp): string {
   return conflictMessage(conflict);
 }
 
-/** `error_code` → lenguaje humano (la cinta nunca muestra el código crudo). */
 export function errorCodeMessage(code: ErrorCode): string {
   switch (code) {
     case "judge_veto":

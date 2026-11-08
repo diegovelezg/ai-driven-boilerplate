@@ -23,7 +23,7 @@ export function AgencyCommissionForm({
     setMsg(null);
     const trimmed = value.trim();
     if (trimmed !== "" && normalizeCommissionPct(trimmed) === null) {
-      setMsg("Comisión inválida (0-100).");
+      setMsg("Comisión inválida (entero 0-100).");
       return;
     }
     startTransition(async () => {
@@ -40,26 +40,26 @@ export function AgencyCommissionForm({
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-xs">
-          Comisión agencia (% sobre bruto)
           <span className="flex items-center gap-1">
             <input
               value={value}
-              onChange={(e) => setValue(e.target.value)}
-              inputMode="decimal"
+              onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, ""))}
+              inputMode="numeric"
+              pattern="[0-9]*"
               placeholder="p. ej. 15"
               aria-label="Comisión agencia en porcentaje"
-              className="h-8 w-28 rounded-lg border border-border bg-background px-2 text-sm"
+              className="h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums"
             />
             <span className="text-muted-foreground">%</span>
           </span>
         </label>
-        <Button size="sm" onClick={save} disabled={pending}>
+        <Button onClick={save} disabled={pending}>
           {pending ? "Guardando…" : "Guardar"}
         </Button>
         {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        Vacío = sin acuerdo (0% efectivo). Solo propietarios y administradores ven este campo.
+        Vacío = sin acuerdo (0% efectivo).
       </p>
     </div>
   );

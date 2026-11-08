@@ -1,7 +1,13 @@
 # MEOW
 
-> Sistema agéntico de **retención y comprensión de negocio**: entiende tu negocio y actúa
-> sobre él (detecta, decide, propone, ejecuta con aprobación humana y mide).
+> Sistema de **gestión comercial DOOH**: empresas, inventario (venues/pantallas/slots),
+> órdenes de inserción (contrato → hard hold → autorización → materiales → emisión →
+> certificación → cobranza) y marcas.
+>
+> **Fase 2 (2026-11-07):** se extirpó el motor de retención original
+> (modelo probabilístico + loop scout→strategist→copywriter→dispatcher→analyst).
+> Migración `20261122000000_drop_retention_engine.sql`. Sin morning pipeline,
+> sin cron (worker no-op), chat en pausa (501) hasta el agente DOOH.
 
 ## Qué es (y qué no es)
 

@@ -2,6 +2,20 @@
 @import "tw-animate-css";
 @import "./shadcn-theme.css";
 @import "shadcn/tailwind.css";
+@import "leaflet/dist/leaflet.css";
+
+/* Leaflet: Tailwind preflight (img max-width:100%) rompe los tiles;
+ * sin este override el mapa se ve incompleto y los pines desplazados. */
+.screen-map-leaflet {
+  background-color: var(--muted);
+}
+.screen-map-leaflet img.leaflet-tile {
+  max-width: none !important;
+}
+.screen-map-pin {
+  background: transparent !important;
+  border: none !important;
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -171,6 +185,36 @@ input[type="color"]:not(:disabled),
 button:disabled,
 button[aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+/* Scroll minimalista por defecto (SSOT global).
+ * Todo scroll del sitio hereda barra fina + thumb sutil sin declarar clases.
+ * `scroll-fade-*` sigue siendo opt-in por contenedor (máscara con
+ * animation-timeline, no aplicable a ciegas). `no-scrollbar` sigue ganando
+ * donde se usa (utilities > base). */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+    background-clip: content-box;
+  }
 }
 
 /* Cinta de estado de enriquecimiento: brillo que recorre la barra. */

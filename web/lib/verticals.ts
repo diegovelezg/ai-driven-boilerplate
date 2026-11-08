@@ -1,5 +1,5 @@
 // Fase A del perfilador: brief del SECTOR por vertical (prior compartido).
-// Se investiga una vez (web + LLM), se cachea en `vertical_profiles` y se
+// Se investiga una vez (web + LLM), se cachea en `ai_vertical_profiles` y se
 // reusa entre tenants. La precisión del tenant la pone la Fase B con datos.
 // Solo server/scripts (usa Crawlee + service_role); sin "server-only" para
 // que los smoke scripts (tsx) puedan importarlo. El retrieval web vive en
@@ -198,7 +198,7 @@ export async function getVerticalProfile(
   vertical: string,
 ): Promise<{ brief: VerticalBrief; sources: VerticalSource[]; confidence: string | null } | null> {
   const db = getSupabase();
-  const q = db.from("vertical_profiles").select("brief_json,sources_json,confidence");
+  const q = db.from("ai_vertical_profiles").select("brief_json,sources_json,confidence");
   const { data, error } = taxonomyId
     ? await q.eq("taxonomy_id", taxonomyId).maybeSingle()
     : await q.eq("vertical_detected", vertical.trim().slice(0, 120)).maybeSingle();
@@ -227,20 +227,20 @@ export async function saveVerticalProfile(
     researched_at: new Date().toISOString(),
   };
   if (taxonomyId) {
-    const { error } = await db.from("vertical_profiles").upsert(row, { onConflict: "taxonomy_id" });
-    if (error) throw new Error(`vertical_profiles upsert: ${error.message}`);
+    const { error } = await db.from("ai_vertical_profiles").upsert(row, { onConflict: "taxonomy_id" });
+    if (error) throw new Error(`ai_vertical_profiles upsert: ${error.message}`);
     return;
   }
   // Sin taxonomy_id el unique no matchea nulls: buscar por vertical e insertar/actualizar.
   const { data: existing } = await db
-    .from("vertical_profiles")
+    .from("ai_vertical_profiles")
     .select("id")
     .is("taxonomy_id", null)
     .eq("vertical_detected", row.vertical_detected)
     .maybeSingle();
   const id = (existing as Record<string, unknown> | null)?.id as string | undefined;
   const { error } = id
-    ? await db.from("vertical_profiles").update(row).eq("id", id)
-    : await db.from("vertical_profiles").insert(row);
-  if (error) throw new Error(`vertical_profiles write: ${error.message}`);
+    ? await db.from("ai_vertical_profiles").update(row).eq("id", id)
+    : await db.from("ai_vertical_profiles").insert(row);
+  if (error) throw new Error(`ai_vertical_profiles write: ${error.message}`);
 }

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { COMPANY_KINDS, COMPANY_KIND_LABELS } from "@/lib/crm";
+import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { createCompanyRedirectAction, type CrmState } from "@/lib/crm-actions";
 
 const initial: CrmState = { ok: false, message: "" };
@@ -38,7 +39,7 @@ export function NuevaEmpresaForm({ canManageCommission = true }: { canManageComm
           )}
           disabled={pending}
         >
-          <SelectTrigger aria-label="Tipo" className="h-9 w-56 bg-background text-sm">
+          <SelectTrigger aria-label="Tipo">
             <SelectValue placeholder="Elegir tipo…" />
           </SelectTrigger>
           <SelectContent>
@@ -50,19 +51,22 @@ export function NuevaEmpresaForm({ canManageCommission = true }: { canManageComm
       </div>
       {showCommission && (
         <label className="flex flex-col gap-1 text-xs">
-          Comisión agencia (% sobre bruto)
+          <span className="flex flex-wrap items-center gap-2">
+            <RestrictedVisibilityBadge minRole="admin" />
+          </span>
           <span className="flex items-center gap-1">
             <input
               name="agency_commission_pct"
-              inputMode="decimal"
+              inputMode="numeric"
+              pattern="[0-9]*"
               placeholder="p. ej. 15"
               aria-label="Comisión agencia en porcentaje"
-              className="h-9 w-32 rounded-lg border border-border bg-background px-2.5 text-sm"
+              className="h-9 w-32 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums"
             />
             <span className="text-muted-foreground">%</span>
           </span>
           <span className="text-[11px] text-muted-foreground">
-            Solo agencias. Vacío = sin acuerdo (0% efectivo). Solo owner/admin.
+            Solo agencias. Vacío = sin acuerdo (0% efectivo).
           </span>
         </label>
       )}
@@ -100,7 +104,7 @@ export function NuevaEmpresaForm({ canManageCommission = true }: { canManageComm
         <p className="text-xs text-destructive" role="alert">{state.message}</p>
       )}
       <div>
-        <Button type="submit" size="sm" disabled={pending}>{pending ? "Creando…" : "Crear empresa"}</Button>
+        <Button type="submit" disabled={pending}>{pending ? "Creando…" : "Crear empresa"}</Button>
       </div>
     </form>
   );

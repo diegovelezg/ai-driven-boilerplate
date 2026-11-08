@@ -1,8 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
-import { Building2, Bot, FileText, UserRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Building2, Bot, FileText, Globe, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { ComboboxField } from "@/components/combobox-field";
 import { AppCard, AppCardState } from "@/components/app-card";
 import {
   DrawerShell,
@@ -20,11 +24,14 @@ import { createContactAction, type CrmState } from "@/lib/crm-actions";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
+import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { toTitleCase } from "@/lib/format";
 import { KindForm } from "./kind-form";
+import { CompanyEditForm } from "./company-edit-form";
 import { AgencyCommissionForm } from "./agency-commission-form";
 import { EmpresaChat } from "./empresa-chat";
+import { EmpresaResearch } from "./empresa-research";
 
 interface DrawerContact {
   id: string;
@@ -58,15 +65,44 @@ interface EmpresaDetail {
   myRole?: MemberRole | null;
 }
 
-type TabId = "ficha" | "contactos" | "pedidos" | "agentes";
+type TabId = "ficha" | "perfil" | "contactos" | "pedidos" | "agentes";
 
 function contactName(c: DrawerContact): string {
   return [c.first_name, c.last_name].filter(Boolean).join(" ") || "—";
 }
 
-function NewContactForm({ companyId, onSaved }: { companyId: string; onSaved: () => void }) {
+function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: string; siblingJobTitles: string[]; onSaved: () => void }) {
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  const [jobTitle, setJobTitle] = useState("");
+  const [isPrimary, setIsPrimary] = useState(false);
+  const [globalTitles, setGlobalTitles] = useState<string[]>([]);
+  // Cargos globales ya usados: evita repetir el mismo cargo con otra escritura.
+  // setState solo en el callback async del fetch (patrón permitido por el lint).
+  useEffect(() => {
+    let alive = true;
+    const h = setTimeout(() => {
+      fetch("/api/contacts/job-titles", { cache: "no-store" })
+        .then(async (res) => (res.ok ? ((await res.json()) as { job_titles?: string[] }) : null))
+        .then((j) => {
+          if (!alive || !j || !Array.isArray(j.job_titles)) return;
+          setGlobalTitles(j.job_titles.filter((t): t is string => typeof t === "string" && t.trim() !== ""));
+        })
+        .catch(() => {});
+    }, 0);
+    return () => {
+      alive = false;
+      clearTimeout(h);
+    };
+  }, []);
+  const jobTitles = useMemo(() => {
+    const merged: string[] = [];
+    for (const t of [...siblingJobTitles, ...globalTitles]) {
+      const v = t.trim();
+      if (v && !merged.some((m) => m.toLowerCase() === v.toLowerCase())) merged.push(v);
+    }
+    return merged.sort((a, b) => a.localeCompare(b, "es"));
+  }, [siblingJobTitles, globalTitles]);
 
   async function submit(form: FormData) {
     setMsg(null);
@@ -96,14 +132,34 @@ function NewContactForm({ companyId, onSaved }: { companyId: string; onSaved: ()
         Teléfono
         <input name="phone" maxLength={40} className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
       </label>
-      <label className="flex flex-col gap-1 text-xs">
+      <div className="flex min-w-36 flex-col gap-1 text-xs">
         Cargo
-        <input name="job_title" maxLength={120} placeholder="Compras, Gerencia…" className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
-      </label>
-      <label className="flex items-center gap-1.5 text-xs">
-        <input type="checkbox" name="is_primary" /> Principal
-      </label>
-      <Button type="submit" size="sm" disabled={pending}>{pending ? "Agregando…" : "Agregar"}</Button>
+        <input type="hidden" name="job_title" value={jobTitle} />
+        <ComboboxField
+          items={jobTitles}
+          value={jobTitle}
+          onChange={setJobTitle}
+          placeholder="Compras, Gerencia…"
+          emptyText={jobTitle.trim() ? "Enter para usar este cargo." : "Sin cargos registrados."}
+          customLabel={(q) => <>Usar “{q}”</>}
+          ariaLabel="Cargo"
+          disabled={pending}
+        />
+      </div>
+      <div className="flex h-8 items-center gap-2">
+        <input type="hidden" name="is_primary" value={isPrimary ? "on" : ""} />
+        <Checkbox
+          id="new-contact-is-primary"
+          checked={isPrimary}
+          onCheckedChange={(v) => setIsPrimary(v === true)}
+          disabled={pending}
+          aria-label="Contacto principal"
+        />
+        <Label htmlFor="new-contact-is-primary" className="text-xs font-normal">
+          Principal
+        </Label>
+      </div>
+      <Button type="submit" disabled={pending}>{pending ? "Agregando…" : "Agregar"}</Button>
       {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
     </form>
   );
@@ -121,6 +177,8 @@ export function EmpresaDrawer({
   const [tab, setTab] = useState<TabId>(initialTab);
   const [detail, setDetail] = useState<EmpresaDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingDatos, setEditingDatos] = useState(false);
+  const router = useRouter();
 
   const load = useCallback(async () => {
     setError(null);
@@ -136,17 +194,27 @@ export function EmpresaDrawer({
   useEffect(() => {
     setTab("ficha");
     setDetail(null);
+    setEditingDatos(false);
     void load();
   }, [load]);
 
   const contacts = detail?.contacts ?? [];
+  const siblingJobTitles = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const c of contacts) {
+      const raw = (c.job_title ?? "").trim();
+      if (raw && !seen.has(raw.toLowerCase())) seen.set(raw.toLowerCase(), raw);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b, "es"));
+  }, [contacts]);
   const ios = detail?.ios ?? [];
   const campaigns = detail?.campaigns ?? [];
   const company = detail?.company;
   const kind = (company?.kind as string | null) ?? null;
   const rawRole = detail?.myRole ?? null;
   const myRole: MemberRole | null = isMemberRole(rawRole) ? rawRole : null;
-  // Sin auth (dev: myRole null) se permite ver/gestionar; con sesión solo owner/admin.
+  // Sin auth (dev: myRole null) se permite ver/gestionar; viewer = solo lectura.
+  const canEdit = myRole === null || hasMinRole(myRole, "seller");
   const canViewCommission = myRole === null || hasMinRole(myRole, "admin");
   const isAgency = kind === "agencia";
   const commissionRaw = company?.agency_commission_pct;
@@ -159,6 +227,7 @@ export function EmpresaDrawer({
 
   const tabs: DrawerTabDef[] = [
     { id: "ficha", label: "Ficha", icon: Building2 },
+    { id: "perfil", label: "Perfil", icon: Globe },
     { id: "contactos", label: `Contactos (${contacts.length})`, icon: UserRound },
     { id: "pedidos", label: `Pedidos (${ios.length})`, icon: FileText },
     { id: "agentes", label: "Agentes", icon: Bot },
@@ -172,7 +241,7 @@ export function EmpresaDrawer({
       title={company ? toTitleCase(String(company.name ?? "Empresa")) : "Empresa"}
       description={
         company
-          ? [typeof company.domain === "string" && company.domain ? company.domain : null, typeof company.tax_id === "string" && company.tax_id ? `RUT ${company.tax_id}` : null].filter(Boolean).join(" · ") || "—"
+          ? [typeof company.domain === "string" && company.domain ? company.domain : null, typeof company.tax_id === "string" && company.tax_id ? `ID fiscal ${company.tax_id}` : null].filter(Boolean).join(" · ") || "—"
           : "Cargando…"
       }
       badges={
@@ -220,9 +289,38 @@ export function EmpresaDrawer({
             title="Datos"
             description="Identidad y contacto de la contraparte."
             aria-label="Datos de la empresa"
+            action={
+              canEdit && !editingDatos ? (
+                <Button variant="outline" size="sm" onClick={() => setEditingDatos(true)}>
+                  Editar
+                </Button>
+              ) : undefined
+            }
           >
+            {editingDatos ? (
+              <CompanyEditForm
+                key={companyId}
+                companyId={companyId}
+                initial={{
+                  name: typeof company?.name === "string" ? company.name : "",
+                  tax_id: typeof company?.tax_id === "string" ? company.tax_id : "",
+                  domain: typeof company?.domain === "string" ? company.domain : "",
+                  email: typeof company?.email === "string" ? company.email : "",
+                  phone: typeof company?.phone === "string" ? company.phone : "",
+                  city: typeof company?.city === "string" ? company.city : "",
+                  country: typeof company?.country === "string" ? company.country : "",
+                  address: typeof company?.address === "string" ? company.address : "",
+                }}
+                onSaved={() => {
+                  setEditingDatos(false);
+                  router.refresh();
+                  void load();
+                }}
+                onCancel={() => setEditingDatos(false)}
+              />
+            ) : (
             <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">RUT / tax_id</dt><dd className="mt-0.5 text-[13px]">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">ID fiscal</dt><dd className="mt-0.5 text-[13px]">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Dominio</dt><dd className="mt-0.5 text-[13px]">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="mt-0.5 text-[13px]">{typeof company?.email === "string" && company.email ? company.email : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
@@ -233,24 +331,55 @@ export function EmpresaDrawer({
                 <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="mt-0.5 text-[13px]">{String(company.updated_by)}</dd></div>
               )}
             </dl>
+            )}
           </AppCard>
           <AppCard
             title="Tipo"
             description="Naturaleza de la contraparte."
             aria-label="Tipo de empresa"
           >
-            <KindForm companyId={companyId} initial={typeof company?.kind === "string" ? company.kind : null} onSaved={() => void load()} />
+            {canEdit ? (
+              <KindForm key={companyId} companyId={companyId} initial={typeof company?.kind === "string" ? company.kind : null} onSaved={() => { router.refresh(); void load(); }} />
+            ) : (
+              <p className="text-[13px] font-medium">{kindLabel(typeof company?.kind === "string" ? company.kind : null)}</p>
+            )}
           </AppCard>
           {isAgency && canViewCommission && (
             <AppCard
-              title="Comisión agencia"
-              description="Acuerdo por defecto (% sobre bruto). Solo owner/admin."
+              title={
+                <span className="flex flex-wrap items-center gap-2">
+                  Comisión agencia
+                  <RestrictedVisibilityBadge minRole="admin" />
+                </span>
+              }
+              description="Acuerdo por defecto (% sobre bruto)."
               aria-label="Comisión de agencia"
             >
               <AgencyCommissionForm companyId={companyId} initial={commissionInitial} onSaved={() => void load()} />
             </AppCard>
           )}
+          {isAgency && !canViewCommission && (
+            <AppCard
+              title={
+                <span className="flex flex-wrap items-center gap-2">
+                  Comisión agencia
+                  <RestrictedVisibilityBadge minRole="admin" />
+                </span>
+              }
+              description="Acuerdo por defecto (% sobre bruto)."
+              aria-label="Comisión de agencia (restringida)"
+            >
+              <p className="text-[13px] text-muted-foreground">
+                El acuerdo de comisión existe pero solo es visible para Propietario y Administrador.
+                Si necesitas revisarlo, pide a un admin que lo confirme.
+              </p>
+            </AppCard>
+          )}
         </>
+      )}
+
+      {detail && tab === "perfil" && (
+        <EmpresaResearch key={companyId} companyId={companyId} canResearch={canEdit} />
       )}
 
       {detail && tab === "contactos" && (
@@ -288,7 +417,7 @@ export function EmpresaDrawer({
             </DrawerTable>
           )}
           <div className="mt-3">
-            <NewContactForm companyId={companyId} onSaved={() => void load()} />
+            {canEdit && <NewContactForm companyId={companyId} siblingJobTitles={siblingJobTitles} onSaved={() => { router.refresh(); void load(); }} />}
           </div>
         </AppCard>
       )}

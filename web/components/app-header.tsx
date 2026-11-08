@@ -23,7 +23,7 @@ export function AppHeader({
   userEmail = null,
   userRoles = {},
 }: {
-  stores?: Array<{ id: string; name?: string | null; shop_url?: string }>;
+  stores?: Array<{ id: string; name?: string | null }>;
   userEmail?: string | null;
   userRoles?: Record<string, MemberRole>;
 }) {

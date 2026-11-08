@@ -82,7 +82,7 @@ export function DrawerShell({
         {tabs && tabs.length > 0 && (
           <div className="shrink-0 px-8 pt-5 pb-5">
             <div
-              className="flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
+              className="no-scrollbar flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
               role="tablist"
               aria-label={tabListLabel ?? "Detalle"}
             >
@@ -111,7 +111,7 @@ export function DrawerShell({
           </div>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="scroll-fade-b scrollbar-thin scrollbar-gutter-stable flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
           {fill ? children : <div className="flex flex-col gap-7 px-8 pb-8">{children}</div>}
         </div>
       </SheetContent>

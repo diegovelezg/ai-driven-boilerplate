@@ -1,7 +1,7 @@
 // Dashboard Hoy v1 — solo desde la OI (sin facturación).
-// Fuente: insertion_orders + lines + agency_orders + creatives + photo_checks.
+// Fuente: io_orders + lines + io_agency_orders + creatives + io_photo_checks.
 // Sin prorrateo inventado más allá de lineal por tiempo solapado; sin
-// impresiones/GRP (play_logs del CMS vive fuera).
+// impresiones/GRP (io_play_logs del CMS vive fuera).
 import { getSupabase } from "@/lib/supabase";
 
 export type AlertKind = "sin_om" | "material" | "sin_evidencia" | "termina_sin_relevo";
@@ -61,10 +61,10 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const today00 = startOfDayUTC(now);
 
   const [{ data: store }, { data: screens }, { data: ois }] = await Promise.all([
-    db.from("stores").select("shop_currency").eq("id", storeId).maybeSingle(),
-    db.from("screens").select("id,name").eq("store_id", storeId).eq("is_active", true).limit(500),
+    db.from("sys_stores").select("shop_currency").eq("id", storeId).maybeSingle(),
+    db.from("inv_screens").select("id,name").eq("store_id", storeId).eq("is_active", true).limit(500),
     db
-      .from("insertion_orders")
+      .from("io_orders")
       .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id")
       .eq("store_id", storeId)
       .neq("status", "cancelled")
@@ -105,19 +105,19 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   if (oiIds.length > 0) {
     const [lines, oms, creas, photos] = await Promise.all([
       db
-        .from("insertion_order_lines")
+        .from("io_lines")
         .select("io_id,screen_id,rate_minor,starts_at,ends_at")
         .eq("store_id", storeId)
         .in("io_id", oiIds)
         .limit(2000),
-      db.from("agency_orders").select("io_id").eq("store_id", storeId).in("io_id", oiIds).limit(1000),
+      db.from("io_agency_orders").select("io_id").eq("store_id", storeId).in("io_id", oiIds).limit(1000),
       db
-        .from("creatives")
+        .from("io_creatives")
         .select("io_id,qc_status,legal_status")
         .eq("store_id", storeId)
         .in("io_id", oiIds)
         .limit(1000),
-      db.from("photo_checks").select("io_id").eq("store_id", storeId).in("io_id", oiIds).limit(1000),
+      db.from("io_photo_checks").select("io_id").eq("store_id", storeId).in("io_id", oiIds).limit(1000),
     ]);
     lineRows = ((lines.data ?? []) as Array<Record<string, unknown>>).map((l) => ({
       io_id: String(l.io_id),
@@ -142,7 +142,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     const coIds = [...new Set(oiRows.flatMap((o) => [o.advertiser_id, o.billing_id]).filter(Boolean))] as string[];
     if (coIds.length > 0) {
       const { data: cos } = await db
-        .from("companies")
+        .from("crm_companies")
         .select("id,name")
         .eq("store_id", storeId)
         .in("id", coIds)

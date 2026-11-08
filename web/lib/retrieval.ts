@@ -61,7 +61,7 @@ export function searxngHeaders(): Record<string, string> {
 }
 
 /** Chat completion que devuelve JSON (lanza si la respuesta no es texto útil).
- *  Metering issue #15: con `meter.storeId` loguea usage en `llm_usage`
+ *  Metering issue #15: con `meter.storeId` loguea usage en `ai_llm_usage`
  *  (fire-and-forget, nunca bloquea). Sin storeId solo advierte en el insert. */
 export async function completeJson(
   ref: ModelRef,

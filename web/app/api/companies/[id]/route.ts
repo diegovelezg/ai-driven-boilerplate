@@ -14,7 +14,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (auth instanceof Response) return auth;
   try {
     const db = getSupabase();
-    const { data } = await db.from("companies").select("store_id").eq("id", id).maybeSingle();
+    const { data } = await db.from("crm_companies").select("store_id").eq("id", id).maybeSingle();
     if (!data) return Response.json({ error: "Empresa no encontrada." }, { status: 404 });
     const storeId = String((data as Record<string, unknown>).store_id ?? "");
     const denied = await requireStoreMember(storeId, auth);

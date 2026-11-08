@@ -17,23 +17,13 @@ import { createBrowserSupabase } from "@/lib/supabase-browser";
 import { MEMBER_ROLE_LABELS, isMemberRole, type MemberRole } from "@/lib/roles";
 
 /** displayStoreName puro (lib/tenant es server-only: no importar en cliente). */
-function displayTenantName(s: { name?: string | null; shop_url?: string }): string {
-  if (s.name?.trim()) return s.name.trim();
-  const raw = s.shop_url ?? "";
-  try {
-    const host = new URL(raw).hostname.replace(/^(www|api)\./, "");
-    const first = host.split(".")[0];
-    if (first) return first.charAt(0).toUpperCase() + first.slice(1);
-  } catch {
-    // shop_url sin protocolo: se muestra tal cual
-  }
-  return raw || "Tienda";
+function displayTenantName(s: { name?: string | null }): string {
+  return s.name?.trim() ?? "";
 }
 
 export interface UserMenuStore {
   id: string;
   name?: string | null;
-  shop_url?: string;
 }
 
 /**
@@ -43,7 +33,7 @@ export interface UserMenuStore {
  * - `stores` + `initialRoles` vienen del servidor: resuelven tenant activo
  *   (?store= válido > primero) y rol del user sin fetch extra.
  * - Se suscribe a cambios de sesión para no quedarse stale tras login/logout;
- *   refresca el rol vía `merchant_users` (RLS self-read).
+ *   refresca el rol vía `sys_memberships` (RLS self-read).
  * - Silencioso (skeleton → nada) si no hay sesión.
  */
 export function UserMenu({
@@ -72,7 +62,7 @@ export function UserMenu({
       try {
         const client = createBrowserSupabase();
         const { data } = await client
-          .from("merchant_users")
+          .from("sys_memberships")
           .select("store_id,role")
           .eq("user_id", userId);
         if (!alive || !data) return;

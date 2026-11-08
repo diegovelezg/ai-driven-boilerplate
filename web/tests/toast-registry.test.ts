@@ -14,64 +14,57 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..");
 
-/** Actions con corrida en `background_runs`: el caller VA a la cinta. */
+/** Actions con corrida en `sys_runs`: el caller VA a la cinta. */
 const RUNNING = new Set([
-  "startCopywriterAction",
-  "proposeSingleAction",
-  "approveBatchAction",
-  "regenerateStaleDraftsAction",
-  "runRecalibrationAction",
-  "startEnrichmentAction",
-  "reenrichDomainAction",
-  "triggerProspectAction",
   "runProfilerAction", // set con corrida `profile` (progreso por etapa) + síntesis síncrona
 ]);
 
 /** Actions instantáneas (sin run): inline o `toast.add` basta. */
 const INSTANT = new Set([
-  "approveActionAction",
-  "rejectActionAction",
-  "rejectLeadAction",
-  "markLeadContactedAction",
-  "reopenLeadAction",
-  "dismissSignalAction",
-  "getCustomerSignalAction",
-  "reopenSignalAction",
-  "reopenCustomerSignalAction",
-  "markDispatchedAction",
-  "switchChannelAction",
-  "updateDraftContentAction",
-  "revokeApprovalAction",
-  "reopenActionAction",
-  "optOutCustomerAction",
-  "optInCustomerAction",
-  "getDrawerCustomerAction",
-  "decideProfileDeltaAction",
   "chatProfileStepAction",
-  "saveEmailAction",
-  "testEmailAction",
-  "revokeSecretAction",
-  "saveTenantProfileAction",
-  "updateCustomerAction",
-  "mergeAllDuplicatesAction",
-  "mergeCustomersAction",
   "signInAction",
   "signOutAction",
   "getActiveRunsAction", // poll de la cinta, no mutación
+  // CRM (companies/contacts/duplicados)
+  "createCompanyRedirectAction",
+  "updateCompanyAction",
+  "setCompanyKindAction",
+  "setAgencyCommissionAction",
+  "createContactAction",
+  "createContactRedirectAction",
+  "updateContactAction",
+  "mergeContactsAction",
+  // Órdenes + flujo IO
+  "createOrderRedirectAction",
+  "updateOrderAction",
+  "checkAvailabilityAction",
+  "getScreenOccupancyAction",
+  "signOrderAction",
+  "cancelOrderAction",
+  "createAgencyOrderAction",
+  "deleteAgencyOrderAction",
+  "attachCreativeAction",
+  "deleteCreativeAction",
+  "attachPhotoAction",
+  "deletePhotoAction",
+  // Importación Sheet/CSV (corre inline con useTransition)
+  "previewSheetImportAction",
+  "commitSheetUrlImportAction",
+  "commitCsvTextImportAction",
+  // Equipo
+  "updateMemberRoleAction",
 ]);
 
 /** Módulos lib que exportan server actions consumidas por clientes. */
 const ACTION_MODULES = new Set([
-  "lib/review-actions",
-  "lib/retention-actions",
-  "lib/enrich-actions",
-  "lib/settings-actions",
   "lib/profile-actions",
-  "lib/profile-recalibrate/actions",
-  "lib/customer-actions",
   "lib/auth-actions",
   "lib/background-actions",
-  "lib/merge-actions",
+  "lib/crm-actions",
+  "lib/members-actions",
+  "lib/order-actions",
+  "lib/order-flow-actions",
+  "lib/dooh-import-actions",
 ]);
 
 function clientFiles(): string[] {

@@ -98,22 +98,10 @@ export interface StoreProfile {
   buyerType: string | null;
   industry: string | null;
   catalogType: CatalogType | null;
-  repurchaseCycleDays: number | null;
-  churnMultiplier: number;
   archetype: ArchetypeId;
-  archetypeSource: "manual" | "sugerido" | "auto";
-  /** Slots fijados a mano (vigilante #6): nunca se proponen cambios sobre ellos. */
-  manualSlots: string[];
   companyRequired: boolean;
   /** Descripción libre del negocio (entrada orgánica primaria). */
   description: string | null;
-  interpretationConfidence: "alta" | "media" | "baja" | null;
-  notes: string | null;
-  /** Corte p para "seguimiento cercano" (issue #21 Paso 1). Null = default. */
-  closeWatchP?: number | null;
-  /** Cortes de banda_p por tenant (issue #21 Paso 5). Null = default arquetipo. */
-  bandHigh?: number | null;
-  bandLow?: number | null;
 }
 
 /** Defaults de banda por arquetipo (issue #21 Paso 5): hoy todos reproducen
@@ -196,61 +184,3 @@ export function suggestArchetype(s: ProfileSignals | null): Suggestion {
   return { archetype, businessModel: "b2b", confidence: b2bScore > t.b2bHigh ? "alta" : "media", reasons, ruleVersion: ARCHETYPE_RULE_VERSION };
 }
 
-/** Slots del perfil que el vigilante puede proponer (columnas 1:1). */
-export type StoreProfileSlot =
-  | "archetype"
-  | "repurchase_cycle_days"
-  | "taxonomy_id"
-  | "buyer_type";
-
-/** Patch de UNA columna para un slot (puro). Valor serializado como en los deltas. */
-export function profileSlotPatch(
-  slot: StoreProfileSlot,
-  value: string | null,
-): Record<string, unknown> {
-  switch (slot) {
-    case "archetype":
-      return { archetype: value };
-    case "repurchase_cycle_days":
-      return { repurchase_cycle_days: value === null ? null : Number(value) };
-    case "taxonomy_id":
-      return { taxonomy_id: value };
-    case "buyer_type":
-      return { buyer_type: value };
-  }
-}
-
-export interface ManualSlotsInput {
-  archetypeSource: "manual" | "sugerido";
-  archetype: ArchetypeId;
-  cycleDays: number | null;
-  taxonomyId: string | null;
-  buyerType: string | null;
-  /** Perfil vigente antes de este guardado (para no perder protecciones). */
-  existing: StoreProfile | null;
-}
-
-/**
- * Slots protegidos tras un guardado del form (puro). Con fuente `manual`
- * se protege todo lo fijado; con `sugerido` se conserva la protección de
- * los slots manuales previos cuyo valor no cambió en este guardado.
- */
-export function resolveManualSlots(input: ManualSlotsInput): string[] {
-  if (input.archetypeSource === "manual") {
-    return [
-      "archetype",
-      ...(input.cycleDays !== null ? ["repurchase_cycle_days"] : []),
-      ...(input.taxonomyId ? ["taxonomy_id"] : []),
-      ...(input.buyerType ? ["buyer_type"] : []),
-    ];
-  }
-  const prev = input.existing;
-  if (!prev) return [];
-  const same: Record<string, boolean> = {
-    archetype: prev.archetype === input.archetype,
-    repurchase_cycle_days: prev.repurchaseCycleDays === input.cycleDays,
-    taxonomy_id: prev.taxonomyId === input.taxonomyId,
-    buyer_type: prev.buyerType === input.buyerType,
-  };
-  return (prev.manualSlots ?? []).filter((s) => same[s]);
-}

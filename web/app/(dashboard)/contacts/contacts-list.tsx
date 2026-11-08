@@ -1,9 +1,11 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { SearchX } from "lucide-react";
+import { LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import {
   DataTable,
@@ -17,7 +19,9 @@ import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { CompanyPrincipalBadge } from "@/components/company-badges";
 import { formatNumber, toTitleCase } from "@/lib/format";
+import { cn } from "cn";
 import type { CrmContactListItem } from "@/lib/crm-db";
+import type { MemberRole } from "@/lib/roles";
 import { ContactDrawer } from "./contact-drawer";
 
 function fullName(c: CrmContactListItem): string {
@@ -29,26 +33,43 @@ export function ContactsList({
   companies,
   q,
   companyId,
+  initialView,
   initialSelectedId,
+  myRole,
 }: {
   rows: CrmContactListItem[];
   companies: Array<{ id: string; name: string }>;
   q: string;
   companyId: string | null;
+  initialView: "table" | "grid";
   initialSelectedId: string | null;
+  myRole: MemberRole | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  const [view, setView] = useState<"table" | "grid">(initialView);
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
-  const go = (patch: { q?: string; company?: string | null }) => {
+  const buildParams = (patch: { q?: string; company?: string | null; view?: string }) => {
     const params = new URLSearchParams();
     const nextQ = patch.q ?? q;
     if (nextQ.trim()) params.set("q", nextQ.trim());
     const nextCompany = patch.company !== undefined ? patch.company : companyId;
     if (nextCompany) params.set("company", nextCompany);
+    params.set("view", patch.view ?? (view === "grid" ? "grid" : "table"));
+    return params.toString();
+  };
+
+  const go = (patch: { q?: string; company?: string | null }) => {
     startTransition(() => {
-      router.replace(`/contacts?${params.toString()}`);
+      router.replace(`/contacts?${buildParams(patch)}`);
+    });
+  };
+
+  const switchView = (next: "table" | "grid") => {
+    setView(next);
+    startTransition(() => {
+      router.replace(`/contacts?${buildParams({ view: next })}`, { scroll: false });
     });
   };
 
@@ -77,7 +98,7 @@ export function ContactsList({
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de contactos">
         <FilterSearch
           initialValue={q}
-          placeholder="Buscar por nombre, email, cargo…"
+          placeholder="Buscar nombre, empresa, email, cargo o teléfono…"
           ariaLabel="Buscar contactos"
           onSearch={(value) => go({ q: value })}
         />
@@ -86,7 +107,6 @@ export function ContactsList({
           onChange={(v) => go({ company: v === "all" ? null : v })}
           ariaLabel="Filtrar por empresa"
           placeholder="Empresa"
-          widthClass="w-56"
           display={(value) => {
             if (value === "all") return "Empresa: todas";
             const found = companies.find((c) => c.id === value);
@@ -105,11 +125,36 @@ export function ContactsList({
             Limpiar
           </Button>
         )}
+        <span className="flex items-center gap-1" role="group" aria-label="Cambiar vista">
+          <AppTooltip tip="Vista lista">
+            <Button
+              size="icon"
+              variant={view === "table" ? "default" : "outline"}
+              onClick={() => switchView("table")}
+              aria-pressed={view === "table"}
+              aria-label="Vista lista"
+            >
+              <ListIcon aria-hidden />
+            </Button>
+          </AppTooltip>
+          <AppTooltip tip="Vista tarjetas">
+            <Button
+              size="icon"
+              variant={view === "grid" ? "default" : "outline"}
+              onClick={() => switchView("grid")}
+              aria-pressed={view === "grid"}
+              aria-label="Vista tarjetas"
+            >
+              <LayoutGrid aria-hidden />
+            </Button>
+          </AppTooltip>
+        </span>
         <span className="ms-auto text-xs text-muted-foreground tabular-nums" aria-live="polite">
           {isPending ? "Buscando…" : `${formatNumber(rows.length)} resultado${rows.length === 1 ? "" : "s"}`}
         </span>
       </div>
 
+      {view === "table" ? (
       <AppCard variant="table">
         <DataTable>
           <DataTableHeader>
@@ -151,35 +196,69 @@ export function ContactsList({
                 </DataTableTd>
               </DataTableRow>
             ))}
-            {rows.length === 0 && (
-              <DataTableRow>
-                <DataTableTd colSpan={5} className="px-3 py-10">
-                  <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-center">
-                    <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden>
-                      <SearchX className="size-5" />
-                    </span>
-                    <p className="text-sm font-medium">
-                      {hasFilter ? "Sin resultados para ese filtro" : "Aún no hay contactos"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {hasFilter
-                        ? "Prueba con otro nombre o empresa."
-                        : "Se crean desde el drawer de cada empresa, tab Contactos."}
-                    </p>
-                    {hasFilter && (
-                      <Button variant="outline" size="sm" className="mt-1" onClick={() => go({ q: "", company: null })}>
-                        Limpiar filtros
-                      </Button>
-                    )}
-                  </div>
-                </DataTableTd>
-              </DataTableRow>
-            )}
           </DataTableBody>
         </DataTable>
       </AppCard>
+      ) : rows.length > 0 ? (
+        <div className={cn("grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
+          {rows.map((c) => {
+            const name = fullName(c);
+            const displayName = name === "—" ? "Contacto sin nombre" : toTitleCase(name);
+            return (
+              <article
+                key={c.id}
+                tabIndex={0}
+                role="button"
+                aria-label={`Abrir contacto ${displayName}`}
+                onClick={() => setSelectedId(c.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedId(c.id);
+                  }
+                }}
+                className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-medium tracking-tight">{displayName}</h3>
+                  <CompanyPrincipalBadge isPrimary={c.is_primary} />
+                </div>
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {[c.company_name ? toTitleCase(c.company_name) : null, c.job_title].filter(Boolean).join(" · ") || "—"}
+                </p>
+                <p className="mt-2 truncate text-xs text-muted-foreground">{c.email ?? c.phone ?? "Sin contacto"}</p>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
 
-      {selected && <ContactDrawer contact={selected} onClose={() => setSelectedId(null)} />}
+      {rows.length === 0 && (
+        <AppCard>
+          <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-3 py-10 text-center">
+            <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden>
+              <SearchX className="size-5" />
+            </span>
+            <p className="text-sm font-medium">{hasFilter ? "Sin resultados para ese filtro" : "Aún no hay contactos"}</p>
+            <p className="text-xs text-muted-foreground">
+              {hasFilter
+                ? "Prueba con otro nombre o empresa."
+                : "Crea el primero o agrégalo desde el drawer de su empresa."}
+            </p>
+            {hasFilter ? (
+              <Button variant="outline" size="sm" className="mt-1" onClick={() => go({ q: "", company: null })}>
+                Limpiar filtros
+              </Button>
+            ) : (
+              <Button render={<Link href="/contacts/new" />} nativeButton={false} size="sm" variant="outline" className="mt-1">
+                Nuevo contacto
+              </Button>
+            )}
+          </div>
+        </AppCard>
+      )}
+
+      {selected && <ContactDrawer contact={selected} myRole={myRole} onClose={() => setSelectedId(null)} />}
     </div>
   );
 }

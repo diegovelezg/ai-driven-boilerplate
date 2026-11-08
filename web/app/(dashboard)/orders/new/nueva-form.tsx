@@ -37,8 +37,9 @@ import {
 import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
 import { es } from "react-day-picker/locale";
-import { formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
+import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
 import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
+import { PantallaDrawer } from "../../screens/pantalla-drawer";
 import type { ScreenConflict } from "@/lib/availability";
 import {
   addDays,
@@ -56,6 +57,7 @@ interface Screen {
   id: string;
   name: string;
   detail: string | null;
+  price_pen: number | null;
 }
 
 /** "2026-11-03" → Date local sin desfase de zona horaria. */
@@ -393,12 +395,14 @@ function ScreenMultiSelect({
   );
 }
 
-/** Calendario de disponibilidad de una pantalla: ocupado tachado, libre elegible a la vista. */
+/** Calendario de disponibilidad de una pantalla: ocupado tachado, periodo elegido en rango. */
 function ScreenCalendarDialog({
   screen,
   ranges,
   loaded,
   duration,
+  periodStarts,
+  periodEnds,
   onApply,
   onClose,
 }: {
@@ -406,6 +410,8 @@ function ScreenCalendarDialog({
   ranges: OccupiedRange[] | undefined;
   loaded: boolean;
   duration: number;
+  periodStarts: string;
+  periodEnds: string;
   onApply: (starts: string) => void;
   onClose: () => void;
 }) {
@@ -414,6 +420,8 @@ function ScreenCalendarDialog({
     const to = parseISODate(r.ends);
     return from && to ? [{ from, to }] : [];
   });
+  const periodFrom = parseISODate(periodStarts);
+  const periodTo = parseISODate(periodEnds);
   const today = todayLima();
   const free = screen && loaded && ranges ? firstFreeDay(ranges, today) : null;
   const windowStart = screen && loaded && ranges && duration > 0
@@ -435,9 +443,9 @@ function ScreenCalendarDialog({
         ) : (
           <div className="flex flex-col gap-2">
             <Calendar
-              mode="single"
+              mode="range"
               locale={es}
-              selected={undefined}
+              selected={periodFrom ? { from: periodFrom, to: periodTo } : undefined}
               modifiers={{ booked }}
               modifiersClassNames={{ booked: "bg-destructive/10 text-destructive line-through" }}
               disabled={booked}
@@ -485,10 +493,29 @@ export function NuevaOrdenForm({
   const [availError, setAvailError] = useState<string | null>(null);
   const [occupancy, setOccupancy] = useState<Record<string, OccupiedRange[]>>({});
   const [calScreenId, setCalScreenId] = useState<string | null>(null);
+  const [detailScreenId, setDetailScreenId] = useState<string | null>(null);
   const [availableOnly, setAvailableOnly] = useState(false);
 
-  const companyName = companies.find((c) => c.id === company)?.name;
   const dias = diffDaysInclusive(starts, ends);
+
+  // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
+  // lo que el vendedor ya digitó o editó.
+  const priceById = useMemo(() => new Map(screens.map((s) => [s.id, s.price_pen])), [screens]);
+  useEffect(() => {
+    setPrices((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of selected) {
+        if (next[id] !== undefined && String(next[id]).trim() !== "") continue;
+        const p = priceById.get(id);
+        if (p !== null && p !== undefined && Number.isFinite(Number(p)) && Number(p) > 0) {
+          next[id] = String(p);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [selected, priceById]);
 
   // Disponibilidad del periodo (debounce): ocupada = visible pero no seleccionable.
   // Trae choques del periodo + ocupación de todas las pantallas (calendarios y
@@ -582,8 +609,12 @@ export function NuevaOrdenForm({
     const n = Number(String(prices[id] ?? "").replace(",", "."));
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  const lineTotalOf = (id: string) => {
+    const unit = priceOf(id);
+    return unit !== null && dias !== null ? unit * dias : 0;
+  };
   const invalidRows = rows.filter((r) => priceOf(r.id) === null);
-  const total = rows.reduce((a, r) => a + (priceOf(r.id) ?? 0), 0);
+  const total = rows.reduce((a, r) => a + lineTotalOf(r.id), 0);
 
   const blockedRows = rows.filter((r) => occupiedOf(r.id).length > 0);
 
@@ -608,21 +639,25 @@ export function NuevaOrdenForm({
   const canSubmit = !pending && !checking && missing.length === 0;
 
   return (
+    <>
     <form action={action} className="flex flex-col gap-4">
       <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Contratante</span>}>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto]">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="flex min-w-0 flex-col gap-1 text-xs">
             Contratante *
             <input type="hidden" name="company_id" value={company} />
-            <Select value={company} onValueChange={(v) => v && setCompany(v)} disabled={pending}>
-              <SelectTrigger aria-label="Contratante" className="w-full bg-background py-1.5 text-sm data-[size=default]:h-auto data-[size=default]:min-h-9 [&>[data-slot=select-value]]:line-clamp-none [&>[data-slot=select-value]]:whitespace-normal">
-                {/* Nombre explícito: el valor resuelto por defecto muestra el UUID
-                    cuando los ítems del portal aún no están montados. */}
-                <SelectValue placeholder="Agencia o anunciante…">{companyName ? toTitleCase(companyName) : undefined}</SelectValue>
+            <Select
+              value={company}
+              onValueChange={(v) => v && setCompany(v)}
+              items={Object.fromEntries(companies.map((c) => [c.id, toTitleCase(c.name)]))}
+              disabled={pending}
+            >
+              <SelectTrigger aria-label="Contratante" className="w-full">
+                <SelectValue placeholder="Agencia o anunciante…" />
               </SelectTrigger>
-              <SelectContent className="w-max max-w-[min(90vw,28rem)]">
+              <SelectContent>
                 {companies.map((c) => (
-                  <SelectItem key={c.id} value={c.id} className="[&>span]:whitespace-normal">{toTitleCase(c.name)}</SelectItem>
+                  <SelectItem key={c.id} value={c.id}>{toTitleCase(c.name)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -645,9 +680,14 @@ export function NuevaOrdenForm({
           <div className="flex min-w-0 flex-col gap-1 text-xs">
             Condición de pago
               <input type="hidden" name="payment_terms_days" value={paymentTerms} />
-              <Select value={paymentTerms} onValueChange={(v) => setPaymentTerms(v ?? "")} disabled={pending}>
-                <SelectTrigger aria-label="Condición de pago" className="bg-background text-sm data-[size=default]:h-9">
-                  <SelectValue placeholder="Elegir condición…">{paymentTerms === "" ? undefined : paymentTermsLabel(Number(paymentTerms))}</SelectValue>
+              <Select
+                value={paymentTerms}
+                onValueChange={(v) => setPaymentTerms(v ?? "")}
+                items={{ "0": "Contado", "30": "30 días", "60": "60 días", "90": "90 días" }}
+                disabled={pending}
+              >
+                <SelectTrigger aria-label="Condición de pago" className="w-full">
+                  <SelectValue placeholder="Elegir condición…" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="0">Contado</SelectItem>
@@ -726,7 +766,7 @@ export function NuevaOrdenForm({
           )}
           {rows.length > 0 && (
             <section className="flex flex-col gap-2" aria-label="Detalle por pantalla">
-              <SectionHeading title="Detalle por pantalla" hint={`Precio por el periodo${dias !== null ? ` (${formatNumber(dias)} días)` : ""}.`} />
+              <SectionHeading title="Detalle por pantalla" hint={`Precio por día × ${dias !== null ? `${formatNumber(dias)} días` : "días del periodo"}.`} />
               {blockedRows.length > 0 && (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2">
                   <p className="text-xs text-destructive">
@@ -746,16 +786,24 @@ export function NuevaOrdenForm({
               <DataTable>
             <DataTableHeader>
               <DataTableTh>Pantalla</DataTableTh>
-              <DataTableTh>Detalle</DataTableTh>
-              <DataTableTh numeric>Precio (S/)</DataTableTh>
+              <DataTableTh numeric>Precio/día (S/)</DataTableTh>
+              <DataTableTh numeric>Días</DataTableTh>
+              <DataTableTh numeric>Subtotal (S/)</DataTableTh>
               <DataTableTh aria-label="Acciones" />
             </DataTableHeader>
             <DataTableBody>
               {rows.map((s) => {
                 const hits = occupiedOf(s.id);
                 return (
-                  <DataTableRow key={s.id} className={hits.length > 0 ? "bg-destructive/5" : undefined}>
-                    <DataTableTd className="font-medium">
+                  <DataTableRow
+                    key={s.id}
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest("input,button")) return;
+                      setDetailScreenId(s.id);
+                    }}
+                    className={cn(hits.length > 0 && "bg-destructive/5", "cursor-pointer")}
+                  >
+                    <DataTableTd className="font-medium" title={s.detail ?? undefined}>
                       {s.name}
                       {hits.length > 0 && (
                         <span className="block text-[11px] font-normal text-destructive">
@@ -763,24 +811,29 @@ export function NuevaOrdenForm({
                         </span>
                       )}
                     </DataTableTd>
-                  <DataTableTd className="max-w-[280px] truncate text-[13px] text-muted-foreground">
-                    {s.detail ?? "—"}
-                  </DataTableTd>
                   <DataTableTd numeric>
                     <input type="hidden" name="screen_id" value={s.id} />
                     <input type="hidden" name="line_starts_at" value={starts} />
                     <input type="hidden" name="line_ends_at" value={ends} />
                     <input type="hidden" name="line_cant_dias" value={dias ?? ""} />
+                    <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number)) : ""} />
                     <input
-                      name="line_total"
                       value={prices[s.id] ?? ""}
                       onChange={(e) => setPrices((p) => ({ ...p, [s.id]: e.target.value }))}
                       disabled={pending || hits.length > 0}
                       inputMode="decimal"
-                      placeholder="2000"
-                      aria-label={`Precio ${s.name} por el periodo`}
+                      placeholder={s.price_pen !== null && Number.isFinite(Number(s.price_pen)) ? String(s.price_pen) : "2000"}
+                      aria-label={`Precio por día ${s.name}`}
                       className="h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-right text-sm tabular-nums"
                     />
+                  </DataTableTd>
+                  <DataTableTd numeric className="tabular-nums">
+                    {dias ?? "—"}
+                  </DataTableTd>
+                  <DataTableTd numeric className="tabular-nums">
+                    {dias !== null && priceOf(s.id) !== null
+                      ? formatMoney(Math.round((priceOf(s.id) as number) * (dias as number) * 100), "PEN")
+                      : "—"}
                   </DataTableTd>
                   <DataTableTd className="w-20">
                     <div className="flex items-center justify-end gap-1">
@@ -811,10 +864,11 @@ export function NuevaOrdenForm({
               );
             })}
               <DataTableRow className="bg-muted/30 font-medium">
-                <DataTableTd colSpan={2}>
+                <DataTableTd colSpan={3}>
                   Total · {formatNumber(rows.length)} pantalla{plural(rows.length)}
+                  {dias !== null ? ` × ${formatNumber(dias)} días` : ""}
                 </DataTableTd>
-                <DataTableTd numeric className="tabular-nums">
+                <DataTableTd numeric className="tabular-nums whitespace-nowrap">
                   {total > 0 ? formatMoney(Math.round(total * 100), "PEN") : "—"}
                 </DataTableTd>
                 <DataTableTd />
@@ -831,7 +885,7 @@ export function NuevaOrdenForm({
       )}
       <div className="flex flex-col gap-1.5">
         <div>
-          <Button type="submit" size="sm" disabled={!canSubmit}>
+          <Button type="submit" disabled={!canSubmit}>
             {pending ? "Creando…" : `Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), "PEN")}` : ""}`}
           </Button>
         </div>
@@ -845,13 +899,19 @@ export function NuevaOrdenForm({
         ranges={calScreenId ? occupancy[calScreenId] : undefined}
         loaded={calScreenId ? calScreenId in occupancy : false}
         duration={dias ?? 0}
+        periodStarts={starts}
+        periodEnds={ends}
         onApply={(w) => {
           applyWindow(w);
           setCalScreenId(null);
         }}
         onClose={() => setCalScreenId(null)}
       />
+      {detailScreenId && (
+        <PantallaDrawer screenId={detailScreenId} onClose={() => setDetailScreenId(null)} />
+      )}
     </form>
+    </>
   );
 }
 

@@ -1,14 +1,16 @@
 // Comisión de agencia: pura (testeable con tsx --test, sin BD).
 // Acuerdo a nivel empresa + override a nivel IO, % sobre bruto, neto a agencia.
-//   bruto = suma insertion_order_lines.rate_minor
+//   bruto = suma io_lines.rate_minor
 //   commission = round(bruto * pct / 100); neto = bruto - commission
 
 export function normalizeCommissionPct(v: unknown): number | null {
-  if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "string" ? Number(v) : v;
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  const n = typeof v === "string" ? Number(v.trim()) : v;
   if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  if (!Number.isInteger(n)) return null;
   if (n < 0 || n > 100) return null;
-  return Math.round(n * 100) / 100;
+  return n;
 }
 
 /** Override IO > default empresa > 0. Marca directa (sin agencia) resuelve 0. */
@@ -44,7 +46,7 @@ export function splitAgencyAmounts(grossMinor: number, pct: number): AgencySplit
     throw new Error("bruto inválido (entero >= 0).");
   }
   const p = normalizeCommissionPct(pct);
-  if (p === null) throw new Error("comisión inválida (0-100).");
+  if (p === null) throw new Error("comisión inválida (entero 0-100).");
   const commissionMinor = Math.round((grossMinor * p) / 100);
   return { grossMinor, commissionPct: p, commissionMinor, netMinor: grossMinor - commissionMinor };
 }

@@ -1,17 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
-import { resolveActiveStoreId } from "@/lib/tenant";
-import {
-  ARCHETYPES,
-  getStoreProfile,
-  resolveManualSlots,
-  upsertStoreProfile,
-  type ArchetypeId,
-  type BusinessModel,
-  type CatalogType,
-} from "@/lib/store-profiles";
-import { isSupabaseConfigured } from "@/lib/supabase";
 import { investigateBusiness } from "@/lib/ai/investigate";
 import { getProfileSignals } from "@/lib/store-profiles";
 import { runProfiler } from "@/lib/profiling/pipeline";
@@ -227,90 +215,4 @@ export async function chatProfileStepAction(
     done: false,
     missing,
   };
-}
-
-export interface ProfileSaveState {
-  ok: boolean;
-  message: string;
-}
-
-const ARCHETYPE_IDS = Object.keys(ARCHETYPES) as ArchetypeId[];
-
-export async function saveTenantProfileAction(
-  _prev: ProfileSaveState | null,
-  formData: FormData,
-): Promise<ProfileSaveState> {
-  if (!isSupabaseConfigured()) {
-    return { ok: false, message: "Sin Supabase en .env.local: perfil no guardado." };
-  }
-  const storeId = await resolveActiveStoreId();
-  if (!storeId) {
-    return { ok: false, message: "Sin tienda todavía." };
-  }
-
-  const businessModel = "b2b" as BusinessModel;
-  const rawArch = String(formData.get("archetype") ?? "b2b_recurrente") as ArchetypeId;
-  const archetype: ArchetypeId = rawArch === "b2b_proyecto" ? "b2b_proyecto" : "b2b_recurrente";
-  if (!ARCHETYPE_IDS.includes(archetype)) return { ok: false, message: "Arquetipo inválido." };
-
-  const catalogRaw = String(formData.get("catalogType") ?? "").trim();
-  const catalogType = (catalogRaw || null) as CatalogType | null;
-  const industryRaw = String(formData.get("industry") ?? "").trim();
-  const verticalRaw = String(formData.get("verticalDetected") ?? "").trim().slice(0, 80) || null;
-  const taxonomyRaw = String(formData.get("taxonomyId") ?? "").trim() || null;
-  const buyerRaw = String(formData.get("buyerType") ?? "").trim().slice(0, 80) || null;
-  const cycleRaw = String(formData.get("repurchaseCycleDays") ?? "").trim();
-  const multRaw = String(formData.get("churnMultiplier") ?? "").trim();
-  const cycle = cycleRaw ? Number(cycleRaw) : null;
-  const mult = multRaw ? Number(multRaw) : ARCHETYPES[archetype].defaultMultiplier;
-  if (cycle !== null && (!Number.isInteger(cycle) || cycle < 1 || cycle > 1095)) {
-    return { ok: false, message: "Ciclo de recompra: 1–1095 días o vacío (auto)." };
-  }
-  if (!Number.isFinite(mult) || mult < 1 || mult > 5) {
-    return { ok: false, message: "Multiplicador de churn: 1.0–5.0." };
-  }
-  const source = String(formData.get("archetypeSource") ?? "manual");
-  const archetypeSource = source === "sugerido" ? "sugerido" : "manual";
-  const description = String(formData.get("description") ?? "").trim() || null;
-  const confRaw = String(formData.get("interpretationConfidence") ?? "").trim();
-  const interpretationConfidence =
-    confRaw === "alta" || confRaw === "media" || confRaw === "baja" ? confRaw : null;
-
-  // Slots que el merchant fijó a mano: el vigilante (#6) nunca propone
-  // cambiarlos. No basta la fuente: un guardado "sugerido" conserva la
-  // protección de los slots manuales previos que no cambiaron de valor.
-  const existing = await getStoreProfile(storeId).catch(() => null);
-  const manualSlots = resolveManualSlots({
-    archetypeSource,
-    archetype,
-    cycleDays: cycle,
-    taxonomyId: taxonomyRaw,
-    buyerType: buyerRaw,
-    existing,
-  });
-
-  try {
-    await upsertStoreProfile({
-      storeId,
-      businessModel,
-      verticalDetected: verticalRaw,
-      taxonomyId: taxonomyRaw,
-      buyerType: buyerRaw,
-      industry: industryRaw || null,
-      catalogType,
-      repurchaseCycleDays: cycle,
-      churnMultiplier: Math.round(mult * 100) / 100,
-      archetype,
-      archetypeSource,
-      manualSlots,
-      companyRequired: formData.get("companyRequired") === "on",
-      description,
-      interpretationConfidence,
-      notes: String(formData.get("notes") ?? "").trim() || null,
-    });
-    revalidatePath("/settings");
-    return { ok: true, message: `Perfil guardado: ${ARCHETYPES[archetype].label}.` };
-  } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : "Error al guardar" };
-  }
 }

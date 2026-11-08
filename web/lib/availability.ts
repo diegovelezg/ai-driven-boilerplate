@@ -62,14 +62,14 @@ export async function getScreenConflicts(
   const out: ScreenConflict[] = [];
 
   const { data: lines, error: lerr } = await db
-    .from("insertion_order_lines")
-    .select("screen_id,starts_at,ends_at,insertion_orders!inner(io_number,brand,status,created_at)")
+    .from("io_lines")
+    .select("screen_id,starts_at,ends_at,io_orders!inner(io_number,brand,status,created_at)")
     .eq("store_id", storeId)
     .lt("starts_at", qEnd)
     .gt("ends_at", qStart);
   if (lerr) throw new Error(`Availability lines: ${lerr.message}`);
   for (const l of (lines ?? []) as Array<Record<string, unknown>>) {
-    const o = l.insertion_orders as unknown as Record<string, unknown> | null;
+    const o = l.io_orders as unknown as Record<string, unknown> | null;
     if (!o || o.status === "cancelled") continue;
     // El borrador aparta solo 7 días; vencido, libera.
     if (o.status === "draft" && !isHoldFresh(typeof o.created_at === "string" ? o.created_at : null)) continue;
@@ -84,16 +84,16 @@ export async function getScreenConflicts(
   }
 
   const { data: books, error: berr } = await db
-    .from("bookings")
-    .select("starts_at,ends_at,status,insertion_orders(io_number,brand),inventory_slots!inner(screen_id)")
+    .from("inv_bookings")
+    .select("starts_at,ends_at,status,io_orders(io_number,brand),inv_slots!inner(screen_id)")
     .eq("store_id", storeId)
     .neq("status", "cancelled")
     .lt("starts_at", qEnd)
     .gt("ends_at", qStart);
   if (berr) throw new Error(`Availability bookings: ${berr.message}`);
   for (const b of (books ?? []) as Array<Record<string, unknown>>) {
-    const slot = b.inventory_slots as unknown as Record<string, unknown> | null;
-    const o = b.insertion_orders as unknown as Record<string, unknown> | null;
+    const slot = b.inv_slots as unknown as Record<string, unknown> | null;
+    const o = b.io_orders as unknown as Record<string, unknown> | null;
     if (!slot) continue;
     out.push({
       screen_id: String(slot.screen_id),
@@ -127,22 +127,22 @@ export async function getScreenOccupancy(
   };
 
   const { data: lines, error: lerr } = await db
-    .from("insertion_order_lines")
-    .select("screen_id,starts_at,ends_at,insertion_orders!inner(status,created_at)")
+    .from("io_lines")
+    .select("screen_id,starts_at,ends_at,io_orders!inner(status,created_at)")
     .eq("store_id", storeId)
     .in("screen_id", screenIds)
     .gte("ends_at", winStart)
     .lte("starts_at", winEnd);
   if (lerr) throw new Error(`Occupancy lines: ${lerr.message}`);
   for (const l of (lines ?? []) as Array<Record<string, unknown>>) {
-    const o = l.insertion_orders as unknown as Record<string, unknown> | null;
+    const o = l.io_orders as unknown as Record<string, unknown> | null;
     if (!o || o.status === "cancelled") continue;
     if (o.status === "draft" && !isHoldFresh(typeof o.created_at === "string" ? o.created_at : null)) continue;
     push(String(l.screen_id), String(l.starts_at), String(l.ends_at));
   }
 
   const { data: slots, error: serr } = await db
-    .from("inventory_slots")
+    .from("inv_slots")
     .select("id,screen_id")
     .eq("store_id", storeId)
     .in("screen_id", screenIds);
@@ -152,7 +152,7 @@ export async function getScreenOccupancy(
   );
   if (slotById.size > 0) {
     const { data: books, error: berr } = await db
-      .from("bookings")
+      .from("inv_bookings")
       .select("slot_id,starts_at,ends_at,status")
       .eq("store_id", storeId)
       .in("slot_id", [...slotById.keys()])

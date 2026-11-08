@@ -1,4 +1,12 @@
-# MEOW — Blueprint de arquitectura (implementado)
+# MEOW — Blueprint de arquitectura (Fase 2 DOOH)
+
+> **Fase 2 (2026-11-07):** se extirpó el motor de retención
+> (`retention-model/scout/strategist/copywriter/prospect/dispatcher/analyst/mira`,
+> `customer_predictions/churn_signals/proposed_actions/proposed_leads`,
+> ecommerce legacy `customers/orders/channels/products`). Migración
+> `20261122000000_drop_retention_engine.sql`. Sin morning pipeline (worker no-op,
+> cron desactivado), chat en pausa (501) hasta el agente DOOH. Lo que sigue
+> describe el sistema DOOH vigente + historia del motor extirpado.
 
 > **Estado:** documento vivo, refleja `main` a 2026-10-22. Ya no es visión: el loop
 > scout→strategist→copywriter→dispatcher→analyst corre en prod vía worker + cron Coolify,
@@ -143,41 +151,53 @@ Analyst: sesioniza post-envío (moneda tienda), 1 sesión→1ª acción vigente,
 
 ## 5. Database Schema (PostgreSQL, Supabase — fuente real)
 
-> Fuente de verdad: `supabase/migrations/*.sql` (56 archivos). El modelo Prisma de abajo
-> es ilustrativo; el DDL real es SQL directo.
+> Fuente de verdad: `supabase/migrations/*.sql`. El modelo Prisma de abajo
+> es ilustrativo; el DDL real es SQL directo. Pivote DOOH 20261122 + higiene
+> 20261124: se extirpó el motor ecommerce/retención. Nomenclatura con prefijo
+> por dominio (20261125): `sys_` sistema/tenant, `io_` flujo orden→cobro,
+> `inv_` inventario, `crm_` base comercial, `ai_` IA/metering.
 
-Tablas (28 + 3 CRM): `stores, channels, customers, orders, products,
-product_stats, item_content, customer_predictions, churn_signals, proposed_actions,
-proposed_leads, background_runs, domains, enrichment_runs, customer_aliases,
-media_captions, store_profiles, vertical_profiles, profile_snapshots, profile_proposals,
-tenant_model_params, opt_outs, llm_usage, conversations, messages, merchant_users,
-store_secrets, store_secret_audits, jobs` (+ `start_run_if_free()`)
-+ CRM: `companies, contacts, company_roles` (`20261106000000_crm_base.sql` + polish `20261112000000_crm_polish.sql`).
-Single-país: sin `market_regions`; país/moneda del tenant en
-`stores.shop_country` + `stores.shop_currency`.
-CRM: `companies 1-N contacts` (`contacts.company_id` nullable, `SET NULL` al borrar;
-dedupe BD por empresa email/phone + `external_ref` único por tenant para idempotencia Sheet/CSV);
-rol cliente/proveedor = fila activa en `company_roles` (`valid_to IS NULL`), no columna.
-Puentes: `campaigns.advertiser_company_id + primary_contact_id → contacts`,
-`customers.company_id → companies` (backfill por nombre normalizado, motor intacto).
-+ Roles por membresía: `merchant_users.role` (`20261108000000_member_roles.sql`,
-`owner|admin|seller|viewer`, jerarquía en `lib/roles.ts` + `FEATURE_MIN_ROLE`);
-gestión en Settings › Equipo (solo admin+; admin no toca owners; siempre queda un owner).
+Tablas (25):
+- `sys_`: `sys_stores, sys_memberships (rol owner|admin|seller|viewer),
+  sys_store_profiles, sys_secrets, sys_secret_audits, sys_runs, io_counters`
+- `io_`: `io_orders (+io_lines por pantalla/slot/periodo/tarifa),
+  io_agency_orders (OM/OC), io_creatives (QC+legal), io_photo_checks,
+  io_play_logs (PoP CMS, scaffold), io_invoices (A/R), io_campaigns`
+- `inv_`: `inv_venues, inv_screens, inv_loop_templates, inv_slots, inv_bookings`
+  (hard hold con anti-sobreventa `io_check_hold_overlap`)
+- `crm_`: `crm_companies, crm_contacts` (`contacts.company_id` nullable,
+  `SET NULL` al borrar; dedupe por email/phone + `external_ref` único por
+  tenant; `kind` agencia|anunciante|proveedor; `agency_commission_pct`)
+- `ai_`: `ai_domain_cache` (caché global de firmografía por dominio, sin
+  `store_id`), `ai_vertical_profiles` (caché del perfilador),
+  `ai_llm_usage` (+view `ai_llm_usage_daily`, metering write-only)
+- Sin `market_regions`; país/moneda del tenant en
+  `sys_stores.shop_country` + `sys_stores.shop_currency` (single-país).
+- Sin `conversations/messages` (memoria de chat del motor viejo, 0 usos;
+  recrear claveada a empresa si el chat de fichas la necesita) ni
+  `import_runs` (unificado en `sys_runs kind='import'`).
 
-Claves: `stores(platform,shop_url)` único; `customers(source)` ecommerce-upsert/local-intacto;
-`orders` moneda original + `channel/country/is_test`; `customer_predictions`
-`(store,customer,as_of)` + `model_version`; `churn_signals(status,objective,evidence_json)`;
-`proposed_actions(status,evidence_json.generator,approved_by)`; `background_runs(kind,scope)`.
+Claves: `sys_stores(platform,shop_url)` único; `io_orders(store,io_number)`
+único con autonumeración `io_mint_number()` (Año Lima + `io_counters`);
+`io_agency_orders(store,kind,code)` único; `io_invoices(store,number)` único;
+`sys_runs` slot atómico `sys_run_start()` (advisory lock, solo service_role).
+RLS `tenant_isolation` por tabla vía `is_store_member()` (+`my_store_role()`
+para jerarquía en `lib/roles.ts`); `ai_domain_cache` global con lectura
+authenticated. `sys_store_profiles`: config de negocio (arquetipo, ciclo,
+industry); sin columnas del motor (`brain_json, metadata_map, p_band_*`
+extirpadas). Puentes: `io_campaigns.advertiser_company_id +
+primary_contact_id → crm_contacts`, `io_lines.screen_id → inv_screens`,
+`inv_slots.screen_id → inv_screens`, `inv_bookings` cuelga de slot + IO.
 
 ## 6. Technology Stack (real)
 
 - **Runtime:** Node 22 + Next.js 16 (App Router, TS). API routes = proxy fino; inteligencia en
   `lib/` + ADK.
-- **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Customers, Review, Finanzas, Products, Settings, Ayuda).
+- **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Órdenes, Finanzas, Inventario, Empresas, Contactos, Marcas, Settings, Ayuda).
 - **DB/Auth:** Supabase (Postgres + Auth + Realtime). RLS por `is_store_member`.
 - **Scheduler/Worker:** sin cola: `web/worker.ts` one-shot (`--once --kinds=morning`) +
   Scheduled Task Coolify diario 11:00 UTC + daemon dev `WORKER_SCHEDULE=1`. `jobs` retirada
-  (artefacto, no programar sobre ella); slot vía `start_run_if_free`.
+  (artefacto, no programar sobre ella); slot vía `sys_run_start`.
 - **Scraping/búsqueda:** SearXNG (service Coolify) + Crawlee/cheerio (`procps` en runner).
 - **AI:** `@google/adk@^2.3.0` (`LlmAgent` + Zod tools sobre Supabase). Dev/test vía
   `@google/adk-devtools`. Sin Vercel AI SDK. Modelos en `web/config/llm_models.json`.
@@ -188,7 +208,13 @@ npm install @google/adk
 npm install -D @google/adk-devtools
 ```
 
-## 7. Chat + Review (ADK, implementado)
+## 7. Chat (ADK, implementado)
+
+> Nota Fase 2 (20261122): el motor de retención quedó retirado —
+> `lib/adk/tools/retain-tools.ts`, `review/`, `customers/`, `products/` y
+> `conversations/messages` se extirparon. El agente generalista vive en
+> `lib/adk/agents/customer-agent.ts`. Rutas: `app/api/chat`,
+> `companies/[id]/chat`, `orders/[id]/chat`, `contacts/[id]/chat`.
 
 - **Chat:** `lib/adk/agents/customer-agent.ts` (`customer_chat`), instrucción ES
   (tienda/ficha/producto, recupero≠ventas, envelope `{items,total_count,returned,truncated}`,

@@ -1,6 +1,6 @@
-// Guard compartido de las rutas `app/api/customers/[id]/*` + settings actions.
+// Guard compartido de las rutas `app/api/*/[id]/*` + settings actions.
 // Centraliza: exigir Supabase configurado, extraer `:id` (Next 16: promesa),
-// exigir sesión (401) y membresía por tenant vía `merchant_users` (403).
+// exigir sesión (401) y membresía por tenant vía `sys_memberships` (403).
 // Multiuser por tenant: cualquier miembro ve todo su tenant; sin membresía
 // no hay acceso (sin bypass legacy).
 import "server-only";
@@ -47,7 +47,7 @@ export async function userStoreRoles(userId: string): Promise<Map<string, string
   try {
     const { getSupabase } = await import("@/lib/supabase");
     const { data } = await getSupabase()
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("store_id,role")
       .eq("user_id", userId);
     const out = new Map<string, string>();
@@ -88,7 +88,7 @@ export async function userStoreIds(userId: string): Promise<string[]> {
   try {
     const { getSupabase } = await import("@/lib/supabase");
     const { data } = await getSupabase()
-      .from("merchant_users")
+      .from("sys_memberships")
       .select("store_id")
       .eq("user_id", userId);
     return ((data ?? []) as Array<Record<string, unknown>>).map((r) => String(r.store_id ?? "")).filter(Boolean);
@@ -110,30 +110,6 @@ export async function requireStoreMember(
   const stores = await userStoreIds(user.id).catch(() => [] as string[]);
   if (stores.includes(storeId)) return null;
   return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
-}
-
-/**
- * Resuelve el `store_id` de un customer y exige membresía.
- * Devuelve el `storeId` o un `Response` (401/403/404) listo para retornar.
- */
-export async function requireCustomerStoreAccess(customerId: string): Promise<string | Response> {
-  const auth = await requireApiUser();
-  if (auth instanceof Response) return auth;
-  try {
-    const { getSupabase } = await import("@/lib/supabase");
-    const { data } = await getSupabase()
-      .from("customers")
-      .select("store_id")
-      .eq("id", customerId)
-      .maybeSingle();
-    if (!data) return Response.json({ error: "Customer no encontrado." }, { status: 404 });
-    const storeId = String((data as Record<string, unknown>).store_id ?? "");
-    const denied = await requireStoreMember(storeId, auth);
-    if (denied) return denied;
-    return storeId;
-  } catch {
-    return Response.json({ error: "DB read failed." }, { status: 500 });
-  }
 }
 
 /**
