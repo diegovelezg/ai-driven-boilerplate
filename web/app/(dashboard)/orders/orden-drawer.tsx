@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, FileText, Package, Pencil, Plus, Receipt, X } from "lucide-react";
+import { Bot, CircleArrowLeft, FileText, Package, Pencil, Plus, Receipt, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
@@ -122,6 +122,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const [omUrl, setOmUrl] = useState("");
   const [matOpen, setMatOpen] = useState(false);
   const [matUrl, setMatUrl] = useState("");
+  const [matDur, setMatDur] = useState("");
+  const [matW, setMatW] = useState("");
+  const [matH, setMatH] = useState("");
   const [photoOpen, setPhotoOpen] = useState(false);
   const [photoUrl, setPhotoUrl] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -183,17 +186,34 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     });
   };
 
+  const openMatDialog = () => {
+    setMatUrl("");
+    setMatDur("");
+    setMatW("");
+    setMatH("");
+    setMatOpen(true);
+  };
+
   const doAttachMat = () => {
     if (!matUrl.trim()) {
       toast.add({ title: "Falta la URL", description: "Pega la URL del material.", type: "error" });
       return;
     }
     startTransition(async () => {
-      const res = await attachCreativeAction({ orderId, fileUrl: matUrl.trim() });
+      const res = await attachCreativeAction({
+        orderId,
+        fileUrl: matUrl.trim(),
+        durationSec: matDur.trim() || null,
+        widthPx: matW.trim() || null,
+        heightPx: matH.trim() || null,
+      });
       if (res.ok) {
         toast.add({ title: "Material adjuntado", description: res.message, type: "success" });
         setMatOpen(false);
         setMatUrl("");
+        setMatDur("");
+        setMatW("");
+        setMatH("");
         await load();
       } else {
         toast.add({ title: "No se pudo adjuntar", description: res.message, type: "error" });
@@ -233,6 +253,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   };
 
   const o = detail?.order;
+  const orderCurrency = String((o as Record<string, unknown> | undefined)?.currency ?? "PEN").toUpperCase() || "PEN";
   const lines = detail?.lines ?? [];
   const oms = detail?.io_agency_orders ?? [];
   const creatives = detail?.creatives ?? [];
@@ -408,7 +429,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     : "—"}
                 </dd>
               </div>
-              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-0.5 text-[13px] font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, "PEN") : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-0.5 text-[13px] font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"} <span className="text-[11px] font-normal text-muted-foreground">{orderCurrency}</span></dd></div>
               <div><dt className="text-xs text-muted-foreground">Condición de pago</dt><dd className="mt-0.5 text-[13px]">{typeof o.payment_terms_days === "number" ? paymentTermsLabel(o.payment_terms_days) : str(o.payment_terms)}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Estado</dt><dd className="mt-0.5 text-[13px]">{STATUS_LABEL[String(o.status ?? "")] ?? str(o.status)}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Firma</dt><dd className="mt-0.5 text-[13px] tabular-nums">{o.signed_at ? fmtFechaHora(o.signed_at) : "—"}</dd></div>
@@ -457,7 +478,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           )}
                           {Number.isFinite(regular) && regular > 0 && regular !== Number(l.rate_minor ?? 0) && (
                             <span className="block text-[11px] font-normal text-muted-foreground tabular-nums">
-                              Reg. {formatMoney(regular, "PEN")}
+                              Reg. {formatMoney(regular, orderCurrency)}
                             </span>
                           )}
                         </DrawerTableTd>
@@ -468,7 +489,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           {dias ?? "—"}
                         </DrawerTableTd>
                         <DrawerTableTd numeric className="tabular-nums">
-                          {formatMoney(l.rate_minor as number, "PEN")}
+                          {formatMoney(l.rate_minor as number, orderCurrency)}
                         </DrawerTableTd>
                       </DrawerTableRow>
                     );
@@ -478,7 +499,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       Total · {formatNumber(lines.length)} pantalla{lines.length === 1 ? "" : "s"}
                     </DrawerTableTd>
                     <DrawerTableTd numeric className="tabular-nums">
-                      {gross > 0 ? formatMoney(gross, "PEN") : "—"}
+                      {gross > 0 ? formatMoney(gross, orderCurrency) : "—"}
                     </DrawerTableTd>
                   </DrawerTableRow>
                 </DrawerTableBody>
@@ -574,7 +595,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Adjunta la pieza; nace aprobada y libera la emisión."
             action={
               canEdit && creatives.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => { setMatUrl(""); setMatOpen(true); }} disabled={isPending}>
+                <Button variant="outline" size="sm" onClick={openMatDialog} disabled={isPending}>
                   <Plus className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
@@ -589,7 +610,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 {canEdit && (
                   <div>
-                    <Button size="sm" onClick={() => { setMatUrl(""); setMatOpen(true); }} disabled={isPending}>
+                    <Button size="sm" onClick={openMatDialog} disabled={isPending}>
                       <Plus className="size-3.5" aria-hidden /> Adjuntar
                     </Button>
                   </div>
@@ -600,10 +621,22 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 {creatives.map((c) => {
                   const file = typeof c.file_url === "string" && c.file_url ? c.file_url : null;
                   const ok = String(c.qc_status ?? "") === "approved" && String(c.legal_status ?? "") === "approved";
+                  const cw = Number(c.width_px);
+                  const ch = Number(c.height_px);
+                  const cd = Number(c.duration_s);
+                  const spec = [
+                    Number.isFinite(cw) && Number.isFinite(ch) && cw > 0 && ch > 0
+                      ? `${Math.round(cw)}×${Math.round(ch)}${typeof c.aspect === "string" && c.aspect ? ` (${c.aspect})` : ""}`
+                      : null,
+                    Number.isFinite(cd) && cd > 0 ? `${cd} s` : null,
+                  ].filter(Boolean).join(" · ");
                   return (
                   <li key={String(c.id)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
                     <span className="min-w-0 truncate text-[13px] font-medium">
                       {str(c.name)}
+                      {spec && (
+                        <span className="ml-1.5 font-normal text-muted-foreground tabular-nums">{spec}</span>
+                      )}
                       {file && (
                         <>{" "}<a href={file} target="_blank" rel="noreferrer" className="text-xs font-normal text-primary underline-offset-4 hover:underline">
                           Adjunto
@@ -721,7 +754,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   />
                 </div>
                 <p className="text-[11px] text-muted-foreground tabular-nums">
-                  {formatMoney(bill.paid_minor, "PEN")} cobrado de {formatMoney(gross, "PEN")} · {progress}%
+                  {formatMoney(bill.paid_minor, orderCurrency)} cobrado de {formatMoney(gross, orderCurrency)} · {progress}%
                 </p>
               </div>
             )}
@@ -748,7 +781,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                             <OrderInvoiceBadge status={String(v.status ?? "")} />
                           </DrawerTableTd>
                           <DrawerTableTd numeric className="tabular-nums">
-                            {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" ? v.currency : "PEN") : "—"}
+                            {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency) : "—"}
                           </DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
                             {typeof v.due_date === "string" && v.due_date ? fmtFecha(v.due_date) : "—"}
@@ -760,9 +793,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </DrawerTable>
                 {bill && (
                   <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
-                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.invoiced_minor, "PEN")}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.paid_minor, "PEN")}{bill.isPrepaid ? " · prepago" : ""}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Pendiente</dt><dd className={`mt-0.5 text-[13px] tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}>{formatMoney(bill.pending_minor, "PEN")}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.invoiced_minor, orderCurrency)}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.paid_minor, orderCurrency)}{bill.isPrepaid ? " · prepago" : ""}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Pendiente</dt><dd className={`mt-0.5 text-[13px] tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}>{formatMoney(bill.pending_minor, orderCurrency)}</dd></div>
                   </dl>
                 )}
               </>
@@ -848,6 +881,44 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 disabled={isPending}
               />
             </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="ord-mat-dur">Duración (s)</Label>
+                <Input
+                  id="ord-mat-dur"
+                  value={matDur}
+                  onChange={(e) => setMatDur(e.target.value.replace(/[^0-9.]/g, "").slice(0, 7))}
+                  placeholder="10"
+                  inputMode="decimal"
+                  disabled={isPending}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="ord-mat-w">Ancho (px)</Label>
+                <Input
+                  id="ord-mat-w"
+                  value={matW}
+                  onChange={(e) => setMatW(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                  placeholder="1920"
+                  inputMode="numeric"
+                  disabled={isPending}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="ord-mat-h">Alto (px)</Label>
+                <Input
+                  id="ord-mat-h"
+                  value={matH}
+                  onChange={(e) => setMatH(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                  placeholder="1080"
+                  inputMode="numeric"
+                  disabled={isPending}
+                />
+              </div>
+            </div>
+            <p className="-mt-1 text-[11px] text-muted-foreground">
+              Tamaño de la pieza (opcional): resolución del video/imagen y duración del spot.
+            </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setMatOpen(false)} disabled={isPending}>
                 Cancelar
@@ -902,7 +973,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setCancelOpen(false)} disabled={isPending}>
-              Volver
+              <CircleArrowLeft />Volver
             </Button>
             <Button variant="destructive" size="sm" onClick={doCancelOrder} disabled={isPending}>
               {isPending ? "Cancelando…" : "Confirmar cancelación"}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CircleArrowLeft } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -53,7 +54,7 @@ export default async function NuevoContactoPage({
         eyebrow="CRM"
         title="Nuevo contacto"
         description="Una persona, una empresa. La marca que publicita va en el pedido, no acá."
-        right={<Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="outline">Volver</Button>}
+        right={<Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
       />
 
       {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}

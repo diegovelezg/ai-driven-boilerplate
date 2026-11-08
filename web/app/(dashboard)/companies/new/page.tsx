@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CircleArrowLeft } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -15,8 +16,11 @@ export default async function NuevaEmpresaPage() {
   // rol y el form solo pinta el campo cuando corresponde. El server action
   // vuelve a exigirlo (nunca confiar solo en el gating de UI).
   let canManageCommission = true;
+  let defaultCountry = "PE";
   try {
     const { active } = await getMyActiveStore(null).catch(() => ({ active: null as null }));
+    const shopCountry = String(active?.shop_country ?? "").trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(shopCountry)) defaultCountry = shopCountry;
     if (active?.id) {
       const { getMyStoreRole } = await import("@/lib/tenant");
       const { hasMinRole } = await import("@/lib/roles");
@@ -32,10 +36,10 @@ export default async function NuevaEmpresaPage() {
         eyebrow="CRM"
         title="Nueva empresa"
         description="Una empresa, un tipo. La marca que publicita va en el pedido, no acá."
-        right={<Button render={<Link href="/companies" />} nativeButton={false} size="sm" variant="outline">Volver</Button>}
+        right={<Button render={<Link href="/companies" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
       />
       <AppCard title="Datos" description="Nombre y tipo; el resto es opcional.">
-        <NuevaEmpresaForm canManageCommission={canManageCommission} />
+        <NuevaEmpresaForm canManageCommission={canManageCommission} defaultCountry={defaultCountry} />
       </AppCard>
     </div>
   );

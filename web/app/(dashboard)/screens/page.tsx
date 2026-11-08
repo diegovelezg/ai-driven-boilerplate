@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { ScreensList } from "./screens-list";
@@ -97,12 +99,17 @@ export default async function InventarioPage({
       <PageHeader
         eyebrow="DOOH"
         title="Inventario publicitario"
-        description="Espacios publicitarios: recintos → pantallas → slots → reservas. Cada pantalla pertenece a un proveedor."
+        description="Espacios publicitarios: ubicaciones → pantallas → slots → reservas. Cada pantalla pertenece a un proveedor."
         right={
           connected && dbReady && !error ? (
-            <span className="text-xs text-muted-foreground">
-              {counts.inv_venues ?? 0} recintos · {counts.inv_screens ?? 0} pantallas · {counts.inv_slots ?? 0} slots
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">
+                {counts.inv_venues ?? 0} ubicaciones · {counts.inv_screens ?? 0} pantallas · {counts.inv_slots ?? 0} slots
+              </span>
+              <Button render={<Link href="/screens/new" />} nativeButton={false} size="sm">
+                Nueva pantalla
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -114,7 +121,13 @@ export default async function InventarioPage({
       {connected && dbReady && !error && (
         <>
           {totalCount === 0 && !q && !supplierId && !city && active === "all" ? (
-            <AppCardState>Aún no hay pantallas.</AppCardState>
+            <AppCardState>
+              Aún no hay pantallas.{" "}
+              <Link href="/screens/new" className="underline underline-offset-4">
+                Crea la primera
+              </Link>
+              .
+            </AppCardState>
           ) : (
             <ScreensList
               rows={rows}

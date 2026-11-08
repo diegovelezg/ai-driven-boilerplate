@@ -183,15 +183,41 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
 }
 
 /** Adjunta un material (pieza). KISS: solo URL, nace aprobado.
- *  El nombre se deriva del archivo. */
+ *  El tamaño de pieza es opcional: duración en segundos y resolución en px
+ *  (el aspecto se deriva). El nombre se deriva del archivo. */
 export async function attachCreativeAction(input: {
   orderId: string;
   fileUrl: string;
+  durationSec?: number | string | null;
+  widthPx?: number | string | null;
+  heightPx?: number | string | null;
 }): Promise<OrderFlowState> {
   const orderId = String(input.orderId ?? "").trim();
   const fileUrl = httpUrl(input.fileUrl);
   if (!orderId) return { ok: false, message: "Falta la orden." };
   if (!fileUrl) return { ok: false, message: "Pega la URL del material (http(s))." };
+  const optNum = (v: unknown): number | null | undefined => {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return undefined;
+    return n;
+  };
+  const duration = optNum(input.durationSec);
+  if (duration === undefined) return { ok: false, message: "Duración inválida: segundos (> 0)." };
+  const widthPx = optNum(input.widthPx);
+  if (widthPx === undefined || (widthPx !== null && !Number.isInteger(widthPx))) {
+    return { ok: false, message: "Ancho inválido: px (entero > 0)." };
+  }
+  const heightPx = optNum(input.heightPx);
+  if (heightPx === undefined || (heightPx !== null && !Number.isInteger(heightPx))) {
+    return { ok: false, message: "Alto inválido: px (entero > 0)." };
+  }
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const aspect =
+    widthPx !== null && heightPx !== null
+      ? `${widthPx / gcd(widthPx, heightPx)}:${heightPx / gcd(widthPx, heightPx)}`
+      : null;
   let name = "Material";
   try {
     const base = new URL(fileUrl).pathname.split("/").filter(Boolean).pop() ?? "";
@@ -212,6 +238,10 @@ export async function attachCreativeAction(input: {
       created_by: actor,
       name,
       file_url: fileUrl,
+      duration_s: duration,
+      width_px: widthPx,
+      height_px: heightPx,
+      aspect,
       qc_status: "approved",
       legal_status: "approved",
     });

@@ -23,11 +23,19 @@ export interface Hueco {
   diasLibres: number;
 }
 
+export interface CurrencyTotals {
+  comprometidoMesMinor: number;
+  firmadoMesMinor: number;
+  draftMesMinor: number;
+}
+
 export interface DashboardSnapshot {
   currency: string;
   comprometidoMesMinor: number;
   firmadoMesMinor: number;
   draftMesMinor: number;
+  /** Totales por moneda de IO (nunca sumar mixto). */
+  byCurrency: Record<string, CurrencyTotals>;
   ocupacion14d: { ratio: number | null; diasVendidos: number; diasDisponibles: number };
   alAire: { ois: number; pantallas: number };
   porCertificar: number;
@@ -65,14 +73,14 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     db.from("inv_screens").select("id,name").eq("store_id", storeId).eq("is_active", true).limit(500),
     db
       .from("io_orders")
-      .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id")
+      .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id,currency")
       .eq("store_id", storeId)
       .neq("status", "cancelled")
       .order("starts_at", { ascending: true })
       .limit(500),
   ]);
 
-  const currency = String((store as Record<string, unknown> | null)?.shop_currency ?? "PEN");
+  const currency = String((store as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
   const screenRows = ((screens ?? []) as Array<Record<string, unknown>>).map((s) => ({
     id: String(s.id),
     name: String(s.name ?? "—"),
@@ -84,6 +92,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     status: String(o.status ?? ""),
     starts_at: (o.starts_at as string | null) ?? null,
     ends_at: (o.ends_at as string | null) ?? null,
+    currency: String(o.currency ?? currency).toUpperCase() || currency,
     key: String(o.advertiser_company_id ?? o.billing_company_id ?? ""),
     advertiser_id: (o.advertiser_company_id as string | null) ?? null,
     billing_id: (o.billing_company_id as string | null) ?? null,
@@ -166,23 +175,35 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     return Boolean(c?.any && !c.pending);
   };
 
-  // 1. Comprometido mes (prorrateo lineal por tiempo solapado).
+  // 1. Comprometido mes (prorrateo lineal por tiempo solapado, por moneda).
   const dNow = new Date(today00);
   const monthStart = Date.UTC(dNow.getUTCFullYear(), dNow.getUTCMonth(), 1);
   const monthEnd = Date.UTC(dNow.getUTCFullYear(), dNow.getUTCMonth() + 1, 1);
   let comprometido = 0;
   let firmado = 0;
   let draft = 0;
+  const byCurrency: Record<string, CurrencyTotals> = {};
+  const bump = (cur: string, part: number, signed: boolean) => {
+    const c = (cur ?? currency).toUpperCase() || currency;
+    const t = (byCurrency[c] ??= { comprometidoMesMinor: 0, firmadoMesMinor: 0, draftMesMinor: 0 });
+    t.comprometidoMesMinor += part;
+    if (signed) t.firmadoMesMinor += part;
+    else t.draftMesMinor += part;
+    if (c === currency) {
+      comprometido += part;
+      if (signed) firmado += part;
+      else draft += part;
+    }
+  };
   for (const l of lineRows) {
     if (l.starts_ms === null || l.ends_ms === null || l.ends_ms <= l.starts_ms) continue;
     if (!(l.rate_minor > 0)) continue;
     const overlap = Math.max(0, Math.min(l.ends_ms, monthEnd) - Math.max(l.starts_ms, monthStart));
     if (overlap <= 0) continue;
     const part = (overlap / (l.ends_ms - l.starts_ms)) * l.rate_minor;
-    comprometido += part;
-    const st = oiById.get(l.io_id)?.status;
-    if (st === "signed") firmado += part;
-    else draft += part;
+    const io = oiById.get(l.io_id);
+    const st = io?.status;
+    bump(io?.currency ?? currency, part, st === "signed");
   }
 
   // 2. Ocupación 14d (pantalla-día por líneas, no por bookings hold).
@@ -343,11 +364,20 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     .sort((a, b) => b.diasLibres - a.diasLibres)
     .slice(0, 5);
 
+  for (const k of Object.keys(byCurrency)) {
+    byCurrency[k] = {
+      comprometidoMesMinor: Math.round(byCurrency[k].comprometidoMesMinor),
+      firmadoMesMinor: Math.round(byCurrency[k].firmadoMesMinor),
+      draftMesMinor: Math.round(byCurrency[k].draftMesMinor),
+    };
+  }
+
   return {
     currency,
     comprometidoMesMinor: Math.round(comprometido),
     firmadoMesMinor: Math.round(firmado),
     draftMesMinor: Math.round(draft),
+    byCurrency,
     ocupacion14d: { ratio: ocupacionRatio, diasVendidos, diasDisponibles },
     alAire: { ois: alAireOis.length, pantallas: alAireScreens.size },
     porCertificar,

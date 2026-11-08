@@ -50,6 +50,7 @@ import {
   type OccupiedRange,
 } from "@/lib/availability-utils";
 import type { CrmState } from "@/lib/crm-actions";
+import { toastFormError } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
 
@@ -236,7 +237,7 @@ function ScreenMultiSelect({
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar por nombre, código, recinto…"
+              placeholder="Buscar por nombre, código, ubicación…"
               aria-label="Buscar pantallas"
               autoComplete="off"
               className="h-9 w-full rounded-lg border border-border bg-background pr-2.5 pl-8 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring"
@@ -475,15 +476,18 @@ export function NuevaOrdenForm({
   companies,
   brands,
   screens,
+  defaultCurrency = "PEN",
 }: {
   companies: Array<{ id: string; name: string; kind: string | null }>;
   brands: string[];
   screens: Screen[];
+  defaultCurrency?: string;
 }) {
   const [state, action, pending] = useActionState(createOrderRedirectAction, initial);
   const [company, setCompany] = useState<string>("");
   const [brand, setBrand] = useState<string>("");
   const [paymentTerms, setPaymentTerms] = useState<string>("");
+  const [currency, setCurrency] = useState<string>((defaultCurrency ?? "PEN").toUpperCase() || "PEN");
   const [starts, setStarts] = useState<string>("");
   const [ends, setEnds] = useState<string>("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -497,6 +501,12 @@ export function NuevaOrdenForm({
   const [availableOnly, setAvailableOnly] = useState(false);
 
   const dias = diffDaysInclusive(starts, ends);
+
+  // Error del server: borde + toast (el botón ya se deshabilita con `missing`).
+  useEffect(() => {
+    if (!state.message || state.ok) return;
+    toastFormError("No se pudo crear la orden", state.message);
+  }, [state]);
 
   // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
   // lo que el vendedor ya digitó o editó.
@@ -640,9 +650,9 @@ export function NuevaOrdenForm({
 
   return (
     <>
-    <form action={action} className="flex flex-col gap-4">
+    <form action={action} noValidate className="flex flex-col gap-4">
       <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Contratante</span>}>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 flex-col gap-1 text-xs">
             Contratante *
             <input type="hidden" name="company_id" value={company} />
@@ -694,6 +704,24 @@ export function NuevaOrdenForm({
                   <SelectItem value="30">30 días</SelectItem>
                   <SelectItem value="60">60 días</SelectItem>
                   <SelectItem value="90">90 días</SelectItem>
+                </SelectContent>
+              </Select>
+          </div>
+          <div className="flex min-w-0 flex-col gap-1 text-xs">
+            Moneda de la orden
+              <input type="hidden" name="currency" value={currency} />
+              <Select
+                value={currency}
+                onValueChange={(v) => v && setCurrency(String(v).toUpperCase())}
+                items={{ PEN: "PEN — Soles", USD: "USD — Dólares" }}
+                disabled={pending}
+              >
+                <SelectTrigger aria-label="Moneda de la orden" className="w-full">
+                  <SelectValue placeholder="Moneda…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PEN">PEN — Soles</SelectItem>
+                  <SelectItem value="USD">USD — Dólares</SelectItem>
                 </SelectContent>
               </Select>
           </div>
@@ -786,9 +814,9 @@ export function NuevaOrdenForm({
               <DataTable>
             <DataTableHeader>
               <DataTableTh>Pantalla</DataTableTh>
-              <DataTableTh numeric>Precio/día (S/)</DataTableTh>
+              <DataTableTh numeric>Precio/día ({currency})</DataTableTh>
               <DataTableTh numeric>Días</DataTableTh>
-              <DataTableTh numeric>Subtotal (S/)</DataTableTh>
+              <DataTableTh numeric>Subtotal ({currency})</DataTableTh>
               <DataTableTh aria-label="Acciones" />
             </DataTableHeader>
             <DataTableBody>
@@ -832,7 +860,7 @@ export function NuevaOrdenForm({
                   </DataTableTd>
                   <DataTableTd numeric className="tabular-nums">
                     {dias !== null && priceOf(s.id) !== null
-                      ? formatMoney(Math.round((priceOf(s.id) as number) * (dias as number) * 100), "PEN")
+                      ? formatMoney(Math.round((priceOf(s.id) as number) * (dias as number) * 100), currency)
                       : "—"}
                   </DataTableTd>
                   <DataTableTd className="w-20">
@@ -869,7 +897,7 @@ export function NuevaOrdenForm({
                   {dias !== null ? ` × ${formatNumber(dias)} días` : ""}
                 </DataTableTd>
                 <DataTableTd numeric className="tabular-nums whitespace-nowrap">
-                  {total > 0 ? formatMoney(Math.round(total * 100), "PEN") : "—"}
+                  {total > 0 ? formatMoney(Math.round(total * 100), currency) : "—"}
                 </DataTableTd>
                 <DataTableTd />
               </DataTableRow>
@@ -880,13 +908,10 @@ export function NuevaOrdenForm({
         </div>
       </AppCard>
 
-      {state.message && (
-        <p className="text-xs text-destructive" role="alert">{state.message}</p>
-      )}
       <div className="flex flex-col gap-1.5">
         <div>
-          <Button type="submit" disabled={!canSubmit}>
-            {pending ? "Creando…" : `Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), "PEN")}` : ""}`}
+          <Button type="submit" disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined}>
+            {pending ? "Creando…" : `Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), currency)}` : ""}`}
           </Button>
         </div>
         {!canSubmit && !pending && (

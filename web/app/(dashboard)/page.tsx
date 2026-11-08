@@ -77,8 +77,16 @@ export default async function DashboardPage() {
             <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
               <Kpi
                 label="Comprometido mes"
-                value={formatMoney(snap.comprometidoMesMinor, snap.currency)}
-                sub={`firmado ${formatMoney(snap.firmadoMesMinor, snap.currency)} · draft ${formatMoney(snap.draftMesMinor, snap.currency)}`}
+                value={(() => {
+                  const entries = Object.entries(snap.byCurrency ?? {}).filter(([, v]) => v.comprometidoMesMinor > 0);
+                  if (entries.length === 0) return "—";
+                  return entries.map(([c, v]) => formatMoney(v.comprometidoMesMinor, c)).join(" + ");
+                })()}
+                sub={(() => {
+                  const entries = Object.entries(snap.byCurrency ?? {}).filter(([, v]) => v.comprometidoMesMinor > 0);
+                  if (entries.length === 0) return "sin líneas en el mes";
+                  return entries.map(([c, v]) => `firmado ${formatMoney(v.firmadoMesMinor, c)} · draft ${formatMoney(v.draftMesMinor, c)}`).join(" · ");
+                })()}
               />
               <Kpi
                 label="Ocupación 14d"

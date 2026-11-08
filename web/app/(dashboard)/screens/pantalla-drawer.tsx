@@ -1,10 +1,23 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, MapPin, Monitor } from "lucide-react";
+import { BarChart3, CircleCheckBig, CircleOff, MapPin, Monitor, Trash } from "lucide-react";
+import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { AppTooltip } from "@/components/ui/app-tooltip";
+import { toast } from "@/components/ui/toast";
+import { deleteScreenAction, setScreenActiveAction, updateScreenPlaybackAction } from "@/lib/screens-actions";
+import { hasMinRole, type MemberRole } from "@/lib/roles";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { formatDecimal, formatNumber, toTitleCase } from "@/lib/format";
@@ -20,6 +33,7 @@ interface ScreenDetail {
   embedding_model: string | null;
   bookings_count: number;
   lines_count: number;
+  myRole?: MemberRole | null;
 }
 
 function str(v: unknown): string {
@@ -136,9 +150,20 @@ function Chip({ children }: { children: ReactNode }) {
 import { ScreenMap } from "./screen-map";
 
 export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClose: () => void }) {
+  const router = useRouter();
   const [tab, setTab] = useState<TabId>("ficha");
   const [detail, setDetail] = useState<ScreenDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingPlayback, setEditingPlayback] = useState(false);
+  const [durInput, setDurInput] = useState("");
+  const [playsInput, setPlaysInput] = useState("");
+  const [impactInput, setImpactInput] = useState("");
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [savingPlayback, startPlayback] = useTransition();
+  const [delOpen, setDelOpen] = useState(false);
+  const [working, startWork] = useTransition();
+
+  const canManage = detail?.myRole ? hasMinRole(detail.myRole, "seller") : false;
 
   // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
@@ -178,7 +203,76 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
 
   const s = detail?.screen;
   const v = detail?.venue;
-  const tags = Array.isArray(s?.tags) ? (s.tags as unknown[]).filter((t): t is string => typeof t === "string") : [];
+  // El enriquecimiento corre en segundo plano tras crear la pantalla: mientras
+  // siga pendiente, la ficha bloquea ediciones (el job escribe esas columnas).
+  const enriching = s?.enrichment_status === "pending";
+
+  // Releer mientras siga pendiente: el job termina solo y la ficha se actualiza
+  // sin reabrir (tope ~2 min; si el job murió, la guarda server ya liberó).
+  useEffect(() => {
+    if (!enriching) return;
+    let alive = true;
+    let tries = 0;
+    const h = setInterval(() => {
+      tries++;
+      if (tries > 15) {
+        clearInterval(h);
+        return;
+      }
+      fetch(`/api/screens/${screenId}`, { cache: "no-store" })
+        .then(async (res) => {
+          if (!res.ok) throw new Error("No se pudo cargar la pantalla.");
+          return (await res.json()) as ScreenDetail;
+        })
+        .then((j) => {
+          if (!alive) return;
+          setDetail(j);
+          if ((j.screen as Record<string, unknown> | null)?.enrichment_status !== "pending") clearInterval(h);
+        })
+        .catch(() => {});
+    }, 8000);
+    return () => {
+      alive = false;
+      clearInterval(h);
+    };
+  }, [screenId, enriching]);
+
+  // Pauta editable: duración del spot + reproducciones/día.
+  const startEditPlayback = () => {
+    setDurInput(s?.duration_sec != null && s.duration_sec !== "" ? String(s.duration_sec) : "");
+    setPlaysInput(s?.plays_per_day != null && s.plays_per_day !== "" ? String(s.plays_per_day) : "");
+    setImpactInput(s?.impact_day != null && s.impact_day !== "" ? String(s.impact_day) : "");
+    setPlaybackError(null);
+    setEditingPlayback(true);
+  };
+
+  const savePlayback = () => {
+    const parse = (raw: string): number | null | undefined => {
+      const t = raw.trim();
+      if (!t) return null;
+      if (!/^\d+$/.test(t)) return undefined;
+      const n = Number(t);
+      return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+    };
+    const duration = parse(durInput);
+    const plays = parse(playsInput);
+    const impact = parse(impactInput);
+    if (duration === undefined || plays === undefined || impact === undefined) {
+      setPlaybackError("Enteros > 0 (vacío = sin dato).");
+      return;
+    }
+    setPlaybackError(null);
+    startPlayback(async () => {
+      const res = await updateScreenPlaybackAction({ screenId, duration_sec: duration, plays_per_day: plays, impact_day: impact });
+      if (!res.ok) {
+        setPlaybackError(res.message);
+        return;
+      }
+      setDetail((d) => (d ? { ...d, screen: { ...d.screen, duration_sec: duration, plays_per_day: plays, impact_day: impact } } : d));
+      setEditingPlayback(false);
+      toast.add({ title: "Pauta actualizada", description: res.message, type: "success" });
+    });
+  };  const tags = Array.isArray(s?.tags) ? (s.tags as unknown[]).filter((t): t is string => typeof t === "string") : [];
   const media = Array.isArray(s?.media_images)
     ? (s.media_images as unknown[]).filter((m): m is string => typeof m === "string" && m !== "")
     : [];
@@ -203,6 +297,35 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   // Derivados comerciales
   const price = toNum(s?.price_pen);
   const impact = toNum(s?.impact_day);
+  const active = s?.is_active === true;
+
+  // Habilitar / deshabilitar / eliminar (solo seller+).
+  const toggleActive = (next: boolean) => {
+    startWork(async () => {
+      const res = await setScreenActiveAction({ screenId, isActive: next });
+      if (!res.ok) {
+        toast.add({ title: "No se pudo actualizar", description: res.message, type: "error" });
+        return;
+      }
+      setDetail((d) => (d ? { ...d, screen: { ...d.screen, is_active: next } } : d));
+      toast.add({ title: next ? "Pantalla habilitada" : "Pantalla deshabilitada", description: res.message, type: "success" });
+    });
+  };
+
+  const doDelete = () => {
+    startWork(async () => {
+      const res = await deleteScreenAction({ screenId });
+      if (!res.ok) {
+        toast.add({ title: "No se pudo eliminar", description: res.message, type: "error" });
+        return;
+      }
+      setDelOpen(false);
+      toast.add({ title: "Pantalla eliminada", description: res.message, type: "success" });
+      onClose();
+      router.replace("/screens");
+      router.refresh();
+    });
+  };
   const cpm = price !== null && impact !== null && impact > 0 ? (price / impact) * 1000 : null;
   const scoreBar = s ? toBar(s.score) : null;
   const scoreTxt = (() => {
@@ -324,9 +447,55 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             >
               {s.is_active === true ? "Activa" : "Inactiva"}
             </span>
+            {enriching && (
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                Generando información inteligente…
+              </span>
+            )}
             <span className="text-[11px] text-muted-foreground tabular-nums">
               {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas OI
             </span>
+            {canManage && (
+              <span className="ms-auto flex items-center gap-1">
+                <AppTooltip tip={active ? "Deshabilitar pantalla" : "Pantalla ya inactiva"}>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Deshabilitar pantalla"
+                    title={enriching ? "Generando información inteligente…" : "Deshabilitar"}
+                    disabled={!active || working || enriching}
+                    onClick={() => toggleActive(false)}
+                  >
+                    <CircleOff aria-hidden />
+                  </Button>
+                </AppTooltip>
+                <AppTooltip tip={active ? "Pantalla ya activa" : "Habilitar pantalla"}>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Habilitar pantalla"
+                    title={enriching ? "Generando información inteligente…" : "Habilitar"}
+                    disabled={active || working || enriching}
+                    onClick={() => toggleActive(true)}
+                  >
+                    <CircleCheckBig aria-hidden />
+                  </Button>
+                </AppTooltip>
+                <AppTooltip tip="Eliminar pantalla">
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Eliminar pantalla"
+                    title={enriching ? "Generando información inteligente…" : "Eliminar"}
+                    disabled={working || enriching}
+                    onClick={() => setDelOpen(true)}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <Trash aria-hidden />
+                  </Button>
+                </AppTooltip>
+              </span>
+            )}
           </span>
         )
       }
@@ -458,22 +627,81 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           <AppCard title="Rendimiento" description="Qué entrega por día y su calificación global.">
             <div className="flex flex-col gap-4">
               <ScoreBar label="Score global" hint="0–10" value={scoreTxt} bar={scoreBar} />
-              <dl className="grid gap-x-6 gap-y-3 border-t border-border/60 pt-4 sm:grid-cols-3">
-                <Field label="Impresiones / día">
-                  <span className="font-semibold tabular-nums">{fmtInt(s.impressions_day)}</span>
-                </Field>
-                <Field label="Vistas efectivas / día">
-                  <span className="font-semibold tabular-nums">{fmtInt(s.effective_daily_views)}</span>
-                </Field>
-                <Field label="Duración spot">
-                  <span className="tabular-nums">
-                    {toNum(s.duration_sec) !== null ? `${formatNumber(toNum(s.duration_sec))} s` : "—"}
-                  </span>
-                </Field>
-                <Field label="Vistas por spot">
-                  <span className="tabular-nums">{fmtInt(s.views_per_spot)}</span>
-                </Field>
-              </dl>
+              {!editingPlayback ? (
+                <>
+                  <dl className="grid gap-x-6 gap-y-3 border-t border-border/60 pt-4 sm:grid-cols-3">
+                    <Field label="Impresiones / día">
+                      <span className="font-semibold tabular-nums">{fmtInt(s.impressions_day)}</span>
+                    </Field>
+                    <Field label="Vistas efectivas / día">
+                      <span className="font-semibold tabular-nums">{fmtInt(s.effective_daily_views)}</span>
+                    </Field>
+                    <Field label="Reproducciones / día">
+                      <span className="font-semibold tabular-nums">{fmtInt(s.plays_per_day)}</span>
+                    </Field>
+                    <Field label="Duración spot">
+                      <span className="tabular-nums">
+                        {toNum(s.duration_sec) !== null ? `${formatNumber(toNum(s.duration_sec))} s` : "—"}
+                      </span>
+                    </Field>
+                    <Field label="Vistas por spot">
+                      <span className="tabular-nums">{fmtInt(s.views_per_spot)}</span>
+                    </Field>
+                  </dl>
+                  <div>
+                    <Button variant="outline" size="sm" onClick={startEditPlayback} disabled={enriching} title={enriching ? "Generando información inteligente…" : undefined}>
+                      Editar pauta
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="flex flex-col gap-1 text-xs">
+                      Duración spot (s)
+                      <input
+                        value={durInput}
+                        onChange={(e) => setDurInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                        inputMode="numeric"
+                        placeholder="10"
+                        disabled={savingPlayback}
+                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs">
+                      Reproducciones / día
+                      <input
+                        value={playsInput}
+                        onChange={(e) => setPlaysInput(e.target.value.replace(/\D/g, "").slice(0, 7))}
+                        inputMode="numeric"
+                        placeholder="900"
+                        disabled={savingPlayback}
+                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs">
+                      Impactos / día
+                      <input
+                        value={impactInput}
+                        onChange={(e) => setImpactInput(e.target.value.replace(/\D/g, "").slice(0, 9))}
+                        inputMode="numeric"
+                        placeholder="150000"
+                        disabled={savingPlayback}
+                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+                      />
+                    </label>
+                  </div>
+                  {playbackError && <p className="text-xs text-destructive">{playbackError}</p>}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="sm" onClick={savePlayback} disabled={savingPlayback}>
+                      {savingPlayback ? "Guardando…" : "Guardar"}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setEditingPlayback(false)} disabled={savingPlayback}>
+                      Cancelar
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </AppCard>
 
@@ -587,10 +815,29 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           </AppCard>
 
           <p className="px-1 text-xs text-muted-foreground">
-            Enriquecimiento IA: {detail.has_embedding ? `disponible${detail.embedding_model ? ` (${detail.embedding_model})` : ""}` : "no disponible"}.
+            Enriquecimiento IA: {enriching ? "generándose…" : detail.has_embedding ? `disponible${detail.embedding_model ? ` (${detail.embedding_model})` : ""}` : "no disponible"}.
           </p>
         </>
       )}
+      <Dialog open={delOpen} onOpenChange={(v) => !v && setDelOpen(false)}>
+        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Eliminar pantalla</DialogTitle>
+            <DialogDescription>
+              {s ? `Se eliminará "${toTitleCase(String(s.name ?? "esta pantalla"))}" y su ubicación. Los slots caen en cascada.` : "Esta acción no se puede deshacer."}
+              {(detail && (detail.bookings_count > 0 || detail.lines_count > 0)) && " Tiene reservas o líneas en órdenes: el borrado será rechazado."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={working}>
+              <CircleOff aria-hidden />Volver
+            </Button>
+            <Button variant="destructive" size="sm" onClick={doDelete} disabled={working}>
+              {working ? "Eliminando…" : "Confirmar eliminación"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DrawerShell>
   );
 }

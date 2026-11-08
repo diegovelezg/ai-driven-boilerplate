@@ -66,21 +66,27 @@ export function OrdersList({
   };
 
   const summary = useMemo(() => {
-    let bruto = 0;
+    const brutoBy = new Map<string, number>();
+    const vencidoBy = new Map<string, number>();
     let alAire = 0;
     let porCertificar = 0;
     let vencidas = 0;
-    let vencidoMonto = 0;
     for (const o of rows) {
-      bruto += Number(o.gross_minor ?? 0) || 0;
+      const cur = (o.currency ?? "PEN").toUpperCase();
+      brutoBy.set(cur, (brutoBy.get(cur) ?? 0) + (Number(o.gross_minor ?? 0) || 0));
       if (o.stage === "al_aire") alAire += 1;
       if (o.stage === "por_certificar") porCertificar += 1;
       if (o.billing === "vencido") {
         vencidas += 1;
-        vencidoMonto += Number(o.pending_minor ?? 0) || 0;
+        vencidoBy.set(cur, (vencidoBy.get(cur) ?? 0) + (Number(o.pending_minor ?? 0) || 0));
       }
     }
-    return { bruto, alAire, porCertificar, vencidas, vencidoMonto };
+    const fmtGrouped = (m: Map<string, number>) => {
+      const parts = [...m.entries()].filter(([, v]) => v > 0).sort(([a], [b]) => a.localeCompare(b));
+      if (parts.length === 0) return "—";
+      return parts.map(([c, v]) => formatMoney(v, c)).join(" + ");
+    };
+    return { brutoBy, vencidoBy, brutoLabel: fmtGrouped(brutoBy), vencidoLabel: fmtGrouped(vencidoBy), alAire, porCertificar, vencidas };
   }, [rows]);
 
   const hasFilter = q.trim() !== "" || stage !== null || billing !== null;
@@ -90,7 +96,7 @@ export function OrdersList({
       <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4" aria-label="Resumen">
         <div className="rounded-xl border bg-card px-3.5 py-3">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Bruto listado</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{summary.bruto > 0 ? formatMoney(summary.bruto, "PEN") : "—"}</p>
+          <p className="mt-1 text-lg font-semibold tabular-nums">{summary.brutoLabel}</p>
         </div>
         <div className="rounded-xl border bg-card px-3.5 py-3">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Al aire</p>
@@ -104,9 +110,9 @@ export function OrdersList({
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Vencido</p>
           <p className="mt-1 text-lg font-semibold tabular-nums">
             {formatNumber(summary.vencidas)}
-            {summary.vencidoMonto > 0 && (
+            {summary.vencidas > 0 && (
               <span className="ml-2 align-middle text-xs font-medium text-destructive">
-                {formatMoney(summary.vencidoMonto, "PEN")} pend.
+                {summary.vencidoLabel} pend.
               </span>
             )}
           </p>
@@ -197,7 +203,7 @@ export function OrdersList({
                   {o.starts_at && o.ends_at ? `${fmtCorto(o.starts_at)} → ${fmtCorto(o.ends_at)}` : "—"}
                 </DataTableTd>
                 <DataTableTd numeric className="font-medium tabular-nums">
-                  {o.gross_minor > 0 ? formatMoney(o.gross_minor, "PEN") : "—"}
+                  {o.gross_minor > 0 ? formatMoney(o.gross_minor, o.currency) : "—"}
                 </DataTableTd>
                 <DataTableTd>
                   <span className="flex flex-col items-start gap-1">
@@ -210,12 +216,12 @@ export function OrdersList({
                     <OrderBillingBadge status={o.billing} />
                     {o.billing === "parcial" && o.pending_minor > 0 && (
                       <span className="text-[11px] text-muted-foreground tabular-nums">
-                        {formatMoney(o.pending_minor, "PEN")} pend.
+                        {formatMoney(o.pending_minor, o.currency)} pend.
                       </span>
                     )}
                     {o.billing === "vencido" && o.pending_minor > 0 && (
                       <span className="text-[11px] font-medium text-destructive tabular-nums">
-                        {formatMoney(o.pending_minor, "PEN")} pend.
+                        {formatMoney(o.pending_minor, o.currency)} pend.
                       </span>
                     )}
                     {o.billing === "pagado" && o.isPrepaid && (

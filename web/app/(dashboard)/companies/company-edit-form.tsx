@@ -2,7 +2,22 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { COUNTRIES } from "@/lib/countries";
+import { toast } from "@/components/ui/toast";
 import { updateCompanyAction, type CrmState } from "@/lib/crm-actions";
+import {
+  FIELD_ERR_CLS,
+  fieldsFromMessage,
+  validateCompanyFields,
+  type CompanyFieldKey,
+} from "./company-validation";
 
 export interface CompanyEditInitial {
   name: string;
@@ -34,12 +49,26 @@ export function CompanyEditForm({
   const [country, setCountry] = useState(initial.country);
   const [address, setAddress] = useState(initial.address);
   const [pending, startTransition] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState<Set<CompanyFieldKey>>(new Set());
+
+  const bad = (k: CompanyFieldKey) => (invalid.has(k) ? ` ${FIELD_ERR_CLS}` : "");
+  const clear = (k: CompanyFieldKey) =>
+    invalid.has(k) &&
+    setInvalid((p) => {
+      const n = new Set(p);
+      n.delete(k);
+      return n;
+    });
 
   function save() {
-    setMsg(null);
-    if (!name.trim()) {
-      setMsg("Nombre requerido.");
+    const errs = validateCompanyFields({ name, domain, country });
+    if (errs.length > 0) {
+      setInvalid(new Set(errs.map((r) => r.key)));
+      toast.add({
+        title: errs.length === 1 ? "Revisa el campo marcado" : "Revisa los campos marcados",
+        description: errs.map((r) => r.message).join(" "),
+        type: "error",
+      });
       return;
     }
     startTransition(async () => {
@@ -55,8 +84,13 @@ export function CompanyEditForm({
           address: address.trim() || null,
         },
       });
-      setMsg(res.message);
-      if (res.ok) onSaved?.();
+      if (!res.ok) {
+        const keys = fieldsFromMessage(res.message);
+        setInvalid(new Set(keys));
+        toast.add({ title: "No se pudo guardar", description: res.message, type: "error" });
+        return;
+      }
+      onSaved?.();
     });
   }
 
@@ -67,7 +101,7 @@ export function CompanyEditForm({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-xs">
           Nombre *
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={200} disabled={pending} className={inputCls} />
+          <input value={name} onChange={(e) => { setName(e.target.value); clear("name"); }} maxLength={200} disabled={pending} aria-invalid={invalid.has("name")} className={`${inputCls}${bad("name")}`} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           ID fiscal
@@ -75,7 +109,7 @@ export function CompanyEditForm({
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Web
-          <input value={domain} onChange={(e) => setDomain(e.target.value)} maxLength={253} placeholder="acme.pe" disabled={pending} className={inputCls} />
+          <input value={domain} onChange={(e) => { setDomain(e.target.value); clear("domain"); }} maxLength={253} placeholder="acme.pe" disabled={pending} aria-invalid={invalid.has("domain")} className={`${inputCls}${bad("domain")}`} />
         </label>
         <label className="flex flex-col gap-1 text-xs">
           Teléfono
@@ -89,15 +123,35 @@ export function CompanyEditForm({
           Ciudad
           <input value={city} onChange={(e) => setCity(e.target.value)} maxLength={120} disabled={pending} className={inputCls} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
-          País (ISO2)
-          <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2))} maxLength={2} placeholder="PE" disabled={pending} className={`${inputCls} uppercase`} />
-        </label>
+        <div className="flex flex-col gap-1 text-xs">
+          País
+          <Select
+            value={country.trim().toUpperCase() || "__none"}
+            onValueChange={(v) => {
+              if (!v) return;
+              setCountry(v === "__none" ? "" : v);
+              clear("country");
+            }}
+            items={Object.fromEntries(
+              COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]),
+            )}
+            disabled={pending}
+          >
+            <SelectTrigger aria-label="País" aria-invalid={invalid.has("country")} className={`w-full${invalid.has("country") ? ` ${FIELD_ERR_CLS}` : ""}`}>
+              <SelectValue placeholder="Elegir país…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none">Sin especificar</SelectItem>
+              {COUNTRIES.map((c) => (
+                <SelectItem key={c.code} value={c.code}>{c.code} — {c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={save} disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
+        <Button onClick={save} disabled={pending || !name.trim()} title={!name.trim() ? "Completa el nombre para continuar" : undefined}>{pending ? "Guardando…" : "Guardar"}</Button>
         <Button variant="outline" onClick={onCancel} disabled={pending}>Cancelar</Button>
-        {msg && <span className="text-xs text-muted-foreground">{msg}</span>}
       </div>
     </div>
   );

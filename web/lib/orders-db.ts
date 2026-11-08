@@ -16,6 +16,8 @@ export interface OrderRow {
   billing_name: string | null;
   lines_count: number;
   gross_minor: number;
+  /** Moneda de la IO (las líneas heredan esta moneda; nunca sumar mixto). */
+  currency: string;
   stage: OrderStageKey;
   stage_index: number;
   has_om: boolean;
@@ -45,7 +47,7 @@ export async function listOrders(
   const { data, error } = await db
     .from("io_orders")
     .select(
-      "id,io_number,brand,status,starts_at,ends_at,payment_terms_days,advertiser_company_id,billing_company_id",
+      "id,io_number,brand,status,starts_at,ends_at,payment_terms_days,advertiser_company_id,billing_company_id,currency",
     )
     .eq("store_id", storeId)
     .order("starts_at", { ascending: false })
@@ -99,7 +101,7 @@ export async function listOrders(
     db.from("io_agency_orders").select("io_id").eq("store_id", storeId).in("io_id", ids),
     db.from("io_creatives").select("io_id,qc_status,legal_status").eq("store_id", storeId).in("io_id", ids),
     db.from("io_photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
-    db.from("io_invoices").select("io_id,amount_minor,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_invoices").select("io_id,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
   ]);
   // Nombres ya resueltos arriba para el filtro (mismo mapa).
   const nameBy = nameByPre;
@@ -144,9 +146,15 @@ export async function listOrders(
     });
     const agg = linesBy.get(id) ?? { n: 0, gross: 0 };
     const invRows = invBy.get(id) ?? [];
+    // Solo facturas en la moneda de la IO: nunca sumar PEN+USD.
+    const orderCurrency = String(r.currency ?? "PEN").toUpperCase() || "PEN";
+    const invSameCurrency = invRows.filter((v) => {
+      const c = v.currency == null || String(v.currency).trim() === "" ? orderCurrency : String(v.currency).toUpperCase();
+      return c === orderCurrency;
+    });
     const bill = billingStatus({
       gross_minor: agg.gross,
-      invoices: invRows.map((v) => ({
+      invoices: invSameCurrency.map((v) => ({
         amount_minor: Number(v.amount_minor ?? 0),
         status: String(v.status ?? ""),
         issue_date: (v.issue_date as string | null) ?? null,
@@ -168,6 +176,7 @@ export async function listOrders(
       billing_name: r.billing_company_id ? (nameBy.get(String(r.billing_company_id)) ?? null) : null,
       lines_count: agg.n,
       gross_minor: agg.gross,
+      currency: orderCurrency,
       stage,
       stage_index: index,
       has_om: omBy.has(id),
@@ -220,7 +229,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
       .eq("io_id", id)
       .order("starts_at", { ascending: true }),
     db.from("io_agency_orders").select("id,kind,code,portal,issued_at,document_url,notes,created_by").eq("store_id", storeId).eq("io_id", id),
-    db.from("io_creatives").select("id,name,qc_status,legal_status,file_url,created_by").eq("store_id", storeId).eq("io_id", id),
+    db.from("io_creatives").select("id,name,qc_status,legal_status,file_url,created_by,duration_s,width_px,height_px,aspect").eq("store_id", storeId).eq("io_id", id),
     db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
     db.from("io_photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
     db.from("io_invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),

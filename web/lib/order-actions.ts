@@ -44,6 +44,26 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
   if (payment_terms_days !== null && (!Number.isInteger(payment_terms_days) || payment_terms_days < 0)) {
     return { ok: false, message: "Condición de pago inválida." };
   }
+  // Moneda de la IO (default: moneda del tenant). Un país puede operar PEN+USD.
+  const currencyRaw = String(form.get("currency") ?? "").trim().toUpperCase();
+  let orderCurrency: string | null = null;
+  try {
+    const dbCur = getSupabase();
+    const { data: storeRow } = await dbCur
+      .from("sys_stores")
+      .select("shop_currency")
+      .eq("id", t.storeId)
+      .maybeSingle();
+    orderCurrency = String((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
+  } catch {
+    orderCurrency = "PEN";
+  }
+  if (currencyRaw) {
+    if (!/^[A-Z]{3}$/.test(currencyRaw)) {
+      return { ok: false, message: "Moneda inválida (usa PEN, USD…)." };
+    }
+    orderCurrency = currencyRaw;
+  }
   // Líneas: mismo largo en los 5 arreglos (una fila por pantalla).
   const screens = form.getAll("screen_id").map((v) => String(v).trim());
   const inis = form.getAll("line_starts_at").map((v) => String(v).trim());
@@ -116,6 +136,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       billing_company_id: billing,
       brand,
       status: "draft",
+      currency: orderCurrency ?? "PEN",
       // Periodo de la OI = envolvente de sus líneas (fechas inclusivas).
       starts_at: inis.reduce((a, b) => (a < b ? a : b)),
       ends_at: fins.reduce((a, b) => (a > b ? a : b)),

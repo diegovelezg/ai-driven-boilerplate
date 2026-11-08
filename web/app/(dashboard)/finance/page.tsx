@@ -98,26 +98,30 @@ export default async function FinanzasPage({
   }
 
   const db = getSupabase();
-  const viewCurrency = active.shop_currency;
+  const viewCurrency = (active.shop_currency ?? "PEN").toUpperCase() || "PEN";
 
-  let buckets: ReturnType<typeof bucketMonthly> = [];
-  let kpis: ReturnType<typeof computeFinanceKpis> | null = null;
-  let invoicedMinor = 0;
-  let paidMinor = 0;
-  let pendingMinor = 0;
-  let overdueMinor = 0;
-  let overdueCount = 0;
-  let topBrands: Array<{ brand: string; gross: number; ios: number }> = [];
-  let topAdvertisers: Array<{ name: string; gross: number; ios: number }> = [];
-  let topScreens: Array<{ name: string; gross: number; lines: number }> = [];
-  let bottomScreens: Array<{ name: string; gross: number; lines: number }> = [];
+  interface CurrencyFinance {
+    currency: string;
+    buckets: ReturnType<typeof bucketMonthly>;
+    kpis: ReturnType<typeof computeFinanceKpis> | null;
+    invoicedMinor: number;
+    paidMinor: number;
+    pendingMinor: number;
+    overdueMinor: number;
+    overdueCount: number;
+    topBrands: Array<{ brand: string; gross: number; ios: number }>;
+    topAdvertisers: Array<{ name: string; gross: number; ios: number }>;
+    topScreens: Array<{ name: string; gross: number; lines: number }>;
+    bottomScreens: Array<{ name: string; gross: number; lines: number }>;
+  }
+  let finBy: CurrencyFinance[] = [];
   let error: string | null = null;
 
   try {
     // IOs de la tienda (tope operativo: 500, igual que /orders).
     const { data: ioData, error: ioErr } = await db
       .from("io_orders")
-      .select("id,io_number,brand,status,starts_at,advertiser_company_id,billing_company_id")
+      .select("id,io_number,brand,status,starts_at,advertiser_company_id,billing_company_id,currency")
       .eq("store_id", active.id)
       .order("starts_at", { ascending: false })
       .limit(500);
@@ -126,6 +130,9 @@ export default async function FinanzasPage({
     const ioIds = ios.map((r) => String(r.id));
     const brandByIo = new Map(ios.map((r) => [String(r.id), String(r.brand ?? "").trim() || "Sin marca"]));
     const advIdByIo = new Map(ios.map((r) => [String(r.id), r.advertiser_company_id ? String(r.advertiser_company_id) : null]));
+    const currencyByIo = new Map(
+      ios.map((r) => [String(r.id), String(r.currency ?? viewCurrency).toUpperCase() || viewCurrency]),
+    );
 
     // Líneas: contratado. Paginado simple (una tienda DOOH rara vez pasa 5k).
     const lineRows: Array<Record<string, unknown>> = [];
@@ -160,129 +167,162 @@ export default async function FinanzasPage({
       if (invRows.length >= 20000) break;
     }
 
-    // Contratado → reutiliza bucketMonthly/computeFinanceKpis (puros, sin DB):
-    // cada línea es una "orden" con placed_at = starts_at.
-    const finOrders = lineRows.map((r) => ({
-      total_amount: Number(r.rate_minor ?? 0),
-      currency: viewCurrency,
-      placed_at: (r.starts_at as string | null) ?? null,
-    }));
-    buckets = bucketMonthly(finOrders, viewCurrency);
-    kpis = computeFinanceKpis(finOrders, viewCurrency);
+    // Monedas presentes: IOs + facturas (nunca sumar mixto).
+    const curSet = new Set<string>();
+    for (const c of currencyByIo.values()) curSet.add(c);
+    for (const v of invRows) {
+      const raw = String(v.currency ?? "").trim().toUpperCase();
+      if (/^[A-Z]{3}$/.test(raw)) curSet.add(raw);
+      else if (v.io_id) {
+        const ioCur = currencyByIo.get(String(v.io_id));
+        if (ioCur) curSet.add(ioCur);
+      }
+    }
+    if (curSet.size === 0) curSet.add(viewCurrency);
+    // Base primero, resto alfabético.
+    const currencies = [...curSet].sort((a, b) => (a === viewCurrency ? -1 : b === viewCurrency ? 1 : a.localeCompare(b)));
 
-    // Cobro global desde invoices (misma moneda de la vista).
     const today00 = (() => {
       const n = new Date();
       return Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate());
     })();
-    for (const v of invRows) {
-      const cur = (v.currency as string | null) ?? null;
-      if (viewCurrency && cur && cur.toUpperCase() !== viewCurrency.toUpperCase()) continue;
-      const amount = Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0));
-      const st = String(v.status ?? "");
-      if (st === "cancelled" || st === "draft" || amount <= 0) continue;
-      if (st === "paid") {
-        invoicedMinor += amount;
-        paidMinor += amount;
-        continue;
+
+    const screenNameByAll = new Map<string, string>();
+    const advNameByAll = new Map<string, string>();
+    {
+      const sids = [...new Set(lineRows.map((l) => String(l.screen_id ?? "")).filter(Boolean))];
+      if (sids.length > 0) {
+        const { data: scData } = await db
+          .from("inv_screens")
+          .select("id,name,external_ref")
+          .eq("store_id", active.id)
+          .in("id", sids);
+        for (const s of ((scData ?? []) as Array<Record<string, unknown>>)) {
+          const ref = String(s.external_ref ?? "").trim();
+          const label = String(s.name ?? "").trim() || ref || "Sin nombre";
+          screenNameByAll.set(String(s.id), ref ? `${label} (${ref})` : label);
+        }
       }
-      if (st === "overdue") {
-        invoicedMinor += amount;
-        overdueMinor += amount;
-        overdueCount += 1;
-        continue;
-      }
-      if (st === "issued") {
-        invoicedMinor += amount;
-        const dueRaw = (v.due_date as string | null) ?? null;
-        const m = dueRaw ? /^(\d{4})-(\d{2})-(\d{2})/.exec(dueRaw) : null;
-        if (m) {
-          const due = Date.parse(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
-          if (Number.isFinite(due) && due < today00) {
-            overdueMinor += amount;
-            overdueCount += 1;
-          }
+      const aids = [...new Set([...advIdByIo.values()].filter(Boolean) as string[])];
+      if (aids.length > 0) {
+        const { data: coData } = await db
+          .from("crm_companies")
+          .select("id,name")
+          .eq("store_id", active.id)
+          .in("id", aids);
+        for (const c of ((coData ?? []) as Array<Record<string, unknown>>)) {
+          advNameByAll.set(String(c.id), String(c.name ?? "") || "Sin nombre");
         }
       }
     }
-    pendingMinor = Math.max(0, invoicedMinor - paidMinor);
 
-    // Tops por contratado.
-    const grossByBrand = new Map<string, { gross: number; ios: Set<string> }>();
-    const grossByAdv = new Map<string, { gross: number; ios: Set<string> }>();
-    for (const l of lineRows) {
-      const ioId = String(l.io_id ?? "");
-      const amt = Number(l.rate_minor ?? 0) || 0;
-      const brand = brandByIo.get(ioId) ?? "Sin marca";
-      const b = grossByBrand.get(brand) ?? { gross: 0, ios: new Set<string>() };
-      b.gross += amt;
-      b.ios.add(ioId);
-      grossByBrand.set(brand, b);
-      const advId = advIdByIo.get(ioId);
-      if (advId) {
-        const a = grossByAdv.get(advId) ?? { gross: 0, ios: new Set<string>() };
-        a.gross += amt;
-        a.ios.add(ioId);
-        grossByAdv.set(advId, a);
+    finBy = currencies.map((cur) => {
+      // Contratado en esta moneda: cada línea hereda la moneda de su IO.
+      const finOrders = lineRows
+        .filter((r) => (currencyByIo.get(String(r.io_id ?? "")) ?? viewCurrency) === cur)
+        .map((r) => ({
+          total_amount: Number(r.rate_minor ?? 0),
+          currency: cur,
+          placed_at: (r.starts_at as string | null) ?? null,
+        }));
+      const buckets = bucketMonthly(finOrders, cur);
+      const kpis = computeFinanceKpis(finOrders, cur);
+
+      // Cobro en esta moneda.
+      let invoicedMinor = 0;
+      let paidMinor = 0;
+      let overdueMinor = 0;
+      let overdueCount = 0;
+      for (const v of invRows) {
+        const ioCur = v.io_id ? (currencyByIo.get(String(v.io_id)) ?? viewCurrency) : viewCurrency;
+        const eff = String(v.currency ?? "").trim() ? String(v.currency).toUpperCase() : ioCur;
+        if (eff !== cur) continue;
+        const amount = Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0));
+        const st = String(v.status ?? "");
+        if (st === "cancelled" || st === "draft" || amount <= 0) continue;
+        if (st === "paid") {
+          invoicedMinor += amount;
+          paidMinor += amount;
+          continue;
+        }
+        if (st === "overdue") {
+          invoicedMinor += amount;
+          overdueMinor += amount;
+          overdueCount += 1;
+          continue;
+        }
+        if (st === "issued") {
+          invoicedMinor += amount;
+          const dueRaw = (v.due_date as string | null) ?? null;
+          const m = dueRaw ? /^(\d{4})-(\d{2})-(\d{2})/.exec(dueRaw) : null;
+          if (m) {
+            const due = Date.parse(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+            if (Number.isFinite(due) && due < today00) {
+              overdueMinor += amount;
+              overdueCount += 1;
+            }
+          }
+        }
       }
-    }
-    topBrands = [...grossByBrand.entries()]
-      .map(([brand, v]) => ({ brand, gross: v.gross, ios: v.ios.size }))
-      .sort((a, b) => b.gross - a.gross)
-      .slice(0, 10);
+      const pendingMinor = Math.max(0, invoicedMinor - paidMinor);
 
-    // Ranking por pantalla: más y menos contratado.
-    const grossByScreen = new Map<string, { gross: number; lines: number }>();
-    for (const l of lineRows) {
-      const sid = String(l.screen_id ?? "");
-      if (!sid) continue;
-      const amt = Number(l.rate_minor ?? 0) || 0;
-      const s = grossByScreen.get(sid) ?? { gross: 0, lines: 0 };
-      s.gross += amt;
-      s.lines += 1;
-      grossByScreen.set(sid, s);
-    }
-    if (grossByScreen.size > 0) {
-      const { data: scData } = await db
-        .from("inv_screens")
-        .select("id,name,external_ref")
-        .eq("store_id", active.id)
-        .in("id", [...grossByScreen.keys()]);
-      const screenNameBy = new Map(
-        ((scData ?? []) as Array<Record<string, unknown>>).map((s) => {
-          const ref = String(s.external_ref ?? "").trim();
-          const label = String(s.name ?? "").trim() || ref || "Sin nombre";
-          return [String(s.id), ref ? `${label} (${ref})` : label];
-        }),
-      );
-      const ranked = [...grossByScreen.entries()]
-        .map(([id, v]) => ({ name: screenNameBy.get(id) ?? "Sin nombre", gross: v.gross, lines: v.lines }))
-        .sort((a, b) => b.gross - a.gross);
-      topScreens = ranked.slice(0, 5);
-      bottomScreens = ranked.slice(-5).reverse();
-    }
-
-    if (grossByAdv.size > 0) {
-      const { data: coData } = await db
-        .from("crm_companies")
-        .select("id,name")
-        .eq("store_id", active.id)
-        .in("id", [...grossByAdv.keys()]);
-      const nameBy = new Map(
-        ((coData ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
-      );
-      topAdvertisers = [...grossByAdv.entries()]
-        .map(([id, v]) => ({ name: nameBy.get(id) || "Sin nombre", gross: v.gross, ios: v.ios.size }))
+      // Tops por contratado (solo esta moneda).
+      const grossByBrand = new Map<string, { gross: number; ios: Set<string> }>();
+      const grossByAdv = new Map<string, { gross: number; ios: Set<string> }>();
+      const grossByScreen = new Map<string, { gross: number; lines: number }>();
+      for (const l of lineRows) {
+        const ioId = String(l.io_id ?? "");
+        if ((currencyByIo.get(ioId) ?? viewCurrency) !== cur) continue;
+        const amt = Number(l.rate_minor ?? 0) || 0;
+        const brand = brandByIo.get(ioId) ?? "Sin marca";
+        const b = grossByBrand.get(brand) ?? { gross: 0, ios: new Set<string>() };
+        b.gross += amt;
+        b.ios.add(ioId);
+        grossByBrand.set(brand, b);
+        const advId = advIdByIo.get(ioId);
+        if (advId) {
+          const a = grossByAdv.get(advId) ?? { gross: 0, ios: new Set<string>() };
+          a.gross += amt;
+          a.ios.add(ioId);
+          grossByAdv.set(advId, a);
+        }
+        const sid = String(l.screen_id ?? "");
+        if (sid) {
+          const s = grossByScreen.get(sid) ?? { gross: 0, lines: 0 };
+          s.gross += amt;
+          s.lines += 1;
+          grossByScreen.set(sid, s);
+        }
+      }
+      const topBrands = [...grossByBrand.entries()]
+        .map(([brand, v]) => ({ brand, gross: v.gross, ios: v.ios.size }))
         .sort((a, b) => b.gross - a.gross)
         .slice(0, 10);
-    }
+      const topAdvertisers = [...grossByAdv.entries()]
+        .map(([id, v]) => ({ name: advNameByAll.get(id) || "Sin nombre", gross: v.gross, ios: v.ios.size }))
+        .sort((a, b) => b.gross - a.gross)
+        .slice(0, 10);
+      const ranked = [...grossByScreen.entries()]
+        .map(([id, v]) => ({ name: screenNameByAll.get(id) ?? "Sin nombre", gross: v.gross, lines: v.lines }))
+        .sort((a, b) => b.gross - a.gross);
+      return {
+        currency: cur,
+        buckets,
+        kpis,
+        invoicedMinor,
+        paidMinor,
+        pendingMinor,
+        overdueMinor,
+        overdueCount,
+        topBrands,
+        topAdvertisers,
+        topScreens: ranked.slice(0, 5),
+        bottomScreens: ranked.slice(-5).reverse(),
+      };
+    });
   } catch (e) {
     error = e instanceof Error ? e.message : "DB read failed";
   }
-
-  const closed = buckets.slice(0, -1);
-  const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
-  const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
@@ -290,216 +330,230 @@ export default async function FinanzasPage({
       <PageHeader
         eyebrow="Dinero y cobro"
         title={`Finanzas · ${displayStoreName(active)}`}
-        description="Contratado por líneas de IO y cobro por facturas. Montos en la moneda de la tienda."
+        description="Contratado por líneas de IO y cobro por facturas. Agrupado por moneda: nunca se suman PEN+USD."
       />
 
       {error && (
         <AppCardState>{error}</AppCardState>
       )}
 
-      {kpis && (
-        <FinanceStrip
-          buckets={buckets}
-          kpis={kpis}
-          currency={viewCurrency}
-        />
-      )}
+      {finBy.map((fin) => {
+        const closed = fin.buckets.slice(0, -1);
+        const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
+        const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
+        return (
+          <section key={fin.currency} aria-label={`Finanzas ${fin.currency}`} className="flex flex-col gap-8 rounded-2xl border p-4 md:p-6">
+            <SectionHeading
+              title={`Moneda ${fin.currency}`}
+              hint={fin.currency === viewCurrency ? "Moneda base de la tienda." : "Moneda secundaria de IOs."}
+              tone="sky"
+            />
+            {fin.kpis && (
+              <FinanceStrip
+                buckets={fin.buckets}
+                kpis={fin.kpis}
+                currency={fin.currency}
+              />
+            )}
 
-      {kpis && (
-        <section aria-label="Cobro">
-          <SectionHeading
-            title="Cobro"
-            hint="Facturado vs cobrado según invoices (sin facturar = contratado aún no facturado)."
-            tone="emerald"
-          />
-          <AppCard>
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] text-muted-foreground">Facturado</span>
-                <span className="text-xl font-semibold tabular-nums tracking-tight">
-                  {formatMoney(invoicedMinor, viewCurrency)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] text-muted-foreground">Cobrado</span>
-                <span className="text-xl font-semibold tabular-nums tracking-tight">
-                  {formatMoney(paidMinor, viewCurrency)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] text-muted-foreground">Pendiente</span>
-                <span className="text-xl font-semibold tabular-nums tracking-tight">
-                  {formatMoney(pendingMinor, viewCurrency)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[11px] text-muted-foreground">Vencido</span>
-                <span className="text-xl font-semibold tabular-nums tracking-tight">
-                  {formatMoney(overdueMinor, viewCurrency)}
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {formatNumber(overdueCount)} {overdueCount === 1 ? "factura" : "facturas"}
-                </span>
-              </div>
-            </div>
-          </AppCard>
-        </section>
-      )}
+            {fin.kpis && (
+              <section aria-label={`Cobro ${fin.currency}`}>
+                <SectionHeading
+                  title={`Cobro · ${fin.currency}`}
+                  hint="Facturado vs cobrado según invoices (sin facturar = contratado aún no facturado)."
+                  tone="emerald"
+                />
+                <AppCard>
+                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[11px] text-muted-foreground">Facturado</span>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(fin.invoicedMinor, fin.currency)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[11px] text-muted-foreground">Cobrado</span>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(fin.paidMinor, fin.currency)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[11px] text-muted-foreground">Pendiente</span>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(fin.pendingMinor, fin.currency)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[11px] text-muted-foreground">Vencido</span>
+                      <span className="text-xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(fin.overdueMinor, fin.currency)}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {formatNumber(fin.overdueCount)} {fin.overdueCount === 1 ? "factura" : "facturas"}
+                      </span>
+                    </div>
+                  </div>
+                </AppCard>
+              </section>
+            )}
 
-      {(topScreens.length > 0 || bottomScreens.length > 0) && (
-        <section aria-label="Qué más y qué menos vende">
-          <SectionHeading
-            title="Qué más y qué menos vende"
-            hint="Por pantalla, suma de rate_minor de sus líneas."
-            tone="violet"
-          />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <AppCard title="Más contratado" variant="table">
-              <DataTable>
-                <DataTableHeader>
-                  <DataTableTh>Pantalla</DataTableTh>
-                  <DataTableTh numeric>Líneas</DataTableTh>
-                  <DataTableTh numeric>Contratado</DataTableTh>
-                </DataTableHeader>
-                <DataTableBody className="tabular-nums">
-                  {topScreens.map((r) => (
-                    <DataTableRow key={r.name}>
-                      <DataTableTd>{r.name}</DataTableTd>
-                      <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
-                      <DataTableTd numeric>{formatMoney(r.gross, viewCurrency)}</DataTableTd>
-                    </DataTableRow>
-                  ))}
-                </DataTableBody>
-              </DataTable>
-            </AppCard>
-            <AppCard title="Menos contratado" variant="table">
-              <DataTable>
-                <DataTableHeader>
-                  <DataTableTh>Pantalla</DataTableTh>
-                  <DataTableTh numeric>Líneas</DataTableTh>
-                  <DataTableTh numeric>Contratado</DataTableTh>
-                </DataTableHeader>
-                <DataTableBody className="tabular-nums">
-                  {bottomScreens.map((r) => (
-                    <DataTableRow key={r.name}>
-                      <DataTableTd>{r.name}</DataTableTd>
-                      <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
-                      <DataTableTd numeric>{formatMoney(r.gross, viewCurrency)}</DataTableTd>
-                    </DataTableRow>
-                  ))}
-                </DataTableBody>
-              </DataTable>
-            </AppCard>
-          </div>
-        </section>
-      )}
+            {(fin.topScreens.length > 0 || fin.bottomScreens.length > 0) && (
+              <section aria-label={`Qué más y qué menos vende ${fin.currency}`}>
+                <SectionHeading
+                  title={`Qué más y qué menos vende · ${fin.currency}`}
+                  hint="Por pantalla, suma de rate_minor de sus líneas."
+                  tone="violet"
+                />
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <AppCard title="Más contratado" variant="table">
+                    <DataTable>
+                      <DataTableHeader>
+                        <DataTableTh>Pantalla</DataTableTh>
+                        <DataTableTh numeric>Líneas</DataTableTh>
+                        <DataTableTh numeric>Contratado</DataTableTh>
+                      </DataTableHeader>
+                      <DataTableBody className="tabular-nums">
+                        {fin.topScreens.map((r) => (
+                          <DataTableRow key={r.name}>
+                            <DataTableTd>{r.name}</DataTableTd>
+                            <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
+                            <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                          </DataTableRow>
+                        ))}
+                      </DataTableBody>
+                    </DataTable>
+                  </AppCard>
+                  <AppCard title="Menos contratado" variant="table">
+                    <DataTable>
+                      <DataTableHeader>
+                        <DataTableTh>Pantalla</DataTableTh>
+                        <DataTableTh numeric>Líneas</DataTableTh>
+                        <DataTableTh numeric>Contratado</DataTableTh>
+                      </DataTableHeader>
+                      <DataTableBody className="tabular-nums">
+                        {fin.bottomScreens.map((r) => (
+                          <DataTableRow key={r.name}>
+                            <DataTableTd>{r.name}</DataTableTd>
+                            <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
+                            <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                          </DataTableRow>
+                        ))}
+                      </DataTableBody>
+                    </DataTable>
+                  </AppCard>
+                </div>
+              </section>
+            )}
 
-      {buckets.length > 0 && (
-        <section aria-label="Detalle mensual">
-          <SectionHeading
-            title="Contratado mensual"
-            hint="Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite."
-            tone="sky"
-          />
-          <AppCard variant="table">
-            <DataTable>
-              <DataTableHeader>
-                <DataTableTh>Mes</DataTableTh>
-                <DataTableTh numeric>Contratado</DataTableTh>
-                <DataTableTh numeric>Líneas</DataTableTh>
-                <DataTableTh numeric>Ticket</DataTableTh>
-              </DataTableHeader>
-              <DataTableBody className="tabular-nums">
-                {[...buckets].reverse().map((b, i) => (
-                  <DataTableRow key={b.key}>
-                    <DataTableTd className="capitalize">
-                      {`${b.label} ${b.key.slice(0, 4)}`}
-                      {i === 0 && (
-                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          en curso
-                        </span>
-                      )}
-                      {b.key === bestKey && (
-                        <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                          mejor
-                        </span>
-                      )}
-                      {b.key === worstKey && b.key !== bestKey && (
-                        <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
-                          peor
-                        </span>
-                      )}
-                    </DataTableTd>
-                    <DataTableTd numeric>{formatMoney(b.salesMinor, viewCurrency)}</DataTableTd>
-                    <DataTableTd numeric>{formatNumber(b.orders)}</DataTableTd>
-                    <DataTableTd numeric>
-                      {b.orders > 0
-                        ? formatMoney(Math.round(b.salesMinor / b.orders), viewCurrency)
-                        : "—"}
-                    </DataTableTd>
-                  </DataTableRow>
-                ))}
-              </DataTableBody>
-            </DataTable>
-          </AppCard>
-        </section>
-      )}
+            {fin.buckets.length > 0 && (
+              <section aria-label={`Detalle mensual ${fin.currency}`}>
+                <SectionHeading
+                  title={`Contratado mensual · ${fin.currency}`}
+                  hint="Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite."
+                  tone="sky"
+                />
+                <AppCard variant="table">
+                  <DataTable>
+                    <DataTableHeader>
+                      <DataTableTh>Mes</DataTableTh>
+                      <DataTableTh numeric>Contratado</DataTableTh>
+                      <DataTableTh numeric>Líneas</DataTableTh>
+                      <DataTableTh numeric>Ticket</DataTableTh>
+                    </DataTableHeader>
+                    <DataTableBody className="tabular-nums">
+                      {[...fin.buckets].reverse().map((b, i) => (
+                        <DataTableRow key={b.key}>
+                          <DataTableTd className="capitalize">
+                            {`${b.label} ${b.key.slice(0, 4)}`}
+                            {i === 0 && (
+                              <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                                en curso
+                              </span>
+                            )}
+                            {b.key === bestKey && (
+                              <span className="ml-2 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                                mejor
+                              </span>
+                            )}
+                            {b.key === worstKey && b.key !== bestKey && (
+                              <span className="ml-2 rounded bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-600 dark:text-rose-400">
+                                peor
+                              </span>
+                            )}
+                          </DataTableTd>
+                          <DataTableTd numeric>{formatMoney(b.salesMinor, fin.currency)}</DataTableTd>
+                          <DataTableTd numeric>{formatNumber(b.orders)}</DataTableTd>
+                          <DataTableTd numeric>
+                            {b.orders > 0
+                              ? formatMoney(Math.round(b.salesMinor / b.orders), fin.currency)
+                              : "—"}
+                          </DataTableTd>
+                        </DataTableRow>
+                      ))}
+                    </DataTableBody>
+                  </DataTable>
+                </AppCard>
+              </section>
+            )}
 
-      {topBrands.length > 0 && (
-        <section aria-label="Top marcas">
-          <SectionHeading
-            title="Top marcas por contratado"
-            hint="Suma de rate_minor de líneas por marca de la IO."
-            tone="violet"
-          />
-          <AppCard variant="table">
-            <DataTable>
-              <DataTableHeader>
-                <DataTableTh>Marca</DataTableTh>
-                <DataTableTh numeric>IOs</DataTableTh>
-                <DataTableTh numeric>Contratado</DataTableTh>
-              </DataTableHeader>
-              <DataTableBody className="tabular-nums">
-                {topBrands.map((r) => (
-                  <DataTableRow key={r.brand}>
-                    <DataTableTd>{r.brand}</DataTableTd>
-                    <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
-                    <DataTableTd numeric>{formatMoney(r.gross, viewCurrency)}</DataTableTd>
-                  </DataTableRow>
-                ))}
-              </DataTableBody>
-            </DataTable>
-          </AppCard>
-        </section>
-      )}
+            {fin.topBrands.length > 0 && (
+              <section aria-label={`Top marcas ${fin.currency}`}>
+                <SectionHeading
+                  title={`Top marcas por contratado · ${fin.currency}`}
+                  hint="Suma de rate_minor de líneas por marca de la IO."
+                  tone="violet"
+                />
+                <AppCard variant="table">
+                  <DataTable>
+                    <DataTableHeader>
+                      <DataTableTh>Marca</DataTableTh>
+                      <DataTableTh numeric>IOs</DataTableTh>
+                      <DataTableTh numeric>Contratado</DataTableTh>
+                    </DataTableHeader>
+                    <DataTableBody className="tabular-nums">
+                      {fin.topBrands.map((r) => (
+                        <DataTableRow key={r.brand}>
+                          <DataTableTd>{r.brand}</DataTableTd>
+                          <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
+                          <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                        </DataTableRow>
+                      ))}
+                    </DataTableBody>
+                  </DataTable>
+                </AppCard>
+              </section>
+            )}
 
-      {topAdvertisers.length > 0 && (
-        <section aria-label="Top anunciantes">
-          <SectionHeading
-            title="Top anunciantes por contratado"
-            hint="Por empresa anunciante de la IO."
-            tone="emerald"
-          />
-          <AppCard variant="table">
-            <DataTable>
-              <DataTableHeader>
-                <DataTableTh>Anunciante</DataTableTh>
-                <DataTableTh numeric>IOs</DataTableTh>
-                <DataTableTh numeric>Contratado</DataTableTh>
-              </DataTableHeader>
-              <DataTableBody className="tabular-nums">
-                {topAdvertisers.map((r) => (
-                  <DataTableRow key={r.name}>
-                    <DataTableTd>{r.name}</DataTableTd>
-                    <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
-                    <DataTableTd numeric>{formatMoney(r.gross, viewCurrency)}</DataTableTd>
-                  </DataTableRow>
-                ))}
-              </DataTableBody>
-            </DataTable>
-          </AppCard>
-        </section>
-      )}
+            {fin.topAdvertisers.length > 0 && (
+              <section aria-label={`Top anunciantes ${fin.currency}`}>
+                <SectionHeading
+                  title={`Top anunciantes por contratado · ${fin.currency}`}
+                  hint="Por empresa anunciante de la IO."
+                  tone="emerald"
+                />
+                <AppCard variant="table">
+                  <DataTable>
+                    <DataTableHeader>
+                      <DataTableTh>Anunciante</DataTableTh>
+                      <DataTableTh numeric>IOs</DataTableTh>
+                      <DataTableTh numeric>Contratado</DataTableTh>
+                    </DataTableHeader>
+                    <DataTableBody className="tabular-nums">
+                      {fin.topAdvertisers.map((r) => (
+                        <DataTableRow key={r.name}>
+                          <DataTableTd>{r.name}</DataTableTd>
+                          <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
+                          <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                        </DataTableRow>
+                      ))}
+                    </DataTableBody>
+                  </DataTable>
+                </AppCard>
+              </section>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }

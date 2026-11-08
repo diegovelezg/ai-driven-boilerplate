@@ -117,6 +117,14 @@
       "max_tokens": 4000,
       "reasoning_effort": "medium",
       "json_mode": "native"
+    },
+    "screen_narrative": {
+      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "media" },
+      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "media" },
+      "temperature": 0.5,
+      "max_tokens": 600,
+      "reasoning_effort": "low",
+      "json_mode": "none"
     }
   }
 }

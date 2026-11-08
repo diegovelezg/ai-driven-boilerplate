@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CircleArrowLeft } from "lucide-react";
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
@@ -22,6 +23,7 @@ export default async function NuevaOrdenPage() {
   let companies: Array<{ id: string; name: string; kind: string | null }> = [];
   let screens: Array<{ id: string; name: string; detail: string | null; price_pen: number | null }> = [];
   let brands: string[] = [];
+  let defaultCurrency = "PEN";
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -34,6 +36,13 @@ export default async function NuevaOrdenPage() {
         companies = res.rows.map((c) => ({ id: c.id, name: c.name, kind: c.kind }));
         const { getSupabase } = await import("@/lib/supabase");
         const db = getSupabase();
+        const { data: storeRow } = await db
+          .from("sys_stores")
+          .select("shop_currency")
+          .eq("id", storeId)
+          .maybeSingle();
+        defaultCurrency =
+          String((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
         const { data: sc } = await db
           .from("inv_screens")
           .select("id,name,external_ref,technology,width_px,height_px,price_pen,inv_venues(name)")
@@ -74,13 +83,13 @@ export default async function NuevaOrdenPage() {
         eyebrow="DOOH"
         title="Nueva orden"
         description="Un solo periodo para toda la orden: elige pantallas, ponle precio a cada una y créala en borrador. OM y materiales llegan después, en su etapa."
-        right={<Button render={<Link href="/orders" />} nativeButton={false} size="sm" variant="outline">Volver</Button>}
+        right={<Button render={<Link href="/orders" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
       />
       {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
       {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
       {connected && dbReady && !error && (
-        <NuevaOrdenForm companies={companies} brands={brands} screens={screens} />
+        <NuevaOrdenForm companies={companies} brands={brands} screens={screens} defaultCurrency={defaultCurrency} />
       )}
     </div>
   );

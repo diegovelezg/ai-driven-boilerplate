@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { Map as LeafletMap } from "leaflet";
+import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 
 const MAPBOX_TOKEN =
   process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
@@ -61,11 +62,11 @@ export function ScreenMap({
       }).addTo(map);
 
       const pinHtml = `
-        <div class="relative w-0 h-0 select-none pointer-events-auto">
-          <div class="absolute left-0 top-0 -translate-x-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full border-2 transition-all bg-green-600 border-white hover:scale-125 z-10 shadow-md"></div>
+        <div style="position:relative;width:0;height:0">
+          <div style="position:absolute;left:0;top:0;transform:translate(-50%,-92%)">${mapPinCheckInsideSvg(30)}</div>
           ${
             code
-              ? `<div class="absolute left-0 -translate-x-1/2 bottom-2.5 px-2 py-0.5 rounded text-[10px] font-mono shadow-xl border whitespace-nowrap z-30 bg-white/95 text-green-700 border-green-600/60" style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${code}</div>`
+              ? `<div style="position:absolute;left:0;bottom:26px;transform:translateX(-50%);padding:2px 8px;border-radius:6px;font-size:10px;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;z-index:30;background:rgba(255,255,255,0.95);color:#15803d;border:1px solid rgba(22,163,74,0.4);box-shadow:0 4px 6px -1px rgb(0 0 0 / 0.2)">${code}</div>`
               : ""
           }
         </div>

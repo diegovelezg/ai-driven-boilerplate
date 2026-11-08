@@ -1,6 +1,6 @@
 import { getSupabase } from "@/lib/supabase";
 import { getScreenDetail } from "@/lib/screens-db";
-import { requireApiUser, requireStoreMember } from "@/lib/api/guard";
+import { requireApiUser, requireStoreMember, userStoreRoles } from "@/lib/api/guard";
 
 /**
  * GET /api/screens/:id — ficha para el drawer (Ficha + Comercial + Geo).
@@ -19,7 +19,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     if (denied) return denied;
     const detail = await getScreenDetail(storeId, id);
     if (!detail) return Response.json({ error: "Pantalla no encontrada." }, { status: 404 });
-    return Response.json({ store_id: storeId, ...detail });
+    // Rol del caller para gating de acciones (editar pauta, eliminar).
+    let myRole: string | null = null;
+    if (auth) {
+      const { isMemberRole } = await import("@/lib/roles");
+      const roles = await userStoreRoles(auth.id).catch(() => new Map<string, string>());
+      const raw = roles.get(storeId) ?? null;
+      myRole = raw && isMemberRole(raw) ? raw : null;
+    }
+    return Response.json({ store_id: storeId, ...detail, myRole });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
