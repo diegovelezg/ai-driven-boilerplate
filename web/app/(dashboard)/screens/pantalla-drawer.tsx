@@ -164,6 +164,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   const [working, startWork] = useTransition();
 
   const canManage = detail?.myRole ? hasMinRole(detail.myRole, "seller") : false;
+  const canDelete = detail?.myRole ? hasMinRole(detail.myRole, "owner") : false;
 
   // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
@@ -300,7 +301,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   const impact = toNum(s?.impact_day);
   const active = s?.is_active === true;
 
-  // Habilitar / deshabilitar / eliminar (solo seller+).
+  // Habilitar / deshabilitar (seller+) / eliminar (solo owner).
   const toggleActive = (next: boolean) => {
     startWork(async () => {
       const res = await setScreenActiveAction({ screenId, isActive: next });
@@ -473,13 +474,13 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     <CircleCheckBig aria-hidden />
                   </Button>
                 </AppTooltip>
-                <AppTooltip tip="Eliminar pantalla">
+                <AppTooltip tip="Eliminar pantalla (solo propietario)">
                   <Button
                     size="icon-sm"
                     variant="ghost"
                     aria-label="Eliminar pantalla"
-                    title={enriching ? "Generando resumen inteligente…" : "Eliminar"}
-                    disabled={working || enriching}
+                    title={enriching ? "Generando resumen inteligente…" : "Eliminar (solo propietario)"}
+                    disabled={working || enriching || !canDelete}
                     onClick={() => setDelOpen(true)}
                     className="text-destructive hover:text-destructive"
                   >

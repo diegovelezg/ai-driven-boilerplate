@@ -287,14 +287,15 @@ export async function createScreenSubmitAction(_prev: ScreensState, form: FormDa
   return createScreenAction(form);
 }
 
-/** Elimina una pantalla y su ubicación propia (1:1). Bloqueado si tiene
- *  historia comercial (líneas de orden o reservas): RESTRICT en BD. */
+/** Elimina una pantalla y su ubicación propia (1:1). Solo owner.
+ *  Bloqueado si tiene historia comercial (líneas de orden o reservas):
+ *  RESTRICT en BD. */
 export async function deleteScreenAction(input: { screenId: string }): Promise<ScreensState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
   const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const allowed = await requireMinRole(t.storeId, "owner").catch(() => false);
+  if (allowed === false) return { ok: false, message: "Solo el propietario puede eliminar pantallas." };
   const screenId = String(input.screenId ?? "").trim();
   if (!screenId) return { ok: false, message: "Falta la pantalla." };
   try {

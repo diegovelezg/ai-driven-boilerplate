@@ -46,6 +46,7 @@ export const FEATURE_MIN_ROLE = {
   "members.edit": "admin",
   "agency.commission.view": "admin",
   "agency.commission.edit": "admin",
+  "screens.delete": "owner",
 } as const satisfies Record<string, MemberRole>;
 
 export type FeatureKey = keyof typeof FEATURE_MIN_ROLE;
