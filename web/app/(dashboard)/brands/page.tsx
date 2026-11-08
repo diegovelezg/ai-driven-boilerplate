@@ -14,11 +14,12 @@ export const instant = false;
 export default async function MarcasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; sort?: string; dir?: string }>;
+  searchParams: Promise<{ q?: string; sort?: string; dir?: string; brand?: string; marca?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
+  const selectedBrand = ((sp.brand ?? sp.marca) ?? "").trim() || null;
   const { key: sortKey, dir: sortDir } = parseBrandsSort({ sort: sp.sort, dir: sp.dir });
 
   const dbReady = isSupabaseConfigured();
@@ -55,7 +56,7 @@ export default async function MarcasPage({
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (
-        <BrandsList rows={rows} q={q} sortKey={sortKey} sortDir={sortDir} />
+        <BrandsList rows={rows} q={q} sortKey={sortKey} sortDir={sortDir} initialSelectedBrand={selectedBrand} />
       )}
     </div>
   );

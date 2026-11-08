@@ -7,6 +7,7 @@ import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import { PantallaDrawer } from "./pantalla-drawer";
+import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
 import {
   DataTable,
   DataTableBody,
@@ -18,6 +19,7 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
+import { Badge } from "@/components/ui/badge";
 import { formatDecimal, formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { ScreenListRow, ScreensSortDir, ScreensSortKey } from "@/lib/screens-db";
@@ -43,6 +45,7 @@ export function ScreensList({
   sortDir,
   initialView,
   initialSelectedId,
+  truncated = false,
 }: {
   rows: ScreenListRow[];
   totalCount: number;
@@ -58,9 +61,16 @@ export function ScreensList({
   sortDir: ScreensSortDir;
   initialView: "table" | "grid";
   initialSelectedId: string | null;
+  truncated?: boolean;
 }) {
   const [view, setView] = useState<"table" | "grid">(initialView);
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  // Selección con deep-link (?pantalla=, alias ?screen=). Ver entity-list.tsx.
+  const { selectedId, open: openDrawer, close: closeDrawer } = useEntitySelection(
+    "/screens",
+    "pantalla",
+    initialSelectedId,
+    ["screen"],
+  );
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -227,13 +237,7 @@ export function ScreensList({
             </Button>
           </AppTooltip>
         </span>
-        <span
-          role="status"
-          aria-live="polite"
-          className="ms-auto text-xs text-muted-foreground tabular-nums"
-        >
-          {isPending ? "Buscando…" : `${formatNumber(totalCount)} resultado${totalCount === 1 ? "" : "s"}`}
-        </span>
+        <EntityCount total={totalCount} truncated={truncated} pending={isPending} />
       </div>
 
       {view === "table" ? (
@@ -270,7 +274,7 @@ export function ScreensList({
             </DataTableHeader>
             <DataTableBody>
               {rows.map((s) => (
-                <DataTableRow key={s.id} onClick={() => setSelectedId(s.id)} className="cursor-pointer">
+                <DataTableRow key={s.id} onClick={() => openDrawer(s.id)} className="cursor-pointer">
                   <DataTableTd className="max-w-[260px] truncate px-3 py-4 font-medium">
                     {toTitleCase(s.name)}
                     {s.district && <span className="ml-2 font-normal text-muted-foreground">{s.district}</span>}
@@ -285,14 +289,9 @@ export function ScreensList({
                     {s.price_pen !== null ? `S/ ${formatNumber(s.price_pen)}` : "—"}
                   </DataTableTd>
                   <DataTableTd className="px-3 py-4">
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[11px]",
-                        s.is_active ? "bg-emerald-500/10 text-emerald-700" : "bg-muted text-muted-foreground",
-                      )}
-                    >
+                    <Badge variant={s.is_active ? "success" : "secondary"} className="font-normal" title={s.is_active ? "Pantalla activa" : "Pantalla inactiva"}>
                       {s.is_active ? "Activa" : "Inactiva"}
-                    </span>
+                    </Badge>
                   </DataTableTd>
                 </DataTableRow>
               ))}
@@ -328,24 +327,19 @@ export function ScreensList({
             </DataTableBody>
           </DataTable>
         </AppCard>
-      ) : (
+      ) : rows.length > 0 ? (
         <div className={cn("grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
           {rows.map((s) => (
             <article
               key={s.id}
-              onClick={() => setSelectedId(s.id)}
+              onClick={() => openDrawer(s.id)}
               className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-medium tracking-tight">{toTitleCase(s.name)}</h3>
-                <span
-                  className={cn(
-                    "rounded-full px-2 py-0.5 text-[11px]",
-                    s.is_active ? "bg-emerald-500/10 text-emerald-700" : "bg-muted text-muted-foreground",
-                  )}
-                >
+                <Badge variant={s.is_active ? "success" : "secondary"} className="font-normal" title={s.is_active ? "Pantalla activa" : "Pantalla inactiva"}>
                   {s.is_active ? "Activa" : "Inactiva"}
-                </span>
+                </Badge>
               </div>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {[s.supplier_name, [s.district, s.city].filter(Boolean).join(", ")].filter(Boolean).join(" · ") || "—"}
@@ -358,23 +352,23 @@ export function ScreensList({
             </article>
           ))}
         </div>
+      ) : (
+        <EntityEmpty
+          filtered={filtersActive}
+          emptyTitle="Aún no hay pantallas"
+          emptyHint="Todavía no hay inventario cargado."
+          filteredHint="Prueba con otro nombre, proveedor o ciudad."
+          onClear={() => {
+            startTransition(() => {
+              router.replace(`/screens?${buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 })}`);
+            });
+          }}
+        />
       )}
 
-      {selectedId && <PantallaDrawer key={selectedId} screenId={selectedId} onClose={() => setSelectedId(null)} />}
+      {selectedId && <PantallaDrawer key={selectedId} screenId={selectedId} onClose={closeDrawer} />}
 
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground tabular-nums">
-          Página {formatNumber(page)} de {formatNumber(totalPages)}
-        </span>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1 || isPending} onClick={() => goTo(page - 1)}>
-            Anterior
-          </Button>
-          <Button variant="outline" size="sm" disabled={page >= totalPages || isPending} onClick={() => goTo(page + 1)}>
-            Siguiente
-          </Button>
-        </div>
-      </div>
+      <EntityPagination page={page} totalPages={totalPages} pending={isPending} onGo={goTo} />
     </div>
   );
 }

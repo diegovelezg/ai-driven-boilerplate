@@ -38,11 +38,11 @@ export function getSupabase(): SupabaseClient {
   return cached;
 }
 
-/** ¿El error es "función RPC no existe"? → el llamador usa su fallback
- *  (migración pendiente) en vez de tumbar la página. */
+/** ¿El error es "función RPC no existe"? Solo códigos exactos PostgREST/Postgres
+ *  (PGRST202 / 42883). Nunca substring: un error de columna real no debe
+ *  degradar a legacy con semántica distinta en silencio. */
 export function isSupabaseMissingFunction(e: { code?: string; message?: string } | null | undefined): boolean {
   if (!e) return false;
   const code = String((e as { code?: unknown }).code ?? "");
-  const msg = String(e.message ?? "");
-  return code === "42883" || code === "PGRST202" || /could not find|does not exist|not exist/i.test(msg);
+  return code === "42883" || code === "PGRST202";
 }

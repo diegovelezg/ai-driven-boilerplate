@@ -7,6 +7,8 @@
 // Ratio vs puntos: `formatPercent` recibe ratio 0–1, `formatPercentPoints`
 // recibe 0–100. No intercambiar.
 
+import { normalizeCurrency } from "@/lib/currency";
+
 /** Locale de formateo. `es-ES` ≡ `es-PE` en agrupación/decimal ("."/","); se
  *  fija `es-ES` por disponibilidad garantizada en ICU de Node. Los símbolos de
  *  moneda son manuales (ver CURRENCY_SYMBOLS), no `Intl.Currency`. */
@@ -101,7 +103,7 @@ export function formatMoney(
   if (amountMinor === null || amountMinor === undefined) return "—";
   const minor = Number(amountMinor);
   if (!Number.isFinite(minor)) return "—";
-  const code = (currency ?? "").trim().toUpperCase() || "PEN";
+  const code = normalizeCurrency(currency, "PEN");
   const symbol = CURRENCY_SYMBOLS[code] ?? code;
   const d = Math.max(0, Math.floor(decimals));
   const major = minor / 100;

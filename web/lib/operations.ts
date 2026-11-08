@@ -1,6 +1,6 @@
-// Matriz de compatibilidad (Fase 2: sin pipeline programado).
-// Se conserva el módulo por compatibilidad de imports: sin cadena
-// secuencial ni workers pesados, nada conflicta con nada.
+// Matriz de compatibilidad: dos corridas conflictan si comparten kind y
+// solapan alcance (global choca con todo del mismo kind; scoped solo con
+// mismo scopeKind+scopeId). Es el lock que impide duplicar trabajo concurrente.
 export type ScopeKind = "global" | "signal" | "customer" | "domain";
 
 export type ErrorCode = "judge_veto" | "busy" | "llm_fail" | "stale" | "conflict";
@@ -18,15 +18,24 @@ export interface NewOp {
   scopeId?: string | null;
 }
 
-export function conflictsWith(_aNew: NewOp, _bActive: ActiveOp): boolean {
-  return false;
+export function conflictsWith(aNew: NewOp, bActive: ActiveOp): boolean {
+  if (aNew.kind !== bActive.kind) return false;
+  const aScope = aNew.scopeKind ?? "global";
+  const bScope = bActive.scopeKind ?? "global";
+  // Global ocupa todo: choca con cualquier activo del mismo kind.
+  if (aScope === "global" || bScope === "global") return true;
+  // Scoped: solo si coinciden alcance e id.
+  return aScope === bScope && (aNew.scopeId ?? null) === (bActive.scopeId ?? null);
 }
 
-export function isCompatible(_nuevo: NewOp, _activos: ActiveOp[]): boolean {
-  return true;
+export function isCompatible(nuevo: NewOp, activos: ActiveOp[]): boolean {
+  return findConflict(nuevo, activos) === null;
 }
 
-export function findConflict(_nuevo: NewOp, _activos: ActiveOp[]): ActiveOp | null {
+export function findConflict(nuevo: NewOp, activos: ActiveOp[]): ActiveOp | null {
+  for (const a of activos) {
+    if (conflictsWith(nuevo, a)) return a;
+  }
   return null;
 }
 

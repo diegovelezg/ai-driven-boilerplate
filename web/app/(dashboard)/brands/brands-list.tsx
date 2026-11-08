@@ -15,24 +15,34 @@ import {
   SortHeaderButton,
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
+import { Badge } from "@/components/ui/badge";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { BrandsSortDir, BrandsSortKey, BrandRow } from "@/lib/brand-db";
 import { MarcaDrawer } from "./marca-drawer";
+import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
 
 export function BrandsList({
   rows,
   q,
   sortKey,
   sortDir,
+  initialSelectedBrand = null,
 }: {
   rows: BrandRow[];
   q: string;
   sortKey: BrandsSortKey;
   sortDir: BrandsSortDir;
+  initialSelectedBrand?: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  // Selección con deep-link (?brand=, alias ?marca=). Ver entity-list.tsx.
+  const { selectedId: selectedBrand, open: openDrawer, close: closeDrawer } = useEntitySelection(
+    "/brands",
+    "brand",
+    initialSelectedBrand ?? null,
+    ["marca"],
+  );
 
   const buildParams = useCallback(
     (overrides: { q?: string; sort?: string; dir?: string }) => {
@@ -87,9 +97,7 @@ export function BrandsList({
             Limpiar
           </Button>
         )}
-        <span className="ms-auto text-xs text-muted-foreground tabular-nums">
-          {isPending ? "Buscando…" : `${formatNumber(rows.length)} marca${rows.length === 1 ? "" : "s"}`}
-        </span>
+        <EntityCount total={rows.length} pending={isPending} singular="marca" plural="marcas" />
       </div>
 
       <AppCard variant="table">
@@ -134,26 +142,20 @@ export function BrandsList({
                 tabIndex={0}
                 role="button"
                 aria-label={`Abrir marca ${r.brand}`}
-                onClick={() => setSelectedBrand(r.brand)}
+                onClick={() => openDrawer(r.brand)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setSelectedBrand(r.brand);
+                    openDrawer(r.brand);
                   }
                 }}
                 className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 <DataTableTd className="max-w-[220px] truncate px-3 py-4 font-medium">{r.brand}</DataTableTd>
                 <DataTableTd className="px-3 py-4">
-                  <span
-                    className={
-                      r.active
-                        ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400"
-                        : "rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
-                    }
-                  >
+                  <Badge variant={r.active ? "success" : "secondary"} className="font-normal" title={r.active ? "Marca con pauta vigente" : "Marca sin pauta vigente"}>
                     {r.active ? "En pauta" : "Sin pauta"}
-                  </span>
+                  </Badge>
                 </DataTableTd>
                 <DataTableTd numeric className="px-3 py-4 tabular-nums">
                   {formatNumber(r.ios)}
@@ -182,8 +184,12 @@ export function BrandsList({
             ))}
             {rows.length === 0 && (
               <DataTableRow>
-                <DataTableTd colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
-                  {q ? `Sin resultados para “${q}”.` : "Sin marcas: las marcas nacen de los pedidos."}
+                <DataTableTd colSpan={7} className="px-3 py-4">
+                  <EntityEmpty
+                    filtered={q.trim() !== ""}
+                    emptyTitle="Sin marcas"
+                    emptyHint="Las marcas nacen de los pedidos."
+                  />
                 </DataTableTd>
               </DataTableRow>
             )}
@@ -191,7 +197,7 @@ export function BrandsList({
         </DataTable>
       </AppCard>
 
-      {selectedBrand && <MarcaDrawer key={selectedBrand} brandName={selectedBrand} onClose={() => setSelectedBrand(null)} />}
+      {selectedBrand && <MarcaDrawer key={selectedBrand} brandName={selectedBrand} onClose={closeDrawer} />}
     </div>
   );
 }

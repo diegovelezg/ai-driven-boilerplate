@@ -8,35 +8,47 @@
 -- históricas los invocan; solo se actualiza su cuerpo a sys_memberships.
 
 -- 1. Tablas -------------------------------------------------------------
-alter table stores rename to sys_stores;
-alter table merchant_users rename to sys_memberships;
-alter table store_profiles rename to sys_store_profiles;
-alter table store_secrets rename to sys_secrets;
-alter table store_secret_audits rename to sys_secret_audits;
-alter table background_runs rename to sys_runs;
-alter table order_counters rename to io_counters;
-
-alter table insertion_orders rename to io_orders;
-alter table insertion_order_lines rename to io_lines;
-alter table agency_orders rename to io_agency_orders;
-alter table creatives rename to io_creatives;
-alter table photo_checks rename to io_photo_checks;
-alter table play_logs rename to io_play_logs;
-alter table invoices rename to io_invoices;
-alter table campaigns rename to io_campaigns;
-
-alter table venues rename to inv_venues;
-alter table screens rename to inv_screens;
-alter table loop_templates rename to inv_loop_templates;
-alter table inventory_slots rename to inv_slots;
-alter table bookings rename to inv_bookings;
-
-alter table companies rename to crm_companies;
-alter table contacts rename to crm_contacts;
-
-alter table llm_usage rename to ai_llm_usage;
-alter table vertical_profiles rename to ai_vertical_profiles;
-alter table domains rename to ai_domain_cache;
+-- Renombres idempotentes: en replay fresco el origen existe y el destino no
+-- (renombra); en entornos que ya aplicaron el prefijo por otra vía se salta
+-- sin fallar (origen ausente, destino presente).
+do $$
+declare
+  r record;
+begin
+  for r in select * from (values
+    ('stores', 'sys_stores'),
+    ('merchant_users', 'sys_memberships'),
+    ('store_profiles', 'sys_store_profiles'),
+    ('store_secrets', 'sys_secrets'),
+    ('store_secret_audits', 'sys_secret_audits'),
+    ('background_runs', 'sys_runs'),
+    ('order_counters', 'io_counters'),
+    ('insertion_orders', 'io_orders'),
+    ('insertion_order_lines', 'io_lines'),
+    ('agency_orders', 'io_agency_orders'),
+    ('creatives', 'io_creatives'),
+    ('photo_checks', 'io_photo_checks'),
+    ('play_logs', 'io_play_logs'),
+    ('invoices', 'io_invoices'),
+    ('campaigns', 'io_campaigns'),
+    ('venues', 'inv_venues'),
+    ('screens', 'inv_screens'),
+    ('loop_templates', 'inv_loop_templates'),
+    ('inventory_slots', 'inv_slots'),
+    ('bookings', 'inv_bookings'),
+    ('companies', 'crm_companies'),
+    ('contacts', 'crm_contacts'),
+    ('llm_usage', 'ai_llm_usage'),
+    ('vertical_profiles', 'ai_vertical_profiles'),
+    ('domains', 'ai_domain_cache')
+  ) as v(old_name, new_name)
+  loop
+    if to_regclass('public.' || r.old_name) is not null
+      and to_regclass('public.' || r.new_name) is null then
+      execute format('alter table public.%I rename to %I', r.old_name, r.new_name);
+    end if;
+  end loop;
+end $$;
 
 -- 2. View de metering ----------------------------------------------------
 drop view if exists llm_usage_daily;
@@ -165,32 +177,58 @@ begin
 end;
 $$ language plpgsql;
 
-alter function set_updated_at() rename to sys_set_updated_at;
+-- Idempotente: en entornos ya renombrados solo existe sys_set_updated_at.
+do $$
+begin
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'set_updated_at' and pg_get_function_arguments(p.oid) = ''
+  ) and not exists (
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'sys_set_updated_at' and pg_get_function_arguments(p.oid) = ''
+  ) then
+    execute 'alter function public.set_updated_at() rename to sys_set_updated_at';
+  end if;
+end $$;
 
 -- 4. Triggers: nombres alineados al prefijo --------------------------------
 drop trigger if exists agency_orders_updated_at on io_agency_orders;
+drop trigger if exists io_agency_orders_updated_at on io_agency_orders; -- idempotente: ya migrado
 create trigger io_agency_orders_updated_at before update on io_agency_orders for each row execute function sys_set_updated_at();
 drop trigger if exists campaigns_updated_at on io_campaigns;
+drop trigger if exists io_campaigns_updated_at on io_campaigns; -- idempotente: ya migrado
 create trigger io_campaigns_updated_at before update on io_campaigns for each row execute function sys_set_updated_at();
 drop trigger if exists companies_updated_at on crm_companies;
+drop trigger if exists crm_companies_updated_at on crm_companies; -- idempotente: ya migrado
 create trigger crm_companies_updated_at before update on crm_companies for each row execute function sys_set_updated_at();
 drop trigger if exists contacts_updated_at on crm_contacts;
+drop trigger if exists crm_contacts_updated_at on crm_contacts; -- idempotente: ya migrado
 create trigger crm_contacts_updated_at before update on crm_contacts for each row execute function sys_set_updated_at();
 drop trigger if exists creatives_updated_at on io_creatives;
+drop trigger if exists io_creatives_updated_at on io_creatives; -- idempotente: ya migrado
 create trigger io_creatives_updated_at before update on io_creatives for each row execute function sys_set_updated_at();
 drop trigger if exists insertion_orders_updated_at on io_orders;
+drop trigger if exists io_orders_updated_at on io_orders; -- idempotente: ya migrado
 create trigger io_orders_updated_at before update on io_orders for each row execute function sys_set_updated_at();
 drop trigger if exists invoices_updated_at on io_invoices;
+drop trigger if exists io_invoices_updated_at on io_invoices; -- idempotente: ya migrado
 create trigger io_invoices_updated_at before update on io_invoices for each row execute function sys_set_updated_at();
 drop trigger if exists screens_updated_at on inv_screens;
+drop trigger if exists inv_screens_updated_at on inv_screens; -- idempotente: ya migrado
 create trigger inv_screens_updated_at before update on inv_screens for each row execute function sys_set_updated_at();
 drop trigger if exists store_profiles_updated_at on sys_store_profiles;
+drop trigger if exists sys_store_profiles_updated_at on sys_store_profiles; -- idempotente: ya migrado
 create trigger sys_store_profiles_updated_at before update on sys_store_profiles for each row execute function sys_set_updated_at();
 drop trigger if exists venues_updated_at on inv_venues;
+drop trigger if exists inv_venues_updated_at on inv_venues; -- idempotente: ya migrado
 create trigger inv_venues_updated_at before update on inv_venues for each row execute function sys_set_updated_at();
 drop trigger if exists vertical_profiles_updated_at on ai_vertical_profiles;
+drop trigger if exists ai_vertical_profiles_updated_at on ai_vertical_profiles; -- idempotente: ya migrado
 create trigger ai_vertical_profiles_updated_at before update on ai_vertical_profiles for each row execute function sys_set_updated_at();
 drop trigger if exists bookings_hard_hold_overlap on inv_bookings;
+drop trigger if exists inv_bookings_hard_hold_overlap on inv_bookings; -- idempotente: ya migrado
 create trigger inv_bookings_hard_hold_overlap
   before insert or update on inv_bookings
   for each row execute function io_check_hold_overlap();

@@ -40,7 +40,7 @@ export function FilterSelect({
     <Select
       value={value}
       onValueChange={(v) => {
-        if (v) onChange(v);
+        if (v !== undefined && v !== null) onChange(v);
       }}
       items={items}
       disabled={disabled}

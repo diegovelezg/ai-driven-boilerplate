@@ -22,6 +22,7 @@ import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
 import type { BrandDetail } from "@/lib/brand-db";
 import { MarcaChat } from "./marca-chat";
 import { MarcaResearch } from "./marca-research";
+import { Badge } from "@/components/ui/badge";
 
 interface MarcaDetail extends BrandDetail {
   myRole?: MemberRole | null;
@@ -114,15 +115,9 @@ export function MarcaDrawer({
       badges={
         detail && (
           <span className="flex flex-wrap items-center gap-1.5" aria-label={`${detail.brand}, ${ios.length} pedidos`}>
-            <span
-              className={
-                detail.active
-                  ? "rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
-                  : "rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
-              }
-            >
+            <Badge variant={detail.active ? "success" : "secondary"}>
               {detail.active ? "En pauta" : "Sin pauta"}
-            </span>
+            </Badge>
             <span className="text-[11px] text-muted-foreground">
               {companies.length} empresa{companies.length === 1 ? "" : "s"} · {screens.length} pantalla{screens.length === 1 ? "" : "s"}
             </span>

@@ -14,13 +14,14 @@ import {
 } from "@/components/ui/select";
 import { toTitleCase } from "@/lib/format";
 import { createContactRedirectAction, type CrmState } from "@/lib/crm-actions";
+import { EMAIL_RE } from "@/lib/validation";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
 
 type ContactField = "company" | "email" | "phone";
 
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// SSOT: EMAIL_RE vive en lib/validation.ts (issue #8 P2). Re-export de compat.
 
 function fieldsFromContactMessage(msg: string): ContactField[] {
   if (/empresa/i.test(msg)) return ["company"];
@@ -86,7 +87,7 @@ export function NuevoContactoForm({
         Empresa *
         <input type="hidden" name="company_id" value={company} />
         <Select value={company} onValueChange={(v) => { if (v) { setCompany(v); clear("company"); } }} disabled={pending}>
-          <SelectTrigger aria-label="Empresa" aria-invalid={invalid.has("company")} className={invalid.has("company") ? bad("company").trim() : undefined}>
+          <SelectTrigger aria-label="Empresa" aria-invalid={invalid.has("company")} data-field="company_id" className={invalid.has("company") ? bad("company").trim() : undefined}>
             {/* Nombre explícito: el valor resuelto por defecto muestra el UUID
                 cuando los ítems del portal aún no están montados. */}
             <SelectValue placeholder="Elegir empresa…">{companyName ? toTitleCase(companyName) : undefined}</SelectValue>

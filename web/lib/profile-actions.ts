@@ -30,9 +30,22 @@ export interface DeepProfileState {
 const PROFILER_TOTAL = 4;
 
 export async function runProfilerAction(
-  storeId: string,
+  clientStoreId: string,
   description: string,
 ): Promise<DeepProfileState> {
+  // Issue #4 P0: el storeId nunca viene del cliente. Se resuelve en servidor
+  // (tenant activo del usuario) y el param solo se conserva por compat; si
+  // difiere, se deniega (posible IDOR).
+  const { resolveTenantStoreAction } = await import("@/lib/tenant");
+  const t = await resolveTenantStoreAction().catch(() => ({ error: "Sin tienda." }) as const);
+  if ("error" in t) return { ok: false, message: t.error };
+  const storeId = t.storeId;
+  if (clientStoreId && clientStoreId !== storeId) {
+    const { requireMyStoreAccess } = await import("@/lib/tenant");
+    if ((await requireMyStoreAccess(clientStoreId).catch(() => false)) === false) {
+      return { ok: false, message: "Sin acceso a esta tienda." };
+    }
+  }
   // Con cinta (DB): corrida `profile` con progreso por etapa; el cliente la
   // envuelve en `bg.start` y sigue necesitando la síntesis síncrona para
   // avanzar al paso 2. Sin DB: camino legacy sin progreso.
@@ -132,8 +145,21 @@ function missingRequired(r: DescriptionInterpretation): string[] {
 export async function chatProfileStepAction(
   history: ChatMsg[],
   input: string,
-  storeId: string | null,
+  clientStoreId: string,
 ): Promise<ProfileChatState> {
+  // Issue #4 P0: storeId del servidor, nunca del cliente (ver arriba).
+  const { resolveTenantStoreAction: resolveChatStore } = await import("@/lib/tenant");
+  const tc = await resolveChatStore().catch(() => ({ error: "Sin tienda." }) as const);
+  if ("error" in tc) {
+    return { ok: false, reply: tc.error, done: false, missing: [...REQUIRED_SLOTS] };
+  }
+  const storeId = tc.storeId;
+  if (clientStoreId && clientStoreId !== storeId) {
+    const { requireMyStoreAccess: checkChatAccess } = await import("@/lib/tenant");
+    if ((await checkChatAccess(clientStoreId).catch(() => false)) === false) {
+      return { ok: false, reply: "Sin acceso a esta tienda.", done: false, missing: [...REQUIRED_SLOTS] };
+    }
+  }
   const userTexts = [...history.filter((m) => m.role === "user").map((m) => m.content), input]
     .map((t) => t.trim())
     .filter(Boolean);

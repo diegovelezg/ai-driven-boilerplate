@@ -2,21 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
 
 export interface ScreensState {
   ok: boolean;
   message: string;
 }
 
-async function resolveTenantStore(): Promise<{ storeId: string } | { error: string }> {
-  const storeId = await resolveActiveStoreId();
-  if (!storeId) return { error: "Sin tienda." };
-  if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-    return { error: "Sin acceso a esta tienda." };
-  }
-  return { storeId };
-}
+// SSOT: resolveTenantStore = resolveTenantStoreAction (ver lib/tenant.ts).
 
 function cleanStr(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;

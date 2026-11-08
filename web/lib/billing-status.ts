@@ -2,6 +2,7 @@
 // Estándar OOH order-to-cash: la factura puede salir antes, durante o después
 // de la pauta (upfront, 50/50, net-30/45/60). Por eso el cobro NO es una etapa
 // lineal: se deriva de invoices vs bruto por montos, no por existencia.
+import { startOfDayUTC } from "@/lib/dates";
 
 export type BillingStatusKey =
   | "sin_facturar"
@@ -48,11 +49,6 @@ function dayPart(v: string | null | undefined): string | null {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
-function startOfDayUTC(t: number): number {
-  const d = new Date(t);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
 function effectiveDueMs(
   inv: BillingInvoice,
   paymentTermsDays: number | null,
@@ -91,11 +87,12 @@ export function billingStatus(input: BillingInput): BillingSummary {
     const amount = Math.max(0, Math.round(Number(inv.amount_minor ?? 0) || 0));
     const st = String(inv.status ?? "");
     if (st === "cancelled" || st === "draft" || amount < 0) continue;
+    // Prepaid: la factura salió antes del inicio, cuente pagada o no (upfront issued).
+    const issueDay = dayPart(inv.issue_date ?? null);
+    if (startDay && issueDay && issueDay < startDay) prepaid = true;
     if (st === "paid") {
       invoiced += amount;
       paid += amount;
-      const issueDay = dayPart(inv.issue_date ?? null);
-      if (startDay && issueDay && issueDay < startDay) prepaid = true;
       continue;
     }
     if (st === "overdue") {

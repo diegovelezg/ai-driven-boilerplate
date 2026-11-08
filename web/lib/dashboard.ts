@@ -3,6 +3,8 @@
 // Sin prorrateo inventado más allá de lineal por tiempo solapado; sin
 // impresiones/GRP (io_play_logs del CMS vive fuera).
 import { getSupabase } from "@/lib/supabase";
+import { normalizeCurrency } from "@/lib/currency";
+import { startOfDayUTC } from "@/lib/dates";
 
 export type AlertKind = "sin_om" | "material" | "sin_evidencia" | "termina_sin_relevo";
 
@@ -42,15 +44,14 @@ export interface DashboardSnapshot {
   renovacion30d: { conRelevo: number; total: number; ratio: number | null };
   alerts: DashboardAlert[];
   huecos: Hueco[];
-  counts: { ois: number; screens: number };
+  counts: { ois: number; screens: number; truncated: boolean };
+  /** true si alguna fuente se truncó por límite (muestra parcial, no total exacto). */
+  truncated: boolean;
 }
 
 const DAY_MS = 86_400_000;
 
-function startOfDayUTC(t: number): number {
-  const d = new Date(t);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
+// SSOT: startOfDayUTC vive en lib/dates.ts (issue #8 P2).
 
 function parseMs(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -68,19 +69,20 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const now = Date.now();
   const today00 = startOfDayUTC(now);
 
-  const [{ data: store }, { data: screens }, { data: ois }] = await Promise.all([
+  const [{ data: store, count: screensTotal }, { data: screens }, { data: ois, count: oisTotal }] = await Promise.all([
     db.from("sys_stores").select("shop_currency").eq("id", storeId).maybeSingle(),
-    db.from("inv_screens").select("id,name").eq("store_id", storeId).eq("is_active", true).limit(500),
+    db.from("inv_screens").select("id,name", { count: "exact" }).eq("store_id", storeId).eq("is_active", true).limit(500),
     db
       .from("io_orders")
-      .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id,currency")
+      .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id,currency", { count: "exact" })
       .eq("store_id", storeId)
       .neq("status", "cancelled")
       .order("starts_at", { ascending: true })
       .limit(500),
   ]);
+  const truncated = (screensTotal ?? 0) > 500 || (oisTotal ?? 0) > 500;
 
-  const currency = String((store as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
+  const currency = normalizeCurrency((store as Record<string, unknown> | null)?.shop_currency ?? "PEN");
   const screenRows = ((screens ?? []) as Array<Record<string, unknown>>).map((s) => ({
     id: String(s.id),
     name: String(s.name ?? "—"),
@@ -92,7 +94,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     status: String(o.status ?? ""),
     starts_at: (o.starts_at as string | null) ?? null,
     ends_at: (o.ends_at as string | null) ?? null,
-    currency: String(o.currency ?? currency).toUpperCase() || currency,
+    currency: normalizeCurrency(o.currency, currency),
     key: String(o.advertiser_company_id ?? o.billing_company_id ?? ""),
     advertiser_id: (o.advertiser_company_id as string | null) ?? null,
     billing_id: (o.billing_company_id as string | null) ?? null,
@@ -184,15 +186,17 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   let draft = 0;
   const byCurrency: Record<string, CurrencyTotals> = {};
   const bump = (cur: string, part: number, signed: boolean) => {
-    const c = (cur ?? currency).toUpperCase() || currency;
+    const c = normalizeCurrency(cur, currency);
     const t = (byCurrency[c] ??= { comprometidoMesMinor: 0, firmadoMesMinor: 0, draftMesMinor: 0 });
-    t.comprometidoMesMinor += part;
+    // Comprometido = solo firmado (el draft va aparte en draftMesMinor, no infla KPI).
     if (signed) t.firmadoMesMinor += part;
     else t.draftMesMinor += part;
+    t.comprometidoMesMinor = t.firmadoMesMinor;
     if (c === currency) {
-      comprometido += part;
-      if (signed) firmado += part;
-      else draft += part;
+      if (signed) {
+        comprometido += part;
+        firmado += part;
+      } else draft += part;
     }
   };
   for (const l of lineRows) {
@@ -388,6 +392,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     },
     alerts: alerts.slice(0, 20),
     huecos,
-    counts: { ois: oiRows.length, screens: screenRows.length },
+    counts: { ois: oiRows.length, screens: screenRows.length, truncated },
+    truncated,
   };
 }

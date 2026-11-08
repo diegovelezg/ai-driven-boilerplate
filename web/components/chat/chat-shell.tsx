@@ -57,6 +57,8 @@ export interface ChatShellProps {
   onAsk: (text: string) => void;
   pending: boolean;
   error: string | null;
+  /** Reintento del último turno (el hook reenvía sin duplicar la burbuja). */
+  onRetry?: () => void;
   /** Trabajo en curso del orquestador; si llega, reemplaza a thinkingLabel. */
   status?: string | null;
   /** Deshabilita input + sugerencias (p.ej. perfil ya completado). */
@@ -93,6 +95,7 @@ export function ChatShell({
   onAsk,
   pending,
   error,
+  onRetry,
   status = null,
   disabled = false,
   suggestions = [],
@@ -217,9 +220,16 @@ export function ChatShell({
                 <MessageScrollerItem>
                   <Message>
                     <MessageContent>
-                      <Bubble variant="destructive">
-                        <BubbleContent>{error}</BubbleContent>
-                      </Bubble>
+                      <div role="alert" className="flex flex-col items-start gap-2">
+                        <Bubble variant="destructive">
+                          <BubbleContent>{error}</BubbleContent>
+                        </Bubble>
+                        {onRetry && (
+                          <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={pending}>
+                            Reintentar
+                          </Button>
+                        )}
+                      </div>
                     </MessageContent>
                   </Message>
                 </MessageScrollerItem>

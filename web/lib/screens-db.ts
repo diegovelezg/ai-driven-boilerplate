@@ -5,6 +5,7 @@
 // Si el RPC no existe (migración pendiente), fallback al filtro JS
 // normalizado — nunca rompe el deploy.
 import { getSupabase, isSupabaseMissingFunction } from "@/lib/supabase";
+import { SCREENS_SORT_ALIASES } from "@/lib/sort";
 import { joinHaystack, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 
 // Re-export de compatibilidad (tests y otros módulos consumen desde aquí).
@@ -32,24 +33,14 @@ export interface ScreenListRow {
 export type ScreensSortKey = "name" | "supplier" | "city" | "impact" | "price";
 export type ScreensSortDir = "asc" | "desc";
 
-const SORT_ALIASES: Record<string, ScreensSortKey> = {
-  name: "name",
-  nombre: "name",
-  supplier: "supplier",
-  proveedor: "supplier",
-  city: "city",
-  ciudad: "city",
-  impact: "impact",
-  impacto: "impact",
-  price: "price",
-  precio: "price",
-};
+// SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
+export { SCREENS_SORT_ALIASES } from "@/lib/sort";
 
 export function parseScreensSort(sp: { sort?: string; dir?: string }): {
   key: ScreensSortKey;
   dir: ScreensSortDir;
 } {
-  const key: ScreensSortKey = SORT_ALIASES[sp.sort ?? ""] ?? "name";
+  const key: ScreensSortKey = SCREENS_SORT_ALIASES[sp.sort ?? ""] ?? "name";
   if (sp.dir === "asc" || sp.dir === "desc") return { key, dir: sp.dir };
   return { key, dir: key === "name" || key === "supplier" || key === "city" ? "asc" : "desc" };
 }
@@ -115,7 +106,7 @@ const isMissingFunction = isSupabaseMissingFunction;
 export async function listScreens(
   storeId: string,
   opts: ScreensFilter = {},
-): Promise<{ rows: ScreenListRow[]; total: number }> {
+): Promise<{ rows: ScreenListRow[]; total: number; truncated?: boolean }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 20, 1), 100);
   const page = Math.max(1, opts.page ?? 1);
@@ -155,10 +146,15 @@ const LEGACY_COLUMNS =
 async function listScreensLegacy(
   storeId: string,
   opts: ScreensFilter & { pageSize: number; page: number; sortKey: ScreensSortKey; sortDir: ScreensSortDir; q: string },
-): Promise<{ rows: ScreenListRow[]; total: number }> {
+): Promise<{ rows: ScreenListRow[]; total: number; truncated: boolean }> {
   const db = getSupabase();
   const { pageSize, page, sortKey, sortDir } = opts;
   const asc = sortDir === "asc";
+
+  let countQuery = db.from("inv_screens").select("id", { count: "exact", head: true }).eq("store_id", storeId);
+  if (opts.supplierId) countQuery = countQuery.eq("supplier_company_id", opts.supplierId);
+  if (opts.active === "active") countQuery = countQuery.eq("is_active", true);
+  else if (opts.active === "inactive") countQuery = countQuery.eq("is_active", false);
 
   let query = db.from("inv_screens").select(LEGACY_COLUMNS).eq("store_id", storeId).limit(500);
   if (opts.supplierId) query = query.eq("supplier_company_id", opts.supplierId);
@@ -172,6 +168,8 @@ async function listScreensLegacy(
 
   const { data, error } = await query;
   if (error) throw new Error(`Screens read: ${error.message}`);
+  const { count: baseTotal, error: countError } = await countQuery;
+  if (countError) throw new Error(`Screens read: ${countError.message}`);
   let out = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     const venue = (r.inv_venues ?? null) as { name?: unknown; district?: unknown; city?: unknown } | null;
     return {
@@ -229,22 +227,27 @@ async function listScreensLegacy(
     );
   }
 
-  const total = out.length;
+  const sampleFilled = (data?.length ?? 0) >= 500;
+  const hasJsFilter = tokens.length > 0 || !!opts.city || sortKey === "supplier" || sortKey === "city";
+  // Total exacto cuando no hay filtro JS (conteo en BD); con filtro JS el
+  // total vale sobre la muestra y `truncated` lo declara (la UI pinta parcial).
+  const total = hasJsFilter ? out.length : (baseTotal ?? out.length);
   const from = (page - 1) * pageSize;
-  return { rows: out.slice(from, from + pageSize), total };
+  // Muestra de 500: si se llenó, hay más filas fuera (truncated honesto).
+  const truncated = sampleFilled;
+  return { rows: out.slice(from, from + pageSize), total, truncated };
 }
 
 /** Opciones para los filtros (proveedores y ciudades con inventario). */
 export async function listScreenFilterOptions(
   storeId: string,
-): Promise<{ suppliers: Array<{ id: string; name: string }>; cities: string[] }> {
+): Promise<{ suppliers: Array<{ id: string; name: string }>; cities: string[]; truncated: boolean }> {
   const db = getSupabase();
-  // Ciudades directo de venues (sin pasar por el join de screens ni muestra
-  // truncada); proveedores exactos de CRM.
-  const [{ data: venues }, { data: companies }] = await Promise.all([
-    db.from("inv_venues").select("city").eq("store_id", storeId).limit(2000),
-    db.from("crm_companies").select("id,name").eq("store_id", storeId).eq("kind", "proveedor").order("name").limit(200),
+  const [{ data: venues, count: venuesTotal }, { data: companies, count: companiesTotal }] = await Promise.all([
+    db.from("inv_venues").select("city", { count: "exact" }).eq("store_id", storeId).limit(2000),
+    db.from("crm_companies").select("id,name", { count: "exact" }).eq("store_id", storeId).eq("kind", "proveedor").order("name").limit(200),
   ]);
+  const truncated = (venuesTotal ?? 0) > 2000 || (companiesTotal ?? 0) > 200;
   const cities = [
     ...new Set(
       ((venues ?? []) as Array<Record<string, unknown>>)
@@ -258,6 +261,7 @@ export async function listScreenFilterOptions(
       name: String(c.name ?? ""),
     })),
     cities,
+    truncated,
   };
 }
 

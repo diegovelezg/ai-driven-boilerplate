@@ -8,7 +8,12 @@
 // contextos sin sesión). `listMyStores`/`getMyActiveStore` = filtrado por el
 // usuario actual vía cliente RLS (cualquier miembro del tenant ve todo el
 // tenant, y solo sus tenants).
+//
+// SSOT (issue #8 P2): shop_currency siempre vía normalizeCurrency
+// (nunca `String(x ?? 'PEN')` a mano); resolveTenantStoreAction unifica el
+// resolve de server actions (antes copiado en crm/order/screens-actions).
 import { getSupabase } from "@/lib/supabase";
+import { normalizeCurrency } from "@/lib/currency";
 import type { MemberRole } from "@/lib/roles";
 
 export interface TenantStore {
@@ -19,24 +24,25 @@ export interface TenantStore {
 }
 
 /** Lista tiendas ordenadas por creación. Si hay más de 50, valida el ?store=
- *  pedido por ID directo para no caer al tenant equivocado por ventana. */
-export async function listStores(requestedId?: string | null): Promise<TenantStore[]> {
+ *  pedido por ID directo para no caer al tenant equivocado por ventana.
+ *  `truncated` declara el corte (nunca total exacto silencioso). */
+export async function listStores(
+  requestedId?: string | null,
+): Promise<{ stores: TenantStore[]; truncated: boolean; total: number }> {
   const db = getSupabase();
+  const mapRow = (r: Record<string, unknown>): TenantStore => ({
+    id: String(r.id),
+    name: (r.name as string | null) ?? null,
+    shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
+    shop_country: (r.shop_country as string | null) ?? null,
+  });
   if (requestedId) {
     const { data: one } = await db
       .from("sys_stores")
       .select("id,name,shop_currency,shop_country")
       .eq("id", requestedId)
       .maybeSingle();
-    if (one) {
-      const r = one as Record<string, unknown>;
-      return [{
-        id: String(r.id),
-        name: (r.name as string | null) ?? null,
-        shop_currency: String(r.shop_currency ?? "PEN"),
-        shop_country: (r.shop_country as string | null) ?? null,
-      }];
-    }
+    if (one) return { stores: [mapRow(one as Record<string, unknown>)], truncated: false, total: 1 };
   }
   const { data, error, count } = await db
     .from("sys_stores")
@@ -44,16 +50,13 @@ export async function listStores(requestedId?: string | null): Promise<TenantSto
     .order("created_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Stores read: ${error.message}`);
-  if ((count ?? 0) > 50) {
+  const total = count ?? 0;
+  const truncated = total > 50;
+  if (truncated) {
     const { createLogger } = await import("@/lib/log");
-    createLogger("tenant")(`stores truncados a 50/${count}: validar ?store= por ID directo`);
+    createLogger("tenant")(`stores truncados a 50/${total}: validar ?store= por ID directo`);
   }
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    id: String(r.id),
-    name: (r.name as string | null) ?? null,
-    shop_currency: String(r.shop_currency ?? "PEN"),
-    shop_country: (r.shop_country as string | null) ?? null,
-  }));
+  return { stores: ((data ?? []) as Array<Record<string, unknown>>).map(mapRow), truncated, total };
 }
 
 /** Valida ?store= contra la lista; si no existe, null (el caller aplica fallback). */
@@ -75,19 +78,20 @@ async function resolveActiveStore(
   return stores[0];
 }
 
-/** Atajo: lista + resuelve. */
+/** Atajo: lista + resuelve. `truncated` declara el corte a 50 (la UI que
+ *  liste tiendas debe pintarlo; el ?store= hostil se valida por ID directo). */
 export async function getActiveStore(
   requestedId: string | null | undefined,
-): Promise<{ stores: TenantStore[]; active: TenantStore | null }> {
-  const stores = await listStores();
+): Promise<{ stores: TenantStore[]; active: TenantStore | null; truncated: boolean }> {
+  const { stores, truncated } = await listStores();
   if (requestedId && !stores.some((s) => s.id === requestedId)) {
-    const direct = await listStores(requestedId).catch(() => [] as TenantStore[]);
-    for (const d of direct) {
+    const direct = await listStores(requestedId).catch(() => null);
+    for (const d of direct?.stores ?? []) {
       if (!stores.some((s) => s.id === d.id)) stores.push(d);
     }
   }
-  if (stores.length === 0) return { stores, active: null };
-  return { stores, active: await resolveActiveStore(stores, requestedId) };
+  if (stores.length === 0) return { stores, active: null, truncated };
+  return { stores, active: await resolveActiveStore(stores, requestedId), truncated };
 }
 
 /** Nombre propio: sys_stores.name. Sin fallback: si está vacío es un
@@ -96,9 +100,16 @@ export function displayStoreName(s: { name: string | null }): string {
   return s.name?.trim() ?? "";
 }
 
-/** IDs de tiendas del usuario actual (vía RLS: `merchant_users_self_read`).
- *  null = auth no configurada (dev local sin login: sin scoping).
- *  [] = autenticado sin membresías (sin acceso a ningún tenant). */
+/** Anon-dev explícito: solo `ALLOW_ANON_DEV=1` fuera de producción permite el
+ *  modo sin auth. Por defecto: fail-closed (sin sesión = sin acceso). */
+export function isAnonDevAllowed(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  return process.env.ALLOW_ANON_DEV === "1";
+}
+
+/** IDs de tiendas del usuario actual (vía RLS).
+ *  null = anon-dev explícito (`ALLOW_ANON_DEV=1`, no-prod): sin scoping.
+ *  [] = sin sesión / sin membresías / error RLS (fail-closed: sin acceso). */
 export async function getMyStoreIds(): Promise<string[] | null> {
   let configured = false;
   try {
@@ -107,7 +118,7 @@ export async function getMyStoreIds(): Promise<string[] | null> {
   } catch {
     return null;
   }
-  if (!configured) return null;
+  if (!configured) return isAnonDevAllowed() ? null : [];
   try {
     const { createServerSupabase } = await import("@/lib/supabase-server");
     const supabase = await createServerSupabase();
@@ -125,14 +136,15 @@ export async function getMyStoreIds(): Promise<string[] | null> {
   }
 }
 
-/** ¿El usuario actual pertenece a `storeId`? null = sin auth (dev: permite). */
+/** ¿El usuario actual pertenece a `storeId`? null = anon-dev explícito (permite).
+ *  Sin auth configurada y sin bypass: false (fail-closed). */
 export async function requireMyStoreAccess(storeId: string): Promise<boolean | null> {
-  const ids = await getMyStoreIds().catch(() => null);
+  const ids = await getMyStoreIds().catch(() => [] as string[] | null);
   if (ids === null) return null;
   return ids.includes(storeId);
 }
 
-/** Roles del usuario actual por tienda (vía RLS). null = sin auth (dev: sin scoping). */
+/** Roles del usuario actual por tienda (vía RLS). null = anon-dev explícito. */
 export async function getMyStoreRoles(): Promise<Map<string, MemberRole> | null> {
   let configured = false;
   try {
@@ -141,7 +153,7 @@ export async function getMyStoreRoles(): Promise<Map<string, MemberRole> | null>
   } catch {
     return null;
   }
-  if (!configured) return null;
+  if (!configured) return isAnonDevAllowed() ? null : new Map();
   try {
     const { createServerSupabase } = await import("@/lib/supabase-server");
     const { isMemberRole } = await import("@/lib/roles");
@@ -164,31 +176,51 @@ export async function getMyStoreRoles(): Promise<Map<string, MemberRole> | null>
   }
 }
 
-/** Rol del usuario actual en `storeId`. null = sin auth (dev: permite todo). */
+/** Rol del usuario actual en `storeId`. null = anon-dev o sin membresía (el caller deniega). */
 export async function getMyStoreRole(storeId: string): Promise<MemberRole | null> {
-  const roles = await getMyStoreRoles().catch(() => null);
+  const roles = await getMyStoreRoles().catch(() => new Map());
   if (roles === null) return null;
   return roles.get(storeId) ?? null;
 }
 
-/** ¿El usuario actual alcanza el rol mínimo en `storeId`? null = sin auth (dev: permite). */
+/** ¿El usuario actual alcanza el rol mínimo en `storeId`? null = anon-dev explícito.
+ *  Sin auth y sin bypass: false (fail-closed). */
 export async function requireMinRole(
   storeId: string,
   need: MemberRole,
 ): Promise<boolean | null> {
   const { hasMinRole } = await import("@/lib/roles");
-  const roles = await getMyStoreRoles().catch(() => null);
-  if (roles === null) return null; // sin auth: permite
+  const roles = await getMyStoreRoles().catch(() => new Map());
+  if (roles === null) return null; // anon-dev: permite
   const role = roles.get(storeId) ?? null;
   if (role === null) return false; // sin membresía: deniega
   return hasMinRole(role, need);
+}
+
+/** Membresía por userId explícito (service_role, bypassa RLS para el check).
+ *  SSOT issue #4: `api/guard.ts` delega aquí — un solo chequeo de membresía,
+ *  no dos stacks. */
+export async function hasStoreMembership(userId: string, storeId: string): Promise<boolean> {
+  if (!userId || !storeId) return false;
+  try {
+    const { data } = await getSupabase()
+      .from("sys_memberships")
+      .select("store_id")
+      .eq("user_id", userId)
+      .eq("store_id", storeId)
+      .limit(1)
+      .maybeSingle();
+    return Boolean(data);
+  } catch {
+    return false;
+  }
 }
 
 /** Tiendas visibles para el usuario actual. Fuera de membresía no se lista
  *  nada (el ?store= hostil se ignora aguas abajo en `getMyActiveStore`). */
 export async function listMyStores(requestedId?: string | null): Promise<TenantStore[]> {
   const ids = await getMyStoreIds().catch(() => null);
-  if (ids === null) return listStores(requestedId);
+  if (ids === null) return (await listStores(requestedId)).stores;
   if (ids.length === 0) return [];
   const db = getSupabase();
   if (requestedId) {
@@ -203,7 +235,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
       return [{
         id: String(r.id),
         name: (r.name as string | null) ?? null,
-        shop_currency: String(r.shop_currency ?? "PEN"),
+        shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
         shop_country: (r.shop_country as string | null) ?? null,
       }];
     }
@@ -218,7 +250,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     name: (r.name as string | null) ?? null,
-    shop_currency: String(r.shop_currency ?? "PEN"),
+    shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
     shop_country: (r.shop_country as string | null) ?? null,
   }));
 }
@@ -243,4 +275,20 @@ export async function resolveActiveStoreId(requestedId?: string | null): Promise
   } catch {
     return null;
   }
+}
+
+/** SSOT server-action para resolver el tenant (issue #8 P2).
+ *  Antes copiado en crm/order/screens-actions: misma secuencia
+ *  resolveActiveStoreId → requireMyStoreAccess. Semántica tri-estado única: `requireMyStoreAccess`/`getMyStoreIds`/`getMyStoreRoles` retornan `null` SOLO en anon-dev explícito (`ALLOW_ANON_DEV=1`, no-prod); en todo lo demás, `false`/[] (fail-closed). Por eso los callers comparan `=== false` para denegar: `false` deniega, `null` permite (anon-dev). Nunca `!== true`, que denegaría el anon-dev. */
+export async function resolveTenantStoreAction(need?: "seller" | "admin"): Promise<{ storeId: string } | { error: string }> {
+  const storeId = await resolveActiveStoreId();
+  if (!storeId) return { error: "Sin tienda." };
+  if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
+    return { error: "Sin acceso a esta tienda." };
+  }
+  if (need) {
+    const allowed = await requireMinRole(storeId, need).catch(() => false);
+    if (allowed === false) return { error: "Requiere rol vendedor o superior." };
+  }
+  return { storeId };
 }

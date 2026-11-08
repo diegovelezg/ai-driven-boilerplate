@@ -3,19 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
 import { getScreenConflicts, getScreenOccupancy, type ScreenConflict } from "@/lib/availability";
 import { resolveActor } from "@/lib/actor";
+import { isValidCurrency, normalizeCurrency } from "@/lib/currency";
 import type { CrmState } from "@/lib/crm-actions";
 
-async function resolveTenantStore(): Promise<{ storeId: string } | { error: string }> {
-  const storeId = await resolveActiveStoreId();
-  if (!storeId) return { error: "Sin tienda." };
-  if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-    return { error: "Sin acceso a esta tienda." };
-  }
-  return { storeId };
-}
+// SSOT: resolveTenantStore = resolveTenantStoreAction (ver lib/tenant.ts).
 
 /** Número autogenerado vía función SQL (contador atómico por tienda+año). */
 async function mintIoNumber(
@@ -32,7 +26,7 @@ async function mintIoNumber(
 /** Crea la OI en borrador con número autogenerado (etapa Firmada).
  *  Líneas y OM llegan después. */
 export async function createOrderAction(form: FormData): Promise<CrmState> {
-  const t = await resolveTenantStore();
+  const t = await resolveTenantStore("seller");
   if ("error" in t) return { ok: false, message: t.error };
   const company = String(form.get("company_id") ?? "").trim() || null;
   if (!company) return { ok: false, message: "Empresa requerida." };
@@ -45,7 +39,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     return { ok: false, message: "Condición de pago inválida." };
   }
   // Moneda de la IO (default: moneda del tenant). Un país puede operar PEN+USD.
-  const currencyRaw = String(form.get("currency") ?? "").trim().toUpperCase();
+  const currencyRaw = normalizeCurrency(form.get("currency"), "");
   let orderCurrency: string | null = null;
   try {
     const dbCur = getSupabase();
@@ -54,12 +48,13 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       .select("shop_currency")
       .eq("id", t.storeId)
       .maybeSingle();
-    orderCurrency = String((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
+    orderCurrency = normalizeCurrency((storeRow as Record<string, unknown> | null)?.shop_currency, "PEN");
   } catch {
     orderCurrency = "PEN";
   }
   if (currencyRaw) {
-    if (!/^[A-Z]{3}$/.test(currencyRaw)) {
+    // isValidCurrency rechaza ISO3 falsos (XXX/ZZZ/XTS/...) que el regex suelto aceptaba.
+    if (!isValidCurrency(currencyRaw)) {
       return { ok: false, message: "Moneda inválida (usa PEN, USD…)." };
     }
     orderCurrency = currencyRaw;

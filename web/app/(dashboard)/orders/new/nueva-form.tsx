@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, CalendarIcon, Check, ChevronsUpDown, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +38,7 @@ import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
 import { es } from "react-day-picker/locale";
 import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
-import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
+import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
 import { PantallaDrawer } from "../../screens/pantalla-drawer";
 import type { ScreenConflict } from "@/lib/availability";
 import {
@@ -50,7 +50,7 @@ import {
   type OccupiedRange,
 } from "@/lib/availability-utils";
 import type { CrmState } from "@/lib/crm-actions";
-import { toastFormError } from "@/components/ui/form-feedback";
+import { FIELD_ERR_CLS, toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
 
@@ -487,7 +487,7 @@ export function NuevaOrdenForm({
   const [company, setCompany] = useState<string>("");
   const [brand, setBrand] = useState<string>("");
   const [paymentTerms, setPaymentTerms] = useState<string>("");
-  const [currency, setCurrency] = useState<string>((defaultCurrency ?? "PEN").toUpperCase() || "PEN");
+  const [currency, setCurrency] = useState<string>(normalizeCurrency(defaultCurrency, "PEN"));
   const [starts, setStarts] = useState<string>("");
   const [ends, setEnds] = useState<string>("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -499,14 +499,20 @@ export function NuevaOrdenForm({
   const [calScreenId, setCalScreenId] = useState<string | null>(null);
   const [detailScreenId, setDetailScreenId] = useState<string | null>(null);
   const [availableOnly, setAvailableOnly] = useState(false);
+  const { invalid, mark, clear, focusFirst } = useInvalidFields<"company">();
+  const formRef = useRef<HTMLFormElement>(null);
 
   const dias = diffDaysInclusive(starts, ends);
 
-  // Error del server: borde + toast (el botón ya se deshabilita con `missing`).
+  // Error del server: borde + toast + foco (el botón ya se deshabilita con `missing`).
   useEffect(() => {
     if (!state.message || state.ok) return;
+    if (/empresa|contratante|compa[ñn][íi]a|company/i.test(state.message)) {
+      mark(["company"]);
+      focusFirst(formRef, ["company_id"]);
+    }
     toastFormError("No se pudo crear la orden", state.message);
-  }, [state]);
+  }, [state, mark, focusFirst]);
 
   // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
   // lo que el vendedor ya digitó o editó.
@@ -648,9 +654,19 @@ export function NuevaOrdenForm({
   if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} ocupada${plural(blockedRows.length)} en ese periodo`);
   const canSubmit = !pending && !checking && missing.length === 0;
 
+  // Defensa cliente: el botón ya se deshabilita con `missing`, pero un
+  // submit directo (Enter) también marca borde + toast + foco.
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    if (company) return;
+    e.preventDefault();
+    mark(["company"]);
+    toastFormError("Revisa el campo marcado", "Elige quién firma la orden.");
+    focusFirst(formRef, ["company_id"]);
+  }
+
   return (
     <>
-    <form action={action} noValidate className="flex flex-col gap-4">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
       <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Contratante</span>}>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 flex-col gap-1 text-xs">
@@ -658,11 +674,11 @@ export function NuevaOrdenForm({
             <input type="hidden" name="company_id" value={company} />
             <Select
               value={company}
-              onValueChange={(v) => v && setCompany(v)}
+              onValueChange={(v) => { if (v) { setCompany(v); clear("company"); } }}
               items={Object.fromEntries(companies.map((c) => [c.id, toTitleCase(c.name)]))}
               disabled={pending}
             >
-              <SelectTrigger aria-label="Contratante" className="w-full">
+              <SelectTrigger aria-label="Contratante" aria-invalid={invalid.has("company")} data-field="company_id" className={cn("w-full", invalid.has("company") && FIELD_ERR_CLS)}>
                 <SelectValue placeholder="Agencia o anunciante…" />
               </SelectTrigger>
               <SelectContent>

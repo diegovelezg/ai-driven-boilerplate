@@ -2,7 +2,6 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,10 +19,12 @@ import type { OrderStageKey } from "@/lib/order-stage";
 import { BILLING_LABELS } from "@/lib/billing-status";
 import type { BillingStatusKey } from "@/lib/billing-status";
 import { OrderAutorizadaBadge, OrderBillingBadge, OrderStageBadge } from "@/components/order-badges";
+import { normalizeCurrency } from "@/lib/currency";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { OrderRow } from "@/lib/orders-db";
 import type { MemberRole } from "@/lib/roles";
 import { OrdenDrawer } from "./orden-drawer";
+import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
 
 function fmtCorto(v: string | null): string {
   const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(v) : null;
@@ -48,7 +49,13 @@ export function OrdersList({
   initialSelectedId: string | null;
   myRole: MemberRole | null;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  // Selección con deep-link (?order=, alias ?orden=). Ver entity-list.tsx.
+  const { selectedId, open: openDrawer, close: closeDrawer } = useEntitySelection(
+    "/orders",
+    "order",
+    initialSelectedId,
+    ["orden"],
+  );
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -72,7 +79,7 @@ export function OrdersList({
     let porCertificar = 0;
     let vencidas = 0;
     for (const o of rows) {
-      const cur = (o.currency ?? "PEN").toUpperCase();
+      const cur = normalizeCurrency(o.currency, "PEN");
       brutoBy.set(cur, (brutoBy.get(cur) ?? 0) + (Number(o.gross_minor ?? 0) || 0));
       if (o.stage === "al_aire") alAire += 1;
       if (o.stage === "por_certificar") porCertificar += 1;
@@ -159,9 +166,7 @@ export function OrdersList({
             Limpiar
           </Button>
         )}
-        <span className="ms-auto text-xs text-muted-foreground tabular-nums" aria-live="polite">
-          {isPending ? "Buscando…" : `${formatNumber(rows.length)} resultado${rows.length === 1 ? "" : "s"}`}
-        </span>
+        <EntityCount total={rows.length} pending={isPending} />
       </div>
 
       <AppCard variant="table">
@@ -182,11 +187,11 @@ export function OrdersList({
                 tabIndex={0}
                 role="button"
                 aria-label={`Abrir orden ${o.io_number}`}
-                onClick={() => setSelectedId(o.id)}
+                onClick={() => openDrawer(o.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setSelectedId(o.id);
+                    openDrawer(o.id);
                   }
                 }}
                 className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
@@ -233,25 +238,13 @@ export function OrdersList({
             ))}
             {rows.length === 0 && (
               <DataTableRow>
-                <DataTableTd colSpan={7} className="px-3 py-10">
-                  <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-center">
-                    <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden>
-                      <SearchX className="size-5" />
-                    </span>
-                    <p className="text-sm font-medium">
-                      {hasFilter ? "Sin resultados para ese filtro" : "Aún no hay órdenes"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {hasFilter
-                        ? "Prueba con otro IO, marca o combina etapa y cobro."
-                        : "Crea la primera OI para empezar el flujo Firmada → Al aire → Cobro."}
-                    </p>
-                    {hasFilter && (
-                      <Button variant="outline" size="sm" className="mt-1" onClick={() => go({ q: "", stage: null, billing: null })}>
-                        Limpiar filtros
-                      </Button>
-                    )}
-                  </div>
+                <DataTableTd colSpan={7} className="px-3 py-4">
+                  <EntityEmpty
+                    filtered={hasFilter}
+                    emptyTitle="Aún no hay órdenes"
+                    emptyHint="Crea la primera OI para empezar el flujo Firmada → Al aire → Cobro."
+                    onClear={hasFilter ? () => go({ q: "", stage: null, billing: null }) : undefined}
+                  />
                 </DataTableTd>
               </DataTableRow>
             )}
@@ -259,7 +252,7 @@ export function OrdersList({
         </DataTable>
       </AppCard>
 
-      {selectedId && <OrdenDrawer orderId={selectedId} myRole={myRole} onClose={() => setSelectedId(null)} />}
+      {selectedId && <OrdenDrawer orderId={selectedId} myRole={myRole} onClose={closeDrawer} />}
     </div>
   );
 }

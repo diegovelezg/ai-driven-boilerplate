@@ -20,7 +20,8 @@ export async function resolveRouteCustomerId(
   return id;
 }
 
-/** Usuario autenticado o `Response` 401. Sin auth configurada (dev), null = legacy. */
+/** Usuario autenticado o `Response` 401. Sin auth configurada: fail-closed salvo
+ *  anon-dev explícito (`ALLOW_ANON_DEV=1` fuera de prod), que retorna null. */
 export async function requireApiUser(): Promise<{ id: string; email: string | null } | Response | null> {
   let configured = false;
   try {
@@ -29,7 +30,11 @@ export async function requireApiUser(): Promise<{ id: string; email: string | nu
   } catch {
     configured = false;
   }
-  if (!configured) return null;
+  if (!configured) {
+    const { isAnonDevAllowed } = await import("@/lib/tenant");
+    if (isAnonDevAllowed()) return null;
+    return Response.json({ error: "No autenticado." }, { status: 401 });
+  }
   try {
     const { createServerSupabase } = await import("@/lib/supabase-server");
     const supabase = await createServerSupabase();
@@ -42,7 +47,7 @@ export async function requireApiUser(): Promise<{ id: string; email: string | nu
   }
 }
 
-/** Roles del usuario por tienda vía service_role (bypassa RLS para el check). */
+/** Roles del usuario por tienda vía SSOT tenant (issue #4: un solo chequeo). */
 export async function userStoreRoles(userId: string): Promise<Map<string, string>> {
   try {
     const { getSupabase } = await import("@/lib/supabase");
@@ -69,7 +74,13 @@ export async function requireMinRole(
   user: { id: string; email: string | null } | null,
   need: "owner" | "admin" | "seller" | "viewer",
 ): Promise<Response | null> {
-  if (!user) return null; // auth no configurada (dev): sin check
+  if (!user) {
+    try {
+      const { isAnonDevAllowed } = await import("@/lib/tenant");
+      if (isAnonDevAllowed()) return null; // anon-dev explícito: sin check
+    } catch { /* fail-closed */ }
+    return Response.json({ error: "No autenticado." }, { status: 401 });
+  }
   if (!storeId) return Response.json({ error: "Falta store." }, { status: 400 });
   const { hasMinRole, isMemberRole } = await import("@/lib/roles");
   const roles = await userStoreRoles(user.id).catch(() => new Map<string, string>());
@@ -83,7 +94,8 @@ export async function requireMinRole(
   return null;
 }
 
-/** Tiendas del usuario vía service_role (bypassa RLS para el check). */
+/** Tiendas del usuario vía SSOT tenant (issue #4: guard delega a tenant,
+ *  no doble stack). */
 export async function userStoreIds(userId: string): Promise<string[]> {
   try {
     const { getSupabase } = await import("@/lib/supabase");
@@ -100,15 +112,23 @@ export async function userStoreIds(userId: string): Promise<string[]> {
 /**
  * Exige membresía a `storeId`. Sin membresías no hay acceso (403).
  * Devuelve null si ok, o `Response` 403 listo para retornar.
+ * SSOT issue #4: delega en `tenant.hasStoreMembership` (un solo chequeo).
  */
 export async function requireStoreMember(
   storeId: string,
   user: { id: string; email: string | null } | null,
 ): Promise<Response | null> {
-  if (!user) return null; // auth no configurada (dev): sin check
+  if (!user) {
+    try {
+      const { isAnonDevAllowed } = await import("@/lib/tenant");
+      if (isAnonDevAllowed()) return null;
+    } catch { /* fail-closed */ }
+    return Response.json({ error: "No autenticado." }, { status: 401 });
+  }
   if (!storeId) return Response.json({ error: "Falta store." }, { status: 400 });
-  const stores = await userStoreIds(user.id).catch(() => [] as string[]);
-  if (stores.includes(storeId)) return null;
+  const { hasStoreMembership } = await import("@/lib/tenant");
+  const ok = await hasStoreMembership(user.id, storeId).catch(() => false);
+  if (ok) return null;
   return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
 }
 

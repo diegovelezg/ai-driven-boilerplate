@@ -60,5 +60,27 @@ export function useStreamChat(opts: {
     onArtifact?.(null);
   }, [onArtifact]);
 
-  return { messages, setMessages, input, setInput, pending, error, status, ask, clear };
+  // Reintento: reenvía los mensajes actuales (ya terminan en el turno del
+  // usuario) sin duplicar la burbuja. `ask()` no sirve: agregaría otro turno.
+  const retry = useCallback(async () => {
+    if (pending || messages.length === 0) return;
+    setError(null);
+    setStatus(null);
+    setPending(true);
+    try {
+      await postChatStream({
+        url,
+        body: buildBody(messages),
+        setMessages,
+        onArtifact,
+        onStatus: setStatus,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Falló el chat.");
+    } finally {
+      setPending(false);
+    }
+  }, [messages, pending, url, buildBody, onArtifact]);
+
+  return { messages, setMessages, input, setInput, pending, error, status, ask, clear, retry };
 }

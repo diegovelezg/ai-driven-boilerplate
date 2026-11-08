@@ -1,5 +1,6 @@
 // Lecturas CRM (service_role, como customers-db). Escrituras en crm-actions.ts.
 import { getSupabase, isSupabaseMissingFunction } from "@/lib/supabase";
+import { COMPANIES_SORT_ALIASES } from "@/lib/sort";
 import type { CompanyKind } from "@/lib/crm";
 
 export interface CrmCompany {
@@ -39,15 +40,8 @@ export type EmpresasSortKey = CompaniesSortKey;
 /** @deprecated Use CompaniesSortDir (renamed route i18n). */
 export type EmpresasSortDir = CompaniesSortDir;
 
-const COMPANIES_SORT_ALIASES: Record<string, CompaniesSortKey> = {
-  name: "name",
-  nombre: "name",
-  type: "type",
-  tipo: "type",
-  contacts: "contacts",
-  contactos: "contacts",
-  tax_id: "tax_id",
-};
+// SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
+export { COMPANIES_SORT_ALIASES } from "@/lib/sort";
 
 export function parseCompaniesSort(sp: { sort?: string; dir?: string }): {
   key: CompaniesSortKey;
@@ -189,12 +183,13 @@ export interface CrmContactListItem extends CrmContact {
 /** Cargos distintos ya usados en la tienda (para autocomplete sin repetir). */
 export async function listDistinctJobTitles(storeId: string, limit = 200): Promise<string[]> {
   const db = getSupabase();
+  const capped = Math.min(Math.max(limit, 1), 500);
   const { data, error } = await db
     .from("crm_contacts")
     .select("job_title")
     .eq("store_id", storeId)
     .not("job_title", "is", null)
-    .limit(500);
+    .limit(capped);
   if (error) throw new Error(`CRM read: ${error.message}`);
   const seen = new Map<string, string>();
   for (const r of ((data ?? []) as Array<Record<string, unknown>>)) {
@@ -203,16 +198,26 @@ export async function listDistinctJobTitles(storeId: string, limit = 200): Promi
     const key = raw.toLowerCase();
     if (!seen.has(key)) seen.set(key, raw);
   }
-  return [...seen.values()].sort((a, b) => a.localeCompare(b, "es")).slice(0, Math.min(Math.max(limit, 1), 500));
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "es")).slice(0, capped);
 }
 
 export async function listCrmContacts(
   storeId: string,
   opts: { q?: string; companyId?: string; limit?: number } = {},
-): Promise<CrmContactListItem[]> {
+): Promise<{ rows: CrmContactListItem[]; total: number; truncated: boolean }> {
   const db = getSupabase();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const q = (opts.q ?? "").trim();
+
+  // Total exacto de la base (mismos filtros duros, sin texto): el RPC pagina
+  // con límite, así que el total nunca sale de la muestra.
+  let countQuery = db
+    .from("crm_contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("store_id", storeId);
+  if (opts.companyId) countQuery = countQuery.eq("company_id", opts.companyId);
+  const { count: baseTotal, error: countError } = await countQuery;
+  if (countError) throw new Error(`CRM read: ${countError.message}`);
 
   // Vía rápida: un roundtrip que cruza persona + empresa en Postgres.
   const rpc = await db.rpc("crm_search_contacts", {
@@ -222,7 +227,7 @@ export async function listCrmContacts(
     p_limit: limit,
   });
   if (!rpc.error) {
-    return ((rpc.data ?? []) as Array<Record<string, unknown>>).map((c) => ({
+    const rows = ((rpc.data ?? []) as Array<Record<string, unknown>>).map((c) => ({
       id: String(c.id),
       store_id: String(c.store_id),
       company_id: (c.company_id as string | null) ?? null,
@@ -236,17 +241,22 @@ export async function listCrmContacts(
       updated_by: (c.updated_by as string | null) ?? null,
       company_name: (c.company_name as string | null) ?? null,
     }));
+    // Sin texto el total es la base exacta; con texto vale sobre la muestra
+    // y `truncated` lo declara (la UI pinta parcial, nunca total exacto).
+    const truncated = rows.length >= limit;
+    return { rows, total: q ? rows.length : (baseTotal ?? rows.length), truncated };
   }
   if (!isSupabaseMissingFunction(rpc.error as { code?: string; message?: string })) {
     throw new Error(`CRM read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
   }
-  return listCrmContactsLegacy(storeId, opts);
+  return listCrmContactsLegacy(storeId, opts, baseTotal ?? 0);
 }
 
 async function listCrmContactsLegacy(
   storeId: string,
   opts: { q?: string; companyId?: string; limit?: number } = {},
-): Promise<CrmContactListItem[]> {
+  baseTotal = 0,
+): Promise<{ rows: CrmContactListItem[]; total: number; truncated: boolean }> {
   const db = getSupabase();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   let query = db
@@ -269,7 +279,7 @@ async function listCrmContactsLegacy(
     names = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]));
   }
   const out = rows.map((c) => {
-    const embedded = c.companies as unknown as { name?: unknown } | null;
+    const embedded = ((c.crm_companies ?? c.companies) as unknown as { name?: unknown } | null);
     const cid = (c.company_id as string | null) ?? null;
     return {
       id: String(c.id),
@@ -288,14 +298,22 @@ async function listCrmContactsLegacy(
   });
   // Sin join PostgREST (o si falló el embed), el nombre ya viene del mapa.
   // El filtro por empresa es exacto (company_id); el texto filtra personas.
+  // El texto se filtra en JS sobre la muestra: si la muestra se llenó, puede
+  // haber más filas fuera (truncated honesto, la UI pinta parcial).
   const q = (opts.q ?? "").trim();
-  if (q) {
-    const ql = q.toLowerCase();
-    return out.filter((c) =>
-      [c.first_name, c.last_name, c.email, c.job_title, c.company_name].some((v) => (v ?? "").toLowerCase().includes(ql)),
-    );
-  }
-  return out;
+  const sampleFilled = rows.length >= limit;
+  const filtered = q
+    ? out.filter((c) =>
+        [c.first_name, c.last_name, c.email, c.job_title, c.company_name].some((v) =>
+          (v ?? "").toLowerCase().includes(q.toLowerCase()),
+        ),
+      )
+    : out;
+  return {
+    rows: filtered,
+    total: q ? filtered.length : baseTotal || filtered.length,
+    truncated: sampleFilled,
+  };
 }
 
 export interface CrmCampaign {

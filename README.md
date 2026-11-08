@@ -11,47 +11,41 @@
 
 ## Qué es (y qué no es)
 
-No es un CRM. Guardar y segmentar clientes ya es commodity. MEOW es un **motor de
-decisión y acción** encima de los datos del negocio: ingesta desde el ecommerce, construye una
-comprensión viva de quién compra, qué compra, cada cuánto debería volver y qué cuentas se están
-enfriando; y luego, de forma autónoma, **propone la siguiente mejor acción** (WhatsApp/email),
-que el humano aprueba antes de que se ejecute.
+MEOW es un sistema de **gestión comercial DOOH**: empresas, inventario
+(venues/pantallas/slots), órdenes de inserción (contrato → hard hold →
+autorización → materiales → emisión → certificación → cobranza) y marcas.
 
-La diferencia con CRM/analytics/marketing automation:
-el CRM *almacena*, el analytics *describe*, el marketing automation *ejecuta reglas que tú
-armaste*; MEOW **decide y propone por ti, y cierra el loop midiendo el resultado**.
+> **Histórico (Fase 1, extirpado en 2026-11-07):** MEOW fue un *motor de
+> decisión y acción* sobre ecommerce (recompra probabilística + loop
+> scout→strategist→copywriter→dispatcher→analyst). Ver
+> `docs/architecture.md` § histórico y migración
+> `20261122000000_drop_retention_engine.sql`. Nada de lo que sigue en esta
+> sección aplica al sistema vigente.
 
-## El problema
+## El problema (Fase 2: gestión DOOH)
 
-Un negocio con clientes recurrentes **pierde ingresos porque no sabe cuándo un cliente ya
-debería haber vuelto a comprar ni tiene cómo contactarlo a tiempo por el canal correcto
-(WhatsApp)**. El churn es silencioso: nadie detecta al que se está yendo, nadie le escribe el
-mensaje correcto, y nadie mide si vuelve.
+La venta de publicidad en vía pública se gestiona en hojas y chats: inventario
+(pantallas/slots) sin disponibilidad única, órdenes sin trazabilidad
+contractual y cobranza sin conciliación. MEOW centraliza empresas, inventario,
+órdenes de inserción y marcas en un solo multi-tenant con RLS.
 
-## El loop (implementado)
+> **Histórico (Fase 1):** churn silencioso en ecommerce recurrente + mensajes
+> de recupero. Extirpado en 20261122.
 
-1. **Detectar** — `scout` abre `churn_signals` desde `customer_predictions` (quién ya debería
-   haber recomprado / quién se enfría).
-2. **Decidir** — `strategist` prioriza (`open` → `prioritized`) y asigna `objective`
-   (`vip_care` / `winback` / `nurture`).
-3. **Proponer** — `copywriter` (LLM + juez de contactabilidad) redacta el mensaje
-   (WhatsApp/email) como `proposed_actions` en `pending_review`.
-4. **Aprobar** — *human-in-the-loop*: el dueño revisa en `/review` y aprueba/rechaza.
-5. **Ejecutar** — `dispatcher` envía (email vía SendGrid real; WhatsApp retenido sin proveedor,
-   o `RETAIN_DISPATCH_STUB=1` en dev). Pre-envío con gate: opt-out, recompra, sello, juez.
-6. **Medir** — `analyst` atribuye sesiones post-envío a `revenue_attributed` y cierra señales.
+## El loop — HISTÓRICO (extirpado 2026-11-07, no ejecutar)
 
-Pipeline diario (`web/lib/morning-run.ts:runMorningPipeline`):
+> Fase 2: sin `morning pipeline`, sin cron (worker no-op, `web/worker.ts`),
+> sin `runMorningPipeline` / `runSyncOnce` / `claimRunSlot` programados, sin
+> `retention:v3`, sin `scout→strategist→copywriter→analyst`, sin `TenantBrain`
+> (`brain_json`), sin `/customers` / `/review` / `/products` del motor viejo,
+> sin `connectors/`, sin `retain-tools.ts`, sin cron `morning`. Lo que sigue
+> se conserva solo como registro histórico; el código ya no existe.
 
-```
-sync (runSyncOnce) → enrichment → brain → regenerate(stale) → [foto si sync trajo órdenes]
-  → scout → strategist → copywriter (límite 10) → prospect (B2B-only, tope 10 pendientes)
-```
-
-Cada paso deja su corrida en `background_runs` (cinta visible en UI). Best-effort: un paso que
-falla no tumba los siguientes ni el login. Slot atómico `claimRunSlot` (sin duplicados entre
-réplicas). Cron prod: Scheduled Task Coolify `npm run worker -- --once --kinds=sync,morning`
-(ver `docs/coolify.md`).
+1. ~~Detectar — `scout`…~~ 2. ~~Decidir — `strategist`…~~ 3. ~~Proponer —
+   `copywriter`…~~ 4. ~~Aprobar en `/review`…~~ 5. ~~Ejecutar —
+   `dispatcher`…~~ 6. ~~Medir — `analyst`…~~ Pipeline ~~diario~~ eliminado;
+   `background_runs` renombrada a `sys_runs` (cinta de import/perfil, no del
+   loop).
 
 ## Primer caso: tupantalla.com
 
@@ -74,38 +68,32 @@ Mapeo:
 
 ## Estado actual del repo
 
-**Existe (motor + UI completos, no solo Fase 1):**
+**Existe (Fase 2 DOOH vigente):**
 
-- **Conector Medusa** en modo solo lectura: sincroniza `customers`, `orders`, `products`,
-  `channels`, `market_regions` a Supabase (56 migraciones en `supabase/migrations/`).
-  Punto centralizado `web/lib/connectors/` (`getConnector(platform)` +
-  `syncStoreFromPlatform()`); Shopify/Woo lanzan `sin-backend` (agregar = 1 archivo + 1 línea).
-- **Motor probabilístico de recompra `retention:v3:episodes-mixture`** (`web/lib/retention-model.ts`
-  + `web/lib/retention.ts`): grilla bayesiana LogNormal + censura, Modelo A `renovacion` (F≥2) /
-  Modelo B `segunda_compra` (F=1), `sessionize` (<1d) → `episodeize` (ventana por tenant),
-  mezcla de K ritmos (EM+BIC, K≤4), decisión `v4:nodormido-exception`. Salida:
-  `customer_predictions` (foto diaria por `store,customer,as_of`).
-  Autocalibración 30d: `tenant_model_params` + `band-calibrate` / `close-watch-calibrate` /
-  `model-tune` (backtest WFO, trust-region, fail-open a legacy).
-- **Loop multiagente**: `scout:v2` → `strategist:v2` → `copywriter:v16` +
-  juez `contactability:v5` → `prospect:v6` (B2B-only, SearXNG + scraping) → `dispatcher`
-  (email real, WhatsApp retenido) → `analyst` (1 orden = 1 atribución).
-  `TenantBrain` diario en `store_profiles.brain_json` (top activos, ventana mediana,
-  ticket p50/p80, voz cliente); `runStaleRefresh` re-redacta pendientes con sello viejo
-  (nunca toca `approved`/`dispatched`, nada se auto-envía).
-- **Dashboard Next.js 16 (App Router)**: `/` Hoy (actuar/vigilar, embudo, por revisar,
-  recuperado, feed enviados), `/customers` (cartera + predicciones + duplicados + chat por
-  cliente), `/review` (inbox actions/leads/signals), `/finanzas` (KPIs 12m + en juego
-  probabilístico), `/products` (catálogo + stats por market/moneda), `/settings`
-  (tienda/negocio/motor/email), `/ayuda`.
-- **Chat por cliente/producto/tienda con ADK** (`@google/adk`): `LlmAgent` + 22 tools
-  read-only (`list_signals`, `get_product_buyers`, `approve_actions`, …) con envelope
-  `{items,total_count,returned,truncated}`. Modelos primario + fallback en
-  `web/config/llm_models.json` (OpenAI / Anthropic / Gemini vía `RoutedLlm`).
-- **Transversales**: metering LLM por tenant (`llm_usage`), secretos cifrados en
-  `store_secrets`, perfiles de tienda + taxonomía + vertical + recalibración con HITL,
-  enriquecimiento por dominios + gate B2B, matriz de conflictos `operations.ts`,
-  schema-guard, `jobs` + `run_slot` (slot atómico), i18n pendiente (issue #1).
+- **93 migraciones en `supabase/migrations/`** (2026-10-16 → 2026-12-08; la última, `20261208000000_currency_ssot.sql`, crea el DOMAIN `currency_iso` + paridad IO↔factura y entierra `inv_screens.currency`).
+  **24 tablas vivas + vista `ai_llm_usage_daily`:** `sys_` (stores,
+  memberships, store_profiles, runs), `io_` (orders + lines, agency_orders,
+  creatives, photo_checks, play_logs, invoices, campaigns, counters), `inv_`
+  (venues, screens, screen_embeddings, loop_templates, slots, bookings),
+  `crm_` (companies, contacts), `ai_` (domain_cache, vertical_profiles,
+  llm_usage). Sin `market_regions`; país/moneda del tenant en
+  `sys_stores.shop_country` + `sys_stores.shop_currency` (single-país).
+- **Gestión comercial DOOH**: ingesta Sheet/CSV (`sheet-import` +
+  `dooh-import`), hard hold anti-sobreventa (`io_check_hold_overlap`),
+  autonumeración de IOs (`io_mint_number`), flujo orden→cobro, marcas.
+- **Dashboard Next.js 16 (App Router)**: Hoy, Órdenes, Finanzas, Inventario,
+  Empresas, Contactos, Marcas, Settings, Ayuda. Chat en pausa (501) hasta el
+  agente DOOH; worker no-op sin cron (`docs/coolify.md` §3b DESACTIVADO).
+- **Transversales vivos**: metering LLM por tenant (`ai_llm_usage`),
+  perfiles de tienda, matriz de conflictos `operations.ts` (kind+scope),
+  slot atómico `sys_run_start()`, schema-guard, i18n pendiente (issue #1).
+
+> **Histórico (motor extirpado, solo registro):** conector Medusa,
+> `retention:v3:episodes-mixture`, loop
+> `scout:v2→strategist:v2→copywriter:v16→prospect→dispatcher→analyst`,
+> `TenantBrain` (`brain_json`), `runStaleRefresh`, chat ADK con 22 tools,
+> `store_secrets`, `conversations/messages`, `jobs`/`run_slot`. Borrado en
+> `20261122000000_drop_retention_engine.sql` y siguientes.
 
 **No existe todavía / deliberadamente retenido:**
 

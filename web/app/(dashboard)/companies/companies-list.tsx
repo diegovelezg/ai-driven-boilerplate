@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmpresaDrawer } from "./empresa-drawer";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
+import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
 import { COMPANY_KINDS, COMPANY_KIND_LABELS, kindLabel, type CompanyKind } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
@@ -58,7 +60,14 @@ export function CompaniesList({
   initialSelectedId: string | null;
 }) {
   const [view, setView] = useState<"table" | "grid">(initialView);
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  // Selección con deep-link (?company=, alias ?empresa=): abrir/cerrar escribe
+  // la URL y la URL manda (back/forward, deep-link). Ver entity-list.tsx.
+  const { selectedId, open: openDrawer, close: closeDrawer } = useEntitySelection(
+    "/companies",
+    "company",
+    initialSelectedId,
+    ["empresa"],
+  );
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -179,9 +188,7 @@ export function CompaniesList({
             </Button>
           </AppTooltip>
         </span>
-        <span className="ms-auto text-xs text-muted-foreground tabular-nums">
-          {isPending ? "Buscando…" : `${formatNumber(totalCount)} resultado${totalCount === 1 ? "" : "s"}`}
-        </span>
+        <EntityCount total={totalCount} pending={isPending} />
       </div>
 
       {view === "table" ? (
@@ -213,7 +220,7 @@ export function CompaniesList({
               {rows.map((c) => (
                 <DataTableRow
                   key={c.id}
-                  onClick={() => setSelectedId(c.id)}
+                  onClick={() => openDrawer(c.id)}
                   className="cursor-pointer"
                 >
                   <DataTableTd className="max-w-[260px] truncate px-3 py-4 font-medium">
@@ -239,19 +246,17 @@ export function CompaniesList({
             </DataTableBody>
           </DataTable>
         </AppCard>
-      ) : (
+      ) : rows.length > 0 ? (
         <div className={cn("grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3")}>
           {rows.map((c) => (
             <article
               key={c.id}
-              onClick={() => setSelectedId(c.id)}
+              onClick={() => openDrawer(c.id)}
               className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-medium tracking-tight">{toTitleCase(c.name)}</h3>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                  {kindLabel(c.kind)}
-                </span>
+                <Badge variant="secondary">{kindLabel(c.kind)}</Badge>
               </div>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {formatNumber(c.contacts_count)} contacto{c.contacts_count === 1 ? "" : "s"}
@@ -265,35 +270,25 @@ export function CompaniesList({
             </article>
           ))}
         </div>
+      ) : (
+        <EntityEmpty
+          filtered={filtersActive}
+          emptyTitle="Aún no hay empresas"
+          emptyHint="Crea la primera desde Nueva empresa."
+          filteredHint="Prueba con otro nombre o tipo."
+          onClear={() => {
+            startTransition(() => {
+              router.replace(`/companies?${buildParams({ q: "", type: null, page: 1 })}`);
+            });
+          }}
+        />
       )}
 
       {selectedId && (
-        <EmpresaDrawer companyId={selectedId} onClose={() => setSelectedId(null)} />
+        <EmpresaDrawer companyId={selectedId} onClose={closeDrawer} />
       )}
 
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground tabular-nums">
-          Página {formatNumber(page)} de {formatNumber(totalPages)}
-        </span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1 || isPending}
-            onClick={() => goTo(page - 1)}
-          >
-            Anterior
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages || isPending}
-            onClick={() => goTo(page + 1)}
-          >
-            Siguiente
-          </Button>
-        </div>
-      </div>
+      <EntityPagination page={page} totalPages={totalPages} pending={isPending} onGo={goTo} />
     </div>
   );
 }

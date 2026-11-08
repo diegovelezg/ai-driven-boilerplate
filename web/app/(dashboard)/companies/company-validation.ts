@@ -6,6 +6,10 @@
 // hasta completar obligatorios.
 
 export { FIELD_ERR_CLS } from "@/components/ui/form-feedback";
+import { isCountryCode } from "@/lib/countries";
+
+// SSOT país: isCountryCode de lib/countries.ts (issue #8 P2). El server
+// (normalizeCompany) acepta ISO2 libre; el cliente valida contra la lista.
 
 export type CompanyFieldKey = "name" | "domain" | "country" | "commission" | "kind";
 
@@ -33,7 +37,7 @@ export function validateCompanyFields(v: CompanyFieldValues): Array<{ key: Compa
   else if (v.name.trim().length > 200) out.push({ key: "name", message: "Nombre muy largo (máx 200)." });
   if (!domainOk(v.domain)) out.push({ key: "domain", message: "Web inválida (p. ej. acme.pe)." });
   const c = v.country.trim();
-  if (c && !/^[A-Za-z]{2}$/.test(c)) out.push({ key: "country", message: "País inválido (ISO2, p. ej. PE)." });
+  if (c && !isCountryCode(c)) out.push({ key: "country", message: "País inválido (ISO2, p. ej. PE)." });
   if (v.commission !== undefined) {
     const t = v.commission.trim();
     if (t && (!/^\d+$/.test(t) || Number(t) > 100)) {

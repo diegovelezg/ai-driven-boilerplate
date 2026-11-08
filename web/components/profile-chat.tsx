@@ -15,6 +15,7 @@ import {
 import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 import { toast } from "@/components/ui/toast";
 import { verticalName } from "@/lib/taxonomy";
+import { MODEL_LABEL } from "@/lib/ui-badges";
 import { formatNumber } from "@/lib/format";
 
 type Proposal = DescriptionInterpretation & {
@@ -29,11 +30,7 @@ const SLOT_LABEL: Record<string, string> = {
   buyer_type: "tipo de comprador",
 };
 
-const MODEL_LABEL: Record<string, string> = {
-  b2c: "B2B · empresas",
-  b2b: "B2B · empresas",
-  hybrid: "B2B · empresas",
-};
+// SSOT: MODEL_LABEL vive en lib/ui-badges.ts (issue #8 P2).
 
 /** Sin SSE aquí (server actions): etapas rotadas por tiempo mientras trabaja. */
 const INVESTIGATING_STAGES = [
@@ -63,7 +60,9 @@ export function ProfileChat({
   onBusyChange,
   disabled = false,
 }: {
-  storeId: string | null;
+  /** Tenant dueño del perfil (requerido: las actions exigen `storeId: string`,
+   *  sin bypass `null`; el check `=== false` preserva solo el anon-dev). */
+  storeId: string;
   onConfirm: (
     proposal: Proposal,
     fullDescription: string,

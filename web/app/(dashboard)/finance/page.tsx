@@ -5,11 +5,13 @@ import { PageHeader } from "@/components/page-header";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
 import { bucketMonthly, computeFinanceKpis } from "@/lib/finance";
+import { invoiceMatchesOrder, isValidCurrency, normalizeCurrency } from "@/lib/currency";
 import { formatMoney, formatNumber } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
 import { connection } from "next/server";
 import { FinanceStrip } from "../finance-strip";
+import { CurrencyFilter } from "./currency-filter";
 import {
   DataTable,
   DataTableBody,
@@ -29,7 +31,7 @@ export const instant = false;
 export default async function FinanzasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ store?: string }>;
+  searchParams: Promise<{ store?: string; moneda?: string }>;
 }) {
   await connection();
   if (!isSupabaseConfigured()) {
@@ -48,6 +50,7 @@ export default async function FinanzasPage({
   }
 
   const sp = await searchParams;
+  const monedaParam = (sp.moneda ?? "").trim().toUpperCase();
   let stores: TenantStore[] = [];
   let active: TenantStore | null = null;
   try {
@@ -98,7 +101,7 @@ export default async function FinanzasPage({
   }
 
   const db = getSupabase();
-  const viewCurrency = (active.shop_currency ?? "PEN").toUpperCase() || "PEN";
+  const viewCurrency = normalizeCurrency(active.shop_currency, "PEN");
 
   interface CurrencyFinance {
     currency: string;
@@ -115,6 +118,10 @@ export default async function FinanzasPage({
     bottomScreens: Array<{ name: string; gross: number; lines: number }>;
   }
   let finBy: CurrencyFinance[] = [];
+  let activeMoneda: string | null = null;
+  let visibleFin: CurrencyFinance[] = [];
+  let unassignedInvoices: Array<Record<string, unknown>> = [];
+  let unassignedMinor = 0;
   let error: string | null = null;
 
   try {
@@ -131,7 +138,7 @@ export default async function FinanzasPage({
     const brandByIo = new Map(ios.map((r) => [String(r.id), String(r.brand ?? "").trim() || "Sin marca"]));
     const advIdByIo = new Map(ios.map((r) => [String(r.id), r.advertiser_company_id ? String(r.advertiser_company_id) : null]));
     const currencyByIo = new Map(
-      ios.map((r) => [String(r.id), String(r.currency ?? viewCurrency).toUpperCase() || viewCurrency]),
+      ios.map((r) => [String(r.id), normalizeCurrency(r.currency, viewCurrency)]),
     );
 
     // Líneas: contratado. Paginado simple (una tienda DOOH rara vez pasa 5k).
@@ -167,18 +174,23 @@ export default async function FinanzasPage({
       if (invRows.length >= 20000) break;
     }
 
-    // Monedas presentes: IOs + facturas (nunca sumar mixto).
+    // Monedas presentes: solo valores explícitos y válidos (nunca sumar
+    // mixto y nunca heredar: una factura sin moneda no se asigna a la de su
+    // IO en silencio, va a `unassignedInvoices` y se avisa en la UI.
     const curSet = new Set<string>();
     for (const c of currencyByIo.values()) curSet.add(c);
     for (const v of invRows) {
-      const raw = String(v.currency ?? "").trim().toUpperCase();
-      if (/^[A-Z]{3}$/.test(raw)) curSet.add(raw);
-      else if (v.io_id) {
-        const ioCur = currencyByIo.get(String(v.io_id));
-        if (ioCur) curSet.add(ioCur);
-      }
+      const raw = String(v.currency ?? "").trim();
+      if (isValidCurrency(raw)) curSet.add(raw.toUpperCase());
     }
     if (curSet.size === 0) curSet.add(viewCurrency);
+    // Facturas sin moneda explícita válida: excluidas de toda sección
+    // (nunca heredan). Se avisan en la UI con su monto para fijarlas en origen.
+    unassignedInvoices = invRows.filter((v) => !isValidCurrency(String(v.currency ?? "")));
+    unassignedMinor = unassignedInvoices.reduce(
+      (acc, v) => acc + (Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0))),
+      0,
+    );
     // Base primero, resto alfabético.
     const currencies = [...curSet].sort((a, b) => (a === viewCurrency ? -1 : b === viewCurrency ? 1 : a.localeCompare(b)));
 
@@ -219,7 +231,7 @@ export default async function FinanzasPage({
     finBy = currencies.map((cur) => {
       // Contratado en esta moneda: cada línea hereda la moneda de su IO.
       const finOrders = lineRows
-        .filter((r) => (currencyByIo.get(String(r.io_id ?? "")) ?? viewCurrency) === cur)
+        .filter((r) => currencyByIo.get(String(r.io_id ?? "")) === cur)
         .map((r) => ({
           total_amount: Number(r.rate_minor ?? 0),
           currency: cur,
@@ -228,15 +240,14 @@ export default async function FinanzasPage({
       const buckets = bucketMonthly(finOrders, cur);
       const kpis = computeFinanceKpis(finOrders, cur);
 
-      // Cobro en esta moneda.
+      // Cobro en esta moneda: la factura cuenta solo si su moneda
+      // explícita coincide (invoiceMatchesOrder). Sin herencia silenciosa.
       let invoicedMinor = 0;
       let paidMinor = 0;
       let overdueMinor = 0;
       let overdueCount = 0;
       for (const v of invRows) {
-        const ioCur = v.io_id ? (currencyByIo.get(String(v.io_id)) ?? viewCurrency) : viewCurrency;
-        const eff = String(v.currency ?? "").trim() ? String(v.currency).toUpperCase() : ioCur;
-        if (eff !== cur) continue;
+        if (!invoiceMatchesOrder(v.currency, cur)) continue;
         const amount = Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0));
         const st = String(v.status ?? "");
         if (st === "cancelled" || st === "draft" || amount <= 0) continue;
@@ -272,7 +283,7 @@ export default async function FinanzasPage({
       const grossByScreen = new Map<string, { gross: number; lines: number }>();
       for (const l of lineRows) {
         const ioId = String(l.io_id ?? "");
-        if ((currencyByIo.get(ioId) ?? viewCurrency) !== cur) continue;
+        if (currencyByIo.get(ioId) !== cur) continue;
         const amt = Number(l.rate_minor ?? 0) || 0;
         const brand = brandByIo.get(ioId) ?? "Sin marca";
         const b = grossByBrand.get(brand) ?? { gross: 0, ios: new Set<string>() };
@@ -320,6 +331,9 @@ export default async function FinanzasPage({
         bottomScreens: ranked.slice(-5).reverse(),
       };
     });
+    // ?moneda= inválida → Todas (nunca vista vacía por typo).
+    activeMoneda = finBy.some((f) => f.currency === monedaParam) ? monedaParam : null;
+    visibleFin = activeMoneda ? finBy.filter((f) => f.currency === activeMoneda) : finBy;
   } catch (e) {
     error = e instanceof Error ? e.message : "DB read failed";
   }
@@ -337,17 +351,38 @@ export default async function FinanzasPage({
         <AppCardState>{error}</AppCardState>
       )}
 
-      {finBy.map((fin) => {
+      {unassignedMinor > 0 && (
+        <AppCard>
+          <p className="text-sm">
+            {formatNumber(unassignedInvoices.length)}{" "}
+            {unassignedInvoices.length === 1 ? "factura sin" : "facturas sin"} moneda explícita —{" "}
+            {formatMoney(unassignedMinor, viewCurrency)} estimados excluidos de los totales.{" "}
+            Fija su moneda en el origen: nunca se mezclan ni se heredan en silencio.
+          </p>
+        </AppCard>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de finanzas">
+        <CurrencyFilter value={activeMoneda ?? "all"} currencies={finBy.map((f) => f.currency)} />
+      </div>
+
+      {visibleFin.map((fin) => {
+        // Una sola moneda visible: el encabezado "Moneda X / base/secundaria"
+        // es ruido (los montos ya llevan su símbolo). Solo para distinguir
+        // cuando se ven varias monedas a la vez.
+        const showCurrencyChrome = finBy.length > 1 && !activeMoneda;
         const closed = fin.buckets.slice(0, -1);
         const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
         const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
         return (
           <section key={fin.currency} aria-label={`Finanzas ${fin.currency}`} className="flex flex-col gap-8 rounded-2xl border p-4 md:p-6">
-            <SectionHeading
-              title={`Moneda ${fin.currency}`}
-              hint={fin.currency === viewCurrency ? "Moneda base de la tienda." : "Moneda secundaria de IOs."}
-              tone="sky"
-            />
+            {showCurrencyChrome && (
+              <SectionHeading
+                title={`Moneda ${fin.currency}`}
+                hint={fin.currency === viewCurrency ? "Moneda base de la tienda." : "Moneda secundaria de IOs."}
+                tone="sky"
+              />
+            )}
             {fin.kpis && (
               <FinanceStrip
                 buckets={fin.buckets}
@@ -357,9 +392,9 @@ export default async function FinanzasPage({
             )}
 
             {fin.kpis && (
-              <section aria-label={`Cobro ${fin.currency}`}>
+              <section aria-label={showCurrencyChrome ? `Cobro ${fin.currency}` : "Cobro"}>
                 <SectionHeading
-                  title={`Cobro · ${fin.currency}`}
+                  title={showCurrencyChrome ? `Cobro · ${fin.currency}` : "Cobro"}
                   hint="Facturado vs cobrado según invoices (sin facturar = contratado aún no facturado)."
                   tone="emerald"
                 />
@@ -398,9 +433,9 @@ export default async function FinanzasPage({
             )}
 
             {(fin.topScreens.length > 0 || fin.bottomScreens.length > 0) && (
-              <section aria-label={`Qué más y qué menos vende ${fin.currency}`}>
+              <section aria-label={showCurrencyChrome ? `Qué más y qué menos vende ${fin.currency}` : "Qué más y qué menos vende"}>
                 <SectionHeading
-                  title={`Qué más y qué menos vende · ${fin.currency}`}
+                  title={showCurrencyChrome ? `Qué más y qué menos vende · ${fin.currency}` : "Qué más y qué menos vende"}
                   hint="Por pantalla, suma de rate_minor de sus líneas."
                   tone="violet"
                 />

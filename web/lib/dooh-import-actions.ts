@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getSupabase } from "@/lib/supabase";
 import { commitImport } from "@/lib/dooh-import";
 import { sheetUrlToCsvUrl, validateImportCsv, type ImportKind } from "@/lib/sheet-import";
 import { requireMyStoreAccess } from "@/lib/tenant";
@@ -18,20 +17,14 @@ export interface ImportState {
 const KINDS: ImportKind[] = ["companies", "contacts", "venues", "screens", "slots"];
 
 async function resolveTenantStoreId(): Promise<{ storeId: string } | { error: string }> {
-  const db = getSupabase();
-  // Intenta cualquier store accesible (best-effort multi-tenant legacy).
-  const { data } = await db.from("sys_stores").select("id").limit(25);
-  for (const s of (data ?? []) as Array<{ id: string }>) {
-    if ((await requireMyStoreAccess(s.id).catch(() => null)) === true) return { storeId: s.id };
+  // Fail-closed: exige sesión + membresía. Nunca autocrea tenants.
+  const { resolveActiveStoreId } = await import("@/lib/tenant");
+  const storeId = await resolveActiveStoreId().catch(() => null);
+  if (!storeId) return { error: "Sin tienda: inicia sesión con acceso a un tenant." };
+  if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
+    return { error: "Sin acceso a esta tienda." };
   }
-  // Crea tenant DOOH local.
-  const { data: created, error } = await db
-    .from("sys_stores")
-    .insert({ platform: "sheet", shop_url: "dooh://local", shop_currency: "PEN", name: "Inventario DOOH" })
-    .select("id")
-    .maybeSingle();
-  if (error || !created) return { error: `Sin tenant: ${error?.message ?? "DB"}` };
-  return { storeId: (created as { id: string }).id };
+  return { storeId };
 }
 
 async function fetchCsvText(sourceUrl: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
@@ -51,6 +44,9 @@ export async function previewSheetImportAction(input: {
   url: string;
 }): Promise<ImportState> {
   if (!KINDS.includes(input.kind)) return { ok: false, message: "Tipo inválido." };
+  // Preview con fetch saliente: exige sesión + membresía a algún tenant.
+  const t = await resolveTenantStoreId();
+  if ("error" in t) return { ok: false, message: t.error };
   const csvUrl = sheetUrlToCsvUrl(input.url);
   if (!csvUrl) return { ok: false, message: "URL de Google Sheets inválida (pega el link del documento)." };
   const dl = await fetchCsvText(csvUrl);

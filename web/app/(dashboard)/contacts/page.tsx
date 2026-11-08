@@ -42,7 +42,9 @@ export default async function ContactosPage({
   const activeStoreId = await resolveActiveStoreId();
   const connected = Boolean(activeStoreId);
 
-  let rows: Awaited<ReturnType<typeof listCrmContacts>> = [];
+  let rows: Awaited<ReturnType<typeof listCrmContacts>>["rows"] = [];
+  let contactsTotal = 0;
+  let contactsTruncated = false;
   let companies: Awaited<ReturnType<typeof listCrmCompanies>>["rows"] = [];
   let dupeGroups = 0;
   let myRole: MemberRole | null = null;
@@ -61,7 +63,9 @@ export default async function ContactosPage({
           listCrmCompanies(storeId, { pageSize: 200 }),
           listContactDuplicateGroups(storeId).catch(() => ({ groups: [] })),
         ]);
-        rows = contactsRes;
+        rows = contactsRes.rows;
+        contactsTotal = contactsRes.total;
+        contactsTruncated = contactsRes.truncated;
         companies = companiesRes.rows;
         dupeGroups = dupesRes.groups.length;
       }
@@ -103,6 +107,8 @@ export default async function ContactosPage({
           initialView={vista}
           initialSelectedId={selectedId}
           myRole={myRole}
+          totalCount={contactsTotal}
+          truncated={contactsTruncated}
         />
       )}
     </div>

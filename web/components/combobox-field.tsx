@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -44,6 +44,12 @@ export function ComboboxField({
   const [query, setQuery] = useState(value);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const [customs, setCustoms] = useState<string[]>([]);
+
+  // El padre puede resetear/fijar `value` (p. ej. limpiar el form):
+  // el texto visible lo sigue. Sin esto el input queda stale.
+  useEffect(() => {
+    setQuery(value);
+  }, [value]);
 
   const allItems = useMemo(() => {
     const base = [...items];

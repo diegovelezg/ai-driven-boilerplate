@@ -2,6 +2,7 @@
 // (io_orders.brand); la recurrencia se calcula agrupando IOs +
 // líneas por marca: pauta, inversión, pantallas y agencias.
 import { getSupabase } from "@/lib/supabase";
+import { BRANDS_SORT_ALIASES } from "@/lib/sort";
 import { joinHaystack, matchScore, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 
 export interface BrandRow {
@@ -180,19 +181,8 @@ export async function getBrandDetail(storeId: string, brandKey: string): Promise
   };
 }
 
-const BRANDS_SORT_ALIASES: Record<string, BrandsSortKey> = {
-  brand: "brand",
-  marca: "brand",
-  ios: "ios",
-  investment: "investment",
-  inversion: "investment",
-  last: "last",
-  ultima: "last",
-  screens: "screens",
-  pantallas: "screens",
-  agencies: "agencies",
-  agencias: "agencies",
-};
+// SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
+export { BRANDS_SORT_ALIASES } from "@/lib/sort";
 
 export function parseBrandsSort(sp: { sort?: string; dir?: string }): {
   key: BrandsSortKey;

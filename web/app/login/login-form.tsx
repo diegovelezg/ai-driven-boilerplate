@@ -1,31 +1,53 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { Cat } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signInAction } from "@/lib/auth-actions";
-import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
+import { isValidEmail } from "@/lib/validation";
+import { FIELD_ERR_CLS, toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 export function LoginForm({ next }: { next: string }) {
   const [state, action, pending] = useActionState(signInAction, null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const { invalid, mark, clear } = useInvalidFields<"email" | "password">();
+  const { invalid, mark, clear, focusFirst } = useInvalidFields<"email" | "password">();
+  const formRef = useRef<HTMLFormElement>(null);
 
   const ready = email.trim().length > 0 && password.length > 0;
 
-  // Error del server (credenciales, etc.): borde + toast, sin texto inline.
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    const keys: Array<"email" | "password"> = [];
+    const msgs: string[] = [];
+    if (!isValidEmail(email)) {
+      keys.push("email");
+      msgs.push("Email inválido.");
+    }
+    if (password.length === 0) {
+      keys.push("password");
+      msgs.push("Ingresa tu password.");
+    }
+    if (keys.length > 0) {
+      e.preventDefault();
+      mark(keys);
+      toastFormError(keys.length === 1 ? "Revisa el campo marcado" : "Revisa los campos marcados", msgs.join(" "));
+      focusFirst(formRef, keys);
+    }
+  }
+
+  // Error del server (credenciales, etc.): borde + toast + foco, sin texto inline.
   useEffect(() => {
     if (!state || state.ok) return;
     mark(["email", "password"]);
     toastFormError("No se pudo ingresar", state.message);
-  }, [state, mark]);
+    focusFirst(formRef, ["email"]);
+  }, [state, mark, focusFirst]);
 
   return (
-    <form action={action} noValidate className="w-full max-w-sm">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="w-full max-w-sm">
       <AppCard
         title={
           <span className="flex flex-col gap-2">
@@ -57,6 +79,7 @@ export function LoginForm({ next }: { next: string }) {
                 clear("email");
               }}
               aria-invalid={invalid.has("email")}
+              className={invalid.has("email") ? FIELD_ERR_CLS : undefined}
             />
           </div>
           <div className="grid gap-1.5">
@@ -72,6 +95,7 @@ export function LoginForm({ next }: { next: string }) {
                 clear("password");
               }}
               aria-invalid={invalid.has("password")}
+              className={invalid.has("password") ? FIELD_ERR_CLS : undefined}
             />
           </div>
         </div>

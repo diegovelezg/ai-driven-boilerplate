@@ -1,5 +1,6 @@
-// Issue #16 Fase 0/3: matriz de compatibilidad de operaciones (Fase 2).
-// Sin pipeline programado: nada conflicta con nada.
+// Matriz de compatibilidad de operaciones (Fase 2, real).
+// `web/lib/operations.ts` implementa el lock kind+scope: mismo kind global
+// choca siempre; scoped solo con mismo scopeKind+scopeId; distinto kind nunca.
 // Corre con: npm test (node:test stdlib vía tsx, sin dependencias nuevas).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -19,25 +20,36 @@ const op = (kind: string, scopeId: string | null = null, label = kind): ActiveOp
   label,
 });
 
-describe("matriz de compatibilidad (Fase 2: sin pipeline)", () => {
-  it("nada conflicta con nada", () => {
-    for (const a of ["scout", "strategist", "copywriter", "prospect", "enrichment"]) {
-      for (const b of ["scout", "strategist", "copywriter", "prospect"]) {
-        assert.equal(conflictsWith({ kind: a }, op(b)), false, `${a} vs ${b}`);
-      }
-    }
+describe("matriz de compatibilidad (Fase 2: lock kind+scope)", () => {
+  it("mismo kind global conflicta", () => {
+    assert.equal(conflictsWith({ kind: "import" }, op("import")), true);
+    assert.equal(conflictsWith({ kind: "profile" }, op("profile")), true);
   });
 
-  it("isCompatible siempre true", () => {
-    assert.equal(isCompatible({ kind: "copywriter" }, [op("copywriter")]), true);
+  it("distinto kind nunca conflicta", () => {
+    assert.equal(conflictsWith({ kind: "import" }, op("profile")), false);
   });
 
-  it("findConflict siempre null", () => {
-    assert.equal(findConflict({ kind: "scout" }, [op("scout")]), null);
+  it("scoped solo choca con mismo scope+id", () => {
+    assert.equal(
+      conflictsWith({ kind: "profile", scopeKind: "signal", scopeId: "s1" }, op("profile", "s1")),
+      true,
+    );
+    assert.equal(
+      conflictsWith({ kind: "profile", scopeKind: "signal", scopeId: "s1" }, op("profile", "s2")),
+      false,
+    );
+  });
+
+  it("isCompatible / findConflict coherentes", () => {
+    assert.equal(isCompatible({ kind: "import" }, [op("profile")]), true);
+    assert.equal(isCompatible({ kind: "import" }, [op("import")]), false);
+    assert.equal(findConflict({ kind: "profile" }, [op("import")]), null);
+    assert.notEqual(findConflict({ kind: "import" }, [op("import")]), null);
   });
 
   it("mensajes intactos", () => {
-    assert.equal(conflictMessage(op("x", null, "Copywriter")), "En curso: Copywriter…");
+    assert.equal(conflictMessage(op("x", null, "Import")), "En curso: Import…");
     assert.equal(errorCodeMessage("busy"), "En curso");
   });
 });

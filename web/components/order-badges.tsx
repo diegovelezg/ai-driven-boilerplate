@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { invoiceBadgeDisplay } from "@/lib/ui-badges";
 import { ORDER_STAGE_LABELS, type OrderStageKey } from "@/lib/order-stage";
 import { BILLING_LABELS, type BillingStatusKey } from "@/lib/billing-status";
 
@@ -84,13 +85,12 @@ export function OrderBillingBadge({
   );
 }
 
-/** Estado de factura individual: misma gramática que el cobro. */
+/** Estado de factura individual: misma gramática que el cobro (SSOT en lib/ui-badges). */
 export function OrderInvoiceBadge({ status }: { status: string }) {
-  const variant: BadgeVariant =
-    status === "paid" ? "success" : status === "overdue" || status === "cancelled" ? "destructive" : status === "issued" ? "outline" : "secondary";
+  const d = invoiceBadgeDisplay(status);
   return (
-    <Badge variant={variant} className="font-normal">
-      {status || "—"}
+    <Badge variant={d.variant} className="font-normal" title="Estado de la factura">
+      {d.label}
     </Badge>
   );
 }

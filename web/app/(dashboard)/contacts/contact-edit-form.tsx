@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { updateContactAction } from "@/lib/crm-actions";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
+import { validateContactFields } from "./contact-validation";
 
 export interface ContactEditInitial {
   first_name: string;
@@ -40,9 +41,8 @@ export function ContactEditForm({
   const ready = email.trim() !== "" || phone.trim() !== "";
 
   function save() {
-    const keys: Array<"email" | "phone"> = [];
-    if (!email.trim() && !phone.trim()) keys.push("email", "phone");
-    else if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) keys.push("email");
+    const errs = validateContactFields({ email, phone });
+    const keys = errs.map((e) => e.key);
     if (keys.length > 0) {
       mark(keys);
       toastFormError(

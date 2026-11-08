@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { campaignBadgeDisplay, companyIoBadgeDisplay } from "@/lib/ui-badges";
 import { kindLabel } from "@/lib/crm";
 import { OrderStageBadge } from "@/components/order-badges";
 
@@ -16,25 +17,33 @@ export function CompanyKindBadge({ kind }: { kind: string | null }) {
   );
 }
 
-/** Estado de una IO (draft/signed/cancelled) con la gramática de órdenes. */
+/** Estado de una IO (draft/signed/cancelled) con la gramática de órdenes.
+ *  SSOT en lib/ui-badges: ''/null = sin dato (—), nunca "Borrador" inventado. */
 export function CompanyIOBadge({ status }: { status: string | null | undefined }) {
-  const s = String(status ?? "");
-  if (s === "cancelled") return <OrderStageBadge stage="cancelada" isDraft={false} />;
-  if (s === "signed") return <OrderStageBadge stage="firmada" isDraft={false} />;
+  const d = companyIoBadgeDisplay(status);
+  if (d.isEmpty) {
+    return (
+      <Badge variant="secondary" className="font-normal" title="Estado de IO sin dato">
+        —
+      </Badge>
+    );
+  }
+  if (d.stage === "cancelada") return <OrderStageBadge stage="cancelada" isDraft={false} />;
+  if (!d.isDraft) return <OrderStageBadge stage="firmada" isDraft={false} />;
   return <OrderStageBadge stage="firmada" isDraft />;
 }
 
-/** Estado de campaña: activa en curso, completada quieta. */
+/** Estado de campaña: activa en curso, completada quieta (SSOT en lib/ui-badges). */
 export function CompanyCampaignBadge({ status }: { status: string | null | undefined }) {
-  const s = String(status ?? "").toLowerCase();
-  if (s === "active") {
+  const d = campaignBadgeDisplay(status);
+  if (d.label === "Activa") {
     return (
       <Badge variant="default" className="font-normal" title="Campaña en curso">
         Activa
       </Badge>
     );
   }
-  if (s === "completed") {
+  if (d.label === "Completada") {
     return (
       <Badge variant="secondary" className="font-normal" title="Campaña terminada">
         Completada
@@ -42,8 +51,8 @@ export function CompanyCampaignBadge({ status }: { status: string | null | undef
     );
   }
   return (
-    <Badge variant="secondary" className="font-normal" title="Estado de campaña">
-      {s || "—"}
+    <Badge variant={d.variant} className="font-normal" title={d.title}>
+      {d.label}
     </Badge>
   );
 }

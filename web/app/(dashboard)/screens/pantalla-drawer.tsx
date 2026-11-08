@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppTooltip } from "@/components/ui/app-tooltip";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import { deleteScreenAction, setScreenActiveAction, updateScreenPlaybackAction } from "@/lib/screens-actions";
 import { hasMinRole, type MemberRole } from "@/lib/roles";
@@ -142,9 +143,7 @@ function SplitBar({ vehicular, peatonal }: { vehicular: number | null; peatonal:
 }
 
 function Chip({ children }: { children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center rounded-full bg-muted px-2.5 py-1 text-xs text-foreground">{children}</span>
-  );
+  return <Badge variant="secondary">{children}</Badge>;
 }
 
 import { ScreenMap } from "./screen-map";
@@ -439,19 +438,10 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
       badges={
         s && (
           <span className="flex flex-wrap items-center gap-1.5">
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[11px] font-medium",
-                s.is_active === true ? "bg-emerald-500/10 text-emerald-700" : "bg-muted text-muted-foreground",
-              )}
-            >
+            <Badge variant={s.is_active === true ? "success" : "secondary"}>
               {s.is_active === true ? "Activa" : "Inactiva"}
-            </span>
-            {enriching && (
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                Generando información inteligente…
-              </span>
-            )}
+            </Badge>
+            {enriching && <Badge variant="outline">Generando información inteligente…</Badge>}
             <span className="text-[11px] text-muted-foreground tabular-nums">
               {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas OI
             </span>
@@ -724,12 +714,9 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5" aria-label="Etiquetas">
                   {tags.map((t) => (
-                    <span
-                      key={t}
-                      className="rounded-full bg-muted px-2.5 py-1 text-xs text-foreground tabular-nums"
-                    >
+                    <Badge key={t} variant="secondary" className="tabular-nums">
                       {t}
-                    </span>
+                    </Badge>
                   ))}
                 </div>
               )}
@@ -790,12 +777,9 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             description="Anclas cercanas que explican el flujo."
             aria-label="Puntos de interés"
           >
-            {str(s.pois_anchors) !== "—" && (
-              <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">{str(s.pois_anchors)}</p>
-            )}
             {pois.length > 0 ? (
               <ul className="flex flex-col divide-y divide-border/60">
-                {pois.slice(0, 8).map((p, i) => (
+                {pois.map((p, i) => (
                   <li key={i} className="flex items-baseline justify-between gap-3 py-2">
                     <span className="min-w-0 truncate text-[13px] font-medium">{p.name ?? "—"}</span>
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
@@ -808,9 +792,6 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               </ul>
             ) : (
               <p className="text-[13px] text-muted-foreground">Sin detalle de POIs.</p>
-            )}
-            {pois.length > 8 && (
-              <p className="mt-2 text-xs text-muted-foreground tabular-nums">+{formatNumber(pois.length - 8)} más</p>
             )}
           </AppCard>
 

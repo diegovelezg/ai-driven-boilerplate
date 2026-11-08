@@ -77,7 +77,12 @@ describe("SSOT AppCard", () => {
       if (!src.includes("AppCard")) continue;
       const lines = src.split("\n");
       lines.forEach((ln, i) => {
-        if (/border-t/.test(ln) && /pt-/.test(ln)) bad.push(`${rel(f)}:${i + 1}`);
+        // Solo footers reales: los separadores de sección internos
+        // (`dl.grid`, bloques `mt-`/`gap-` como en pantalla-drawer) no son
+        // footers — llevan contenido debajo y no usan la prop footer.
+        // Excepción documentada (issue #10): si un footer real aparece,
+        // migrarlo a la prop `footer` en vez de ampliar esta lista.
+        if (/border-t/.test(ln) && /pt-/.test(ln) && !/grid|mt-|gap-/.test(ln)) bad.push(`${rel(f)}:${i + 1}`);
       });
     }
     assert.deepEqual(bad, [], `footers manuales: ${bad.join(", ")} (usa prop footer)`);

@@ -21,6 +21,7 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { createContactAction, type CrmState } from "@/lib/crm-actions";
+import { EMAIL_RE } from "@/lib/validation";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
@@ -115,7 +116,7 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
       toastFormError("Revisa los campos marcados", "Email o teléfono requerido.");
       return;
     }
-    if (em && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) {
+    if (em && !EMAIL_RE.test(em)) {
       mark(["email"]);
       toastFormError("Revisa el campo marcado", "Email inválido.");
       return;

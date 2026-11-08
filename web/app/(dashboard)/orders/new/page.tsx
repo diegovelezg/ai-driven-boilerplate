@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { listCrmCompanies } from "@/lib/crm-db";
+import { normalizeCurrency } from "@/lib/currency";
 import { NuevaOrdenForm } from "./nueva-form";
 
 // Request-time: usa el cliente Supabase (timers/Date internos) en el render.
@@ -42,7 +43,7 @@ export default async function NuevaOrdenPage() {
           .eq("id", storeId)
           .maybeSingle();
         defaultCurrency =
-          String((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN").toUpperCase() || "PEN";
+          normalizeCurrency((storeRow as Record<string, unknown> | null)?.shop_currency ?? "PEN");
         const { data: sc } = await db
           .from("inv_screens")
           .select("id,name,external_ref,technology,width_px,height_px,price_pen,inv_venues(name)")

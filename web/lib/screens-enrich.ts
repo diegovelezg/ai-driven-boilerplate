@@ -181,7 +181,7 @@ export async function analyzeCoordinates(lat: number, lng: number, token: string
     return out;
   });
   const tileP = fetchJson(
-    `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=400&limit=50&access_token=${token}`,
+    `https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/tilequery/${lng},${lat}.json?radius=400&limit=50&layers=road,landuse,building&access_token=${token}`,
     15_000,
   );
   const [geoData, poiArrays, tileData] = await Promise.all([geoP, Promise.all(poiPs), tileP]);
@@ -221,7 +221,7 @@ export async function analyzeCoordinates(lat: number, lng: number, token: string
   const road = roadHierarchy(roadClasses);
 
   let speedKmh = 20;
-  let congestionLevel = "low";
+  let congestionLevel = "unknown";
   try {
     const dir = await fetchJson(
       `https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${lng},${lat};${lng + 0.003},${lat + 0.003}?overview=full&annotations=congestion,speed,duration&access_token=${token}`,
@@ -239,6 +239,7 @@ export async function analyzeCoordinates(lat: number, lng: number, token: string
     else if (summary.heavy > 0) congestionLevel = "heavy";
     else if (summary.moderate > 0) congestionLevel = "moderate";
     else if (summary.low > 0) congestionLevel = "low";
+    else congestionLevel = "unknown";
   } catch {
     // telemetría best-effort
   }
@@ -266,8 +267,12 @@ export async function analyzeCoordinates(lat: number, lng: number, token: string
   if (road.primary === "motorway" || road.primary === "trunk") ptsJerarquia = 40;
   else if (road.primary === "primary") ptsJerarquia = 35;
   else if (road.primary === "secondary") ptsJerarquia = 25;
+  // Nodos de transporte: solo estaciones/terminales por nombre. Los hoteles
+  // (`category === 'hotel'`) se excluyen a propósito (issue #1 P1b): ya
+  // aportan a `travel_transit` vía la matriz de perfiles y aquí llegaban a
+  // dominar el score (caso Dos de Mayo: 7 hoteles = 30/50 pts). Doble conteo.
   const poisTransporte = allPois.filter(
-    (p) => p.category === "hotel" || p.name.toLowerCase().includes("estacion") || p.name.toLowerCase().includes("terminal"),
+    (p) => p.name.toLowerCase().includes("estacion") || p.name.toLowerCase().includes("terminal"),
   ).length;
   const ptsNodos = Math.min(poisTransporte * 7, 30);
   let ptsCruces = 0;

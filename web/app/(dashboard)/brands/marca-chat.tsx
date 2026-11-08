@@ -1,9 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
-import { ChatShell } from "@/components/chat/chat-shell";
-import { useStreamChat } from "@/components/chat/use-stream-chat";
-import type { ChatMessage } from "@/components/chat/types";
+import { EntityChat } from "@/lib/entity-chat";
 
 const SUGGESTED = [
   "Resúmeme esta marca",
@@ -18,32 +15,13 @@ export function MarcaChat({
   brandName: string;
 }) {
   const encoded = encodeURIComponent(brandName);
-  const buildBody = useCallback((messages: ChatMessage[]) => ({ messages }), []);
-  const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
-    url: `/api/brands/${encoded}/chat`,
-    buildBody,
-  });
-
   return (
-    <ChatShell
-      messages={messages}
-      input={input}
-      onInputChange={setInput}
-      onAsk={(t) => void ask(t)}
-      pending={pending}
-      error={error}
-      status={status}
+    <EntityChat
+      url={`/api/brands/${encoded}/chat`}
       suggestions={SUGGESTED}
       emptyTitle="Pregunta por esta marca"
       emptySubtitle="Leo sus pedidos, empresas, pantallas e inversión para responder."
-      emptyAvatar={
-        <div
-          aria-hidden
-          className="flex size-12 items-center justify-center rounded-xl bg-primary/10 text-sm font-semibold tracking-wide text-primary"
-        >
-          {(brandName.trim()[0] ?? "—").toUpperCase()}
-        </div>
-      }
+      avatarLetter={brandName}
       placeholder="Pregunta por esta marca…"
       inputAriaLabel="Pregunta por esta marca"
     />

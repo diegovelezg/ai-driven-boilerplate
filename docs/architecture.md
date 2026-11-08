@@ -8,12 +8,18 @@
 > cron desactivado), chat en pausa (501) hasta el agente DOOH. Lo que sigue
 > describe el sistema DOOH vigente + historia del motor extirpado.
 
-> **Estado:** documento vivo, refleja `main` a 2026-10-22. Ya no es visión: el loop
-> scout→strategist→copywriter→dispatcher→analyst corre en prod vía worker + cron Coolify,
-> con motor probabilístico `retention:v3:episodes-mixture` y 56 migraciones aplicadas.
-> Ver `README.md` raíz para posicionamiento y `web/README.md` para operación diaria.
+> **Estado (Fase 2):** bloque HISTÓRICO. Describía `main` a 2026-10-22, cuando el
+> loop scout→strategist→copywriter→dispatcher→analyst corría en prod vía
+> worker + cron con `retention:v3` y 56 migraciones. Extirpado en
+> `20261122000000_drop_retention_engine.sql`; ver el banner Fase 2 arriba
+> para el estado vigente (93 migraciones, worker no-op, cron desactivado).
 
-## 1. High-Level Architecture Diagram (real)
+## 1. High-Level Architecture Diagram (HISTÓRICO — motor extirpado en Fase 2)
+
+> El diagrama conserva el motor de retención (ingesta → morning pipeline →
+> retention v3 → agentes → dispatch) como registro histórico. En Fase 2 solo
+> vive la ingesta DOOH (Sheet/CSV → `inv_*`/`crm_*`/`io_*`); el resto está
+> extirpado (`20261122000000`).
 
 ```
 +-------------------------------------------------------------------------+
@@ -68,7 +74,8 @@
 ## 2. Ingestion Module: DOOH vía Sheet/CSV
 
 > Implementado en `web/lib/sheet-import.ts` + `web/lib/dooh-import.ts`.
-> `web/worker.ts` corre solo `morning` por tienda.
+> HISTÓRICO: `web/worker.ts` corría `morning` por tienda; en Fase 2 es no-op
+> (ver §3b y banner superior).
 
 Ingesta: companies → contacts → venues → screens → slots (upsert por external_ref).
 
@@ -134,13 +141,13 @@ Por `prioritized` top-mira sin `busySignal/busyCustomer`: historial 5 órdenes +
 wa≤450/body≤800, email 400–750). Inserta `pending_review` + señal→`actioned`. Nunca envía.
 `runStaleRefresh(limit 10)`: re-redacta stale a GEN vigente (#26 implementado).
 
-### Prospect `prospect:v7:single-country` (`web/lib/prospect.ts`)
+### Prospect — HISTÓRICO (`web/lib/prospect.ts`, eliminado)
 
 Gate B2B-only; ICP manual o auto (top-20 + brain + feedback); queries LLM →
 SearXNG → scrape → score vs ICP + pool similar + retrieval top-3 + gate contacto +
 `SCORE_MIN=0.5` + tope 2/industria → dedupe → `proposed_leads pending_review`.
 
-### Dispatcher + Analyst (`web/lib/dispatcher.ts`, `analyst.ts`, `pre-send.ts`)
+### Dispatcher + Analyst — HISTÓRICO (`web/lib/dispatcher.ts`, `analyst.ts`, eliminados)
 
 Dispatcher: sello fresco (`generator==COPYWRITER_GEN`), 1/cliente/corrida,
 `checkPreSendGate` (opt-out, recompra, duplicado, dismissed, no-enviable → `skipped/held`);
@@ -157,13 +164,14 @@ Analyst: sesioniza post-envío (moneda tienda), 1 sesión→1ª acción vigente,
 > por dominio (20261125): `sys_` sistema/tenant, `io_` flujo orden→cobro,
 > `inv_` inventario, `crm_` base comercial, `ai_` IA/metering.
 
-Tablas (25):
+Tablas vivas (24 + vista `ai_llm_usage_daily`):
 - `sys_`: `sys_stores, sys_memberships (rol owner|admin|seller|viewer),
-  sys_store_profiles, sys_secrets, sys_secret_audits, sys_runs, io_counters`
+  sys_store_profiles, sys_runs, io_counters`
 - `io_`: `io_orders (+io_lines por pantalla/slot/periodo/tarifa),
   io_agency_orders (OM/OC), io_creatives (QC+legal), io_photo_checks,
   io_play_logs (PoP CMS, scaffold), io_invoices (A/R), io_campaigns`
-- `inv_`: `inv_venues, inv_screens, inv_loop_templates, inv_slots, inv_bookings`
+- `inv_`: `inv_venues, inv_screens, inv_screen_embeddings, inv_loop_templates,
+  inv_slots, inv_bookings`
   (hard hold con anti-sobreventa `io_check_hold_overlap`)
 - `crm_`: `crm_companies, crm_contacts` (`contacts.company_id` nullable,
   `SET NULL` al borrar; dedupe por email/phone + `external_ref` único por
@@ -177,7 +185,7 @@ Tablas (25):
   recrear claveada a empresa si el chat de fichas la necesita) ni
   `import_runs` (unificado en `sys_runs kind='import'`).
 
-Claves: `sys_stores(platform,shop_url)` único; `io_orders(store,io_number)`
+Claves: `sys_stores(name)` propio; `io_orders(store,io_number)`
 único con autonumeración `io_mint_number()` (Año Lima + `io_counters`);
 `io_agency_orders(store,kind,code)` único; `io_invoices(store,number)` único;
 `sys_runs` slot atómico `sys_run_start()` (advisory lock, solo service_role).
@@ -195,20 +203,28 @@ primary_contact_id → crm_contacts`, `io_lines.screen_id → inv_screens`,
   `lib/` + ADK.
 - **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Órdenes, Finanzas, Inventario, Empresas, Contactos, Marcas, Settings, Ayuda).
 - **DB/Auth:** Supabase (Postgres + Auth + Realtime). RLS por `is_store_member`.
-- **Scheduler/Worker:** sin cola: `web/worker.ts` one-shot (`--once --kinds=morning`) +
-  Scheduled Task Coolify diario 11:00 UTC + daemon dev `WORKER_SCHEDULE=1`. `jobs` retirada
-  (artefacto, no programar sobre ella); slot vía `sys_run_start`.
+- **Scheduler/Worker:** Fase 2 sin pipeline: `web/worker.ts` no-op (sale 0);
+  cron Coolify DESACTIVADO (`docs/coolify.md` §3b). `sys_runs` es la cinta
+  (import/perfil); slot vía `sys_run_start` (solo corridas vivas, no del
+  motor extirpado).
 - **Scraping/búsqueda:** SearXNG (service Coolify) + Crawlee/cheerio (`procps` en runner).
 - **AI:** `@google/adk@^2.3.0` (`LlmAgent` + Zod tools sobre Supabase). Dev/test vía
   `@google/adk-devtools`. Sin Vercel AI SDK. Modelos en `web/config/llm_models.json`.
-- **Outbound:** Email Resend/SendGrid real; WhatsApp Meta/Twilio pendiente (#4).
+- **Outbound:** email/senders retirados con `sys_secrets` (20261129); sin
+  proveedor vigente.
 
 ```bash
 npm install @google/adk
 npm install -D @google/adk-devtools
 ```
 
-## 7. Chat (ADK, implementado)
+## 7. Chat (ADK, en pausa 501 hasta el agente DOOH)
+
+> Nota Fase 2 (20261122): el motor de retención quedó retirado —
+> `retain-tools.ts`, `review/`, `customers/`, `products/` del motor y
+> `conversations/messages` se extirparon. El agente generalista vive en
+> `lib/adk/agents/customer-agent.ts`. Rutas: `app/api/chat`,
+> `companies/[id]/chat`, `orders/[id]/chat`, `contacts/[id]/chat` (501).
 
 > Nota Fase 2 (20261122): el motor de retención quedó retirado —
 > `lib/adk/tools/retain-tools.ts`, `review/`, `customers/`, `products/` y
@@ -216,37 +232,33 @@ npm install -D @google/adk-devtools
 > `lib/adk/agents/customer-agent.ts`. Rutas: `app/api/chat`,
 > `companies/[id]/chat`, `orders/[id]/chat`, `contacts/[id]/chat`.
 
-- **Chat:** `lib/adk/agents/customer-agent.ts` (`customer_chat`), instrucción ES
-  (tienda/ficha/producto, recupero≠ventas, envelope `{items,total_count,returned,truncated}`,
-  approve solo con confirmación). Rutas `app/api/chat`, `products/[id]/chat`, `customers/[id]/chat`.
-- **Tools (22, `lib/adk/tools/retain-tools.ts`):** `get_store_summary, get_recovery_stats,
+- **Chat:** `lib/adk/agents/customer-agent.ts` (`customer_chat`, en pausa 501).
+  Rutas `app/api/chat`, `orders/[id]/chat`, `companies/[id]/chat`,
+  `contacts/[id]/chat` (501 hasta el agente DOOH). Lo que sigue es histórico:
+- **Tools — HISTÓRICO (22, `lib/adk/tools/retain-tools.ts`, extirpado):** ~~`get_store_summary, get_recovery_stats,
   list_signals, list_actions, approve_actions, reject_actions, find_customer,
   filter_customers, get_customer_profile, get_customer_orders, get_customer_firmographics,
   list_leads, start_prospect_run, get_top_products, start_scout_run, start_strategist_run,
   start_copywriter_run, start_dispatcher_run, start_analyst_run, get_product_summary,
-  get_product_movements, get_product_buyers` (con `limit/offset`, `total=distincts`,
-  `truncated` honesto tras fix #28 parcial + #17).
-- **Review (no canvas):** inbox 3 tabs actions/leads/signals (`app/(dashboard)/review`),
-  con sustento predicción+última orden, wa.me, cambio canal, veto visible.
-  Persistencia: `conversations` + `messages`; borradores = `proposed_actions PENDING_REVIEW`.
+  get_product_movements, get_product_buyers`~~.
+- **Review — HISTÓRICO (extirpado):** ~~inbox 3 tabs actions/leads/signals
+  (`app/(dashboard)/review`), `conversations` + `messages`,
+  `proposed_actions PENDING_REVIEW`~~.
 
-## 9. Reactividad UI (polling hoy; Realtime como mejora futura)
+## 9. Reactividad UI — HISTÓRICO parcial (el polling de Review/Customers/Products era del motor)
 
-- **Hoy (2026-11-03):** las vistas son server render por request (`await connection()`),
+- **Hoy (2026-11-03, vigente parcial):** las vistas son server render por request (`await connection()`),
   así que un tab abierto es una foto fija. Reactividad vía polling, sin realtime:
   `<AutoRefresh/>` (`web/components/auto-refresh.tsx`: `router.refresh()` cada 60s +
-  al volver al tab, sin solapar, conservando estado cliente) en Hoy, Review, Customers,
-  Finanzas y Products. `HealthSection` ya polleaba `/api/health` cada 15s y
-  `BackgroundStatus` refresca al aquietarse una corrida (falla con tab oculto:
-  el navegador estrangula los intervalos — por eso existe `AutoRefresh`).
-  Settings/Duplicados/Ayuda quedan fuera: solo cambian por acción del usuario
-  (ya revalidan con `revalidatePath`).
-- **Mejora futura (solo si el polling duele: muchos usuarios concurrentes o
-  necesidad de frescura de segundos):** migrar a Supabase Realtime
-  (`postgres_changes` → `router.refresh()`). Tablas candidatas, solo las que
-  cambian fuera de la sesión (pipeline/cron): `proposed_actions`,
-  `proposed_leads`, `churn_signals`, `customer_predictions`, `background_runs`
-  (progreso en vivo), `customers`, `orders`, `products`. Requisitos previos:
+  al volver al tab) en Finanzas; `BackgroundStatus` refresca al aquietarse una
+  corrida viva (import/perfil). ~~Review, Customers, Finanzas-en-juego y
+  Products del motor~~: histórico (vistas extirpadas con la retención).
+- **Mejora futura (solo si el polling duele):** migrar a Supabase Realtime
+  (`postgres_changes` → `router.refresh()`). Tablas candidatas vivas, solo las que
+  cambian fuera de la sesión: `sys_runs` (progreso en vivo), `io_orders`,
+  `crm_companies`, `crm_contacts`. ~~`proposed_actions`, `proposed_leads`,
+  `churn_signals`, `customer_predictions`, `background_runs`, `customers`,
+  `orders`, `products`~~: histórico (tablas extirpadas, no suscribir).
   (1) añadirlas a la publicación `supabase_realtime` (+ `REPLICA IDENTITY FULL`
   donde importe update/delete); (2) verificar RLS `SELECT` para `authenticated`
   canal por canal (Realtime la respeta); (3) un hook cliente único con
@@ -254,5 +266,5 @@ npm install -D @google/adk-devtools
 
 ## 8. Metering LLM por tenant (issue #15, implementado base)
 
-- **Tabla:** `llm_usage` (`20261020000003`), 1 fila/llamada con `store_id` + 
+- **Tabla:** `ai_llm_usage` (antes `llm_usage`, `20261020000003`), 1 fila/llamada con `store_id` + 
 ...[truncated 911 chars]

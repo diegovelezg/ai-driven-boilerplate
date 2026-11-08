@@ -168,9 +168,9 @@ export function BackgroundStatus({ children }: { children: ReactNode }) {
     return () => clearInterval(t);
   }, [starting, activeRuns.length, refreshRuns]);
 
-  // Red lenta siempre viva: los runs que arranca el SERVIDOR (morning en
-  // after(), post-merge) no pasan por start() del cliente; sin este poll
-  // nadie los descubre y sus toasts jamás aparecen. 6s, best-effort.
+  // Red lenta siempre viva: los runs que arranca el SERVIDOR (p. ej. perfil
+  // profundo o import en server actions) no pasan por start() del cliente; sin
+  // este poll nadie los descubre y sus toasts jamás aparecen. 6s, best-effort.
   useEffect(() => {
     const t = setInterval(() => {
       void refreshRuns();

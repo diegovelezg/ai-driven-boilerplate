@@ -39,8 +39,13 @@ export function useInvalidFields<T extends string>() {
 
   const focusFirst = useCallback((root: { current: HTMLElement | null }, names: string[]) => {
     for (const n of names) {
-      const el = root.current?.querySelector<HTMLElement>(`[name="${n}"]`);
-      if (el) {
+      // `data-field` primero (triggers visibles de Select), luego `name`.
+      // Se salta `input[type=hidden]`: `focus()` ahí es no-op y el campo
+      // visible nunca recibiría el foco (nueva-form/nuevo-form `company_id`).
+      const els = root.current?.querySelectorAll<HTMLElement>(`[data-field="${n}"],[name="${n}"]`);
+      for (const el of els ?? []) {
+        if (el instanceof HTMLInputElement && el.type === "hidden") continue;
+        if (el instanceof HTMLElement && el.offsetParent === null && el.tagName !== "BODY") continue;
         el.focus();
         return;
       }

@@ -6,27 +6,16 @@ import type { ChatArtifact } from "@/components/chat/types";
 import { useStreamChat } from "@/components/chat/use-stream-chat";
 import type { ChatMessage } from "@/components/chat/types";
 
-/** Pool de presets alineados al motor: decisiones (actuar/vigilar/no-tocar),
- *  ventanas de recompra, recupero medido, borradores, leads y resumen.
- *  Cada preset mapea a una tool real. Cada apertura muestra 3 al azar. */
+/** Pool de presets Fase 2 (DOOH, sin motor de retención): resumen de tienda,
+ *  órdenes, inventario y empresas. Cada apertura muestra 3 al azar.
+ *  (Histórico: los presets del loop scout/copywriter/prospector se retiraron
+ *  con el motor extirpado en 20261122.) */
 const SUGGESTION_POOL = [
-  "¿A quién debo actuar hoy y por qué?",
-  "¿Cuánto recuperamos este mes?",
-  "Muéstrame los borradores pendientes",
-  "¿Qué hago primero hoy?",
   "Dame el resumen de la tienda",
-  "¿Qué clientes valiosos piden actuar hoy?",
-  "Filtra customers en vigilancia",
-  "¿Qué leads nuevos encontró el prospector?",
-  "¿Quién entra en ventana esta semana?",
-  "Muéstrame borradores de WhatsApp pendientes",
+  "¿Qué órdenes están en curso?",
+  "Muéstrame el inventario disponible",
+  "¿Qué empresas son anunciantes activos?",
   "¿Cuál es la facturación bruta?",
-  "¿Cuántos compradores vs customers tenemos?",
-  "¿Cuánto recupero atribuido llevamos en 30 días?",
-  "¿Quiénes están en primera recompra sin volver?",
-  "¿Qué borradores puedo aprobar ya?",
-  "¿A quién no tocamos hoy y por qué?",
-  "¿Cuántos volverán solos sin que hagamos nada?",
 ];
 
 /** 3 al azar sin repetir (Fisher-Yates parcial). */
@@ -54,7 +43,7 @@ export function ChatPanel({
     (messages: ChatMessage[]) => ({ storeId, messages }),
     [storeId],
   );
-  const { messages, input, setInput, pending, error, status, ask } = useStreamChat({
+  const { messages, input, setInput, pending, error, status, ask, retry } = useStreamChat({
     url: "/api/chat",
     buildBody,
     onArtifact,
@@ -75,6 +64,7 @@ export function ChatPanel({
       onAsk={(t) => void ask(t)}
       pending={pending}
       error={error}
+      onRetry={() => void retry()}
       status={status}
       suggestions={suggestions}
       onShuffleSuggestions={() => setNonce((n) => n + 1)}

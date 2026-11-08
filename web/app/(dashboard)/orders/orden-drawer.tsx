@@ -27,6 +27,7 @@ import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, atta
 import { OrdenChat } from "./orden-chat";
 import { OrderEditForm } from "./order-edit-form";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
+import { normalizeCurrency } from "@/lib/currency";
 import { formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
 
 interface Detail {
@@ -253,7 +254,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   };
 
   const o = detail?.order;
-  const orderCurrency = String((o as Record<string, unknown> | undefined)?.currency ?? "PEN").toUpperCase() || "PEN";
+  const orderCurrency = normalizeCurrency((o as Record<string, unknown> | undefined)?.currency ?? "PEN");
   const lines = detail?.lines ?? [];
   const oms = detail?.io_agency_orders ?? [];
   const creatives = detail?.creatives ?? [];

@@ -7,6 +7,8 @@ import { AppCard } from "@/components/app-card";
 import { toast } from "@/components/ui/toast";
 import { mergeContactsAction } from "@/lib/crm-actions";
 import type { DuplicateGroup } from "@/lib/contact-duplicates";
+import { Badge } from "@/components/ui/badge";
+import { EntityEmpty } from "@/components/entity-list";
 
 function displayName(r: DuplicateGroup["rows"][number]): string {
   return [r.first_name, r.last_name].filter(Boolean).join(" ") || "—";
@@ -36,6 +38,15 @@ export function DuplicatesList({ groups }: { groups: DuplicateGroup[] }) {
     });
   };
 
+  if (groups.length === 0) {
+    return (
+      <EntityEmpty
+        filtered={false}
+        emptyTitle="Sin duplicados"
+        emptyHint="No hay grupos por revisar: emails y teléfonos están limpios."
+      />
+    );
+  }
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted-foreground tabular-nums">
@@ -85,11 +96,7 @@ function GroupCard({
                 <strong>{displayName(r)}</strong>
                 {r.job_title && <span className="text-muted-foreground">{r.job_title}</span>}
                 {r.company_name && <span className="text-muted-foreground">· {r.company_name}</span>}
-                {r.is_primary && (
-                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                    principal
-                  </span>
-                )}
+                {r.is_primary && <Badge>principal</Badge>}
                 <span className="w-full text-xs text-muted-foreground tabular-nums">
                   {[r.email, r.phone].filter(Boolean).join(" · ") || "sin canal"}
                 </span>

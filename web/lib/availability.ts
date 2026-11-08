@@ -31,17 +31,37 @@ export function isHoldFresh(createdAt: string | null | undefined, now = Date.now
   return t + HOLD_DAYS * 86_400_000 > now;
 }
 
-/** Fin exclusivo ISO (BD) → día inclusivo "yyyy-mm-dd" para mostrar. */
+/** Fecha UI "yyyy-mm-dd" válida o throw (fail-closed: nunca {} libre). */
+export function assertDateStr(v: string, field: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || !Number.isFinite(Date.parse(v))) {
+    throw new Error(`Fecha inválida en ${field}: ${v}`);
+  }
+  return v;
+}
+
+/** Fin exclusivo ISO (BD) → día inclusivo "yyyy-mm-dd" para mostrar.
+ *  Issue #5: sin restar 24h a ciegas. El fin semiabierto puede traer hora no
+ *  medianoche; restar un día entero mostraba el día anterior. Se resta 1ms y
+ *  se formatea en Lima (zona de periodBounds). */
 export function displayEndOf(exclusiveIso: string): string {
-  const t = Date.parse(exclusiveIso);
-  if (Number.isNaN(t)) return exclusiveIso.slice(0, 10);
-  const d = new Date(t - 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+  if (!Number.isFinite(Date.parse(exclusiveIso))) throw new Error(`Fecha inválida: ${exclusiveIso}`);
+  const t = Date.parse(exclusiveIso) as number;
+  const d = new Date(t - 1);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((x) => x.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** Periodo UI (inicio/fin inclusivos "yyyy-mm-dd") → rango semiabierto ISO Lima. */
 export function periodBounds(starts: string, ends: string): { qStart: string; qEnd: string } {
+  assertDateStr(starts, "starts");
+  assertDateStr(ends, "ends");
+  if (ends < starts) throw new Error(`Rango inválido: ${starts} > ${ends}`);
   const [y, m, d] = ends.split("-").map(Number);
   const t = new Date(Date.UTC(y, m - 1, d) + 86_400_000);
   const p = (n: number) => String(n).padStart(2, "0");
@@ -115,6 +135,7 @@ export async function getScreenOccupancy(
   from: string,
 ): Promise<Record<string, OccupiedRange[]>> {
   const db = getSupabase();
+  assertDateStr(from, "from");
   const out: Record<string, OccupiedRange[]> = {};
   if (screenIds.length === 0) return out;
   const [y, m, d] = from.split("-").map(Number);

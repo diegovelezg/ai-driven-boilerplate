@@ -52,4 +52,10 @@ describe("bordes de periodo UI ↔ BD", () => {
   it("displayEndOf: fin exclusivo → día inclusivo", () => {
     assert.equal(displayEndOf("2026-11-25T00:00:00-05:00"), "2026-11-24");
   });
+  it("fecha inválida lanza, nunca {} libre (issue #5 P0)", () => {
+    assert.throws(() => periodBounds("nonsense", "2026-11-24"), /Fecha inválida/);
+    assert.throws(() => periodBounds("2026-11-03", "no-fecha"), /Fecha inválida/);
+    assert.throws(() => periodBounds("2026-11-24", "2026-11-03"), /Rango inválido/);
+    assert.throws(() => displayEndOf("NaN-nada"), /Fecha inválida/);
+  });
 });

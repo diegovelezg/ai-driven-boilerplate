@@ -1,7 +1,10 @@
-# Deploy en Coolify v4: 3 recursos separados (Supabase + SearXNG + web) + 1 Scheduled Task
+# Deploy en Coolify v4: 3 recursos separados (Supabase + SearXNG + web)
+# (+ 1 Scheduled Task HEREDADA Y DESACTIVADA, ver §3b — Fase 2 sin cron)
 #
-# Sin recurso worker: el cron corre one-shot dentro del contenedor web
-# (la imagen ya trae `worker.ts` + `lib/` + `node_modules`, ver `web/Dockerfile`).
+# Sin recurso worker: en Fase 1 el cron corría one-shot dentro del contenedor
+# web (la imagen ya trae `worker.ts` + `lib/` + `node_modules`, ver
+# `web/Dockerfile`). En Fase 2 el worker es no-op: la Task
+# `retention-daily` debe estar pausada/eliminada (§3b).
 # El daemon interno (`WORKER_SCHEDULE=1`) queda como modo alterno en código,
 # apagado por default; prod usa cron externo.
 
@@ -15,7 +18,7 @@ Coolify con su propio ciclo de deploy. Proyecto Coolify: `retention-ai-engine`
 | Supabase | mismo service | Studio: `https://retention-studio.papelitosdecolor.com` | 3000 (activar Basic Auth del dominio, pendiente §1.2) |
 | SearXNG | Service (plantilla one-click `searxng`) | autogenerado `https://<id>.papelitosdecolor.com` (wildcard, sin pedir DNS) | 8080 |
 | web | Application (repo git, build pack Dockerfile) | `https://retention.papelitosdecolor.com` | 3000 |
-| cron diario | Scheduled Task sobre `web` (ver 3b) | — | — |
+| cron diario | Scheduled Task sobre `web` — DESACTIVADA en Fase 2 (ver 3b) | — | — |
 
 Postgres NO expone puerto público (la plantilla no publica 5432).
 

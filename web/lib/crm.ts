@@ -10,6 +10,10 @@
 // una empresa: la misma marca puede venir vía agencia o directo.
 // Cliente/prospecto NO se guardan: se derivan (¿tiene IO firmada?).
 
+// SSOT email: el patrón vive en lib/validation.ts (issue #8 P2).
+import { isCountryCode } from "@/lib/countries";
+import { isValidEmail } from "@/lib/validation";
+
 export const COMPANY_KINDS = ["agencia", "anunciante", "proveedor"] as const;
 
 export type CompanyKind = (typeof COMPANY_KINDS)[number];
@@ -73,9 +77,15 @@ export function normalizeCompany(input: CompanyInput): { ok: true; value: Requir
   if (input.domain && domain === null) return { ok: false, error: "Web inválida (p. ej. acme.pe)." };
   const email = cleanStr(input.email, 320);
   if (input.email && !email) return { ok: false, error: "Email inválido." };
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Email inválido." };
-  const country = cleanStr(input.country, 2)?.toUpperCase() ?? null;
-  if (input.country && !country) return { ok: false, error: "País inválido (ISO2)." };
+  if (email && !isValidEmail(email)) return { ok: false, error: "Email inválido." };
+  // País: ISO2 real (misma regla que el cliente company-validation:
+  // `isCountryCode`). El servidor era más laxo (cualquier 2 letras) y dejaba
+  // pasar "AA": ahora espejo exacto, el cliente nunca bloquea un valor válido.
+  const countryRaw = cleanStr(input.country, 2)?.toUpperCase() ?? null;
+  if (input.country && (!countryRaw || !isCountryCode(countryRaw))) {
+    return { ok: false, error: "País inválido (ISO2, p. ej. PE)." };
+  }
+  const country = countryRaw;
   const external_ref = cleanStr(input.external_ref, 120);
   if (input.external_ref && !external_ref) return { ok: false, error: "external_ref inválido." };
   const kind = input.kind ?? null;
@@ -102,7 +112,7 @@ export function normalizeContact(input: ContactInput): { ok: true; value: Contac
   const email = cleanStr(input.email, 320);
   const phone = cleanStr(input.phone, 40);
   if (!email && !phone) return { ok: false, error: "Contacto requiere email o teléfono." };
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { ok: false, error: "Email inválido." };
+  if (email && !isValidEmail(email)) return { ok: false, error: "Email inválido." };
   return {
     ok: true,
     value: {

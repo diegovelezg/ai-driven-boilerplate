@@ -1,9 +1,8 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
+import { LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
@@ -17,6 +16,7 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
+import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
 import { CompanyPrincipalBadge } from "@/components/company-badges";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
@@ -36,6 +36,8 @@ export function ContactsList({
   initialView,
   initialSelectedId,
   myRole,
+  totalCount,
+  truncated = false,
 }: {
   rows: CrmContactListItem[];
   companies: Array<{ id: string; name: string }>;
@@ -44,8 +46,16 @@ export function ContactsList({
   initialView: "table" | "grid";
   initialSelectedId: string | null;
   myRole: MemberRole | null;
+  totalCount?: number;
+  truncated?: boolean;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  // Selección con deep-link (?contact=, alias ?contacto=). Ver entity-list.tsx.
+  const { selectedId, open: openDrawer, close: closeDrawer } = useEntitySelection(
+    "/contacts",
+    "contact",
+    initialSelectedId,
+    ["contacto"],
+  );
   const [view, setView] = useState<"table" | "grid">(initialView);
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -87,7 +97,13 @@ export function ContactsList({
       <div className="grid grid-cols-2 gap-2.5" aria-label="Resumen">
         <div className="rounded-xl border bg-card px-3.5 py-3">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">En vista</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(summary.total)}</p>
+          <p
+            className="mt-1 text-lg font-semibold tabular-nums"
+            title={truncated ? `Muestra parcial de ${formatNumber(totalCount ?? summary.total)} en total` : undefined}
+          >
+            {formatNumber(summary.total)}
+            {truncated && <span className="ml-2 text-xs font-medium text-muted-foreground">· muestra parcial</span>}
+          </p>
         </div>
         <div className="rounded-xl border bg-card px-3.5 py-3">
           <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Principales</p>
@@ -149,9 +165,7 @@ export function ContactsList({
             </Button>
           </AppTooltip>
         </span>
-        <span className="ms-auto text-xs text-muted-foreground tabular-nums" aria-live="polite">
-          {isPending ? "Buscando…" : `${formatNumber(rows.length)} resultado${rows.length === 1 ? "" : "s"}`}
-        </span>
+        <EntityCount total={rows.length} pending={isPending} />
       </div>
 
       {view === "table" ? (
@@ -171,11 +185,11 @@ export function ContactsList({
                 tabIndex={0}
                 role="button"
                 aria-label={`Abrir contacto ${fullName(c)}`}
-                onClick={() => setSelectedId(c.id)}
+                onClick={() => openDrawer(c.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setSelectedId(c.id);
+                    openDrawer(c.id);
                   }
                 }}
                 className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
@@ -210,11 +224,11 @@ export function ContactsList({
                 tabIndex={0}
                 role="button"
                 aria-label={`Abrir contacto ${displayName}`}
-                onClick={() => setSelectedId(c.id)}
+                onClick={() => openDrawer(c.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    setSelectedId(c.id);
+                    openDrawer(c.id);
                   }
                 }}
                 className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
@@ -234,31 +248,15 @@ export function ContactsList({
       ) : null}
 
       {rows.length === 0 && (
-        <AppCard>
-          <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-3 py-10 text-center">
-            <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden>
-              <SearchX className="size-5" />
-            </span>
-            <p className="text-sm font-medium">{hasFilter ? "Sin resultados para ese filtro" : "Aún no hay contactos"}</p>
-            <p className="text-xs text-muted-foreground">
-              {hasFilter
-                ? "Prueba con otro nombre o empresa."
-                : "Crea el primero o agrégalo desde el drawer de su empresa."}
-            </p>
-            {hasFilter ? (
-              <Button variant="outline" size="sm" className="mt-1" onClick={() => go({ q: "", company: null })}>
-                Limpiar filtros
-              </Button>
-            ) : (
-              <Button render={<Link href="/contacts/new" />} nativeButton={false} size="sm" variant="outline" className="mt-1">
-                Nuevo contacto
-              </Button>
-            )}
-          </div>
-        </AppCard>
+        <EntityEmpty
+          filtered={hasFilter}
+          emptyTitle="Aún no hay contactos"
+          emptyHint="Crea el primero o agrégalo desde el drawer de su empresa."
+          onClear={hasFilter ? () => go({ q: "", company: null }) : undefined}
+        />
       )}
 
-      {selected && <ContactDrawer contact={selected} myRole={myRole} onClose={() => setSelectedId(null)} />}
+      {selected && <ContactDrawer contact={selected} myRole={myRole} onClose={closeDrawer} />}
     </div>
   );
 }

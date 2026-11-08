@@ -1,17 +1,23 @@
 # MEOW — web
 
-Dashboard merchant multi-tenant (inventario DOOH vía Sheet/CSV) a Supabase
-+ loop de retención completo (scout → analyst). Las vistas leen desde BD.
+> **Fase 2 (2026-11-07):** gestión comercial DOOH. Motor de retención
+> extirpado (`20261122000000_drop_retention_engine.sql`): sin morning
+> pipeline, sin cron (worker no-op), chat en pausa (501) hasta el agente DOOH.
+
+Dashboard merchant multi-tenant (inventario DOOH vía Sheet/CSV) a Supabase.
+Las vistas leen desde BD.
 
 ## Stack
 
 - Next.js 16 (App Router) + React 19 + TailwindCSS 4 + shadcn/ui
 - Supabase local (Postgres + PostgREST) vía CLI + Docker; misma migración corre en cloud
-  (56 migraciones en `supabase/migrations/`, ~28 tablas)
+  (93 migraciones en `supabase/migrations/` —incl. `20261208000000_currency_ssot.sql`—, 24 tablas vivas + vista `ai_llm_usage_daily`)
 - Ingesta DOOH vía Sheet/CSV (`lib/sheet-import.ts` + `lib/dooh-import.ts`)
-- ADK `@google/adk@^2.3.0` (`LlmAgent` + 22 tools en `lib/adk/`), modelos en
-  `config/llm_models.json` (primario + fallback, OpenAI/Anthropic/Gemini vía `RoutedLlm`)
-- Worker `worker.ts` (one-shot prod + daemon dev), cron Coolify `morning`
+- ADK `@google/adk@^2.3.0` (pausado: chat 501 hasta el agente DOOH), modelos en
+  `config/llm_models.json`
+- Worker `worker.ts`: no-op intencional (sale 0 sin hacer nada); **sin cron**
+  (`docs/coolify.md` §3b DESACTIVADO — esta es la fuente vigente; cualquier
+  mención a cron `morning` en otro doc es histórica)
 
 ## Quickstart
 
@@ -25,82 +31,66 @@ npx -y supabase start        # desde la raíz del repo
 # 2. Env (una vez)
 # web/.env.local con SUPABASE_URL=http://127.0.0.1:54321,
 # SUPABASE_ANON_KEY y SUPABASE_SERVICE_ROLE_KEY (ver `npx supabase status`)
-# + SEARXNG_URL + DEEPSEEK/OPENAI/ANTHROPIC/GEMINI keys opcionales
 
 # 3. App
 cd web
 npm install
 npm run dev               # :3000
-
-# 4. Worker local (otra terminal, con web/.env.local)
-npm run worker -- --once --kinds=morning
 ```
 
 ## Ingesta DOOH
 
 - `/screens` → Importar desde Google Sheet URL o CSV (kinds: companies → contacts → venues → screens → slots).
-- Prod: el cron Coolify corre `morning` diario 11:00 UTC (ver `docs/coolify.md` §3b).
+- Prod: **sin cron**. `docs/coolify.md` §3b está DESACTIVADO (worker no-op).
 
-## Modelo de datos (implementado, no solo Fase 1)
+## Modelo de datos (Fase 2 vigente)
 
-Fuente de verdad: `supabase/migrations/*.sql` (56 archivos, 2026-10-16 → 2026-11-01).
-Tablas clave:
+Fuente de verdad: `supabase/migrations/*.sql` (92 archivos, 2026-10-16 → 2026-12-07).
+24 tablas vivas + vista `ai_llm_usage_daily`:
 
-- Tenant: `stores`, `companies`, `contacts`, `venues`, `screens`, `inventory_slots`,
-  `customers` (legacy), `orders` (legacy), `products` (legacy), `product_stats`, `metadata_map`.
-- Motor/loop: `customer_predictions` (foto diaria `store,customer,as_of`,
-  `model_version=retention:v3`), `churn_signals` (`open/prioritized/actioned/closed` +
-  `objective`), `proposed_actions` (`pending_review/approved/dispatched` + `evidence_json`
-  con `generator/decision/p_recompra_h`), `background_runs` (cinta + scopes), `opt_outs`,
-  `tenant_model_params`, `store_profiles` (`brain_json`), `vertical_profiles`.
-- Prospect/enrich: `proposed_leads`, `domains`, `enrichment_runs`, `customer_aliases`.
-- Chat/auth/ops: `conversations`, `messages`, `merchant_users`, `store_secrets`,
-  `llm_usage`, `jobs` (artefacto) + `start_run_if_free` (slot atómico).
+- `sys_`: `sys_stores`, `sys_memberships`, `sys_store_profiles`,
+  `sys_runs` (cinta de import/perfil), `io_counters`
+- `io_`: `io_orders` (+`io_lines`), `io_agency_orders`, `io_creatives`,
+  `io_photo_checks`, `io_play_logs`, `io_invoices`, `io_campaigns`
+- `inv_`: `inv_venues`, `inv_screens`, `inv_screen_embeddings`,
+  `inv_loop_templates`, `inv_slots`, `inv_bookings`
+- `crm_`: `crm_companies`, `crm_contacts`
+- `ai_`: `ai_domain_cache`, `ai_vertical_profiles`, `ai_llm_usage`
+
+Sin `market_regions`; país/moneda del tenant en `sys_stores.shop_country` +
+`sys_stores.shop_currency` (single-país).
+
+> **Histórico (extirpado):** `customer_predictions`, `churn_signals`,
+> `proposed_actions`, `proposed_leads`, `tenant_model_params`, `opt_outs`,
+> `domains`/`enrichment_runs` (motor), ecommerce legacy
+> (`customers/orders/channels/products/product_stats`), `brain_json`,
+> `conversations/messages`, `import_runs`, `jobs`, `store_secrets`,
+> `runMorningPipeline`, `claimRunSlot` programado. Ver `docs/architecture.md`
+> § histórico.
 
 Detalle del diseño en `docs/architecture.md` §§2,5.
 
-## Pipeline morning (código)
+## Pipeline morning — HISTÓRICO (no ejecutar)
 
-`lib/morning-run.ts:runMorningPipeline`:
-
-1. `enrichment` — pendientes de dominios, cada login si hay.
-2. `brain` — `computeTenantBrain` si no fresco <24h (`top activos, ventana mediana,
-   ticket p50/p80, voz cliente`).
-3. `regenerate` — `runStaleRefresh(limit 10)`: pendientes con sello viejo → fresco.
-   Nunca toca `approved/dispatched`.
-4. `foto` — solo si `opts.refreshFoto`: `runRetentionModel`.
-5. Gate `morningAlreadyDone` (scout+strategist+copywriter+prospect done hoy → stop).
-6. `scout` → `strategist` → `copywriter(limit 10)` → `prospect` (B2B-only, tope 10 pendientes).
-
-Versiones GEN vigentes: `retention:v3:episodes-mixture`, `scout:v2:retention`,
-`strategist:v2:retention`, `copywriter:v16:identidad-estructural`,
-`contactability:v5:sin-continuidad`, `prospect:v7:single-country`,
-`decision v4:nodormido-exception`.
+> Extirpado 2026-11-07. `lib/morning-run.ts:runMorningPipeline` ya no existe;
+> `worker.ts` es no-op; no hay `scout→strategist→copywriter→prospect`, ni
+> `GEN retention:v3 / scout:v2 / copywriter:v16 / prospect:v7`. Se conserva el
+> nombre como registro; no programar cron sobre esto.
 
 ## Páginas
 
-- `/` Hoy: actuar/vigilar, embudo, por revisar, recuperado, feed enviados.
-- `/customers`: cartera + `customer_predictions`, drawer, chat ADK, duplicados.
-- `/review`: inbox actions/leads/signals (approve/reject, wa.me, cambio canal).
-- `/finance`: KPIs 12m + en juego probabilístico.
-- `/products`: catálogo + `product_stats` por moneda.
-- `/settings`: negocio (perfil, arquetipo,
-  recalibración) / motor (ciclo, H, bandas) / email.
-- `/help`, `/login`.
+- `/` Hoy (DOOH operativo).
+- `/orders`: órdenes de inserción y flujo orden→cobro.
+- `/finance`: KPIs + finanzas.
+- `/screens`: inventario + importación Sheet/CSV.
+- `/companies`, `/contacts`: base comercial.
+- `/brands`: marcas.
+- `/settings`, `/help`, `/login`.
 
-## SearXNG local (prospector + rescue de enriquecimiento)
+## SearXNG local (histórico del prospector extirpado)
 
-```bash
-# Una vez (desde la raíz del repo; settings versionado en infra/searxng/):
-docker run -d --name searxng --restart unless-stopped -p 8888:8080 \
-  -v $PWD/infra/searxng/settings.yml:/etc/searxng/settings.yml:ro \
-  searxng/searxng:latest
-# SEARXNG_URL=http://localhost:8888 (default en lib/prospect.ts; override en .env.local)
-```
-
-Prod: service SearXNG en Coolify, `SEARXNG_URL=https://<id>.papelitosdecolor.com`
-(+ `SEARXNG_BASIC_AUTH` si compartido). No montar desde `/tmp` (tmpfs en Arch: se pierde
-al reboot aunque el contenedor tenga `--restart`).
+> El prospector (`prospect:v7`) se extirpó con el motor. SearXNG queda como
+> infra opcional sin consumidor vigente; no es requisito del quickstart.
 
 ## Comandos
 
@@ -108,6 +98,6 @@ al reboot aunque el contenedor tenga `--restart`).
 npm run dev     # desarrollo
 npm run build && npm run start
 npm run lint
-npm run worker -- --once --kinds=morning  # pipeline sin login
+npm run worker  # no-op Fase 2 (sale 0)
 npx supabase stop   # apaga el stack local (desde la raíz)
 ```

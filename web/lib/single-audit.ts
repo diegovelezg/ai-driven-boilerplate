@@ -1,7 +1,7 @@
 // Auditoría del single "Redactar" (issue #16 Fase 1). Módulo puro y
 // testeable (sin I/O): la regla de cierre garantizado vive aquí, no en el
-// server action. `review-actions.ts` solo inyecta las dependencias reales;
-// `copywriter.ts` reutiliza el prefijo del veto; la fila lo detecta.
+// server action. (HISTÓRICO: el productor de vetos del motor extirpado vivía
+// en el redactor; hoy el prefijo lo define este módulo y nadie más lo emite.)
 // Sin `server-only`: lo importan el test tsx y un client component.
 import type { ErrorCode, ScopeKind } from "@/lib/operations";
 
@@ -14,9 +14,9 @@ export function singleSignalScope(signalId: string): { scopeKind: ScopeKind; sco
   return { scopeKind: "signal", scopeId: signalId };
 }
 
-/** ¿Este mensaje es un veto del juez (y no un fallo)? Un cambio de copy
- *  en `copywriter.ts` debe pasar por `JUDGE_VETO_PREFIX`, nunca por
- *  literales duplicados en cada consumidor. */
+/** ¿Este mensaje es un veto del juez (y no un fallo)? Todo productor de vetos
+ *  (HISTÓRICO: el redactor extirpado) debe pasar por `JUDGE_VETO_PREFIX`,
+ *  nunca por literales duplicados en cada consumidor. */
 export function isJudgeVetoMessage(msg: string): boolean {
   return msg.startsWith(JUDGE_VETO_PREFIX);
 }

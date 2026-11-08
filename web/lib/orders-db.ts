@@ -4,6 +4,7 @@ import { getSupabase } from "@/lib/supabase";
 import { joinHaystack, matchScore, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 import { orderStage, type OrderStageKey } from "@/lib/order-stage";
 import { billingStatus, type BillingStatusKey } from "@/lib/billing-status";
+import { invoiceMatchesOrder, normalizeCurrency } from "@/lib/currency";
 
 export interface OrderRow {
   id: string;
@@ -103,6 +104,16 @@ export async function listOrders(
     db.from("io_photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
     db.from("io_invoices").select("io_id,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
   ]);
+  // Hijas: fail-closed — cualquier hija caída lanza (nunca 0 silencioso).
+  for (const [name, res] of [
+    ["lines", lines],
+    ["oms", oms],
+    ["creas", creas],
+    ["photos", photos],
+    ["invs", invs],
+  ] as const) {
+    if (res.error) throw new Error(`Orders read (${name}): ${res.error.message}`);
+  }
   // Nombres ya resueltos arriba para el filtro (mismo mapa).
   const nameBy = nameByPre;
   const linesBy = new Map<string, { n: number; gross: number }>();
@@ -146,12 +157,10 @@ export async function listOrders(
     });
     const agg = linesBy.get(id) ?? { n: 0, gross: 0 };
     const invRows = invBy.get(id) ?? [];
-    // Solo facturas en la moneda de la IO: nunca sumar PEN+USD.
-    const orderCurrency = String(r.currency ?? "PEN").toUpperCase() || "PEN";
-    const invSameCurrency = invRows.filter((v) => {
-      const c = v.currency == null || String(v.currency).trim() === "" ? orderCurrency : String(v.currency).toUpperCase();
-      return c === orderCurrency;
-    });
+    // Solo facturas con moneda explícita igual a la IO: null NUNCA hereda
+    // (una USD sin moneda no se suma como PEN).
+    const orderCurrency = normalizeCurrency(r.currency ?? "PEN", "PEN");
+    const invSameCurrency = invRows.filter((v) => invoiceMatchesOrder(v.currency, orderCurrency));
     const bill = billingStatus({
       gross_minor: agg.gross,
       invoices: invSameCurrency.map((v) => ({
@@ -240,8 +249,12 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   const kindBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), typeof c.kind === "string" ? c.kind : null]),
   );
+  for (const [name, res] of [["companies", cos], ["lines", lines], ["oms", oms], ["creatives", creas], ["photos", photos], ["invoices", invs]] as const) {
+    if (res.error) throw new Error(`Order read (${name}): ${res.error.message}`);
+  }
+  if (bookings.error) throw new Error(`Order read (bookings): ${bookings.error.message}`);
   const lineRows = ((lines.data ?? []) as Array<Record<string, unknown>>);
-  const screenIds = [...new Set(lineRows.map((l) => String(l.screen_id)).filter(Boolean))];
+  const screenIds = [...new Set(lineRows.filter((l) => l.screen_id).map((l) => String(l.screen_id)))];
   let screenBy = new Map<string, { name: string; detail: string | null }>();
   if (screenIds.length > 0) {
     const { data: screens } = await db
@@ -251,7 +264,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
       .in("id", screenIds);
     screenBy = new Map(
       ((screens ?? []) as Array<Record<string, unknown>>).map((s) => {
-        const v = s.venues as unknown as { name?: unknown } | null;
+        const v = s.inv_venues as unknown as { name?: unknown } | null;
         const venue = typeof v?.name === "string" ? v.name : "";
         const w = Number(s.width_px);
         const h = Number(s.height_px);

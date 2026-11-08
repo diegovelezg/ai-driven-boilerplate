@@ -63,6 +63,7 @@ export default async function InventarioPage({
 
   let rows: Awaited<ReturnType<typeof listScreens>>["rows"] = [];
   let totalCount = 0;
+  let truncated = false;
   let suppliers: Array<{ id: string; name: string }> = [];
   let cities: string[] = [];
   let counts: Record<string, number> = {};
@@ -80,6 +81,7 @@ export default async function InventarioPage({
         ]);
         rows = list.rows;
         totalCount = list.total;
+        truncated = list.truncated ?? false;
         suppliers = opts.suppliers;
         cities = opts.cities;
         const db = getSupabase();
@@ -144,6 +146,7 @@ export default async function InventarioPage({
               sortDir={sortDir}
               initialView={vista}
               initialSelectedId={selectedId}
+              truncated={truncated}
             />
           )}
         </>

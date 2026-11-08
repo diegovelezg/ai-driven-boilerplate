@@ -1,8 +1,9 @@
 // Finanzas DOOH: tendencia 12m + KPIs 30d.
 // Puro cálculo sobre líneas de IO mapeadas a FinanceOrder
 // (total_amount = rate_minor, placed_at = starts_at).
-// Regla de moneda: solo la moneda de la vista. El resto se ignora
-// (nunca se suman PEN+MXN).
+// Regla de moneda: solo la moneda de la vista (siempre explícita, nunca null).
+// El resto se ignora (nunca se suman PEN+USD).
+import { normalizeCurrency } from "@/lib/currency";
 export interface FinanceOrder {
   total_amount: number;
   currency: string | null;
@@ -49,10 +50,9 @@ export interface RetentionKpis {
 const DAY_MS = 86_400_000;
 const MONTH_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
-function sameCurrency(orderCur: string | null, viewCurrency: string | null): boolean {
-  if (viewCurrency === null) return true;
-  if (orderCur == null) return true;
-  return orderCur.toUpperCase() === viewCurrency.toUpperCase();
+function sameCurrency(orderCur: string | null, viewCurrency: string): boolean {
+  if (orderCur == null || String(orderCur).trim() === "") return true;
+  return normalizeCurrency(orderCur, "") === normalizeCurrency(viewCurrency, "");
 }
 
 function monthKey(d: Date): string {
@@ -72,7 +72,7 @@ function last12MonthKeys(now = Date.now()): Array<{ key: string; label: string }
 
 export function bucketMonthly(
   orders: FinanceOrder[],
-  viewCurrency: string | null,
+  viewCurrency: string,
   now = Date.now(),
 ): MonthBucket[] {
   const keys = last12MonthKeys(now);
@@ -102,7 +102,7 @@ function deltaPct(cur: number, prev: number): number | null {
 
 export function computeFinanceKpis(
   orders: FinanceOrder[],
-  viewCurrency: string | null,
+  viewCurrency: string,
   now = Date.now(),
 ): FinanceKpis {
   const last30 = now - 30 * DAY_MS;

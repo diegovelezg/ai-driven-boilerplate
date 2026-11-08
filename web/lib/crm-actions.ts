@@ -6,24 +6,17 @@ import { getSupabase } from "@/lib/supabase";
 import { isCompanyKind, normalizeCompany, normalizeContact, type CompanyKind } from "@/lib/crm";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { resolveActor } from "@/lib/actor";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
 
 export interface CrmState {
   ok: boolean;
   message: string;
 }
 
-async function resolveTenantStore(): Promise<{ storeId: string } | { error: string }> {
-  const storeId = await resolveActiveStoreId();
-  if (!storeId) return { error: "Sin tienda." };
-  if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-    return { error: "Sin acceso a esta tienda." };
-  }
-  return { storeId };
-}
+// SSOT: resolveTenantStore = resolveTenantStoreAction (ver lib/tenant.ts).
 
 export async function createCompanyAction(form: FormData): Promise<CrmState> {
-  const t = await resolveTenantStore();
+  const t = await resolveTenantStore("seller");
   if ("error" in t) return { ok: false, message: t.error };
   const kindRaw = String(form.get("kind") ?? "").trim();
   if (!isCompanyKind(kindRaw)) return { ok: false, message: "Tipo requerido: agencia, anunciante o proveedor." };

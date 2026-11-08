@@ -1,7 +1,8 @@
 /** Etiquetas del "pensando" descriptivo: tool del orquestador → qué se muestra.
- *  Los `start_*_run` son delegación real a un especialista (Scout, Estratega,
- *  Redactor, Mensajero, Analista en `lib/adk/tools/retain-tools`); el resto
- *  describe la acción sobre datos. SSOT visual: solo ChatShell las pinta. */
+ *  SSOT visual: solo ChatShell las pinta. HISTÓRICO Fase 2: los `start_*_run`
+ *  del loop de retención ya no tienen especialista que los emita (motor
+ *  extirpado en 20261122); las etiquetas se conservan por compatibilidad
+ *  de UI hasta el agente DOOH. */
 const TOOL_STATUS: Record<string, string> = {
   start_scout_run: "Scout vigilando tu base…",
   start_strategist_run: "Estratega priorizando…",

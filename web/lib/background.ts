@@ -1,20 +1,17 @@
 // Corridas en segundo plano. Fuente única de verdad (SSOT) para la cinta de
-// progreso global: cualquier trabajo de larga duración (enriquecimiento, mañana,
-// ...) registra aquí su estado y la UI lo muestra con un solo componente.
-// Sin `server-only`: los scripts tsx (enrich-once, prospect-once) lo importan;
-// ningún componente cliente lo importa en runtime (solo el tipo BackgroundRun).
+// progreso global: cualquier trabajo de larga duración (perfil profundo,
+// import, ...) registra aquí su estado y la UI lo muestra con un solo componente.
+// Sin `server-only`: lo importan los server actions (profile-actions,
+// background-actions); ningún componente cliente lo importa en runtime
+// (solo el tipo BackgroundRun).
 //
-// Contrato de `summary` (filosofía TeamPulse): 1 línea, lenguaje humano,
-// outcome + $ cuando aplique, pausa intencional explicada. Nunca jerga de logs
-// ("revisados/nuevas/actualizadas", "medidas", "fallidos", "[STUB]", emails).
-// Formatos por agente:
-// - scout: "Vigiló N · X listos para actuar" | "Vigiló N, nadie necesita mensaje · no quemamos descuentos"
-// - strategist: "X ordenados, empieza por {nombre}" | "Sin ordenar, nada urgente"
-// - copywriter: "X listos para tu visto bueno" | "Sin borradores nuevos, X ya tenían borrador · no duplico" | "Sin borradores, no había priorizados frescos"
-// - prospect: "X parecidos a tu ideal por revisar" | "En pausa, primero recuperamos lo tuyo" | tope 10: "Pausamos al Prospector..."
-// - dispatcher: "X listos, conecta WhatsApp/email para enviar" | "X enviadas, solo lo aprobado"
-// - analyst: "X volvieron · {monto} recuperado" | "Observando X enviados, mide en N días"
-// El `failed` va en su columna, no en el texto. `current` nunca lleva PII (emails).
+// Contrato de `summary` (Fase 2): 1 línea, lenguaje humano,
+// outcome + $ cuando aplique, pausa intencional explicada. Nunca jerga de logs.
+// Formatos vivos: profile ("Perfil X/Y etapas"), import ("import <kind>
+// <source>: X/Y ok", traspaso desde import_runs en 20261124).
+// (HISTÓRICO: los formatos scout/strategist/copywriter/prospect/dispatcher/
+// analyst son del motor de retención extirpado en 20261122 y ya no se emiten.)
+// El `failed` va en su columna, no en el texto. `current` nunca lleva PII.
 import { getSupabase } from "@/lib/supabase";
 import {
   findConflict,
