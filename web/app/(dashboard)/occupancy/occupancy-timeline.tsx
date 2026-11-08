@@ -220,15 +220,22 @@ export function OccupancyTimeline({
               {visibles.map((s) => {
                 const list = byScreen.get(s.id) ?? [];
                 return (
-                  <tr key={s.id} className="border-b last:border-0 hover:bg-muted/30">
+                  <tr
+                    key={s.id}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Abrir pantalla ${s.name}`}
+                    onClick={() => setSelectedId(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelectedId(s.id);
+                      }
+                    }}
+                    className="cursor-pointer border-b last:border-0 hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  >
                     <td className="sticky left-0 z-10 bg-background px-3 py-2">
-                      <button
-                        type="button"
-                        className="font-medium hover:underline"
-                        onClick={() => setSelectedId(s.id)}
-                      >
-                        {s.name}
-                      </button>
+                      <span className="font-medium">{s.name}</span>
                       <span className="block text-[11px] text-muted-foreground">
                         {[s.venue_name, s.city].filter(Boolean).join(" · ") || "—"}
                       </span>

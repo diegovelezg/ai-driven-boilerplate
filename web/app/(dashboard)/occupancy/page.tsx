@@ -206,7 +206,7 @@ export default async function OcupacionPage({
       <PageHeader
         eyebrow="Operación"
         title="Ocupación"
-        description="Filas = pantallas, columnas = días. Rojo ocupado, verde libre. Clic en la pantalla para su ficha."
+        description="Filas = pantallas, columnas = días. Rojo ocupado, verde libre. Clic en la fila para su ficha."
       />
       {error && <AppCardState>{error}</AppCardState>}
       {!error && (

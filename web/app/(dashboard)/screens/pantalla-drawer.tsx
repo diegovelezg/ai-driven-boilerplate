@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, Bot, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
 import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +24,7 @@ import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { formatDecimal, formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 
-type TabId = "ficha" | "comercial" | "geo" | "agentes";
+type TabId = "ficha" | "comercial" | "ocupacion" | "geo" | "agentes";
 
 interface ScreenDetail {
   screen: Record<string, unknown>;
@@ -148,6 +148,7 @@ function Chip({ children }: { children: ReactNode }) {
 
 import { ScreenMap } from "./screen-map";
 import { PantallaChat } from "./pantalla-chat";
+import { PantallaOcupacion } from "./pantalla-ocupacion";
 
 export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClose: () => void }) {
   const router = useRouter();
@@ -292,6 +293,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   const tabs: DrawerTabDef[] = [
     { id: "ficha", label: "Ficha", icon: Monitor },
     { id: "comercial", label: "Comercial", icon: BarChart3 },
+    { id: "ocupacion", label: "Ocupación", icon: CalendarDays },
     { id: "geo", label: "Entorno", icon: MapPin },
     { id: "agentes", label: "Agentes", icon: Bot },
   ];
@@ -736,6 +738,8 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           </AppCard>
         </>
       )}
+
+      {detail && s && tab === "ocupacion" && <PantallaOcupacion screenId={screenId} />}
 
       {detail && s && tab === "geo" && (
         <>
