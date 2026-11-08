@@ -19,6 +19,40 @@ export { buildChatPrompt, parseChatBody, sseEncode };
 
 export type ChatScope = "store" | "screen" | "company" | "order" | "contact" | "brand";
 
+/** Tablas por scope (SSOT: una sola rama en vez de ×4 duplicadas). */
+const ENTITY_TABLES: Record<
+  Exclude<ChatScope, "store" | "brand">,
+  { table: string; columns: string; patchKey: "screenId" | "companyId" | "orderId" | "contactId"; labelOf: (row: Record<string, unknown>, fallback: string) => string | null }
+> = {
+  screen: {
+    table: "inv_screens",
+    columns: "id,store_id,name",
+    patchKey: "screenId",
+    labelOf: (row) => (typeof row.name === "string" ? row.name : null),
+  },
+  company: {
+    table: "crm_companies",
+    columns: "id,store_id,name",
+    patchKey: "companyId",
+    labelOf: (row) => (typeof row.name === "string" ? row.name : null),
+  },
+  order: {
+    table: "io_orders",
+    columns: "id,store_id,io_number",
+    patchKey: "orderId",
+    labelOf: (row) => (typeof row.io_number === "string" ? row.io_number : null),
+  },
+  contact: {
+    table: "crm_contacts",
+    columns: "id,store_id,first_name,last_name",
+    patchKey: "contactId",
+    labelOf: (row) => {
+      const label = [row.first_name, row.last_name].filter((x) => typeof x === "string" && x).join(" ");
+      return label || null;
+    },
+  },
+};
+
 async function resolveEntityStore(
   scope: ChatScope,
   params: unknown,
@@ -26,60 +60,27 @@ async function resolveEntityStore(
   const p = (params ?? {}) as Record<string, unknown>;
   const { getSupabase } = await import("@/lib/supabase");
   const db = getSupabase();
-  if (scope === "screen" && typeof p.id === "string") {
-    const { data } = await db.from("inv_screens").select("id,store_id,name").eq("id", p.id).maybeSingle();
-    const row = (data ?? null) as Record<string, unknown> | null;
-    if (!row) return { storeId: null, entityKey: p.id, focusLabel: null, patch: { screenId: p.id } };
-    return {
-      storeId: String(row.store_id ?? ""),
-      entityKey: String(row.id ?? p.id),
-      focusLabel: typeof row.name === "string" ? row.name : null,
-      patch: { screenId: String(row.id ?? p.id) },
-    };
-  }
-  if (scope === "company" && typeof p.id === "string") {
-    const { data } = await db.from("crm_companies").select("id,store_id,name").eq("id", p.id).maybeSingle();
-    const row = (data ?? null) as Record<string, unknown> | null;
-    if (!row) return { storeId: null, entityKey: p.id, focusLabel: null, patch: { companyId: p.id } };
-    return {
-      storeId: String(row.store_id ?? ""),
-      entityKey: String(row.id ?? p.id),
-      focusLabel: typeof row.name === "string" ? row.name : null,
-      patch: { companyId: String(row.id ?? p.id) },
-    };
-  }
-  if (scope === "order" && typeof p.id === "string") {
-    const { data } = await db.from("io_orders").select("id,store_id,io_number").eq("id", p.id).maybeSingle();
-    const row = (data ?? null) as Record<string, unknown> | null;
-    if (!row) return { storeId: null, entityKey: p.id, focusLabel: null, patch: { orderId: p.id } };
-    return {
-      storeId: String(row.store_id ?? ""),
-      entityKey: String(row.id ?? p.id),
-      focusLabel: typeof row.io_number === "string" ? row.io_number : null,
-      patch: { orderId: String(row.id ?? p.id) },
-    };
-  }
-  if (scope === "contact" && typeof p.id === "string") {
-    const { data } = await db
-      .from("crm_contacts")
-      .select("id,store_id,first_name,last_name")
-      .eq("id", p.id)
-      .maybeSingle();
-    const row = (data ?? null) as Record<string, unknown> | null;
-    if (!row) return { storeId: null, entityKey: p.id, focusLabel: null, patch: { contactId: p.id } };
-    const label = [row.first_name, row.last_name].filter((x) => typeof x === "string" && x).join(" ") || null;
-    return {
-      storeId: String(row.store_id ?? ""),
-      entityKey: String(row.id ?? p.id),
-      focusLabel: label,
-      patch: { contactId: String(row.id ?? p.id) },
-    };
-  }
   if (scope === "brand" && typeof p.name === "string") {
     const name = decodeURIComponent(p.name);
     return { storeId: null, entityKey: name, focusLabel: name, patch: { brandName: name } };
   }
-  return { storeId: null, entityKey: "store", focusLabel: null, patch: {} };
+  if (scope === "store") {
+    return { storeId: null, entityKey: "store", focusLabel: null, patch: {} };
+  }
+  const conf = ENTITY_TABLES[scope as keyof typeof ENTITY_TABLES];
+  if (conf && typeof p.id === "string") {
+    const { data } = await db.from(conf.table).select(conf.columns).eq("id", p.id).maybeSingle();
+    const row = (data ?? null) as Record<string, unknown> | null;
+    if (!row) return { storeId: null, entityKey: p.id, focusLabel: null, patch: { [conf.patchKey]: p.id } as Partial<AgentContext> };
+    return {
+      storeId: String(row.store_id ?? ""),
+      entityKey: String(row.id ?? p.id),
+      focusLabel: conf.labelOf(row, p.id),
+      patch: { [conf.patchKey]: String(row.id ?? p.id) } as Partial<AgentContext>,
+    };
+  }
+  const key = scope === "brand" ? String((p as Record<string, unknown>).name ?? "store") : "store";
+  return { storeId: null, entityKey: key, focusLabel: null, patch: {} };
 }
 
 export function createChatRoute(opts?: { scope?: ChatScope }) {
@@ -182,7 +183,13 @@ export function createChatRoute(opts?: { scope?: ChatScope }) {
     const sessionService = getChatSessionService();
     const runner = createAdkRunner({ agent, appName: "dooh", sessionService });
     const userId = user?.id ?? "anon-dev";
-    const sessionId = `dooh-${storeId}-${scope}-${entityKey}`.slice(0, 120);
+    // Anon-dev (sin sesión) NUNCA comparte: id efímero por request, sin
+    // reuso entre usuarios (antes `dooh-<store>-<scope>-<key>` fijo fugaba
+    // contexto entre anónimos). Autenticado: estable por usuario×foco.
+    const sessionId = (user
+      ? `dooh-${storeId}-${scope}-${entityKey}-${userId}`
+      : `dooh-${storeId}-${scope}-${entityKey}-anon-${crypto.randomUUID()}`
+    ).slice(0, 120);
     try {
       const existing = await sessionService.getSession({ appName: "dooh", userId, sessionId }).catch(() => undefined);
       if (!existing) {

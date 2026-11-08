@@ -1,8 +1,5 @@
-import Link from "next/link";
-import { CircleArrowLeft } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { NuevaEmpresaForm } from "./nueva-form";
 import { connection } from "next/server";
 import { getMyActiveStore } from "@/lib/tenant";
@@ -36,7 +33,7 @@ export default async function NuevaEmpresaPage() {
         eyebrow="CRM"
         title="Nueva empresa"
         description="Elige el tipo de empresa y completa sus datos. La marca se registra en la orden."
-        right={<Button render={<Link href="/companies" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
+        backHref="/companies"
       />
       <AppCard title="Datos" description="Solo el nombre y el tipo son obligatorios.">
         <NuevaEmpresaForm canManageCommission={canManageCommission} defaultCountry={defaultCountry} />

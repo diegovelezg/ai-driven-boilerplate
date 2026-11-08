@@ -20,6 +20,7 @@ import {
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { COMPANY_KINDS, COMPANY_KIND_LABELS, kindLabel, type CompanyKind } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
@@ -109,6 +110,11 @@ export function CompaniesList({
 
   const filtersActive = q.trim() !== "" || kind !== null;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const exportParams = new URLSearchParams({ entity: "companies" });
+  if (q.trim()) exportParams.set("q", q.trim());
+  if (kind) exportParams.set("type", kind);
+  exportParams.set("sort", sortKey);
+  exportParams.set("dir", sortDir);
 
   const goTo = (next: number) => {
     startTransition(() => {
@@ -189,6 +195,7 @@ export function CompaniesList({
             </Button>
           </AppTooltip>
         </span>
+        <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar empresas filtradas a CSV" />
         <EntityCount total={totalCount} pending={isPending} />
       </div>
 

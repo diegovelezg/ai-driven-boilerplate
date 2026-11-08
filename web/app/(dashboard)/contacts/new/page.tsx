@@ -1,8 +1,5 @@
-import Link from "next/link";
-import { CircleArrowLeft } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { listCrmCompanies, listDistinctJobTitles } from "@/lib/crm-db";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
@@ -54,7 +51,7 @@ export default async function NuevoContactoPage({
         eyebrow="CRM"
         title="Nuevo contacto"
         description="Datos de la persona y de la empresa a la que pertenece."
-        right={<Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
+        backHref="/contacts"
       />
 
       {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}

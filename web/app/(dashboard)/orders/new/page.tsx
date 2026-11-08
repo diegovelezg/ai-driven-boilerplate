@@ -1,9 +1,6 @@
-import Link from "next/link";
-import { CircleArrowLeft } from "lucide-react";
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { listCrmCompanies } from "@/lib/crm-db";
@@ -100,7 +97,7 @@ export default async function NuevaOrdenPage() {
         eyebrow="DOOH"
         title="Nueva orden"
         description="Un solo periodo para toda la orden: elige pantallas, define sus precios y guárdala como borrador. Después podrás completar autorización y materiales."
-        right={<Button render={<Link href="/orders" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
+        backHref="/orders"
       />
       {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
       {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}

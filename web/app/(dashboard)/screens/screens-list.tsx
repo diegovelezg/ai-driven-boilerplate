@@ -8,6 +8,7 @@ import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import { PantallaDrawer } from "./pantalla-drawer";
 import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import {
   DataTable,
   DataTableBody,
@@ -131,6 +132,13 @@ export function ScreensList({
 
   const filtersActive = q.trim() !== "" || supplierId !== null || city !== null || active !== "all";
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const exportParams = new URLSearchParams({ entity: "screens" });
+  if (q.trim()) exportParams.set("q", q.trim());
+  if (supplierId) exportParams.set("proveedor", supplierId);
+  if (city) exportParams.set("ciudad", city);
+  if (active !== "all") exportParams.set("estado", active);
+  exportParams.set("sort", sortKey);
+  exportParams.set("dir", sortDir);
 
   const goTo = (next: number) => {
     startTransition(() => {
@@ -238,6 +246,7 @@ export function ScreensList({
             </Button>
           </AppTooltip>
         </span>
+        <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar pantallas filtradas a CSV" />
         <EntityCount total={totalCount} truncated={truncated} pending={isPending} />
       </div>
 

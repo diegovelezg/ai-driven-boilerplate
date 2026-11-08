@@ -9,6 +9,10 @@ export interface BrandRow {
   brand: string;
   ios: number;
   total_minor: number;
+  /** Monedas ISO de las IOs agregadas (la marca cruza PEN+USD: nunca asumir una).
+   *  Totales por moneda (nunca sumar mixto en el export: una fila por moneda). */
+  currencies: string[];
+  totals_by_currency: Record<string, number>;
   first_start: string | null;
   last_end: string | null;
   screens: string[];
@@ -201,7 +205,7 @@ export async function listBrands(
   const db = getSupabase();
   const { data: orders, error } = await db
     .from("io_orders")
-    .select("id,io_number,brand,status,starts_at,ends_at,billing_company_id")
+    .select("id,io_number,brand,status,starts_at,ends_at,billing_company_id,currency")
     .eq("store_id", storeId)
     .not("brand", "is", null);
   if (error) throw new Error(`CRM read: ${error.message}`);
@@ -233,10 +237,12 @@ export async function listBrands(
     const brand = String(o.brand);
     let row = byBrand.get(keyOf(brand));
     if (!row) {
-      row = { brand, ios: 0, total_minor: 0, first_start: null, last_end: null, screens: [], agencies: [], active: false, screensSet: new Set(), agenciesSet: new Set() };
+      row = { brand, ios: 0, total_minor: 0, currencies: [], totals_by_currency: {}, first_start: null, last_end: null, screens: [], agencies: [], active: false, screensSet: new Set(), agenciesSet: new Set() };
       byBrand.set(keyOf(brand), row);
     }
     row.ios += 1;
+    const cur = typeof o.currency === "string" && o.currency.trim() ? o.currency.trim().toUpperCase() : null;
+    if (cur && !row.currencies.includes(cur)) row.currencies.push(cur);
     const starts = typeof o.starts_at === "string" ? o.starts_at : null;
     const ends = typeof o.ends_at === "string" ? o.ends_at : null;
     if (starts && (!row.first_start || starts < row.first_start)) row.first_start = starts;
@@ -250,12 +256,18 @@ export async function listBrands(
     if (!io) continue;
     const row = byBrand.get(keyOf(String(io.brand)));
     if (!row) continue;
-    row.total_minor += Number(l.rate_minor ?? 0);
+    const amt = Number(l.rate_minor ?? 0);
+    row.total_minor += amt;
+    const cur = typeof io.currency === "string" && (io.currency as string).trim()
+      ? (io.currency as string).trim().toUpperCase()
+      : "PEN";
+    row.totals_by_currency[cur] = (row.totals_by_currency[cur] ?? 0) + amt;
     const sc = typeof l.screen_id === "string" ? screenName.get(l.screen_id) : null;
     if (sc) row.screensSet.add(sc);
   }
   const tokens = tokenizeSearch(opts.q ?? "");
   const qNorm = normalizeSearch(opts.q ?? "");
+  for (const r of byBrand.values()) r.currencies.sort();
   const sortKey = opts.sortKey ?? "brand";
   const ascending = (opts.sortDir ?? (sortKey === "brand" ? "asc" : "desc")) === "asc";
   // Fuzzy en JS (la marca es derivada por agregación): tildes, multi-token

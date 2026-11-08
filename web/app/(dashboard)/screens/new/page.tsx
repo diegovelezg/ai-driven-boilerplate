@@ -1,9 +1,6 @@
-import Link from "next/link";
 import { connection } from "next/server";
-import { CircleArrowLeft } from "lucide-react";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import { listScreenFilterOptions } from "@/lib/screens-db";
@@ -45,7 +42,7 @@ export default async function NuevaPantallaPage() {
         eyebrow="DOOH"
         title="Nueva pantalla"
         description="Marca el punto en el mapa, completa la ubicación y registra la pantalla con sus medidas y precio."
-        right={<Button render={<Link href="/screens" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
+        backHref="/screens"
       />
       {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
       {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}

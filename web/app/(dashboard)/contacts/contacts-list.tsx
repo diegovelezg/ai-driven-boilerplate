@@ -19,6 +19,7 @@ import {
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
+import { ExportCsvButton } from "@/components/export-csv-button";
 import { CompanyPrincipalBadge } from "@/components/company-badges";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
@@ -93,6 +94,9 @@ export function ContactsList({
 
   const selected = rows.find((r) => r.id === selectedId) ?? null;
   const hasFilter = q.trim() !== "" || companyId !== null;
+  const exportParams = new URLSearchParams({ entity: "contacts" });
+  if (q.trim()) exportParams.set("q", q.trim());
+  if (companyId) exportParams.set("company", companyId);
 
   return (
     <div className="flex flex-col gap-4">
@@ -174,6 +178,7 @@ export function ContactsList({
             </Button>
           </AppTooltip>
         </span>
+        <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar contactos filtrados a CSV" />
         <EntityCount total={rows.length} pending={isPending} />
       </div>
 

@@ -1,41 +1,20 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { connection } from "next/server";
-import { Camera, FileText, Package, Plus, Radio, RefreshCw, Wallet, Gauge, type LucideIcon } from "lucide-react";
+import { Camera, Gauge, Plus, Radio, RefreshCw, Wallet } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
 import { PageHeader } from "@/components/page-header";
 import { SectionHeading } from "@/components/section-heading";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { getMyStoreRole, requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import type { MemberRole } from "@/lib/roles";
 import { formatMoney, formatNumber, formatPercent } from "@/lib/format";
-import { getDashboardSnapshot, type AlertKind } from "@/lib/dashboard";
+import { getDashboardSnapshot } from "@/lib/dashboard";
+import { DashboardAlerts } from "./dashboard-alerts";
 
 export const instant = false;
-
-const ALERT_META: Record<AlertKind, { label: string; icon: LucideIcon; className: string }> = {
-  sin_om: {
-    label: "Sin OM",
-    icon: FileText,
-    className: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
-  },
-  material: {
-    label: "Material",
-    icon: Package,
-    className: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  sin_evidencia: {
-    label: "Sin evidencia",
-    icon: Camera,
-    className: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  },
-  termina_sin_relevo: {
-    label: "Sin relevo",
-    icon: RefreshCw,
-    className: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  },
-};
 
 export default async function DashboardPage() {
   await connection();
@@ -44,6 +23,7 @@ export default async function DashboardPage() {
   const connected = Boolean(activeStoreId);
 
   let snap: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  let myRole: MemberRole | null = null;
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -52,6 +32,7 @@ export default async function DashboardPage() {
       if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
         error = "Sin acceso a esta tienda.";
       } else {
+        myRole = await getMyStoreRole(storeId).catch(() => null);
         snap = await getDashboardSnapshot(storeId);
       }
     } catch (e) {
@@ -136,47 +117,9 @@ export default async function DashboardPage() {
               variant="table"
               className="self-start"
             >
-              {snap.alerts.length === 0 ? (
-                <p className="px-4 py-6 text-sm text-muted-foreground">
-                  Sin alertas. Todo lo firmado tiene OM, material aprobado y evidencia.
-                </p>
-              ) : (
-                <ul className="divide-y divide-border">
-                  {snap.alerts.map((a) => (
-                    <li key={`${a.kind}-${a.ioId}`}>
-                      <Link
-                        href={`/orders?order=${a.ioId}`}
-                        className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-muted/40"
-                      >
-                        <span className="min-w-0">
-                          <span className="flex flex-wrap items-center gap-2">
-                            <Badge
-                              variant="secondary"
-                              className={`gap-1 font-normal ${ALERT_META[a.kind].className}`}
-                            >
-                              {(() => {
-                                const Icon = ALERT_META[a.kind].icon;
-                                return <Icon aria-hidden />;
-                              })()}
-                              {ALERT_META[a.kind].label}
-                            </Badge>
-                            <span className="text-sm font-medium">{a.ioNumber}</span>
-                            {a.brand && (
-                              <span className="truncate text-xs text-muted-foreground">{a.brand}</span>
-                            )}
-                          </span>
-                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                            {a.detail}
-                          </span>
-                        </span>
-                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                          {a.company ?? "—"}
-                        </span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <Suspense fallback={<p className="px-4 py-6 text-sm text-muted-foreground">Cargando alertas…</p>}>
+                <DashboardAlerts alerts={snap.alerts} myRole={myRole} />
+              </Suspense>
             </AppCard>
 
             <AppCard

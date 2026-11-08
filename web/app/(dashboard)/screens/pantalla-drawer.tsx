@@ -9,7 +9,7 @@ import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
+  DrawerDialogContent as DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,

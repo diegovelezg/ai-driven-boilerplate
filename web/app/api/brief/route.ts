@@ -22,7 +22,17 @@ export async function POST(req: Request) {
       return Response.json({ error: "Sin acceso a esta tienda." }, { status: 403 });
     }
     const { checkRateLimit } = await import("@/lib/rate-limit");
-    if (!checkRateLimit(`brief:${active.id}`, 5, 60_000)) {
+    // Clave por tienda+usuario: un usuario no agota la cuota de toda la tienda.
+    let rateKey = `brief:${active.id}:anon`;
+    try {
+      const { createServerSupabase } = await import("@/lib/supabase-server");
+      const supabase = await createServerSupabase();
+      const { data } = await supabase.auth.getUser();
+      if (data.user?.id) rateKey = `brief:${active.id}:${data.user.id}`;
+    } catch {
+      // sin sesión resoluble: cae a :anon (fail-closed en throttle)
+    }
+    if (!checkRateLimit(rateKey, 5, 60_000)) {
       return Response.json({ error: "Demasiadas corridas. Espera un momento." }, { status: 429 });
     }
     if (!force) {
@@ -38,6 +48,7 @@ export async function POST(req: Request) {
     const r = await runBriefJob(active.id);
     return Response.json({ ok: true, ...r });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
+    console.error("[brief]", e instanceof Error ? e.message : e);
+    return Response.json({ error: "No se pudo correr el muro." }, { status: 500 });
   }
 }

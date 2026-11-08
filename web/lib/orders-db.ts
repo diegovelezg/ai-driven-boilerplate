@@ -206,6 +206,8 @@ export interface OrderDetail {
   advertiser_name: string | null;
   billing_name: string | null;
   billing_kind: string | null;
+  /** RUC de la razón social a facturar (crm_companies.tax_id). */
+  billing_tax_id: string | null;
   lines: Array<Record<string, unknown>>;
   io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
@@ -227,7 +229,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   if (!order) return null;
   const o = order as Record<string, unknown>;
   const [cos, lines, oms, creas, bookings, photos, invs] = await Promise.all([
-    db.from("crm_companies").select("id,name,kind").eq("store_id", storeId).in(
+    db.from("crm_companies").select("id,name,kind,tax_id").eq("store_id", storeId).in(
       "id",
       [o.advertiser_company_id, o.billing_company_id].filter(Boolean).map(String),
     ),
@@ -248,6 +250,12 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   );
   const kindBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), typeof c.kind === "string" ? c.kind : null]),
+  );
+  const taxBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [
+      String(c.id),
+      typeof c.tax_id === "string" && c.tax_id.trim() ? c.tax_id.trim() : null,
+    ]),
   );
   for (const [name, res] of [["companies", cos], ["lines", lines], ["oms", oms], ["creatives", creas], ["photos", photos], ["invoices", invs]] as const) {
     if (res.error) throw new Error(`Order read (${name}): ${res.error.message}`);
@@ -283,6 +291,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
     advertiser_name: o.advertiser_company_id ? (nameBy.get(String(o.advertiser_company_id)) ?? null) : null,
     billing_name: o.billing_company_id ? (nameBy.get(String(o.billing_company_id)) ?? null) : null,
     billing_kind: o.billing_company_id ? (kindBy.get(String(o.billing_company_id)) ?? null) : null,
+    billing_tax_id: o.billing_company_id ? (taxBy.get(String(o.billing_company_id)) ?? null) : null,
     lines: lineRows.map((l) => {
       const s = screenBy.get(String(l.screen_id));
       return { ...l, screen_name: s?.name ?? null, screen_detail: s?.detail ?? null };

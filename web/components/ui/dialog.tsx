@@ -43,13 +43,18 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  forceOverlay = false,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  /** Opt-in: solo los dialogs anidados en un Sheet modal lo necesitan.
+   *  Sin esto Base UI no pinta backdrop (el click fuera no cierra).
+   *  El default (false) no monta backdrop persistente en el resto. */
+  forceOverlay?: boolean
 }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay forceRender={forceOverlay ? true : undefined} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
@@ -143,6 +148,15 @@ function DialogDescription({
   )
 }
 
+/** Dialog dentro de un drawer (Sheet modal): backdrop opt-in.
+ *  Usar SOLO anidado en drawer; el resto usa `DialogContent` (sin
+ *  backdrop persistente). */
+function DrawerDialogContent({
+  ...props
+}: React.ComponentProps<typeof DialogContent>) {
+  return <DialogContent {...props} forceOverlay />
+}
+
 export {
   Dialog,
   DialogClose,
@@ -154,4 +168,5 @@ export {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
+  DrawerDialogContent,
 }

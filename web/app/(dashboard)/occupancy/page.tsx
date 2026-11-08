@@ -12,14 +12,21 @@ import { OccupancyTimeline } from "./occupancy-timeline";
 export const instant = false;
 
 function validDay(v: string | undefined, fallback: string): string {
-  if (v && /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(v))) return v;
-  return fallback;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v ?? "");
+  if (!m) return fallback;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return fallback;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return fallback;
+  return v!.trim();
 }
 
 export default async function OcupacionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ desde?: string; dias?: string; q?: string; ciudad?: string; proveedor?: string }>;
+  searchParams: Promise<{ desde?: string; dias?: string; q?: string; ciudad?: string; proveedor?: string; estado?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
@@ -29,10 +36,16 @@ export default async function OcupacionPage({
   const dias = [7, 14, 28].includes(diasRaw) ? diasRaw : 14;
   const q = (sp.q ?? "").trim();
   const ciudad = (sp.ciudad ?? "").trim() || null;
+  const rawEstado = (sp.estado ?? "").trim().toLowerCase();
+  const estado: "all" | "libre" | "ocupada" =
+    rawEstado === "libre" || rawEstado === "ocupada" ? rawEstado : "all";
   // Explícito manda: uuid, "own" (red propia) o "all". Sin param, default =
   // red propia si la tienda tiene casa (kind NULL), si no todos.
+  // OJO: "all" explícito debe persistir (?proveedor=all); tratarlo como
+  // ausente rebotaba siempre al default de la empresa.
+  const hasProveedorParam = sp.proveedor !== undefined;
   const rawProveedor = (sp.proveedor ?? "").trim().toLowerCase();
-  const explicitProveedor = rawProveedor === "" || rawProveedor === "all" ? null : rawProveedor;
+  const explicitProveedor = !hasProveedorParam || rawProveedor === "" ? null : rawProveedor;
 
   const dbReady = isSupabaseConfigured();
   const activeStoreId = await resolveActiveStoreId();
@@ -145,14 +158,31 @@ export default async function OcupacionPage({
     supplierValue =
       explicitProveedor ?? pick(myCompany) ?? pick(homeCompany) ?? (casaName ? "own" : "all");
     const listSupplierId = supplierValue !== "own" && supplierValue !== "all" ? supplierValue : null;
-    const [list, opts] = await Promise.all([
-      listScreens(storeId, { q, city: ciudad, supplierId: listSupplierId, active: "active", sortKey: "name", sortDir: "asc", page: 1, pageSize: 100 }),
+    const ownOnly = supplierValue === "own";
+    const [first, opts] = await Promise.all([
+      // ownOnly se filtra en la query (IS NULL + paginado), nunca en memoria
+      // sobre la muestra (ver ScreensFilter.ownOnly).
+      listScreens(storeId, { q, city: ciudad, supplierId: listSupplierId, ownOnly, active: "active", sortKey: "name", sortDir: "asc", page: 1, pageSize: 100 }),
       listScreenFilterOptions(storeId).catch(() => ({ cities: [] as string[], suppliers: [] as Array<{ id: string; name: string }>, truncated: false })),
     ]);
-    // Red propia = pantallas sin proveedor (ownership own); el RPC no lo
-    // expresa (NULL = sin filtro), así que se filtra sobre la muestra.
-    const ownOnly = supplierValue === "own";
-    const rows = ownOnly ? list.rows.filter((r) => !r.supplier_id) : list.rows;
+    // La matriz necesita TODAS las pantallas (208 activas hoy): con solo la
+    // pág.1 los conflictos caían fuera y "Ocupadas" salía vacío. Bucle
+    // paginado con tope 2000 (mismo patrón que el export).
+    const allRows = [...first.rows];
+    const totalScreens = first.total ?? first.rows.length;
+    let screensTruncated = Boolean(first.truncated);
+    for (let page = 2; page <= 20 && allRows.length < totalScreens; page += 1) {
+      const next = await listScreens(storeId, { q, city: ciudad, supplierId: listSupplierId, ownOnly, active: "active", sortKey: "name", sortDir: "asc", page, pageSize: 100 });
+      if (next.truncated) {
+        screensTruncated = true;
+        break;
+      }
+      allRows.push(...next.rows);
+      if (next.rows.length === 0) break;
+    }
+    if (allRows.length < totalScreens) screensTruncated = true;
+    const rows = allRows;
+    truncated = screensTruncated;
     screens = rows.map((r) => ({
       id: r.id,
       name: r.name,
@@ -161,7 +191,6 @@ export default async function OcupacionPage({
     }));
     cities = opts.cities;
     suppliers = opts.suppliers;
-    truncated = Boolean(list.truncated) || (list.total ?? 0) > screens.length;
     // Fin inclusivo = último día visible (desde + dias - 1).
     const [y, m, d] = desde.split("-").map(Number);
     const p = (n: number) => String(n).padStart(2, "0");
@@ -192,6 +221,7 @@ export default async function OcupacionPage({
           supplierValue={supplierValue}
           suppliers={suppliers}
           casaName={casaName}
+          estado={estado}
           truncated={truncated}
         />
       )}

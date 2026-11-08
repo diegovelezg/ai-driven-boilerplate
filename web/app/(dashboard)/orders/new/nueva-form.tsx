@@ -9,7 +9,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { ComboboxField } from "@/components/combobox-field";
 import {
   Dialog,
-  DialogContent,
+  DrawerDialogContent as DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,

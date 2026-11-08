@@ -21,6 +21,7 @@ import { formatMoney, formatNumber } from "@/lib/format";
 import type { BrandsSortDir, BrandsSortKey, BrandRow } from "@/lib/brand-db";
 import { MarcaDrawer } from "./marca-drawer";
 import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
+import { ExportCsvButton } from "@/components/export-csv-button";
 
 export function BrandsList({
   rows,
@@ -71,6 +72,11 @@ export function BrandsList({
     });
   };
 
+  const exportParams = new URLSearchParams({ entity: "brands" });
+  if (q.trim()) exportParams.set("q", q.trim());
+  exportParams.set("sort", sortKey);
+  exportParams.set("dir", sortDir);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2.5">
@@ -99,6 +105,7 @@ export function BrandsList({
             Limpiar
           </Button>
         )}
+        <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar marcas filtradas a CSV" />
         <EntityCount total={rows.length} pending={isPending} singular="marca" plural="marcas" />
       </div>
 

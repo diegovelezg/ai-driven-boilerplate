@@ -48,6 +48,9 @@ export function parseScreensSort(sp: { sort?: string; dir?: string }): {
 export interface ScreensFilter {
   q?: string;
   supplierId?: string | null;
+  /** Red propia: pantallas sin proveedor (supplier_company_id IS NULL).
+   *  Se filtra en la query (SQL), nunca en memoria sobre la muestra. */
+  ownOnly?: boolean;
   city?: string | null;
   active?: "all" | "active" | "inactive";
   sortKey?: ScreensSortKey;
@@ -114,25 +117,28 @@ export async function listScreens(
   const sortDir = opts.sortDir ?? "asc";
   const q = (opts.q ?? "").trim();
 
-  // Vía rápida: un roundtrip con ranking + total exacto en Postgres.
-  const rpc = await db.rpc("inv_search_screens", {
-    p_store: storeId,
-    p_q: q || null,
-    p_supplier: opts.supplierId ?? null,
-    p_city: (opts.city ?? "").trim() || null,
-    p_active: opts.active ?? "all",
-    p_sort: sortKey,
-    p_dir: sortDir,
-    p_limit: pageSize,
-    p_offset: (page - 1) * pageSize,
-  });
-  if (!rpc.error) {
-    const data = (rpc.data ?? []) as Array<Record<string, unknown>>;
-    const total = data.length > 0 ? Number(data[0].total ?? 0) : 0;
-    return { rows: data.map(mapRpcRow), total: Number.isFinite(total) ? total : 0 };
-  }
-  if (!isMissingFunction(rpc.error as { code?: string; message?: string })) {
-    throw new Error(`Screens read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
+  // Red propia (ownOnly) no la expresa el RPC ($2 NULL = sin filtro):
+  // se resuelve por la vía legacy con IS NULL en la query (paginado real).
+  if (!opts.ownOnly) {
+    const rpc = await db.rpc("inv_search_screens", {
+      p_store: storeId,
+      p_q: q || null,
+      p_supplier: opts.supplierId ?? null,
+      p_city: (opts.city ?? "").trim() || null,
+      p_active: opts.active ?? "all",
+      p_sort: sortKey,
+      p_dir: sortDir,
+      p_limit: pageSize,
+      p_offset: (page - 1) * pageSize,
+    });
+    if (!rpc.error) {
+      const data = (rpc.data ?? []) as Array<Record<string, unknown>>;
+      const total = data.length > 0 ? Number(data[0].total ?? 0) : 0;
+      return { rows: data.map(mapRpcRow), total: Number.isFinite(total) ? total : 0 };
+    }
+    if (!isMissingFunction(rpc.error as { code?: string; message?: string })) {
+      throw new Error(`Screens read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
+    }
   }
 
   // Fallback pre-migración: mismos campos y normalización, paginación honesta
@@ -152,12 +158,14 @@ async function listScreensLegacy(
   const asc = sortDir === "asc";
 
   let countQuery = db.from("inv_screens").select("id", { count: "exact", head: true }).eq("store_id", storeId);
-  if (opts.supplierId) countQuery = countQuery.eq("supplier_company_id", opts.supplierId);
+  if (opts.ownOnly) countQuery = countQuery.is("supplier_company_id", null);
+  else if (opts.supplierId) countQuery = countQuery.eq("supplier_company_id", opts.supplierId);
   if (opts.active === "active") countQuery = countQuery.eq("is_active", true);
   else if (opts.active === "inactive") countQuery = countQuery.eq("is_active", false);
 
   let query = db.from("inv_screens").select(LEGACY_COLUMNS).eq("store_id", storeId).limit(500);
-  if (opts.supplierId) query = query.eq("supplier_company_id", opts.supplierId);
+  if (opts.ownOnly) query = query.is("supplier_company_id", null);
+  else if (opts.supplierId) query = query.eq("supplier_company_id", opts.supplierId);
   if (opts.active === "active") query = query.eq("is_active", true);
   else if (opts.active === "inactive") query = query.eq("is_active", false);
   // Orden servido por Supabase solo en columnas propias; supplier/city se ordenan en JS.
@@ -291,8 +299,19 @@ export async function getScreenDetail(storeId: string, screenId: string): Promis
   delete screen.inv_venues;
   const screenIdStr = String(screen.id);
   const supplierId = (screen.supplier_company_id as string | null) ?? null;
+  // Las reservas cuelgan de slots (inv_bookings.slot_id → inv_slots.id):
+  // inv_bookings NO tiene screen_id (filtrar por ella = 42703 → 500).
+  const { data: slotRows, error: slotErr } = await db
+    .from("inv_slots")
+    .select("id")
+    .eq("store_id", storeId)
+    .eq("screen_id", screenIdStr);
+  if (slotErr) throw new Error(`Screens read: ${slotErr.message}`);
+  const slotIds = ((slotRows ?? []) as Array<Record<string, unknown>>).map((s) => String(s.id));
   const [{ count: bookings }, { count: lines }, { data: emb }, supRes] = await Promise.all([
-    db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("screen_id", screenIdStr),
+    slotIds.length > 0
+      ? db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).in("slot_id", slotIds)
+      : Promise.resolve({ count: 0 as number | null }),
     db.from("io_lines").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("screen_id", screenIdStr),
     db.from("inv_screen_embeddings").select("model").eq("screen_id", screenIdStr).maybeSingle(),
     supplierId

@@ -28,6 +28,7 @@ import type { OrderRow } from "@/lib/orders-db";
 import type { MemberRole } from "@/lib/roles";
 import { OrdenDrawer } from "./orden-drawer";
 import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
+import { ExportCsvButton } from "@/components/export-csv-button";
 
 function fmtCorto(v: string | null): string {
   const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(v) : null;
@@ -100,6 +101,10 @@ export function OrdersList({
   }, [rows]);
 
   const hasFilter = q.trim() !== "" || stage !== null || billing !== null;
+  const exportParams = new URLSearchParams({ entity: "orders" });
+  if (q.trim()) exportParams.set("q", q.trim());
+  if (stage) exportParams.set("stage", stage);
+  if (billing) exportParams.set("billing", billing);
 
   return (
     <div className="flex flex-col gap-4">
@@ -166,6 +171,7 @@ export function OrdersList({
             Limpiar
           </Button>
         )}
+        <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar órdenes filtradas a CSV" />
         <EntityCount total={rows.length} pending={isPending} />
       </div>
 

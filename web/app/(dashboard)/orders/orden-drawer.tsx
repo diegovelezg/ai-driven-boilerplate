@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
-  DialogContent,
+  DrawerDialogContent as DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -23,9 +23,10 @@ import { SectionHeading } from "@/components/section-heading";
 import { DrawerTable, DrawerTableBody, DrawerTableHeader, DrawerTableRow, DrawerTableTd, DrawerTableTh } from "@/components/drawer-table";
 import { ORDER_STEPS, orderStage } from "@/lib/order-stage";
 import { BILLING_LABELS, billingStatus } from "@/lib/billing-status";
-import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction } from "@/lib/order-flow-actions";
+import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction, setInvoiceStatusAction } from "@/lib/order-flow-actions";
 import { OrdenChat } from "./orden-chat";
 import { OrderEditForm } from "./order-edit-form";
+import { InvoiceForm } from "./invoice-form";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { normalizeCurrency } from "@/lib/currency";
 import { formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
@@ -35,6 +36,7 @@ interface Detail {
   advertiser_name: string | null;
   billing_name: string | null;
   billing_kind: string | null;
+  billing_tax_id: string | null;
   lines: Array<Record<string, unknown>>;
   io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
@@ -123,11 +125,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const [omUrl, setOmUrl] = useState("");
   const [matOpen, setMatOpen] = useState(false);
   const [matUrl, setMatUrl] = useState("");
-  const [matDur, setMatDur] = useState("");
-  const [matW, setMatW] = useState("");
-  const [matH, setMatH] = useState("");
   const [photoOpen, setPhotoOpen] = useState(false);
   const [photoUrl, setPhotoUrl] = useState("");
+  const [invOpen, setInvOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -189,9 +189,6 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
 
   const openMatDialog = () => {
     setMatUrl("");
-    setMatDur("");
-    setMatW("");
-    setMatH("");
     setMatOpen(true);
   };
 
@@ -204,17 +201,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       const res = await attachCreativeAction({
         orderId,
         fileUrl: matUrl.trim(),
-        durationSec: matDur.trim() || null,
-        widthPx: matW.trim() || null,
-        heightPx: matH.trim() || null,
       });
       if (res.ok) {
         toast.add({ title: "Material adjuntado", description: res.message, type: "success" });
         setMatOpen(false);
         setMatUrl("");
-        setMatDur("");
-        setMatW("");
-        setMatH("");
         await load();
       } else {
         toast.add({ title: "No se pudo adjuntar", description: res.message, type: "error" });
@@ -747,7 +738,17 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <SectionHeading
               title="Cobranza"
               hint="Carril paralelo: admite upfront y abonos a mitad de pauta."
-              right={bill && <OrderBillingBadge status={bill.status} prepaid={bill.isPrepaid} prefixed />}
+              right={
+                <span className="flex items-center gap-2">
+                  {bill && <OrderBillingBadge status={bill.status} prepaid={bill.isPrepaid} prefixed />}
+                  {canEdit && (
+                    <Button size="xs" variant="outline" onClick={() => setInvOpen(true)} disabled={isPending}>
+                      <Receipt aria-hidden />
+                      Registrar factura
+                    </Button>
+                  )}
+                </span>
+              }
             />
             {bill && gross > 0 && (
               <div className="flex flex-col gap-1.5" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Cobrado ${progress}% del bruto`}>
@@ -773,23 +774,74 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     <DrawerTableTh>Número</DrawerTableTh>
                     <DrawerTableTh>Estado</DrawerTableTh>
                     <DrawerTableTh numeric>Monto</DrawerTableTh>
+                    <DrawerTableTh>Emisión</DrawerTableTh>
                     <DrawerTableTh>Vence</DrawerTableTh>
+                    {canEdit && <DrawerTableTh>Acciones</DrawerTableTh>}
                   </DrawerTableHeader>
                   <DrawerTableBody>
                     {invoices.map((v) => {
                       const amount = Number(v.amount_minor ?? NaN);
+                      const st = String(v.status ?? "");
+                      const terminal = st === "cancelled" || st === "draft";
                       return (
                         <DrawerTableRow key={String(v.id)}>
                           <DrawerTableTd className="font-medium">{str(v.number)}</DrawerTableTd>
                           <DrawerTableTd>
-                            <OrderInvoiceBadge status={String(v.status ?? "")} />
+                            <OrderInvoiceBadge status={st} />
                           </DrawerTableTd>
                           <DrawerTableTd numeric className="tabular-nums">
                             {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency) : "—"}
                           </DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
+                            {typeof v.issue_date === "string" && v.issue_date ? fmtFecha(v.issue_date) : "—"}
+                          </DrawerTableTd>
+                          <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
                             {typeof v.due_date === "string" && v.due_date ? fmtFecha(v.due_date) : "—"}
                           </DrawerTableTd>
+                          {canEdit && (
+                            <DrawerTableTd>
+                              {terminal ? (
+                                <span className="text-[11px] text-muted-foreground">—</span>
+                              ) : (
+                                <span className="flex flex-wrap items-center gap-1">
+                                  {st !== "paid" && (
+                                    <Button
+                                      variant="outline"
+                                      size="xs"
+                                      aria-label={`Marcar factura ${str(v.number)} como pagada`}
+                                      title="Marcar como pagada"
+                                      onClick={() => void runFlow("Factura pagada", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "paid" }))}
+                                      disabled={isPending}
+                                    >
+                                      Pagada
+                                    </Button>
+                                  )}
+                                  {st === "paid" && (
+                                    <Button
+                                      variant="ghost"
+                                      size="xs"
+                                      aria-label={`Reabrir factura ${str(v.number)} como emitida`}
+                                      title="Reabrir como emitida (por error al marcar)"
+                                      onClick={() => void runFlow("Factura emitida", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "issued" }))}
+                                      disabled={isPending}
+                                    >
+                                      Reabrir
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    aria-label={`Anular factura ${str(v.number)}`}
+                                    title="Anular (terminal: no suma en cobro)"
+                                    onClick={() => void runFlow("Factura anulada", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "cancelled" }))}
+                                    disabled={isPending}
+                                  >
+                                    Anular
+                                  </Button>
+                                </span>
+                              )}
+                            </DrawerTableTd>
+                          )}
                         </DrawerTableRow>
                       );
                     })}
@@ -874,7 +926,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           <DialogHeader>
             <DialogTitle>Adjuntar material</DialogTitle>
             <DialogDescription>
-              La pieza nace pendiente; al aprobarla pasa a emisión.
+              Pega la URL del material. Nace aprobado.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
@@ -889,44 +941,6 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 disabled={isPending}
               />
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="grid gap-1.5">
-                <Label htmlFor="ord-mat-dur">Duración (s)</Label>
-                <Input
-                  id="ord-mat-dur"
-                  value={matDur}
-                  onChange={(e) => setMatDur(e.target.value.replace(/[^0-9.]/g, "").slice(0, 7))}
-                  placeholder="10"
-                  inputMode="decimal"
-                  disabled={isPending}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="ord-mat-w">Ancho (px)</Label>
-                <Input
-                  id="ord-mat-w"
-                  value={matW}
-                  onChange={(e) => setMatW(e.target.value.replace(/\D/g, "").slice(0, 5))}
-                  placeholder="1920"
-                  inputMode="numeric"
-                  disabled={isPending}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="ord-mat-h">Alto (px)</Label>
-                <Input
-                  id="ord-mat-h"
-                  value={matH}
-                  onChange={(e) => setMatH(e.target.value.replace(/\D/g, "").slice(0, 5))}
-                  placeholder="1080"
-                  inputMode="numeric"
-                  disabled={isPending}
-                />
-              </div>
-            </div>
-            <p className="-mt-1 text-[11px] text-muted-foreground">
-              Tamaño de la pieza (opcional): resolución del video/imagen y duración del spot.
-            </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setMatOpen(false)} disabled={isPending}>
                 <X aria-hidden />
@@ -972,6 +986,30 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={invOpen} onOpenChange={(v) => !v && setInvOpen(false)}>
+        <DialogContent className="p-6 sm:min-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Registrar factura</DialogTitle>
+            <DialogDescription>
+              Comprobante emitido en {orderCurrency}. El vencimiento se sugiere desde la condición de pago.
+            </DialogDescription>
+          </DialogHeader>
+          <InvoiceForm
+            orderId={orderId}
+            orderCurrency={orderCurrency}
+            paymentTermsDays={typeof o?.payment_terms_days === "number" ? (o.payment_terms_days as number) : null}
+            billingName={detail?.billing_name ?? null}
+            billingTaxId={detail?.billing_tax_id ?? null}
+            onSaved={() => {
+              setInvOpen(false);
+              toast.add({ title: "Factura registrada", description: "Ya figura en cobranza.", type: "success" });
+              void load();
+            }}
+            onCancel={() => setInvOpen(false)}
+          />
         </DialogContent>
       </Dialog>
 

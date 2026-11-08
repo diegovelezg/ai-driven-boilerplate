@@ -34,6 +34,8 @@ function shortDay(day: string): string {
   return `${d}/${m}`;
 }
 
+export type OccupancyEstado = "all" | "libre" | "ocupada";
+
 export function OccupancyTimeline({
   screens,
   conflicts,
@@ -45,6 +47,7 @@ export function OccupancyTimeline({
   supplierValue,
   suppliers,
   casaName,
+  estado,
   truncated = false,
 }: {
   screens: OccupancyScreen[];
@@ -57,6 +60,7 @@ export function OccupancyTimeline({
   supplierValue: string;
   suppliers: Array<{ id: string; name: string }>;
   casaName: string | null;
+  estado: OccupancyEstado;
   truncated?: boolean;
 }) {
   const router = useRouter();
@@ -74,26 +78,39 @@ export function OccupancyTimeline({
   const covers = (list: ScreenConflict[], day: string): ScreenConflict | null =>
     list.find((r) => r.starts <= day && day <= r.ends) ?? null;
 
-  let busyCells = 0;
+  // Ocupada = ≥1 día rojo en la ventana visible (tiene algo vendido);
+  // libre = 0 días ocupados (hueco total, lo que busca un comprador).
+  const busyDays = new Map<string, number>();
   for (const s of screens) {
     const list = byScreen.get(s.id) ?? [];
-    for (const d of days) if (covers(list, d)) busyCells += 1;
+    let n = 0;
+    for (const d of days) if (covers(list, d)) n += 1;
+    busyDays.set(s.id, n);
   }
-  const totalCells = screens.length * days.length;
+  const visibles =
+    estado === "all" ? screens : screens.filter((s) => (estado === "ocupada" ? (busyDays.get(s.id) ?? 0) > 0 : (busyDays.get(s.id) ?? 0) === 0));
+
+  let busyCells = 0;
+  for (const s of visibles) busyCells += busyDays.get(s.id) ?? 0;
+  const totalCells = visibles.length * days.length;
   const occPct = totalCells > 0 ? Math.round((busyCells / totalCells) * 100) : 0;
 
-  const go = (patch: { desde?: string; dias?: number; q?: string; ciudad?: string | null; proveedor?: string | null }) => {
+  const go = (patch: { desde?: string; dias?: number; q?: string; ciudad?: string | null; proveedor?: string | null; estado?: string }) => {
     const params = new URLSearchParams();
     const store = sp.get("store");
     if (store) params.set("store", store);
     const nq = patch.q !== undefined ? patch.q : q;
     const nc = patch.ciudad !== undefined ? patch.ciudad : ciudad;
     const np = patch.proveedor !== undefined ? patch.proveedor : supplierValue;
+    const ne = patch.estado !== undefined ? patch.estado : estado;
     const nd = patch.desde ?? desde;
     const ndias = patch.dias ?? dias;
     if (nq.trim()) params.set("q", nq.trim());
     if (nc) params.set("ciudad", nc);
-    if (np && np !== "all") params.set("proveedor", np);
+    // "all" se persiste explícito (?proveedor=all); omitirlo rebotaba al
+    // default de la empresa y hacía imposible ver todo proveedor.
+    if (np) params.set("proveedor", np);
+    if (ne && ne !== "all") params.set("estado", ne);
     if (ndias !== 14) params.set("dias", String(ndias));
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Lima" });
     if (nd !== today) params.set("desde", nd);
@@ -148,6 +165,19 @@ export function OccupancyTimeline({
             </SelectItem>
           ))}
         </FilterSelect>
+        <FilterSelect
+          value={estado}
+          onChange={(v) => go({ estado: v })}
+          ariaLabel="Filtrar por estado"
+          placeholder="Estado"
+          display={(value) =>
+            value === "all" ? "Todas" : value === "libre" ? "Libres" : value === "ocupada" ? "Ocupadas" : String(value)
+          }
+        >
+          <SelectItem value="all">Todas</SelectItem>
+          <SelectItem value="libre">Libres</SelectItem>
+          <SelectItem value="ocupada">Ocupadas</SelectItem>
+        </FilterSelect>
         {[7, 14, 28].map((n) => (
           <Button
             key={n}
@@ -169,7 +199,7 @@ export function OccupancyTimeline({
         <span className="ms-auto text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {isPending
             ? "Buscando…"
-            : `${formatNumber(screens.length)} pantallas · ${occPct}% ocupado${truncated ? " · muestra parcial" : ""}`}
+            : `${formatNumber(visibles.length)} pantallas · ${occPct}% ocupado${truncated ? " · muestra parcial" : ""}`}
         </span>
       </div>
 
@@ -187,7 +217,7 @@ export function OccupancyTimeline({
               </tr>
             </thead>
             <tbody>
-              {screens.map((s) => {
+              {visibles.map((s) => {
                 const list = byScreen.get(s.id) ?? [];
                 return (
                   <tr key={s.id} className="border-b last:border-0 hover:bg-muted/30">
@@ -231,9 +261,13 @@ export function OccupancyTimeline({
         </div>
       </AppCard>
 
-      {screens.length === 0 && (
+      {visibles.length === 0 && (
         <p className="py-6 text-center text-sm text-muted-foreground">
-          Sin pantallas para esos filtros. Ajusta la búsqueda, el proveedor o la ciudad.
+          {estado === "libre"
+            ? "Nada libre en esa ventana con esos filtros. Prueba más días u otro proveedor."
+            : estado === "ocupada"
+              ? "Nada ocupado en esa ventana con esos filtros. Todo libre."
+              : "Sin pantallas para esos filtros. Ajusta la búsqueda, el proveedor o la ciudad."}
         </p>
       )}
 

@@ -4,12 +4,17 @@ import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { listWallInsights, type WallInsight } from "@/lib/insights";
 
-/** Muro del tenant para Hoy (server action: storeId siempre del servidor). */
-export async function getWallAction(): Promise<WallInsight[]> {
+/** Muro del tenant para Hoy (server action: storeId siempre del servidor).
+ *  Acepta `storeId` explícito para no resolver la tienda 2 veces (la página
+ *  ya resolvió + chequeó membresía); sin arg, resuelve internamente. */
+export async function getWallAction(storeIdArg?: string): Promise<WallInsight[]> {
   const { resolveTenantStoreAction, getMyStoreRole } = await import("@/lib/tenant");
-  const t = await resolveTenantStoreAction().catch(() => ({ error: "Sin tienda." }) as const);
-  if ("error" in t) return [];
-  const storeId = t.storeId;
+  let storeId = (storeIdArg ?? "").trim();
+  if (!storeId) {
+    const t = await resolveTenantStoreAction().catch(() => ({ error: "Sin tienda." }) as const);
+    if ("error" in t) return [];
+    storeId = t.storeId;
+  }
   let userId: string | null = null;
   let email: string | null = null;
   try {
