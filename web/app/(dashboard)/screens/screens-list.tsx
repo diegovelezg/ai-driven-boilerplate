@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
+import { FilterX, LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
@@ -210,6 +210,7 @@ export function ScreensList({
               });
             }}
           >
+            <FilterX aria-hidden />
             Limpiar
           </Button>
         )}
@@ -317,6 +318,7 @@ export function ScreensList({
                             });
                           }}
                         >
+                          <FilterX aria-hidden />
                           Limpiar filtros
                         </Button>
                       )}

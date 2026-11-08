@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Merge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { toast } from "@/components/ui/toast";
@@ -107,6 +108,7 @@ function GroupCard({
       </ul>
       <div>
         <Button size="sm" disabled={merging} onClick={() => onMerge(group, survivor)}>
+          <Merge aria-hidden />
           {merging ? "Fusionando…" : `Fusionar en el elegido (${group.rows.length - 1} se eliminan)`}
         </Button>
       </div>

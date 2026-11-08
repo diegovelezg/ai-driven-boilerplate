@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { connection } from "next/server";
+import { Camera, FileText, Package, Plus, RefreshCw, type LucideIcon } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
+import { Metric, MetricRow } from "@/components/metric";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,25 +10,33 @@ import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { formatMoney, formatNumber, formatPercent } from "@/lib/format";
 import { getDashboardSnapshot, type AlertKind } from "@/lib/dashboard";
+import { InsightsWall } from "@/components/insights-wall";
+import type { WallInsight } from "@/lib/insights";
 
 export const instant = false;
 
-const ALERT_LABEL: Record<AlertKind, string> = {
-  sin_om: "Sin OM",
-  material: "Material",
-  sin_evidencia: "Sin evidencia",
-  termina_sin_relevo: "Sin relevo",
+const ALERT_META: Record<AlertKind, { label: string; icon: LucideIcon; className: string }> = {
+  sin_om: {
+    label: "Sin OM",
+    icon: FileText,
+    className: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  },
+  material: {
+    label: "Material",
+    icon: Package,
+    className: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  },
+  sin_evidencia: {
+    label: "Sin evidencia",
+    icon: Camera,
+    className: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  },
+  termina_sin_relevo: {
+    label: "Sin relevo",
+    icon: RefreshCw,
+    className: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  },
 };
-
-function Kpi({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <span className="text-xl font-semibold tabular-nums tracking-tight">{value}</span>
-      <span className="text-xs text-muted-foreground tabular-nums">{sub}</span>
-    </div>
-  );
-}
 
 export default async function DashboardPage() {
   await connection();
@@ -35,6 +45,7 @@ export default async function DashboardPage() {
   const connected = Boolean(activeStoreId);
 
   let snap: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  let wall: WallInsight[] = [];
   let error: string | null = null;
 
   if (connected && dbReady) {
@@ -44,9 +55,13 @@ export default async function DashboardPage() {
         error = "Sin acceso a esta tienda.";
       } else {
         snap = await getDashboardSnapshot(storeId);
+        // Muro de insights (issue #11): feed persistido debajo de los KPIs.
+        // Best-effort: si la migración aún no corrió, Hoy sigue con KPIs.
+        const { getWallAction } = await import("@/lib/insights-actions");
+        wall = await getWallAction().catch(() => []);
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -55,71 +70,76 @@ export default async function DashboardPage() {
       <PageHeader
         eyebrow="DOOH"
         title="Hoy"
-        description="Solo desde la OI: valor comprometido, ocupación, al aire, certificación y relevo. Sin facturación todavía — el bruto es vendido firmado, no cobrado."
+        description="Lo comprometido del mes, qué está al aire y qué falta certificar. Los montos son contratados: todavía no representan cobro."
         right={
           <Button render={<Link href="/orders/new" />} nativeButton={false} size="sm">
+            <Plus aria-hidden />
             Nueva orden
           </Button>
         }
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {snap && (
         <>
           <AppCard
             title="Salud comercial · mes en curso"
-            description="Prorrateo lineal por tiempo solapado. Línea completa solo si cae entera en el mes."
-            contentClassName="flex flex-col gap-4"
+            contentClassName="flex flex-col gap-5"
           >
-            <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-              <Kpi
+            <MetricRow columns={5}>
+              <Metric
                 label="Comprometido mes"
                 value={(() => {
                   const entries = Object.entries(snap.byCurrency ?? {}).filter(([, v]) => v.comprometidoMesMinor > 0);
                   if (entries.length === 0) return "—";
                   return entries.map(([c, v]) => formatMoney(v.comprometidoMesMinor, c)).join(" + ");
                 })()}
-                sub={(() => {
+                hint={(() => {
                   const entries = Object.entries(snap.byCurrency ?? {}).filter(([, v]) => v.comprometidoMesMinor > 0);
-                  if (entries.length === 0) return "sin líneas en el mes";
-                  return entries.map(([c, v]) => `firmado ${formatMoney(v.firmadoMesMinor, c)} · draft ${formatMoney(v.draftMesMinor, c)}`).join(" · ");
+                  if (entries.length === 0) return "Sin órdenes en el mes";
+                  return entries.map(([c, v]) => `firmado ${formatMoney(v.firmadoMesMinor, c)} · borrador ${formatMoney(v.draftMesMinor, c)}`).join(" · ");
                 })()}
               />
-              <Kpi
+              <Metric
                 label="Ocupación 14d"
                 value={snap.ocupacion14d.ratio === null ? "—" : formatPercent(snap.ocupacion14d.ratio)}
-                sub={`${formatNumber(snap.ocupacion14d.diasVendidos)} / ${formatNumber(snap.ocupacion14d.diasDisponibles)} pantalla-día`}
+                hint={`${formatNumber(snap.ocupacion14d.diasVendidos)} de ${formatNumber(snap.ocupacion14d.diasDisponibles)} pantalla-día`}
+                tone="primary"
               />
-              <Kpi
+              <Metric
                 label="Al aire hoy"
-                value={`${formatNumber(snap.alAire.ois)} OI`}
-                sub={`${formatNumber(snap.alAire.pantallas)} pantallas`}
+                value={`${formatNumber(snap.alAire.ois)} órdenes`}
+                hint={`${formatNumber(snap.alAire.pantallas)} pantallas`}
               />
-              <Kpi
+              <Metric
                 label="Por certificar"
                 value={formatNumber(snap.porCertificar)}
-                sub="terminadas sin foto-check"
+                hint="Terminadas sin evidencia fotográfica"
+                tone={snap.porCertificar > 0 ? "warning" : "default"}
               />
-              <Kpi
+              <Metric
                 label="Relevo 30d"
                 value={
                   snap.renovacion30d.ratio === null
                     ? "—"
                     : formatPercent(snap.renovacion30d.ratio)
                 }
-                sub={`${formatNumber(snap.renovacion30d.conRelevo)} / ${formatNumber(snap.renovacion30d.total)} con siguiente OI`}
+                hint={`${formatNumber(snap.renovacion30d.conRelevo)} de ${formatNumber(snap.renovacion30d.total)} con siguiente orden`}
               />
-            </div>
+            </MetricRow>
           </AppCard>
+
+          {wall.length > 0 && <InsightsWall initial={wall} />}
 
           <div className="grid gap-8 lg:grid-cols-[1fr_320px]">
             <AppCard
               title={`Alertas (${snap.alerts.length})`}
-              description="Ordenadas por riesgo: OM → material → evidencia → relevo. Cada una abre su orden."
+              description="Lo que requiere acción, de mayor a menor riesgo. Cada alerta abre su orden."
               variant="table"
+              className="self-start"
             >
               {snap.alerts.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-muted-foreground">
@@ -135,8 +155,15 @@ export default async function DashboardPage() {
                       >
                         <span className="min-w-0">
                           <span className="flex flex-wrap items-center gap-2">
-                            <Badge variant="secondary" className="font-normal">
-                              {ALERT_LABEL[a.kind]}
+                            <Badge
+                              variant="secondary"
+                              className={`gap-1 font-normal ${ALERT_META[a.kind].className}`}
+                            >
+                              {(() => {
+                                const Icon = ALERT_META[a.kind].icon;
+                                return <Icon aria-hidden />;
+                              })()}
+                              {ALERT_META[a.kind].label}
                             </Badge>
                             <span className="text-sm font-medium">{a.ioNumber}</span>
                             {a.brand && (
@@ -159,7 +186,8 @@ export default async function DashboardPage() {
 
             <AppCard
               title="Huecos vendibles"
-              description="Pantallas más libres próximos 14d."
+              description="Las pantallas con más días libres en los próximos 14 días."
+              className="self-start"
             >
               {snap.huecos.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Sin pantallas activas.</p>
@@ -179,7 +207,7 @@ export default async function DashboardPage() {
                 className="mt-3 text-xs text-muted-foreground tabular-nums"
                 title={snap.truncated ? "Muestra parcial: la fuente se truncó por límite" : undefined}
               >
-                {formatNumber(snap.counts.ois)} OIs vigentes · {formatNumber(snap.counts.screens)} pantallas
+                {formatNumber(snap.counts.ois)} órdenes vigentes · {formatNumber(snap.counts.screens)} pantallas
                 {snap.truncated ? " · muestra parcial" : ""}.
               </p>
             </AppCard>

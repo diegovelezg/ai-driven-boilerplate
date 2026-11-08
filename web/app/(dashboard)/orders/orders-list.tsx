@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { FilterX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
+import { Metric, MetricRow } from "@/components/metric";
 import { Button } from "@/components/ui/button";
 import {
   DataTable,
@@ -100,31 +102,22 @@ export function OrdersList({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4" aria-label="Resumen">
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Bruto listado</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{summary.brutoLabel}</p>
-        </div>
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Al aire</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(summary.alAire)}</p>
-        </div>
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Por certificar</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(summary.porCertificar)}</p>
-        </div>
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Vencido</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">
-            {formatNumber(summary.vencidas)}
-            {summary.vencidas > 0 && (
-              <span className="ml-2 align-middle text-xs font-medium text-destructive">
-                {summary.vencidoLabel} pend.
-              </span>
-            )}
-          </p>
-        </div>
-      </div>
+      <MetricRow columns={4} className="py-1">
+        <Metric label="Bruto listado" value={summary.brutoLabel} hint="Contratado en las órdenes visibles" />
+        <Metric label="Al aire" value={formatNumber(summary.alAire)} hint="Órdenes pautando hoy" />
+        <Metric
+          label="Por certificar"
+          value={formatNumber(summary.porCertificar)}
+          hint="Terminadas sin evidencia"
+          tone={summary.porCertificar > 0 ? "warning" : "default"}
+        />
+        <Metric
+          label="Vencido"
+          value={formatNumber(summary.vencidas)}
+          hint={summary.vencidas > 0 ? `${summary.vencidoLabel} pendiente de cobro` : "Sin cobros vencidos"}
+          tone={summary.vencidas > 0 ? "danger" : "default"}
+        />
+      </MetricRow>
 
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de órdenes">
         <FilterSearch
@@ -163,6 +156,7 @@ export function OrdersList({
         </FilterSelect>
         {hasFilter && (
           <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", stage: null, billing: null })}>
+            <FilterX aria-hidden />
             Limpiar
           </Button>
         )}
@@ -240,9 +234,10 @@ export function OrdersList({
               <DataTableRow>
                 <DataTableTd colSpan={7} className="px-3 py-4">
                   <EntityEmpty
+                    inline
                     filtered={hasFilter}
                     emptyTitle="Aún no hay órdenes"
-                    emptyHint="Crea la primera OI para empezar el flujo Firmada → Al aire → Cobro."
+                    emptyHint="Crea la primera orden para empezar el flujo: firma, al aire y cobro."
                     onClear={hasFilter ? () => go({ q: "", stage: null, billing: null }) : undefined}
                   />
                 </DataTableTd>

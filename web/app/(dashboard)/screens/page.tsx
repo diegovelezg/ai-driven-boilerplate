@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
@@ -92,7 +93,7 @@ export default async function InventarioPage({
         counts = Object.fromEntries(tables.map((t, i) => [t, settled[i]?.count ?? 0]));
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -101,14 +102,15 @@ export default async function InventarioPage({
       <PageHeader
         eyebrow="DOOH"
         title="Inventario publicitario"
-        description="Espacios publicitarios: ubicaciones → pantallas → slots → reservas. Cada pantalla pertenece a un proveedor."
+        description="Dónde está tu inventario, qué pantallas lo componen y a qué precio se vende cada espacio."
         right={
           connected && dbReady && !error ? (
             <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground">
-                {counts.inv_venues ?? 0} ubicaciones · {counts.inv_screens ?? 0} pantallas · {counts.inv_slots ?? 0} slots
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {counts.inv_venues ?? 0} ubicaciones · {counts.inv_screens ?? 0} pantallas · {counts.inv_slots ?? 0} espacios
               </span>
               <Button render={<Link href="/screens/new" />} nativeButton={false} size="sm">
+                <Plus aria-hidden />
                 Nueva pantalla
               </Button>
             </div>
@@ -117,7 +119,7 @@ export default async function InventarioPage({
       />
 
       {!connected && <AppCardState>Sin tienda.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

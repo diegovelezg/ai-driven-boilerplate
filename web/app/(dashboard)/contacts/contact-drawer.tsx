@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, FileText, Mail, Pencil, Phone, UserRound } from "lucide-react";
+import { Bot, Building2, FileText, Mail, Pencil, Phone, RotateCcw, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import {
@@ -121,6 +121,7 @@ export function ContactDrawer({
             <div className="flex flex-col gap-3">
               <AppCardState>{iosError}</AppCardState>
               <Button variant="outline" size="sm" className="w-fit" onClick={loadIos}>
+                <RotateCcw aria-hidden />
                 Reintentar
               </Button>
             </div>
@@ -134,11 +135,11 @@ export function ContactDrawer({
           {!iosError && ios !== null && (
             <AppCard
               title={`Pedidos de ${contact.company_name ? toTitleCase(contact.company_name) : "su empresa"} (${ios.length})`}
-              description="IOs donde su empresa es anunciante o facturación."
+              description="Órdenes donde su empresa es anunciante o responsable de facturación."
               aria-label="Pedidos de su empresa"
             >
               {ios.length === 0 ? (
-                <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+                <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                   <p className="text-[13px] text-muted-foreground">
                     {contact.company_id
                       ? "Su empresa aún no tiene pedidos."
@@ -148,7 +149,7 @@ export function ContactDrawer({
               ) : (
                 <ul className="flex flex-col gap-1.5">
                   {ios.map((o) => (
-                    <li key={o.id} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                    <li key={o.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                       <span className="flex min-w-0 items-center gap-2 text-[13px]">
                         <span className="truncate font-medium">{o.io_number}</span>
                         <span className="shrink-0 text-xs text-muted-foreground">{o.brand ? toTitleCase(o.brand) : "—"}</span>
@@ -200,7 +201,6 @@ export function ContactDrawer({
 
           <AppCard
             title="Ficha"
-            description="Datos de la persona de contacto."
             aria-label="Ficha del contacto"
             action={
               canEdit && !editingFicha ? (
@@ -244,7 +244,7 @@ export function ContactDrawer({
 
           <AppCard
             title="Empresa"
-            description="La contraparte a la que pertenece."
+            description="Dónde trabaja esta persona."
             aria-label="Empresa del contacto"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -253,6 +253,7 @@ export function ContactDrawer({
               </p>
               {contact.company_id && (
                 <Button render={<Link href={`/companies?company=${contact.company_id}`} />} nativeButton={false} size="sm" variant="outline">
+                  <Building2 aria-hidden />
                   Ver empresa
                 </Button>
               )}

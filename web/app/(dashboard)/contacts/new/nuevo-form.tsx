@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -150,7 +151,10 @@ export function NuevoContactoForm({
         Email o teléfono requerido. Solo un contacto puede ser principal por empresa.
       </p>
       <div>
-        <Button type="submit" disabled={pending || !ready} title={!ready ? "Elige empresa y agrega email o teléfono" : undefined}>{pending ? "Creando…" : "Crear contacto"}</Button>
+        <Button type="submit" disabled={pending || !ready} title={!ready ? "Elige empresa y agrega email o teléfono" : undefined}>
+          <Plus aria-hidden />
+          {pending ? "Creando…" : "Crear contacto"}
+        </Button>
       </div>
     </form>
   );

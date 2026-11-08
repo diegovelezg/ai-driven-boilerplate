@@ -77,9 +77,9 @@ function contentPreview(content: unknown): string {
  * No altera el flujo: todos los callbacks devuelven undefined,
  * salvo que ADK exija el tipo (onEvent).
  */
-export class RetainLoggingPlugin extends BasePlugin {
+export class AdkLoggingPlugin extends BasePlugin {
   constructor() {
-    super("retain_logging");
+    super("adk_logging");
   }
 
   override async onUserMessageCallback(params: {

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { FilterX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
@@ -94,6 +95,7 @@ export function BrandsList({
               });
             }}
           >
+            <FilterX aria-hidden />
             Limpiar
           </Button>
         )}
@@ -186,9 +188,15 @@ export function BrandsList({
               <DataTableRow>
                 <DataTableTd colSpan={7} className="px-3 py-4">
                   <EntityEmpty
+                    inline
                     filtered={q.trim() !== ""}
                     emptyTitle="Sin marcas"
                     emptyHint="Las marcas nacen de los pedidos."
+                    onClear={() => {
+                      startTransition(() => {
+                        router.replace(`/brands?${buildParams({ q: "" })}`);
+                      });
+                    }}
                   />
                 </DataTableTd>
               </DataTableRow>

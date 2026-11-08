@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Building2, FileText, Globe, Megaphone } from "lucide-react";
+import { Bot, Building2, FileText, Globe, Megaphone, RotateCcw } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,7 +61,7 @@ export function MarcaDrawer({
         setError(null);
       } catch (e) {
         if (!alive) return;
-        setError(e instanceof Error ? e.message : "DB read failed");
+        setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
       } finally {
         if (alive) setLoading(false);
       }
@@ -79,7 +79,7 @@ export function MarcaDrawer({
       if (!res.ok) throw new Error("No se pudo cargar la marca.");
       setDetail((await res.json()) as MarcaDetail);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "DB read failed");
+      setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     } finally {
       setLoading(false);
     }
@@ -138,6 +138,7 @@ export function MarcaDrawer({
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
           <Button variant="outline" size="sm" className="w-fit" onClick={() => void reload()}>
+            <RotateCcw aria-hidden />
             Reintentar
           </Button>
         </div>
@@ -173,17 +174,17 @@ export function MarcaDrawer({
       {detail && tab === "pedidos" && (
         <AppCard
           title={`Pedidos (${ios.length})`}
-          description="IOs donde esta es la marca publicitada."
+          description="Órdenes donde esta marca es la que se pauta."
           aria-label="Pedidos de la marca"
         >
           {ios.length === 0 ? (
-            <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-[13px] text-muted-foreground">Sin pedidos para esta marca.</p>
             </div>
           ) : (
             <DrawerTable>
               <DrawerTableHeader>
-                <DrawerTableTh>IO</DrawerTableTh>
+                <DrawerTableTh>Orden</DrawerTableTh>
                 <DrawerTableTh>Inicio</DrawerTableTh>
                 <DrawerTableTh>Fin</DrawerTableTh>
                 <DrawerTableTh>Estado</DrawerTableTh>
@@ -208,11 +209,11 @@ export function MarcaDrawer({
       {detail && tab === "empresas" && (
         <AppCard
           title={`Empresas (${companies.length})`}
-          description="Vinculadas por los pedidos de la marca (una fila por empresa, con sus roles)."
+          description="Empresas que pautaron con esta marca y su rol en cada pedido."
           aria-label="Empresas de la marca"
         >
           {companies.length === 0 ? (
-            <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-[13px] text-muted-foreground">Sin empresas vinculadas.</p>
             </div>
           ) : (

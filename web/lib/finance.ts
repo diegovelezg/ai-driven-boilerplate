@@ -28,25 +28,6 @@ export interface FinanceKpis {
   ordersDeltaPct: number | null;
 }
 
-/** Tipos legacy del chart de recupero (motor de retención extirpado en
- *  20261122). Se conservan para los props opcionales de FinanceStrip;
- *  la página DOOH no los pobla. */
-export interface RescateBucket {
-  key: string;
-  label: string;
-  enJuegoMinor: number;
-  enJuegoCount: number;
-  origenEnJuego: "motor" | "pre-motor";
-  rescatadoMinor: number;
-}
-
-export interface RetentionKpis {
-  rescatado30dMinor: number;
-  rescatadoDeltaPct: number | null;
-  enJuegoNowMinor: number;
-  enJuegoNowCount: number;
-}
-
 const DAY_MS = 86_400_000;
 const MONTH_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 

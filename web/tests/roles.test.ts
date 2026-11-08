@@ -39,6 +39,6 @@ describe("member roles", () => {
     // Miembros: ver todos, editar desde admin.
     assert.equal(canAccessFeature("seller", "members.edit"), false);
     assert.equal(canAccessFeature("admin", "members.edit"), true);
-    assert.equal(FEATURE_MIN_ROLE["review.approve"], "seller");
+    assert.equal(FEATURE_MIN_ROLE["crm.edit"], "seller");
   });
 });

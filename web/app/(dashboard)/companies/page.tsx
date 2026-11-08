@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -57,7 +58,7 @@ export default async function EmpresasPage({
         totalCount = res.total;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -66,16 +67,17 @@ export default async function EmpresasPage({
       <PageHeader
         eyebrow="CRM"
         title="Empresas"
-        description="Cada empresa tiene un tipo obligatorio (agencia, anunciante o proveedor) y N contactos. La marca publicitada es dato del pedido, no una empresa."
+        description="Agencias, anunciantes y proveedores con sus contactos. La marca que se pauta se registra en la orden."
         right={
           <Button render={<Link href="/companies/new" />} nativeButton={false} size="sm">
+            <Plus aria-hidden />
             Nueva empresa
           </Button>
         }
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

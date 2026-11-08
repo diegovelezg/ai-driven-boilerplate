@@ -14,7 +14,7 @@
 // - `EntityPagination`: Anterior/Siguiente con "Página x de y".
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { SearchX } from "lucide-react";
+import { ChevronLeft, ChevronRight, FilterX, SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { formatNumber } from "@/lib/format";
@@ -95,7 +95,9 @@ export function EntityCount({
   );
 }
 
-/** Estado vacío con SearchX: mismo en tabla y grilla. */
+/** Estado vacío con SearchX: mismo en tabla y grilla.
+ *  `inline` evita la Card cuando ya se está dentro de una (p. ej. celda
+ *  vacía de una tabla): nunca anidar tarjetas. */
 export function EntityEmpty({
   filtered,
   emptyTitle,
@@ -103,6 +105,7 @@ export function EntityEmpty({
   filteredTitle = "Sin resultados para ese filtro",
   filteredHint = "Prueba con otro término.",
   onClear,
+  inline = false,
 }: {
   filtered: boolean;
   emptyTitle: string;
@@ -110,26 +113,27 @@ export function EntityEmpty({
   filteredTitle?: string;
   filteredHint?: string;
   onClear?: () => void;
+  inline?: boolean;
 }) {
-  return (
-    <AppCard>
-      <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-3 py-10 text-center">
-        <span
-          className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground"
-          aria-hidden
-        >
-          <SearchX className="size-5" />
-        </span>
-        <p className="text-sm font-medium">{filtered ? filteredTitle : emptyTitle}</p>
-        <p className="text-xs text-muted-foreground">{filtered ? filteredHint : emptyHint}</p>
-        {filtered && onClear && (
-          <Button variant="outline" size="sm" className="mt-1" onClick={onClear}>
-            Limpiar filtros
-          </Button>
-        )}
-      </div>
-    </AppCard>
+  const body = (
+    <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-3 py-10 text-center">
+      <span
+        className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground"
+        aria-hidden
+      >
+        <SearchX className="size-5" />
+      </span>
+      <p className="text-sm font-medium">{filtered ? filteredTitle : emptyTitle}</p>
+      <p className="text-xs text-muted-foreground">{filtered ? filteredHint : emptyHint}</p>
+      {filtered && onClear && (
+        <Button variant="outline" size="sm" className="mt-1" onClick={onClear}>
+          <FilterX aria-hidden />
+          Limpiar filtros
+        </Button>
+      )}
+    </div>
   );
+  return inline ? body : <AppCard>{body}</AppCard>;
 }
 
 /** Paginador Anterior/Siguiente ("Página x de y"). */
@@ -151,6 +155,7 @@ export function EntityPagination({
       </span>
       <div className="flex gap-2">
         <Button variant="outline" size="sm" disabled={page <= 1 || pending} onClick={() => onGo(page - 1)}>
+          <ChevronLeft aria-hidden />
           Anterior
         </Button>
         <Button
@@ -160,6 +165,7 @@ export function EntityPagination({
           onClick={() => onGo(page + 1)}
         >
           Siguiente
+          <ChevronRight aria-hidden />
         </Button>
       </div>
     </div>

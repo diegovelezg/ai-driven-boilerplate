@@ -44,7 +44,7 @@ export default async function NuevoContactoPage({
         jobTitles = titles;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -53,16 +53,16 @@ export default async function NuevoContactoPage({
       <PageHeader
         eyebrow="CRM"
         title="Nuevo contacto"
-        description="Una persona, una empresa. La marca que publicita va en el pedido, no acá."
-        right={<Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
+        description="Datos de la persona y de la empresa a la que pertenece."
+        right={<Button render={<Link href="/contacts" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (
-        <AppCard title="Datos" description="Empresa y una vía de contacto (email o teléfono).">
+        <AppCard title="Datos" description="Indica la empresa y al menos un canal: email o teléfono.">
           <NuevoContactoForm companies={companies} jobTitles={jobTitles} initialCompanyId={initialCompanyId} />
         </AppCard>
       )}

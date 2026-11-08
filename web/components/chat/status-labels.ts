@@ -1,37 +1,11 @@
-/** Etiquetas del "pensando" descriptivo: tool del orquestador → qué se muestra.
- *  SSOT visual: solo ChatShell las pinta. HISTÓRICO Fase 2: los `start_*_run`
- *  del loop de retención ya no tienen especialista que los emita (motor
- *  extirpado en 20261122); las etiquetas se conservan por compatibilidad
- *  de UI hasta el agente DOOH. */
+/** Etiquetas del "pensando" descriptivo: tool de dooh_agent → qué se muestra.
+ *  SSOT visual: solo ChatShell las pinta. Solo las 5 tools vivas del agente único. */
 const TOOL_STATUS: Record<string, string> = {
-  start_scout_run: "Scout vigilando tu base…",
-  start_strategist_run: "Estratega priorizando…",
-  start_copywriter_run: "Redactor redactando borradores…",
-  start_dispatcher_run: "Mensajero enviando lo aprobado…",
-  start_analyst_run: "Analista midiendo recupero…",
-  start_prospect_run: "Prospector buscando leads…",
-  list_actions: "Revisando acciones…",
-  list_leads: "Buscando leads…",
-  filter_customers: "Filtrando customers…",
-  find_customer: "Buscando al customer…",
-  get_store_summary: "Resumiendo tu tienda…",
-  get_recovery_stats: "Midiendo recupero…",
-  list_signals: "Revisando señales…",
-  approve_actions: "Aprobando borradores…",
-  reject_actions: "Descartando borradores…",
-  get_customer_profile: "Leyendo la ficha…",
-  get_customer_orders: "Revisando sus compras…",
-  get_customer_firmographics: "Revisando datos de la empresa…",
-  get_inbox_summary: "Contando tu inbox…",
-  get_hoy_snapshot: "Leyendo tu hoy…",
-  get_runs_status: "Revisando tus workers…",
-  dismiss_signals: "Descartando señales…",
-  reopen_signals: "Reabriendo señales…",
-  decide_lead: "Decidiendo el lead…",
-  get_top_products: "Rankeando tu catálogo…",
-  get_product_summary: "Leyendo la ficha del ítem…",
-  get_product_movements: "Revisando cuándo se vende…",
-  get_product_buyers: "Revisando quiénes lo compran…",
+  get_company: "Leyendo la ficha de la empresa…",
+  get_order: "Revisando la orden…",
+  search_inventory: "Buscando pantallas disponibles…",
+  get_finance: "Calculando finanzas…",
+  explain_kpi: "Explicando el indicador…",
 };
 
 /** Tool desconocida → genérico honesto (sigue habiendo trabajo en curso). */

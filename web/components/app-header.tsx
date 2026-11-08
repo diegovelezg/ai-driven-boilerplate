@@ -9,13 +9,15 @@ import { UsagePill } from "@/components/usage-pill";
 import type { MemberRole } from "@/lib/roles";
 
 const titles = [
+  { href: "/orders", label: "Órdenes" },
+  { href: "/screens", label: "Inventario" },
+  { href: "/companies", label: "Empresas" },
+  { href: "/contacts", label: "Contactos" },
+  { href: "/brands", label: "Marcas" },
   { href: "/finance", label: "Finanzas" },
-  { href: "/review", label: "Review Inbox" },
-  { href: "/customers", label: "Customers" },
-  { href: "/campaigns", label: "Campaigns" },
-  { href: "/settings", label: "Settings" },
+  { href: "/settings", label: "Configuración" },
   { href: "/help", label: "Ayuda" },
-  { href: "/", label: "Dashboard" },
+  { href: "/", label: "Hoy" },
 ];
 
 export function AppHeader({
@@ -31,7 +33,7 @@ export function AppHeader({
   const title =
     titles.find((t) =>
       t.href === "/" ? pathname === "/" : pathname.startsWith(t.href),
-    )?.label ?? "Dashboard";
+    )?.label ?? "Hoy";
 
   return (
     <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-4">

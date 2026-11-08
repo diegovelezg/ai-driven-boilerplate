@@ -178,7 +178,7 @@ export function DomainResearchPanel({ researchBase, canResearch }: { researchBas
       {!error && (candidates ?? []).length === 0 && (
         <AppCard
           title="Perfil"
-          description="Research web de la empresa (ficha firmográfica)."
+          description="Información pública de la empresa para completar su ficha."
           aria-label="Perfil de la empresa"
         >
           <p className="text-[13px] text-muted-foreground">

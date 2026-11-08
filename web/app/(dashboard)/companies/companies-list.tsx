@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, List as ListIcon } from "lucide-react";
+import { FilterX, LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Badge } from "@/components/ui/badge";
@@ -161,6 +161,7 @@ export function CompaniesList({
               });
             }}
           >
+            <FilterX aria-hidden />
             Limpiar
           </Button>
         )}

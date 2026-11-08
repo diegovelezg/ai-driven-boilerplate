@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -118,8 +119,8 @@ export function ContactEditForm({
         </Label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={save} disabled={pending || !ready} title={!ready ? "Agrega email o teléfono para continuar" : undefined}>{pending ? "Guardando…" : "Guardar"}</Button>
-        <Button variant="outline" onClick={onCancel} disabled={pending}>Cancelar</Button>
+        <Button onClick={save} disabled={pending || !ready} title={!ready ? "Agrega email o teléfono para continuar" : undefined}><Save aria-hidden />{pending ? "Guardando…" : "Guardar"}</Button>
+        <Button variant="outline" onClick={onCancel} disabled={pending}><X aria-hidden />Cancelar</Button>
       </div>
     </div>
   );

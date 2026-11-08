@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense, Fragment, useEffect, useState } from "react";
+import { Suspense, Fragment } from "react";
 import {
   Cat,
   Building2,
   CircleHelp,
   Contact,
   FileText,
+  Inbox,
   LayoutDashboard,
   MonitorPlay,
   Settings,
@@ -45,7 +46,10 @@ type NavGroup = {
 // inventario, empresas, personas, marcas. Sin motor de retención: no hay
 // Retención, Inbox ni Customers ecommerce. Finanzas sí se conserva.
 const groups: NavGroup[] = [
-  { label: null, items: [{ href: "/", label: "Dashboard", icon: LayoutDashboard }] },
+  { label: null, items: [
+    { href: "/", label: "Hoy", icon: LayoutDashboard },
+    { href: "/muro", label: "Muro", icon: Inbox },
+  ] },
   {
     label: "Operación",
     items: [
@@ -65,7 +69,7 @@ const groups: NavGroup[] = [
   {
     label: "Sistema",
     items: [
-      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/settings", label: "Configuración", icon: Settings },
       { href: "/help", label: "Ayuda", icon: CircleHelp },
     ],
   },

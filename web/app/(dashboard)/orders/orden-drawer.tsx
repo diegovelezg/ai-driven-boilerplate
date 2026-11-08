@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, CircleArrowLeft, FileText, Package, Pencil, Plus, Receipt, X } from "lucide-react";
+import { Ban, Bot, CircleArrowLeft, FileText, Package, Paperclip, Pencil, PenLine, Receipt, RotateCcw, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
@@ -137,7 +137,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       if (!res.ok) throw new Error("No se pudo cargar la orden.");
       setDetail((await res.json()) as Detail);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "DB read failed");
+      setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     }
   }, [orderId]);
 
@@ -350,6 +350,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
           <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
+            <RotateCcw aria-hidden />
             Reintentar
           </Button>
         </div>
@@ -378,13 +379,14 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           {tab === "resumen" && (
           <>
           {isDraft && canEdit && (
-            <section aria-label="Firmar orden" className="flex flex-col gap-2 rounded-xl border border-dashed px-4 py-3">
+            <section aria-label="Firmar orden" className="flex flex-col gap-2 rounded-xl bg-muted/40 px-4 py-3">
               <p className="text-[13px] font-medium">Borrador: esperando la firma del cliente</p>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Cuando el cliente firme la OI, márcala aquí. Recién entonces podrás registrar el OM/OC.
+                Cuando el cliente firme la orden, márcala aquí. Recién entonces podrás registrar el OM/OC.
               </p>
               <div>
                 <Button size="sm" onClick={() => setSignOpen(true)} disabled={isPending}>
+                  <PenLine aria-hidden />
                   Marcar firmada
                 </Button>
               </div>
@@ -392,7 +394,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           )}
           <AppCard
             title="Ficha"
-            description="Mismos datos de Nueva orden: contratante, marca, periodo y pago."
+            description="Contratante, marca, periodo y condiciones de pago."
             aria-label="Ficha de la orden"
             action={
               canEdit && !editingFicha ? (
@@ -449,8 +451,8 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           </AppCard>
 
           {lines.length === 0 ? (
-            <div className="rounded-lg border border-dashed px-3 py-3">
-              <p className="text-[13px] text-muted-foreground">Sin líneas.</p>
+            <div className="rounded-lg bg-muted/40 px-3 py-3">
+              <p className="text-[13px] text-muted-foreground">Sin pantallas en esta orden.</p>
             </div>
           ) : (
               <DrawerTable>
@@ -512,6 +514,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             {canEdit && !isDraft && (
               <div>
                 <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setCancelOpen(true)} disabled={isPending}>
+                  <Ban aria-hidden />
                   Cancelar orden
                 </Button>
               </div>
@@ -523,11 +526,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           <>
           <AppCard
             title={`Autorización (${oms.length})`}
-            description="OM de la agencia. Sin autorización la orden no avanza a Materiales."
+            description="Autorización de la agencia. Sin ella, la orden no avanza a producción."
             action={
               canEdit && !isDraft && oms.length > 0 ? (
                 <Button variant="outline" size="sm" onClick={() => { setOmUrl(""); setOmOpen(true); }} disabled={isPending}>
-                  <Plus className="size-3.5" aria-hidden /> Adjuntar
+                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
             }
@@ -535,7 +538,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             aria-label="Autorización"
           >
             {oms.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-[13px] text-muted-foreground">
                   {isDraft
                     ? "Primero marca la orden como firmada; luego adjunta la autorización."
@@ -544,7 +547,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 {canEdit && !isDraft && (
                   <div>
                     <Button size="sm" onClick={() => { setOmUrl(""); setOmOpen(true); }} disabled={isPending}>
-                      <Plus className="size-3.5" aria-hidden /> Adjuntar
+                      <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                     </Button>
                   </div>
                 )}
@@ -557,7 +560,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   const codeIsUrl = /^https?:\/\//i.test(rawCode);
                   const href = doc ?? (codeIsUrl ? rawCode : null);
                   return (
-                  <li key={String(m.id)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <li key={String(m.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                     <span className="flex min-w-0 items-center gap-2 text-[13px]">
                       <Badge variant="secondary" className="font-normal">{str(m.kind)}</Badge>
                       {!codeIsUrl && <span className="truncate font-medium">{rawCode}</span>}
@@ -593,11 +596,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
 
           <AppCard
             title={`Materiales (${creatives.length})`}
-            description="Adjunta la pieza; nace aprobada y libera la emisión."
+            description="Adjunta la pieza; queda aprobada y libera la salida al aire."
             action={
               canEdit && creatives.length > 0 ? (
                 <Button variant="outline" size="sm" onClick={openMatDialog} disabled={isPending}>
-                  <Plus className="size-3.5" aria-hidden /> Adjuntar
+                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
             }
@@ -605,14 +608,14 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             aria-label="Materiales"
           >
             {creatives.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-[13px] text-muted-foreground">
                   Sin piezas cargadas. Adjunta el material para pasar a emisión.
                 </p>
                 {canEdit && (
                   <div>
                     <Button size="sm" onClick={openMatDialog} disabled={isPending}>
-                      <Plus className="size-3.5" aria-hidden /> Adjuntar
+                      <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                     </Button>
                   </div>
                 )}
@@ -632,7 +635,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     Number.isFinite(cd) && cd > 0 ? `${cd} s` : null,
                   ].filter(Boolean).join(" · ");
                   return (
-                  <li key={String(c.id)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <li key={String(c.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                     <span className="min-w-0 truncate text-[13px] font-medium">
                       {str(c.name)}
                       {spec && (
@@ -671,11 +674,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
 
           <AppCard
             title={`Certificación (${photos.length})`}
-            description="Foto check + PoP. Corre en paralelo a la cobranza."
+            description="Evidencia fotográfica de la pauta al aire. Corre en paralelo a la cobranza."
             action={
               canEdit && photos.length > 0 ? (
                 <Button variant="outline" size="sm" onClick={() => { setPhotoUrl(""); setPhotoOpen(true); }} disabled={isPending}>
-                  <Plus className="size-3.5" aria-hidden /> Adjuntar
+                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
             }
@@ -683,7 +686,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             aria-label="Certificación"
           >
             {photos.length === 0 && canEdit && (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-[13px] text-muted-foreground">
                   {ended
                     ? "La pauta terminó sin foto check: adjúntalo para cerrar el ciclo operativo."
@@ -691,7 +694,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 <div>
                   <Button size="sm" onClick={() => { setPhotoUrl(""); setPhotoOpen(true); }} disabled={isPending}>
-                    <Plus className="size-3.5" aria-hidden /> Adjuntar
+                    <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                   </Button>
                 </div>
               </div>
@@ -702,7 +705,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   const url = (typeof p.photo_url === "string" && p.photo_url) || (typeof p.video_url === "string" && p.video_url) || null;
                   const isVideo = typeof p.video_url === "string" && !!p.video_url;
                   return (
-                  <li key={String(p.id)} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <li key={String(p.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                     <span className="flex min-w-0 items-center gap-2 text-[13px]">
                       <Badge variant="secondary" className="font-normal">{isVideo ? "Video" : "Foto"}</Badge>
                       {url ? (
@@ -760,7 +763,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               </div>
             )}
             {invoices.length === 0 ? (
-              <p className="rounded-lg border border-dashed px-3 py-3 text-[13px] text-muted-foreground">
+              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
                 Sin facturas emitidas. Puedes facturar antes, durante o después de la pauta.
               </p>
             ) : (
@@ -814,15 +817,17 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           <DialogHeader>
             <DialogTitle>Marcar orden como firmada</DialogTitle>
             <DialogDescription>
-              Confirma que el cliente firmó la OI. Pasará a etapa Firmada y pedirá el OM/OC.
+              Confirma que el cliente firmó la orden. Pasará a etapa Firmada y pedirá el OM/OC.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setSignOpen(false)} disabled={isPending}>
+                <X aria-hidden />
                 Cancelar
               </Button>
               <Button size="sm" onClick={doSign} disabled={isPending}>
+                <PenLine aria-hidden />
                 {isPending ? "Firmando…" : "Confirmar firma"}
               </Button>
             </div>
@@ -852,9 +857,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setOmOpen(false)} disabled={isPending}>
+                <X aria-hidden />
                 Cancelar
               </Button>
               <Button size="sm" onClick={doCreateOm} disabled={isPending || !omUrl.trim()}>
+                <Paperclip aria-hidden />
                 {isPending ? "Adjuntando…" : "Adjuntar"}
               </Button>
             </div>
@@ -922,9 +929,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </p>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setMatOpen(false)} disabled={isPending}>
+                <X aria-hidden />
                 Cancelar
               </Button>
               <Button size="sm" onClick={doAttachMat} disabled={isPending || !matUrl.trim()}>
+                <Paperclip aria-hidden />
                 {isPending ? "Adjuntando…" : "Adjuntar"}
               </Button>
             </div>
@@ -954,9 +963,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setPhotoOpen(false)} disabled={isPending}>
+                <X aria-hidden />
                 Cancelar
               </Button>
               <Button size="sm" onClick={doAttachPhoto} disabled={isPending || !photoUrl.trim()}>
+                <Paperclip aria-hidden />
                 {isPending ? "Adjuntando…" : "Adjuntar"}
               </Button>
             </div>
@@ -974,9 +985,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setCancelOpen(false)} disabled={isPending}>
-              <CircleArrowLeft />Volver
+              <CircleArrowLeft aria-hidden />Volver
             </Button>
             <Button variant="destructive" size="sm" onClick={doCancelOrder} disabled={isPending}>
+              <Ban aria-hidden />
               {isPending ? "Cancelando…" : "Confirmar cancelación"}
             </Button>
           </div>

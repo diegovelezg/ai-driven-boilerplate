@@ -35,10 +35,10 @@ export default async function NuevaEmpresaPage() {
       <PageHeader
         eyebrow="CRM"
         title="Nueva empresa"
-        description="Una empresa, un tipo. La marca que publicita va en el pedido, no acá."
-        right={<Button render={<Link href="/companies" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
+        description="Elige el tipo de empresa y completa sus datos. La marca se registra en la orden."
+        right={<Button render={<Link href="/companies" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
       />
-      <AppCard title="Datos" description="Nombre y tipo; el resto es opcional.">
+      <AppCard title="Datos" description="Solo el nombre y el tipo son obligatorios.">
         <NuevaEmpresaForm canManageCommission={canManageCommission} defaultCountry={defaultCountry} />
       </AppCard>
     </div>

@@ -29,9 +29,8 @@ function pickRandomSuggestions(pool: string[], n = 3): string[] {
 }
 
 /** Panel de chat store-scoped: lo usa el dock del dashboard.
- *  Chat único sin selector: el orquestador decide qué especialista responde.
- *  El dato estructurado siempre se eleva vía `onArtifact`: el host decide
- *  (navegar a la vista filtrada: Review o Customers). Este panel nunca pinta datos. */
+ *  Chat único con dooh_agent (5 tools read-only): empresas, órdenes,
+ *  inventario y finanzas. El dato estructurado siempre se eleva vía `onArtifact`. */
 export function ChatPanel({
   storeId,
   onArtifact,
@@ -68,9 +67,9 @@ export function ChatPanel({
       status={status}
       suggestions={suggestions}
       onShuffleSuggestions={() => setNonce((n) => n + 1)}
-      emptyTitle="Pregunta a tu equipo de agentes"
-      emptySubtitle="Scout vigila, Estratega prioriza, Redactor propone y Analista mide. Pregunta en lenguaje normal — el orquestador lanza al especialista."
-      placeholder="Pregunta a tu equipo…"
+      emptyTitle="Pregunta a tu asistente DOOH"
+      emptySubtitle="Empresas, órdenes, inventario y finanzas. Pregunta en lenguaje normal — el asistente consulta tus datos."
+      placeholder="Pregunta sobre tu negocio…"
     />
   );
 }

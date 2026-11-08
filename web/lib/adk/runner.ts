@@ -1,10 +1,10 @@
 import { Runner, type BaseAgent, type BaseSessionService } from "@google/adk";
-import { RetainLoggingPlugin } from "./logging-plugin";
+import { AdkLoggingPlugin } from "./logging-plugin";
 
 // Plugin único: si ADK_LOG=0 se corre sin observabilidad (tests silenciosos).
-function plugins(): RetainLoggingPlugin[] {
+function plugins(): AdkLoggingPlugin[] {
   if (process.env.ADK_LOG === "0") return [];
-  return [new RetainLoggingPlugin()];
+  return [new AdkLoggingPlugin()];
 }
 
 /**

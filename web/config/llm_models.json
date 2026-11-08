@@ -46,55 +46,7 @@
       "reasoning_effort": "low",
       "json_mode": "native"
     },
-    "scout_scan": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "economica" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "economica" },
-      "temperature": 0.1,
-      "max_tokens": 1000,
-      "reasoning_effort": "high",
-      "json_mode": "native"
-    },
-    "strategist_plan": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "media" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "media" },
-      "temperature": 0.3,
-      "max_tokens": 1500,
-      "reasoning_effort": "high",
-      "json_mode": "native"
-    },
-    "proposer_draft": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "media" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "media" },
-      "temperature": 0.5,
-      "max_tokens": 3000,
-      "reasoning_effort": "high",
-      "json_mode": "native"
-    },
-    "contactability_judge": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "economica" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "economica" },
-      "temperature": 0.1,
-      "max_tokens": 800,
-      "reasoning_effort": "low",
-      "json_mode": "native"
-    },
-    "dispatcher_send": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "economica" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "economica" },
-      "temperature": 0.1,
-      "max_tokens": 500,
-      "reasoning_effort": "high",
-      "json_mode": "native"
-    },
-    "analyst_measure": {
-      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "economica" },
-      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "economica" },
-      "temperature": 0.1,
-      "max_tokens": 1000,
-      "reasoning_effort": "high",
-      "json_mode": "native"
-    },
-    "prospect_scan": {
+    "retrieval_queries": {
       "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "media" },
       "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "media" },
       "temperature": 0.3,
@@ -125,6 +77,14 @@
       "max_tokens": 600,
       "reasoning_effort": "low",
       "json_mode": "none"
+    },
+    "brief_narrate": {
+      "primary": { "provider": "openai", "model": "gpt-6-luna", "quality": "economica" },
+      "fallback": { "provider": "deepseek", "model": "deepseek-flash", "quality": "economica" },
+      "temperature": 0.3,
+      "max_tokens": 1500,
+      "reasoning_effort": "low",
+      "json_mode": "native"
     }
   }
 }

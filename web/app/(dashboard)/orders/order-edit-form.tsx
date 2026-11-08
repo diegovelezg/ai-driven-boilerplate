@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import { Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -125,8 +126,8 @@ export function OrderEditForm({
         </label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={pending}>{pending ? "Guardando…" : "Guardar"}</Button>
-        <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>Cancelar</Button>
+        <Button type="submit" disabled={pending}><Save aria-hidden />{pending ? "Guardando…" : "Guardar"}</Button>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={pending}><X aria-hidden />Cancelar</Button>
       </div>
     </form>
   );

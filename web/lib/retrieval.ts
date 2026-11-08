@@ -1,5 +1,5 @@
 // Capa de retrieval web compartida: queries LLM → SearXNG → scrape estático.
-// La usan el perfilador (verticals, Fase A) y el prospector/enriquecedor.
+// La usan el perfilador (verticals, Fase A) y el enriquecedor.
 // SIN "server-only" a propósito: el pipeline del perfilador debe cargar en
 // scripts tsx (ver profiling/log.ts). El logging aquí es mínimo por diseño:
 // los fallos se propagan como errores con contexto, cada llamador loguea.
@@ -39,12 +39,12 @@ export function firstWritableDir(
       // Siguiente candidato.
     }
   }
-  return candidates[candidates.length - 1] ?? join(tmpdir(), "retain-crawlee");
+  return candidates[candidates.length - 1] ?? join(tmpdir(), "dooh-crawlee");
 }
 
 process.env.CRAWLEE_STORAGE_DIR ??= firstWritableDir([
   join(process.cwd(), ".data", "crawlee"),
-  join(tmpdir(), "retain-crawlee"),
+  join(tmpdir(), "dooh-crawlee"),
 ]);
 
 const SEARXNG_RAW = (process.env.SEARXNG_URL ?? "").trim();
@@ -111,7 +111,7 @@ export async function completeJson(
     if (usage) {
       void logLlmUsage({
         storeId: meter.storeId,
-        process: meter.process ?? "prospect_scan",
+        process: meter.process ?? "retrieval_queries",
         provider: ref.provider,
         model: ref.model,
         promptTokens: usage.promptTokens,
@@ -135,9 +135,9 @@ export async function completeJson(
 const QUERIES_SYSTEM =
   "Generas queries de búsqueda web para encontrar negocios parecidos al ICP. Responde SOLO JSON: {\"queries\": [string]}. REGLAS: 1 tema por query (una industria O un producto top O una marca, nunca mezcles 3 industrias en una query); 6-12 palabras; incluye Perú o una ciudad (Lima/Arequipa/Cusco) cuando el ICP sea peruano; añade una señal de web oficial (\"sitio oficial\", \"contacto\", \"nosotros\"); evita operadores menos (-) y comillas excesivas (SearXNG los penaliza); prefiere queries que devuelvan webs de empresas y directorios indexables; evita site:linkedin.com y redes sociales (muro de login, no scrapeables).";
 
-/** Queries de búsqueda desde un ICP (3 intentos primario→fallback, como el prospector). */
+/** Queries de búsqueda desde un ICP (3 intentos primario→fallback, como el enriquecedor). */
 export async function buildQueries(icp: string, n = 3, focus?: string | null, meter?: { storeId?: string | null }): Promise<string[]> {
-  const cfg = getLlmConfig("prospect_scan");
+  const cfg = getLlmConfig("retrieval_queries");
   const order = [cfg.primary, cfg.fallback, cfg.fallback].filter(
     (r): r is ModelRef => Boolean(r),
   );
@@ -153,7 +153,7 @@ export async function buildQueries(icp: string, n = 3, focus?: string | null, me
         cfg.reasoningEffort,
         QUERIES_SYSTEM,
         user,
-        meter?.storeId ? { storeId: meter.storeId, process: "prospect_scan", usedFallback: i > 0 } : undefined,
+        meter?.storeId ? { storeId: meter.storeId, process: "retrieval_queries", usedFallback: i > 0 } : undefined,
       );
       break;
     } catch (e) {

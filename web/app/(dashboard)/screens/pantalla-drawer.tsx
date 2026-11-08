@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, CircleCheckBig, CircleOff, MapPin, Monitor, Trash } from "lucide-react";
+import { BarChart3, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
 import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
 import {
@@ -179,7 +179,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
         })
         .catch((e: unknown) => {
           if (!alive) return;
-          setError(e instanceof Error ? e.message : "DB read failed");
+          setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
         });
     }, 0);
     return () => {
@@ -197,7 +197,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
         return (await res.json()) as ScreenDetail;
       })
       .then((j) => setDetail(j))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "DB read failed"));
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "No se pudieron cargar los datos."));
   };
 
   const s = detail?.screen;
@@ -441,9 +441,9 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             <Badge variant={s.is_active === true ? "success" : "secondary"}>
               {s.is_active === true ? "Activa" : "Inactiva"}
             </Badge>
-            {enriching && <Badge variant="outline">Generando información inteligente…</Badge>}
+            {enriching && <Badge variant="outline">Generando resumen inteligente…</Badge>}
             <span className="text-[11px] text-muted-foreground tabular-nums">
-              {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas OI
+              {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas en órdenes
             </span>
             {canManage && (
               <span className="ms-auto flex items-center gap-1">
@@ -452,7 +452,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     size="icon-sm"
                     variant="ghost"
                     aria-label="Deshabilitar pantalla"
-                    title={enriching ? "Generando información inteligente…" : "Deshabilitar"}
+                    title={enriching ? "Generando resumen inteligente…" : "Deshabilitar"}
                     disabled={!active || working || enriching}
                     onClick={() => toggleActive(false)}
                   >
@@ -464,7 +464,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     size="icon-sm"
                     variant="ghost"
                     aria-label="Habilitar pantalla"
-                    title={enriching ? "Generando información inteligente…" : "Habilitar"}
+                    title={enriching ? "Generando resumen inteligente…" : "Habilitar"}
                     disabled={active || working || enriching}
                     onClick={() => toggleActive(true)}
                   >
@@ -476,7 +476,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     size="icon-sm"
                     variant="ghost"
                     aria-label="Eliminar pantalla"
-                    title={enriching ? "Generando información inteligente…" : "Eliminar"}
+                    title={enriching ? "Generando resumen inteligente…" : "Eliminar"}
                     disabled={working || enriching}
                     onClick={() => setDelOpen(true)}
                     className="text-destructive hover:text-destructive"
@@ -498,6 +498,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
           <Button variant="outline" size="sm" className="w-fit" onClick={retry}>
+            <RotateCcw aria-hidden />
             Reintentar
           </Button>
         </div>
@@ -639,7 +640,8 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     </Field>
                   </dl>
                   <div>
-                    <Button variant="outline" size="sm" onClick={startEditPlayback} disabled={enriching} title={enriching ? "Generando información inteligente…" : undefined}>
+                    <Button variant="outline" size="sm" onClick={startEditPlayback} disabled={enriching} title={enriching ? "Generando resumen inteligente…" : undefined}>
+                      <Pencil aria-hidden />
                       Editar pauta
                     </Button>
                   </div>
@@ -684,9 +686,11 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                   {playbackError && <p className="text-xs text-destructive">{playbackError}</p>}
                   <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" onClick={savePlayback} disabled={savingPlayback}>
+                      <Save aria-hidden />
                       {savingPlayback ? "Guardando…" : "Guardar"}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => setEditingPlayback(false)} disabled={savingPlayback}>
+                      <X aria-hidden />
                       Cancelar
                     </Button>
                   </div>
@@ -796,7 +800,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           </AppCard>
 
           <p className="px-1 text-xs text-muted-foreground">
-            Enriquecimiento IA: {enriching ? "generándose…" : detail.has_embedding ? `disponible${detail.embedding_model ? ` (${detail.embedding_model})` : ""}` : "no disponible"}.
+            Resumen inteligente: {enriching ? "generándose…" : detail.has_embedding ? "listo" : "no disponible"}.
           </p>
         </>
       )}
@@ -805,8 +809,8 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           <DialogHeader>
             <DialogTitle>Eliminar pantalla</DialogTitle>
             <DialogDescription>
-              {s ? `Se eliminará "${toTitleCase(String(s.name ?? "esta pantalla"))}" y su ubicación. Los slots caen en cascada.` : "Esta acción no se puede deshacer."}
-              {(detail && (detail.bookings_count > 0 || detail.lines_count > 0)) && " Tiene reservas o líneas en órdenes: el borrado será rechazado."}
+              {s ? `Se eliminará "${toTitleCase(String(s.name ?? "esta pantalla"))}" y su ubicación. Esta acción no se puede deshacer.` : "Esta acción no se puede deshacer."}
+              {(detail && (detail.bookings_count > 0 || detail.lines_count > 0)) && " Tiene reservas o líneas en órdenes, por eso no se puede eliminar."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
@@ -814,6 +818,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               <CircleOff aria-hidden />Volver
             </Button>
             <Button variant="destructive" size="sm" onClick={doDelete} disabled={working}>
+              <Trash aria-hidden />
               {working ? "Eliminando…" : "Confirmar eliminación"}
             </Button>
           </div>

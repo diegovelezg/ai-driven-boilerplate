@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Save } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { SectionHeading } from "@/components/section-heading";
@@ -68,6 +69,7 @@ function MemberRow({
               })
             }
           >
+            <Save aria-hidden />
             {pending ? "Guardando…" : "Guardar"}
           </Button>
         )}
@@ -91,8 +93,8 @@ export function TeamPanel({
   return (
     <section role="tabpanel" aria-label="Equipo" className="flex w-full max-w-2xl flex-col gap-4">
       <SectionHeading
-        title="Equipo y roles"
-        hint="Quién accede a esta tienda y con qué rol. Owner > Admin > Vendedor > Lector. Los features se separarán por rol."
+        title="Roles del equipo"
+        hint="El propietario tiene control total; admin configura, vendedor opera y lector solo consulta."
         tone="primary"
       />
       <AppCard
@@ -100,7 +102,7 @@ export function TeamPanel({
         description={
           myRole
             ? `Tu rol: ${MEMBER_ROLE_LABELS[myRole]}${canEdit ? "" : " (solo lectura)"}`
-            : "Sin sesión: vista de desarrollo."
+            : "Sin sesión activa."
         }
       >
         {members.length === 0 ? (
@@ -123,8 +125,8 @@ export function TeamPanel({
         )}
       </AppCard>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        Lector ve · Vendedor opera (CRM, review) · Admin configura y gestiona vendedores ·
-        Propietario gestiona todo (único que puede tocar propietarios; siempre queda uno).
+        Siempre debe quedar al menos un propietario. Solo un propietario puede cambiar el rol
+        de otro propietario.
       </p>
     </section>
   );

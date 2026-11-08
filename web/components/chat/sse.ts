@@ -73,7 +73,7 @@ export async function postChatStream(opts: {
   body: unknown;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   onArtifact?: (artifact: ChatArtifact) => void;
-  /** Etiqueta descriptiva del trabajo en curso ("Scout vigilando…"). */
+  /** Etiqueta descriptiva del trabajo en curso ("Buscando pantallas…"). */
   onStatus?: (label: string | null) => void;
 }): Promise<void> {
   const { url, body, setMessages, onArtifact, onStatus } = opts;

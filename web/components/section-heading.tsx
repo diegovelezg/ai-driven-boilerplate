@@ -45,7 +45,7 @@ export function SectionHeading({
           className={cn("mt-1.5 h-4 w-1 shrink-0 rounded-full", TONES[tone])}
         />
         <div className="min-w-0">
-          <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
           {hint && (
             <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
               {hint}

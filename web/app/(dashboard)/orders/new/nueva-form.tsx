@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, CalendarIcon, Check, ChevronsUpDown, Search, X } from "lucide-react";
+import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AppCard } from "@/components/app-card";
@@ -268,9 +268,11 @@ function ScreenMultiSelect({
                   onSetAll([...selected, ...visible.map((s) => s.id).filter((id) => !set.has(id) && occupiedOf(id).length === 0)])
                 }
               >
+                <Check aria-hidden />
                 Todas
               </Button>
               <Button type="button" variant="ghost" size="xs" disabled={selected.length === 0} onClick={onClear}>
+                <X aria-hidden />
                 Ninguna
               </Button>
             </div>
@@ -346,8 +348,9 @@ function ScreenMultiSelect({
             )}
           </div>
           {periodReady && !isChecking && !availError && occupiedCount === 0 && (
-            <p className="px-2 text-[11px] text-emerald-700 tabular-nums" role="status">
-              ✓ Todo libre en {periodLabel}
+            <p className="flex items-center gap-1 px-2 text-[11px] text-emerald-700 tabular-nums" role="status">
+              <Check aria-hidden className="size-3.5" />
+              Todo libre en {periodLabel}
             </p>
           )}
           {periodReady && !isChecking && availError && (
@@ -356,12 +359,13 @@ function ScreenMultiSelect({
             </p>
           )}
           {periodReady && occupiedCount > 0 && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-destructive/5 px-2.5 py-2">
               <p className="text-[11px] text-destructive tabular-nums">
                 {formatNumber(occupiedCount)} ocupada{plural(occupiedCount)} en {periodLabel}
               </p>
               {nextWindowLabel && onApplyWindow && (
                 <Button type="button" size="xs" variant="outline" onClick={onApplyWindow}>
+                  <ArrowRight aria-hidden />
                   {nextWindowLabel}
                 </Button>
               )}
@@ -461,6 +465,7 @@ function ScreenCalendarDialog({
             {windowStart && (
               <div>
                 <Button type="button" size="sm" variant="outline" onClick={() => onApply(windowStart)}>
+                  <CalendarDays aria-hidden />
                   Usar {formatShort(windowStart)} → {formatShort(addDays(windowStart, duration - 1))}
                 </Button>
               </div>
@@ -667,7 +672,7 @@ export function NuevaOrdenForm({
   return (
     <>
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-      <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Contratante</span>}>
+      <AppCard title="Contratante">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 flex-col gap-1 text-xs">
             Contratante *
@@ -744,7 +749,7 @@ export function NuevaOrdenForm({
         </div>
       </AppCard>
 
-      <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Periodo</span>}>
+      <AppCard title="Periodo">
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-3 gap-2">
             <PeriodDatePicker
@@ -777,11 +782,11 @@ export function NuevaOrdenForm({
         </div>
       </AppCard>
 
-      <AppCard title={<span className="text-[15px] font-semibold tracking-tight">Pantallas{rows.length > 0 ? ` (${formatNumber(rows.length)})` : ""}</span>}>
+      <AppCard title={`Pantallas${rows.length > 0 ? ` (${formatNumber(rows.length)})` : ""}`}>
         <div className="flex flex-col gap-4">
           {screens.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              Sin pantallas activas. Importa el inventario en /screens antes de crear la orden.
+              Sin pantallas activas. Registra pantallas en Inventario antes de crear la orden.
             </p>
           ) : (
             <ScreenMultiSelect
@@ -812,12 +817,13 @@ export function NuevaOrdenForm({
             <section className="flex flex-col gap-2" aria-label="Detalle por pantalla">
               <SectionHeading title="Detalle por pantalla" hint={`Precio por día × ${dias !== null ? `${formatNumber(dias)} días` : "días del periodo"}.`} />
               {blockedRows.length > 0 && (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-2.5 py-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-destructive/5 px-2.5 py-2">
                   <p className="text-xs text-destructive">
                     {blockedRows.length} ocupada{plural(blockedRows.length)} en ese periodo.
                   </p>
                   {dias !== null && (commonWindow ? (
                     <Button type="button" size="xs" variant="outline" onClick={() => applyWindow(commonWindow)}>
+                      <ArrowRight aria-hidden />
                       Mover al próximo hueco: {formatShort(commonWindow)} → {formatShort(addDays(commonWindow, dias - 1))}
                     </Button>
                   ) : checking ? (
@@ -927,6 +933,7 @@ export function NuevaOrdenForm({
       <div className="flex flex-col gap-1.5">
         <div>
           <Button type="submit" disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined}>
+            <Plus aria-hidden />
             {pending ? "Creando…" : `Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), currency)}` : ""}`}
           </Button>
         </div>

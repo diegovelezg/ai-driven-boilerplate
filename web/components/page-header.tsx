@@ -31,7 +31,7 @@ export function PageHeader({
           {eyebrow}
         </span>
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="max-w-3xl text-xl font-semibold tracking-tight text-balance md:text-2xl">
+          <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-balance md:text-3xl">
             {title}
           </h1>
           {badge}

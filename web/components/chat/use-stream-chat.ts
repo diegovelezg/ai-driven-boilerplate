@@ -22,7 +22,7 @@ export function useStreamChat(opts: {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Trabajo en curso del orquestador ("Scout vigilando…"); null = genérico. */
+  /** Trabajo en curso del agente ("Buscando pantallas…"); null = genérico. */
   const [status, setStatus] = useState<string | null>(null);
 
   const ask = useCallback(

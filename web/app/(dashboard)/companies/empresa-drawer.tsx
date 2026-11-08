@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Building2, Bot, FileText, Globe, UserRound } from "lucide-react";
+import { Building2, Bot, FileText, Globe, Pencil, Plus, RotateCcw, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ComboboxField } from "@/components/combobox-field";
@@ -187,7 +188,10 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
           Principal
         </Label>
       </div>
-      <Button type="submit" disabled={pending || !ready} title={!ready ? "Agrega email o teléfono" : undefined}>{pending ? "Agregando…" : "Agregar"}</Button>
+      <Button type="submit" disabled={pending || !ready} title={!ready ? "Agrega email o teléfono" : undefined}>
+        <Plus aria-hidden />
+        {pending ? "Agregando…" : "Agregar"}
+      </Button>
     </form>
   );
 }
@@ -214,7 +218,7 @@ export function EmpresaDrawer({
       if (!res.ok) throw new Error("No se pudo cargar la empresa.");
       setDetail((await res.json()) as EmpresaDetail);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "DB read failed");
+      setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     }
   }, [companyId]);
 
@@ -298,6 +302,7 @@ export function EmpresaDrawer({
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
           <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
+            <RotateCcw aria-hidden />
             Reintentar
           </Button>
         </div>
@@ -314,11 +319,12 @@ export function EmpresaDrawer({
         <>
           <AppCard
             title="Datos"
-            description="Identidad y contacto de la contraparte."
+            description="Nombre, identificación y datos de contacto."
             aria-label="Datos de la empresa"
             action={
               canEdit && !editingDatos ? (
                 <Button variant="outline" size="sm" onClick={() => setEditingDatos(true)}>
+                  <Pencil aria-hidden />
                   Editar
                 </Button>
               ) : undefined
@@ -360,7 +366,6 @@ export function EmpresaDrawer({
           </AppCard>
           <AppCard
             title="Tipo"
-            description="Naturaleza de la contraparte."
             aria-label="Tipo de empresa"
           >
             {canEdit ? (
@@ -414,7 +419,7 @@ export function EmpresaDrawer({
           aria-label="Contactos de la empresa"
         >
           {contacts.length === 0 ? (
-            <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-[13px] text-muted-foreground">Sin contactos. Agrega el primero abajo.</p>
             </div>
           ) : (
@@ -441,9 +446,14 @@ export function EmpresaDrawer({
               </DrawerTableBody>
             </DrawerTable>
           )}
-          <div className="mt-3">
-            {canEdit && <NewContactForm companyId={companyId} siblingJobTitles={siblingJobTitles} onSaved={() => { router.refresh(); void load(); }} />}
-          </div>
+          {canEdit && (
+            <>
+              <Separator className="mt-1" />
+              <div className="mt-1">
+                <NewContactForm companyId={companyId} siblingJobTitles={siblingJobTitles} onSaved={() => { router.refresh(); void load(); }} />
+              </div>
+            </>
+          )}
         </AppCard>
       )}
 
@@ -451,17 +461,17 @@ export function EmpresaDrawer({
         <>
           <AppCard
             title={`Pedidos (${ios.length})`}
-            description="IOs donde es anunciante o facturación. La marca va en el pedido."
+            description="Órdenes donde aparece como anunciante o responsable de facturación."
             aria-label="Pedidos de la empresa"
           >
             {ios.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-[13px] text-muted-foreground">Sin pedidos: aún no es cliente.</p>
               </div>
             ) : (
               <DrawerTable>
                 <DrawerTableHeader>
-                  <DrawerTableTh>IO</DrawerTableTh>
+                  <DrawerTableTh>Orden</DrawerTableTh>
                   <DrawerTableTh>Marca</DrawerTableTh>
                   <DrawerTableTh>Estado</DrawerTableTh>
                 </DrawerTableHeader>
@@ -479,11 +489,11 @@ export function EmpresaDrawer({
           </AppCard>
           <AppCard
             title={`Campañas (${campaigns.length})`}
-            description="Donde la empresa es anunciante."
+            description="Pautas registradas en las que participa."
             aria-label="Campañas de la empresa"
           >
             {campaigns.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg border border-dashed px-3 py-3">
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-[13px] text-muted-foreground">Sin campañas.</p>
               </div>
             ) : (

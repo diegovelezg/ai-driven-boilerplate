@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { Cat } from "lucide-react";
+import { Cat, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
@@ -54,12 +54,13 @@ export function LoginForm({ next }: { next: string }) {
             <span className="mb-1 flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <Cat className="size-5" strokeWidth={2} />
             </span>
-            Entra a tu motor de retención
+            Entra a tu operación comercial
           </span>
         }
-        description="Tu operación de retención, lista para hoy."
+        description="Inventario, órdenes y cobros en un solo lugar."
         footer={
-          <Button type="submit" disabled={pending || !ready} className="w-full" title={!ready ? "Completa email y password" : undefined}>
+          <Button type="submit" disabled={pending || !ready} className="w-full" title={!ready ? "Completa email y contraseña" : undefined}>
+            <LogIn aria-hidden />
             {pending ? "Ingresando…" : "Ingresar"}
           </Button>
         }
@@ -83,7 +84,7 @@ export function LoginForm({ next }: { next: string }) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">Contraseña</Label>
             <Input
               id="password"
               name="password"

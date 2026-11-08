@@ -30,7 +30,7 @@ export default async function ContactDuplicatesPage() {
         truncated = res.truncated;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -39,11 +39,11 @@ export default async function ContactDuplicatesPage() {
       <PageHeader
         eyebrow="CRM"
         title="Contactos duplicados"
-        description="Mismo email o mismo teléfono: elige quién queda y fusiona. Las campañas se re-apuntan al que queda."
+        description="Mismo email o teléfono en varias fichas: elige cuál conservar y fusiona el resto."
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

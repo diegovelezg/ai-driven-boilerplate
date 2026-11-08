@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import {
@@ -171,7 +172,10 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
         </div>
       </div>
       <div>
-        <Button type="submit" disabled={pending || !nameOk} title={!nameOk ? "Completa el nombre para continuar" : undefined}>{pending ? "Creando…" : "Crear empresa"}</Button>
+        <Button type="submit" disabled={pending || !nameOk} title={!nameOk ? "Completa el nombre para continuar" : undefined}>
+          <Plus aria-hidden />
+          {pending ? "Creando…" : "Crear empresa"}
+        </Button>
       </div>
     </form>
   );

@@ -2,8 +2,9 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutGrid, List as ListIcon } from "lucide-react";
+import { FilterX, LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
+import { Metric, MetricRow } from "@/components/metric";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import {
@@ -94,22 +95,22 @@ export function ContactsList({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-2.5" aria-label="Resumen">
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">En vista</p>
-          <p
-            className="mt-1 text-lg font-semibold tabular-nums"
-            title={truncated ? `Muestra parcial de ${formatNumber(totalCount ?? summary.total)} en total` : undefined}
-          >
-            {formatNumber(summary.total)}
-            {truncated && <span className="ml-2 text-xs font-medium text-muted-foreground">· muestra parcial</span>}
-          </p>
-        </div>
-        <div className="rounded-xl border bg-card px-3.5 py-3">
-          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Principales</p>
-          <p className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(summary.primary)}</p>
-        </div>
-      </div>
+      <MetricRow columns={2} className="py-1" aria-label="Resumen">
+        <Metric
+          label="En vista"
+          value={formatNumber(summary.total)}
+          hint={
+            truncated
+              ? `Muestra parcial de ${formatNumber(totalCount ?? summary.total)} en total`
+              : "Contactos con los filtros actuales"
+          }
+        />
+        <Metric
+          label="Principales"
+          value={formatNumber(summary.primary)}
+          hint="Contacto de referencia en su empresa"
+        />
+      </MetricRow>
 
       <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros de contactos">
         <FilterSearch
@@ -138,6 +139,7 @@ export function ContactsList({
         </FilterSelect>
         {hasFilter && (
           <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", company: null })}>
+            <FilterX aria-hidden />
             Limpiar
           </Button>
         )}
@@ -251,7 +253,7 @@ export function ContactsList({
         <EntityEmpty
           filtered={hasFilter}
           emptyTitle="Aún no hay contactos"
-          emptyHint="Crea el primero o agrégalo desde el drawer de su empresa."
+          emptyHint="Crea el primero o agrégalo desde la ficha de su empresa."
           onClear={hasFilter ? () => go({ q: "", company: null }) : undefined}
         />
       )}

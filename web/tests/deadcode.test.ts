@@ -31,6 +31,10 @@ const DEAD_FILES = [
   "components/product-badges.tsx",
   "components/filter-button.tsx",
   "components/inbox-tag.tsx",
+  "lib/rhythm-describe.ts",
+  "lib/action-trace.ts",
+  "tests/rhythm-describe.test.ts",
+  "tests/action-trace.test.ts",
   "tests/worker-args.test.ts",
 ];
 

@@ -39,7 +39,7 @@ export default async function MarcasPage({
         rows = await listBrands(storeId, { q, sortKey, sortDir });
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -48,11 +48,11 @@ export default async function MarcasPage({
       <PageHeader
         eyebrow="CRM"
         title="Marcas"
-        description="La recurrencia se mide por marca: pedidos, inversión, última pauta, pantallas y agencias. La marca nace del pedido, no se crea acá."
+        description="Cuánto y con qué frecuencia pauta cada marca: pedidos, inversión, última pauta y agencias. Las marcas se crean al registrar una orden."
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

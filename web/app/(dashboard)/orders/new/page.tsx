@@ -74,7 +74,7 @@ export default async function NuevaOrdenPage() {
         );
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -83,11 +83,11 @@ export default async function NuevaOrdenPage() {
       <PageHeader
         eyebrow="DOOH"
         title="Nueva orden"
-        description="Un solo periodo para toda la orden: elige pantallas, ponle precio a cada una y créala en borrador. OM y materiales llegan después, en su etapa."
-        right={<Button render={<Link href="/orders" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
+        description="Un solo periodo para toda la orden: elige pantallas, define sus precios y guárdala como borrador. Después podrás completar autorización y materiales."
+        right={<Button render={<Link href="/orders" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
       />
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
       {connected && dbReady && !error && (
         <NuevaOrdenForm companies={companies} brands={brands} screens={screens} defaultCurrency={defaultCurrency} />

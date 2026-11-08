@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CopyCheck, Plus } from "lucide-react";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
@@ -70,7 +71,7 @@ export default async function ContactosPage({
         dupeGroups = dupesRes.groups.length;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -79,23 +80,25 @@ export default async function ContactosPage({
       <PageHeader
         eyebrow="CRM"
         title="Contactos"
-        description="Personas de las empresas: quién firma, quién paga, quién aprueba. También se agregan desde el drawer de cada empresa, tab Contactos."
+        description="Quién firma, quién paga y quién aprueba en cada empresa. También puedes agregarlos desde la ficha de la empresa."
         right={
           <span className="flex items-center gap-2">
             {dupeGroups > 0 && (
               <Button render={<Link href="/contacts/duplicates" />} nativeButton={false} variant="outline" size="sm">
+                <CopyCheck aria-hidden />
                 Revisar duplicados · {dupeGroups}
               </Button>
             )}
             <Button render={<Link href="/contacts/new" />} nativeButton={false} size="sm">
+              <Plus aria-hidden />
               Nuevo contacto
             </Button>
           </span>
         }
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

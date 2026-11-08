@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { AlertTriangle, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
+import { Metric, MetricRow } from "@/components/metric";
 import { PageHeader } from "@/components/page-header";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
@@ -40,11 +42,9 @@ export default async function FinanzasPage({
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
-          description="Contratado, facturado y cobrado (DOOH)."
+          description="Qué está contratado, qué se facturó y qué falta cobrar."
         />
-        <AppCardState>
-            Supabase no configurado (`supabase start` + `web/.env.local`).
-        </AppCardState>
+        <AppCardState>Base de datos no disponible.</AppCardState>
       </div>
     );
   }
@@ -63,10 +63,10 @@ export default async function FinanzasPage({
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
-          description="Contratado, facturado y cobrado (DOOH)."
+          description="Qué está contratado, qué se facturó y qué falta cobrar."
         />
         <AppCardState>
-            Stores read: {e instanceof Error ? e.message : "DB read failed"}
+          {e instanceof Error ? e.message : "No se pudieron cargar los datos."}
         </AppCardState>
       </div>
     );
@@ -79,21 +79,22 @@ export default async function FinanzasPage({
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
-          description="Contratado, facturado y cobrado (DOOH)."
+          description="Qué está contratado, qué se facturó y qué falta cobrar."
         />
         <AppCard
           footer={
             noAccess ? undefined : (
               <Button render={<Link href="/settings" />} nativeButton={false} variant="outline" size="sm">
-                Ir a Settings
+                <Settings2 aria-hidden />
+                Ir a configuración
               </Button>
             )
           }
         >
           <p className="text-[13px] text-muted-foreground">
             {noAccess
-              ? "Tu usuario no tiene tiendas asignadas. Pide a tu admin que te agregue en sys_memberships."
-              : "Conecta tu tienda para ver tus finanzas."}
+              ? "Tu usuario no tiene tiendas asignadas. Pide a un administrador que te dé acceso."
+              : "Conecta una tienda para ver tus finanzas."}
           </p>
         </AppCard>
       </div>
@@ -335,7 +336,7 @@ export default async function FinanzasPage({
     activeMoneda = finBy.some((f) => f.currency === monedaParam) ? monedaParam : null;
     visibleFin = activeMoneda ? finBy.filter((f) => f.currency === activeMoneda) : finBy;
   } catch (e) {
-    error = e instanceof Error ? e.message : "DB read failed";
+    error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
   }
 
   return (
@@ -344,7 +345,7 @@ export default async function FinanzasPage({
       <PageHeader
         eyebrow="Dinero y cobro"
         title={`Finanzas · ${displayStoreName(active)}`}
-        description="Contratado por líneas de IO y cobro por facturas. Agrupado por moneda: nunca se suman PEN+USD."
+        description="Qué está contratado, qué se facturó y qué falta cobrar. Cada moneda se muestra por separado."
       />
 
       {error && (
@@ -352,12 +353,14 @@ export default async function FinanzasPage({
       )}
 
       {unassignedMinor > 0 && (
-        <AppCard>
-          <p className="text-sm">
-            {formatNumber(unassignedInvoices.length)}{" "}
-            {unassignedInvoices.length === 1 ? "factura sin" : "facturas sin"} moneda explícita —{" "}
-            {formatMoney(unassignedMinor, viewCurrency)} estimados excluidos de los totales.{" "}
-            Fija su moneda en el origen: nunca se mezclan ni se heredan en silencio.
+        <AppCard tone="amber">
+          <p className="flex items-start gap-2.5 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+            <span>
+              {formatNumber(unassignedInvoices.length)}{" "}
+              {unassignedInvoices.length === 1 ? "factura sin" : "facturas sin"} moneda definida —{" "}
+              {formatMoney(unassignedMinor, viewCurrency)} quedaron fuera de los totales. Asígnales una moneda para incluirlas.
+            </span>
           </p>
         </AppCard>
       )}
@@ -375,11 +378,11 @@ export default async function FinanzasPage({
         const bestKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor > a.salesMinor ? b : a)).key : null;
         const worstKey = closed.length > 0 ? closed.reduce((a, b) => (b.salesMinor < a.salesMinor ? b : a)).key : null;
         return (
-          <section key={fin.currency} aria-label={`Finanzas ${fin.currency}`} className="flex flex-col gap-8 rounded-2xl border p-4 md:p-6">
+          <section key={fin.currency} aria-label={`Finanzas ${fin.currency}`} className="flex flex-col gap-8">
             {showCurrencyChrome && (
               <SectionHeading
                 title={`Moneda ${fin.currency}`}
-                hint={fin.currency === viewCurrency ? "Moneda base de la tienda." : "Moneda secundaria de IOs."}
+                hint={fin.currency === viewCurrency ? "Moneda base de la tienda." : "Moneda secundaria de órdenes."}
                 tone="sky"
               />
             )}
@@ -395,39 +398,34 @@ export default async function FinanzasPage({
               <section aria-label={showCurrencyChrome ? `Cobro ${fin.currency}` : "Cobro"}>
                 <SectionHeading
                   title={showCurrencyChrome ? `Cobro · ${fin.currency}` : "Cobro"}
-                  hint="Facturado vs cobrado según invoices (sin facturar = contratado aún no facturado)."
+                  hint="Facturado, cobrado y lo que sigue pendiente."
                   tone="emerald"
                 />
                 <AppCard>
-                  <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[11px] text-muted-foreground">Facturado</span>
-                      <span className="text-xl font-semibold tabular-nums tracking-tight">
-                        {formatMoney(fin.invoicedMinor, fin.currency)}
-                      </span>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[11px] text-muted-foreground">Cobrado</span>
-                      <span className="text-xl font-semibold tabular-nums tracking-tight">
-                        {formatMoney(fin.paidMinor, fin.currency)}
-                      </span>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[11px] text-muted-foreground">Pendiente</span>
-                      <span className="text-xl font-semibold tabular-nums tracking-tight">
-                        {formatMoney(fin.pendingMinor, fin.currency)}
-                      </span>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      <span className="text-[11px] text-muted-foreground">Vencido</span>
-                      <span className="text-xl font-semibold tabular-nums tracking-tight">
-                        {formatMoney(fin.overdueMinor, fin.currency)}
-                      </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatNumber(fin.overdueCount)} {fin.overdueCount === 1 ? "factura" : "facturas"}
-                      </span>
-                    </div>
-                  </div>
+                  <MetricRow columns={4}>
+                    <Metric
+                      label="Facturado"
+                      value={formatMoney(fin.invoicedMinor, fin.currency)}
+                      hint="Total emitido"
+                    />
+                    <Metric
+                      label="Cobrado"
+                      value={formatMoney(fin.paidMinor, fin.currency)}
+                      hint="Pagos confirmados"
+                      tone="success"
+                    />
+                    <Metric
+                      label="Pendiente"
+                      value={formatMoney(fin.pendingMinor, fin.currency)}
+                      hint="Facturado por cobrar"
+                    />
+                    <Metric
+                      label="Vencido"
+                      value={formatMoney(fin.overdueMinor, fin.currency)}
+                      hint={`${formatNumber(fin.overdueCount)} ${fin.overdueCount === 1 ? "factura" : "facturas"}`}
+                      tone={fin.overdueMinor > 0 ? "danger" : "default"}
+                    />
+                  </MetricRow>
                 </AppCard>
               </section>
             )}
@@ -436,7 +434,7 @@ export default async function FinanzasPage({
               <section aria-label={showCurrencyChrome ? `Qué más y qué menos vende ${fin.currency}` : "Qué más y qué menos vende"}>
                 <SectionHeading
                   title={showCurrencyChrome ? `Qué más y qué menos vende · ${fin.currency}` : "Qué más y qué menos vende"}
-                  hint="Por pantalla, suma de rate_minor de sus líneas."
+                  hint="Por pantalla, según lo contratado."
                   tone="violet"
                 />
                 <div className="grid gap-4 lg:grid-cols-2">
@@ -484,7 +482,7 @@ export default async function FinanzasPage({
               <section aria-label={`Detalle mensual ${fin.currency}`}>
                 <SectionHeading
                   title={`Contratado mensual · ${fin.currency}`}
-                  hint="Mejor/peor sobre meses cerrados: el mes en curso es parcial y no compite."
+                  hint="Mejor y peor mes, sin contar el mes en curso."
                   tone="sky"
                 />
                 <AppCard variant="table">
@@ -535,14 +533,14 @@ export default async function FinanzasPage({
               <section aria-label={`Top marcas ${fin.currency}`}>
                 <SectionHeading
                   title={`Top marcas por contratado · ${fin.currency}`}
-                  hint="Suma de rate_minor de líneas por marca de la IO."
+                  hint="Monto contratado por marca."
                   tone="violet"
                 />
                 <AppCard variant="table">
                   <DataTable>
                     <DataTableHeader>
                       <DataTableTh>Marca</DataTableTh>
-                      <DataTableTh numeric>IOs</DataTableTh>
+                      <DataTableTh numeric>Órdenes</DataTableTh>
                       <DataTableTh numeric>Contratado</DataTableTh>
                     </DataTableHeader>
                     <DataTableBody className="tabular-nums">
@@ -563,14 +561,14 @@ export default async function FinanzasPage({
               <section aria-label={`Top anunciantes ${fin.currency}`}>
                 <SectionHeading
                   title={`Top anunciantes por contratado · ${fin.currency}`}
-                  hint="Por empresa anunciante de la IO."
+                  hint="Monto contratado por empresa anunciante."
                   tone="emerald"
                 />
                 <AppCard variant="table">
                   <DataTable>
                     <DataTableHeader>
                       <DataTableTh>Anunciante</DataTableTh>
-                      <DataTableTh numeric>IOs</DataTableTh>
+                      <DataTableTh numeric>Órdenes</DataTableTh>
                       <DataTableTh numeric>Contratado</DataTableTh>
                     </DataTableHeader>
                     <DataTableBody className="tabular-nums">

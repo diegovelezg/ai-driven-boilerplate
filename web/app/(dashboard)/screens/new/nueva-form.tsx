@@ -2,6 +2,8 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Plus } from "lucide-react";
+import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import {
@@ -321,6 +323,8 @@ export function NuevaPantallaForm({
 
   return (
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+      <AppCard title="Ubicación" description="Dónde está la pantalla.">
+        <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-1 text-xs">
         Punto en el mapa *
         <input type="hidden" name="venue_latitude" value={venueLat ?? ""} />
@@ -343,6 +347,72 @@ export function NuevaPantallaForm({
           !geoLoading && <p className="text-[11px] text-muted-foreground">Marca dónde está la pantalla.</p>
         )}
       </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+          Dirección *
+          <input
+            name="venue_address"
+            maxLength={300}
+            placeholder="Av. Pardo 793"
+            value={venueAddress}
+            aria-invalid={invalid.has("venue")}
+            onChange={(e) => {
+              setVenueAddress(e.target.value);
+              setAddressOk(e.target.value.trim().length > 0);
+              clear("venue");
+            }}
+            className={`${baseInput}${bad("venue")}`}
+          />
+        </label>
+        <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-3">
+          <label className="flex flex-col gap-1 text-xs">
+            Distrito *
+            <input
+              name="venue_district"
+              maxLength={120}
+              placeholder="Miraflores"
+              value={venueDistrict}
+              onChange={(e) => setVenueDistrict(e.target.value)}
+              className={baseInput}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Ciudad *
+            <input
+              name="venue_city"
+              maxLength={120}
+              placeholder="Lima"
+              value={venueCity}
+              onChange={(e) => setVenueCity(e.target.value)}
+              className={baseInput}
+            />
+          </label>
+          <div className="flex flex-col gap-1 text-xs">
+            País *
+            <input type="hidden" name="venue_country" value={venueCountry === "__none" ? "" : venueCountry} />
+            <Select
+              value={venueCountry === "" ? "__none" : venueCountry}
+              onValueChange={(v) => v && setVenueCountry(v)}
+              items={Object.fromEntries(COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]))}
+              disabled={pending}
+            >
+              <SelectTrigger aria-label="País de la ubicación" className="w-full">
+                <SelectValue placeholder="Elegir país…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">Sin especificar</SelectItem>
+                {COUNTRIES.map((c) => (
+                  <SelectItem key={c.code} value={c.code}>{c.code} — {c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+        </div>
+      </AppCard>
+      <AppCard title="Pantalla" description="Nombre, formato y medidas.">
+        <div className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-xs">
         Nombre *
         <input
@@ -428,84 +498,6 @@ export function NuevaPantallaForm({
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
-          Dirección *
-          <input
-            name="venue_address"
-            maxLength={300}
-            placeholder="Av. Pardo 793"
-            value={venueAddress}
-            aria-invalid={invalid.has("venue")}
-            onChange={(e) => {
-              setVenueAddress(e.target.value);
-              setAddressOk(e.target.value.trim().length > 0);
-              clear("venue");
-            }}
-            className={`${baseInput}${bad("venue")}`}
-          />
-        </label>
-        <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs">
-            Distrito *
-            <input
-              name="venue_district"
-              maxLength={120}
-              placeholder="Miraflores"
-              value={venueDistrict}
-              onChange={(e) => setVenueDistrict(e.target.value)}
-              className={baseInput}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs">
-            Ciudad *
-            <input
-              name="venue_city"
-              maxLength={120}
-              placeholder="Lima"
-              value={venueCity}
-              onChange={(e) => setVenueCity(e.target.value)}
-              className={baseInput}
-            />
-          </label>
-          <div className="flex flex-col gap-1 text-xs">
-            País *
-            <input type="hidden" name="venue_country" value={venueCountry === "__none" ? "" : venueCountry} />
-            <Select
-              value={venueCountry === "" ? "__none" : venueCountry}
-              onValueChange={(v) => v && setVenueCountry(v)}
-              items={Object.fromEntries(COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]))}
-              disabled={pending}
-            >
-              <SelectTrigger aria-label="País de la ubicación" className="w-full">
-                <SelectValue placeholder="Elegir país…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">Sin especificar</SelectItem>
-                {COUNTRIES.map((c) => (
-                  <SelectItem key={c.code} value={c.code}>{c.code} — {c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
-          Precio (PEN) *
-          <input
-            name="price_pen"
-            inputMode="numeric"
-            placeholder="1500"
-            value={price}
-            aria-invalid={invalid.has("price")}
-            onChange={(e) => {
-              setPrice(e.target.value.replace(/\D/g, "").slice(0, 9));
-              clear("price");
-            }}
-            className={`${baseInput} tabular-nums${bad("price")}`}
-          />
-        </label>
         <label className="flex flex-col gap-1 text-xs">
           Ancho (m) *
           <input
@@ -570,6 +562,30 @@ export function NuevaPantallaForm({
         </label>
           </>
         )}
+      </div>
+      {orientation && modality === "digital" && (
+        <p className="text-xs text-muted-foreground">Orientación detectada: {orientation}.</p>
+      )}
+        </div>
+      </AppCard>
+
+      <AppCard title="Precio y pauta" description="Cuánto cuesta y cuántas veces se muestra por día.">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-xs">
+          Precio (PEN) *
+          <input
+            name="price_pen"
+            inputMode="numeric"
+            placeholder="1500"
+            value={price}
+            aria-invalid={invalid.has("price")}
+            onChange={(e) => {
+              setPrice(e.target.value.replace(/\D/g, "").slice(0, 9));
+              clear("price");
+            }}
+            className={`${baseInput} tabular-nums${bad("price")}`}
+          />
+        </label>
         {modality === "digital" && (
           <label className="flex flex-col gap-1 text-xs">
             Duración del spot (s) *
@@ -620,12 +636,11 @@ export function NuevaPantallaForm({
           />
         </label>
       </div>
-      {orientation && modality === "digital" && (
-        <p className="text-xs text-muted-foreground">Orientación detectada: {orientation}.</p>
-      )}
+      </AppCard>
 
       <div>
         <Button type="submit" disabled={pending || !canSubmit} title={!canSubmit ? "Completa todos los campos para continuar" : undefined}>
+          <Plus aria-hidden />
           {pending ? "Creando…" : "Crear pantalla"}
         </Button>
       </div>

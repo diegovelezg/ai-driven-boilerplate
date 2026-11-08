@@ -32,7 +32,7 @@ export default async function NuevaPantallaPage() {
         suppliers = (await listScreenFilterOptions(storeId!)).suppliers;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -45,10 +45,10 @@ export default async function NuevaPantallaPage() {
         eyebrow="DOOH"
         title="Nueva pantalla"
         description="Marca el punto en el mapa, completa la ubicación y registra la pantalla con sus medidas y precio."
-        right={<Button render={<Link href="/screens" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft />Volver</Button>}
+        right={<Button render={<Link href="/screens" />} nativeButton={false} size="sm" variant="outline"><CircleArrowLeft aria-hidden />Volver</Button>}
       />
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
       {connected && dbReady && !error && (
         <NuevaPantallaForm suppliers={suppliers} defaultCountry={defaultCountry} />

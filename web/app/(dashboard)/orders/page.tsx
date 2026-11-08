@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Plus } from "lucide-react";
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
@@ -64,7 +65,7 @@ export default async function OrdenesPage({
         rows = await listOrders(storeId, { q, stage, billing });
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : "DB read failed";
+      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
     }
   }
 
@@ -73,16 +74,17 @@ export default async function OrdenesPage({
       <PageHeader
         eyebrow="DOOH"
         title="Órdenes"
-        description="Etapa operativa: Firmada → Materiales → Al aire → Por certificar → Cerrada. Cobro en carril paralelo (sin facturar → facturado → parcial → pagado / vencido): admite upfront y abonos a mitad de pauta."
+        description="Sigue cada orden desde la firma hasta el cierre. El cobro avanza por separado y admite pagos parciales."
         right={
           <Button render={<Link href="/orders/new" />} nativeButton={false} size="sm">
+            <Plus aria-hidden />
             Nueva orden
           </Button>
         }
       />
 
-      {!connected && <AppCardState>Sin tienda. Importa inventario en /screens.</AppCardState>}
-      {connected && !dbReady && <AppCardState>Supabase no configurado.</AppCardState>}
+      {!connected && <AppCardState>Sin tienda conectada.</AppCardState>}
+      {connected && !dbReady && <AppCardState>Base de datos no disponible.</AppCardState>}
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (

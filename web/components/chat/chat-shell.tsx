@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ArrowUpIcon } from "lucide-react";
+import { ArrowUpIcon, RotateCcw } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -226,6 +226,7 @@ export function ChatShell({
                         </Bubble>
                         {onRetry && (
                           <Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={pending}>
+                            <RotateCcw aria-hidden />
                             Reintentar
                           </Button>
                         )}

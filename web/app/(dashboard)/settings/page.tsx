@@ -51,12 +51,12 @@ export default async function SettingsPage({
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
       <PageHeader
         eyebrow="Configuración"
-        title="Settings"
-        description="Gestiona tu equipo."
+        title="Equipo"
+        description="Quién puede entrar a esta tienda y qué puede hacer cada persona."
       />
       {accessDenied ? (
         <p className="text-sm text-muted-foreground">
-          Sin acceso a esta tienda. Pide a tu admin que te agregue en sys_memberships.
+          Sin acceso a esta tienda. Pide a un administrador que te dé acceso.
         </p>
       ) : (
         <TeamPanel

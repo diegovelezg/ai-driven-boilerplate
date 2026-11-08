@@ -9,7 +9,7 @@ import {
   type DomainCandidate,
 } from "@/lib/company-domains";
 
-const UA = "Mozilla/5.0 (compatible; RetainEngineBot/0.1)";
+const UA = "Mozilla/5.0 (compatible; DoohBot/0.1)";
 const FETCH_TIMEOUT_MS = 12_000;
 
 function htmlToText(html: string): string {

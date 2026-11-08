@@ -7,7 +7,7 @@ import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
 
 const log = createProfilerLogger();
 
-const UA = "Mozilla/5.0 (compatible; AIRetentionEngineBot/0.1)";
+const UA = "Mozilla/5.0 (compatible; DoohBot/0.1)";
 const FETCH_TIMEOUT_MS = 12_000;
 
 export interface InvestigateSources {
@@ -73,7 +73,7 @@ async function fetchHomepageText(domain: string): Promise<{ text: string; url: s
   return null;
 }
 
-const SYSTEM = `Eres un analista que tipifica un negocio B2B para un motor de retención.
+const SYSTEM = `Eres un analista que tipifica un negocio B2B para un tenant DOOH (anunciante, agencia o proveedor de pantallas).
 Responde SOLO con un objeto JSON válido, sin markdown, con este esquema exacto:
 {"business_model": "b2b"|null, "vertical": string|null, "taxonomy_id": string|null, "buyer_type": string|null, "cycle_days": number|null, "cycle_unknown": boolean, "industry": "alimentos"|"moda"|"belleza"|"hogar"|"electronica"|"salud"|"mascotas"|"servicios"|"distribucion"|"otro"|null, "catalog_type": "consumible"|"perecedero"|"moda_estacional"|"durable"|"servicio"|"digital"|"mixto"|null, "archetype": "b2b_recurrente"|"b2b_proyecto"|null, "company_required": true, "confidence": "alta"|"media"|"baja", "understood": string[], "questions": string[]}
 Reglas:

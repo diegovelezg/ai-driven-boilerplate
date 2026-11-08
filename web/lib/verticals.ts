@@ -50,7 +50,7 @@ const VALID_SIZES = new Set(["micro", "pequeña", "mediana", "grande", "agencia"
 const VALID_CONF = new Set(["alta", "media", "baja"]);
 
 async function briefOnce(ref: ModelRef, text: string, meter?: { storeId?: string | null; usedFallback?: boolean }): Promise<string> {
-  const cfg = getLlmConfig("prospect_scan");
+  const cfg = getLlmConfig("retrieval_queries");
   const apiKey = ref.apiKeyEnv ? process.env[ref.apiKeyEnv] : undefined;
   if (!apiKey) throw new Error(`Falta ${ref.apiKeyEnv}`);
   const base = (ref.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -78,7 +78,7 @@ async function briefOnce(ref: ModelRef, text: string, meter?: { storeId?: string
     if (usage) {
       void logLlmUsage({
         storeId: meter.storeId,
-        process: "prospect_scan",
+        process: "retrieval_queries",
         provider: ref.provider,
         model: ref.model,
         promptTokens: usage.promptTokens,
@@ -176,7 +176,7 @@ export async function researchVertical(
   const corpus = selectRich(scraped);
   if (corpus.length === 0) throw new Error("Sin texto útil en la web para este vertical.");
 
-  const cfg = getLlmConfig("prospect_scan");
+  const cfg = getLlmConfig("retrieval_queries");
   const text = `Vertical: ${v}\n\n${corpus.map((s, i) => `[${i}] ${s.url}\n${s.title}\n${s.text.slice(0, 1500)}`).join("\n\n")}`;
   let raw: string;
   try {
