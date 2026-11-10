@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { RowIconButton } from "@/components/buttons";
+import { RowIconButton, SubmitButton } from "@/components/buttons";
 import { SelectionBadge } from "@/components/badges";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AppSelect } from "@/components/ui/app-select";
@@ -1135,10 +1135,10 @@ export function NuevaOrdenForm({
 
       <div className="flex flex-col gap-1.5">
         <div>
-          <Button type="submit" disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined}>
+          <SubmitButton pending={pending} disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined} pendingLabel="Creando…">
             <Plus aria-hidden />
-            {pending ? "Creando…" : `Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), currency)}` : ""}`}
-          </Button>
+            {`Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), currency)}` : ""}`}
+          </SubmitButton>
         </div>
         {!canSubmit && !pending && (
           <p className="text-[11px] text-muted-foreground">Falta: {missing.join(", ")}.</p>

@@ -5,9 +5,9 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, Save, Trash, X } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, Save, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DangerButton, RetryButton, RowIconButton } from "@/components/buttons";
+import { DangerButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
 import {
   Dialog,
   DrawerDialogContent as DialogContent,
@@ -253,14 +253,11 @@ function ScreenPlaybackForm({
       </div>
       {(error ?? serverError) && <p className="text-xs text-destructive">{error ?? serverError}</p>}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={save} disabled={pending}>
+        <SubmitButton size="sm" onClick={save} pending={pending}>
           <Save aria-hidden />
-          {pending ? "Guardando…" : "Guardar"}
-        </Button>
-        <Button variant="outline" size="sm" onClick={onCancel} disabled={pending}>
-          <X aria-hidden />
-          Cancelar
-        </Button>
+          Guardar
+        </SubmitButton>
+        <CancelButton size="sm" onCancel={onCancel} disabled={pending} />
       </div>
     </div>
   );

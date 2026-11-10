@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Save, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { CancelButton, RetryButton } from "@/components/buttons";
+import { Save } from "lucide-react";
+import { CancelButton, RetryButton, SubmitButton } from "@/components/buttons";
 import { updateOrderAction } from "@/lib/order-actions";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -445,8 +444,8 @@ export function OrderEditForm({
       </AppCard>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={pending}><Save aria-hidden />{pending ? "Guardando…" : "Guardar"}</Button>
-        <Button type="button" variant="outline" onClick={onCancel} disabled={pending}><X aria-hidden />Cancelar</Button>
+        <SubmitButton pending={pending}><Save aria-hidden />Guardar</SubmitButton>
+        <CancelButton onCancel={onCancel} disabled={pending} />
       </div>
     </form>
   );

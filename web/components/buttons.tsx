@@ -17,8 +17,9 @@ import { cn } from "cn";
  * - Limpiar filtros: ghost + sm (xs solo en popovers) + FilterX.
  * - Vista lista/grilla: icon + default/outline + aria-pressed + tooltip.
  * - Segmentado (7/14/28d): default/outline + sm.
- * - Submit: default + disabled hasta completar + title qué falta + spinner en pending.
- * - Cancelar: outline + X. Editar: outline + sm + Pencil.
+ * - Submit: default + disabled hasta completar + title qué falta + spinner en pending
+ *   (size sm solo en footers compactos: invoice-form).
+ * - Cancelar: outline + X (size sm solo en footers compactos).
  * - Acción de fila icon-only: ghost + icon-sm + aria-label + title + spinner en pending;
  *   `danger` tiñe a destructive (eliminar, cancelar orden).
  * - Acción destructiva con etiqueta: variant destructive + sm + spinner en pending.
@@ -158,6 +159,7 @@ export function SubmitButton({
   type = "submit",
   onClick,
   pendingLabel = "Guardando…",
+  size = "default",
   children,
   className,
 }: {
@@ -167,11 +169,12 @@ export function SubmitButton({
   type?: "submit" | "button";
   onClick?: () => void;
   pendingLabel?: ReactNode;
+  size?: "default" | "sm";
   children: ReactNode;
   className?: string;
 }) {
   return (
-    <Button type={type} disabled={pending || disabled} title={title} onClick={onClick} className={className}>
+    <Button type={type} size={size} disabled={pending || disabled} title={title} onClick={onClick} className={className}>
       {pending ? (
         <>
           <Loader2 className="animate-spin" aria-hidden />
@@ -189,15 +192,17 @@ export function CancelButton({
   onCancel,
   disabled,
   label = "Cancelar",
+  size = "default",
   className,
 }: {
   onCancel: (() => void) | undefined;
   disabled?: boolean;
   label?: string;
+  size?: "default" | "sm";
   className?: string;
 }) {
   return (
-    <Button variant="outline" onClick={onCancel} disabled={disabled} className={className}>
+    <Button variant="outline" size={size} onClick={onCancel} disabled={disabled} className={className}>
       <X aria-hidden />
       {label}
     </Button>

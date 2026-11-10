@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ComboboxField } from "@/components/combobox-field";
@@ -151,10 +151,10 @@ export function NuevoContactoForm({
         Email o teléfono requerido. Solo un contacto puede ser principal por empresa.
       </p>
       <div>
-        <Button type="submit" disabled={pending || !ready} title={!ready ? "Elige empresa y agrega email o teléfono" : undefined}>
+        <SubmitButton pending={pending} disabled={!ready} title={!ready ? "Elige empresa y agrega email o teléfono" : undefined} pendingLabel="Creando…">
           <Plus aria-hidden />
-          {pending ? "Creando…" : "Crear contacto"}
-        </Button>
+          Crear contacto
+        </SubmitButton>
       </div>
     </form>
   );

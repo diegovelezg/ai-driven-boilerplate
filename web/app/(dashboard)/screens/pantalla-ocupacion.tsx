@@ -5,7 +5,7 @@ import { es } from "react-day-picker/locale";
 import { CalendarDays } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { HistoryBadge, OccupancyBadge, UpcomingBadge } from "@/components/badges";
-import { Button } from "@/components/ui/button";
+import { RetryButton } from "@/components/buttons";
 import { Calendar } from "@/components/ui/calendar";
 import { formatDate, formatNumber, parseISODate } from "@/lib/format";
 import { addDays, firstFreeDay, todayLima, type OccupiedRange } from "@/lib/availability-utils";
@@ -77,11 +77,8 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
     return (
       <div className="flex flex-col gap-3">
         <AppCardState>{error}</AppCardState>
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-fit"
-          onClick={() => {
+        <RetryButton
+          onRetry={() => {
             setError(null);
             setData(null);
             fetch(`/api/screens/${screenId}/occupancy?past=90&future=120`, { cache: "no-store" })
@@ -92,9 +89,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
               .then((j) => setData(j))
               .catch((e: unknown) => setError(e instanceof Error ? e.message : "No se pudo cargar la ocupación."));
           }}
-        >
-          Reintentar
-        </Button>
+        />
       </div>
     );
   }

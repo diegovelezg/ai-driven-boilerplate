@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Cat, LogIn } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import { AppCard } from "@/components/app-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,10 +59,10 @@ export function LoginForm({ next }: { next: string }) {
         }
         description="Inventario, órdenes y cobros en un solo lugar."
         footer={
-          <Button type="submit" disabled={pending || !ready} className="w-full" title={!ready ? "Completa email y contraseña" : undefined}>
+          <SubmitButton pending={pending} disabled={!ready} title={!ready ? "Completa email y contraseña" : undefined} pendingLabel="Ingresando…" className="w-full">
             <LogIn aria-hidden />
-            {pending ? "Ingresando…" : "Ingresar"}
-          </Button>
+            Ingresar
+          </SubmitButton>
         }
       >
         <div className="flex flex-col gap-3">

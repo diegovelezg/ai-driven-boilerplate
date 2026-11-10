@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { AppCard } from "@/components/app-card";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import { toast } from "@/components/ui/toast";
 import {
   Select,
@@ -628,10 +628,10 @@ export function NuevaPantallaForm({
       </AppCard>
 
       <div>
-        <Button type="submit" disabled={pending || !canSubmit} title={!canSubmit ? "Completa todos los campos para continuar" : undefined}>
+        <SubmitButton pending={pending} disabled={!canSubmit} title={!canSubmit ? "Completa todos los campos para continuar" : undefined} pendingLabel="Creando…">
           <Plus aria-hidden />
-          {pending ? "Creando…" : "Crear pantalla"}
-        </Button>
+          Crear pantalla
+        </SubmitButton>
       </div>
     </form>
   );

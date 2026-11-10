@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Building2, CalendarIcon, Receipt, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { RowIconButton } from "@/components/buttons";
+import { CancelButton, RowIconButton, SubmitButton } from "@/components/buttons";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -295,19 +295,17 @@ export function InvoiceForm({
         />
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-border/60 pt-4">
-        <Button type="button" variant="outline" size="sm" onClick={onCancel} disabled={pending}>
-          <X aria-hidden />
-          Cancelar
-        </Button>
-        <Button
-          type="submit"
+        <CancelButton size="sm" onCancel={onCancel} disabled={pending} />
+        <SubmitButton
           size="sm"
-          disabled={pending || blocked !== null || missing.length > 0}
+          pending={pending}
+          disabled={blocked !== null || missing.length > 0}
           title={blocked ?? (missing.length > 0 ? `Falta: ${missing.join(" y ")}` : undefined)}
+          pendingLabel="Registrando…"
         >
           <Receipt aria-hidden />
-          {pending ? "Registrando…" : "Registrar factura"}
-        </Button>
+          Registrar factura
+        </SubmitButton>
       </div>
     </form>
   );

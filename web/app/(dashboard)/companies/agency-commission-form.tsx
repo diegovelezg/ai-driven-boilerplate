@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { setAgencyCommissionAction } from "@/lib/crm-actions";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
@@ -61,9 +61,7 @@ export function AgencyCommissionForm({
             <span className="text-muted-foreground">%</span>
           </span>
         </label>
-        <Button onClick={save} disabled={pending}>
-          {pending ? "Guardando…" : "Guardar"}
-        </Button>
+        <SubmitButton onClick={save} pending={pending}>Guardar</SubmitButton>
       </div>
       <p className="text-[11px] text-muted-foreground">
         Vacío = sin acuerdo (0% efectivo).

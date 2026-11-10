@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Ban, Bot, CircleArrowLeft, CircleCheckBig, FileDown, FileText, Package, Paperclip, Pencil, PenLine, Receipt, RotateCcw, Trash, X } from "lucide-react";
+import { Ban, Bot, CircleArrowLeft, CircleCheckBig, FileDown, FileText, Package, Paperclip, Pencil, PenLine, Receipt, Trash, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
-import { DangerButton, RetryButton, RowIconButton } from "@/components/buttons";
+import { DangerButton, EditButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
 import { AttributeBadge } from "@/components/badges";
 import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge } from "@/components/order-badges";
 import { orderStageDisplay } from "@/lib/ui-badges";
@@ -165,14 +165,11 @@ function AttachUrlDialog({
             />
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={pending}>
-              <X aria-hidden />
-              Cancelar
-            </Button>
-            <Button size="sm" onClick={confirm} disabled={pending || !url.trim()}>
+            <CancelButton size="sm" onCancel={() => onOpenChange(false)} disabled={pending} />
+            <SubmitButton size="sm" type="button" onClick={confirm} pending={pending} disabled={!url.trim()} pendingLabel="Adjuntando…">
               <Paperclip aria-hidden />
-              {pending ? "Adjuntando…" : "Adjuntar"}
-            </Button>
+              Adjuntar
+            </SubmitButton>
           </div>
         </div>
       </DialogContent>
@@ -605,9 +602,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   <FileDown className="size-3.5" aria-hidden /> PDF
                 </Button>
                 {canEdit && (
-                  <Button variant="outline" size="sm" onClick={() => setEditingFicha(true)}>
-                    <Pencil className="size-3.5" aria-hidden /> Editar
-                  </Button>
+                  <EditButton onEdit={() => setEditingFicha(true)} />
                 )}
               </span>
             </div>
@@ -696,9 +691,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           <>
           {isDraft && canEdit && lines.length > 0 && (
             <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => void openLinesDialog()} disabled={isPending}>
-                <Pencil className="size-3.5" aria-hidden /> Editar
-              </Button>
+              <EditButton onEdit={() => void openLinesDialog()} disabled={isPending} />
             </div>
           )}
           <AppCard
@@ -1148,20 +1141,14 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           {screensError ? (
             <div className="flex flex-col gap-3">
               <AppCardState>{screensError}</AppCardState>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-fit"
-                onClick={() => {
+              <RetryButton
+                onRetry={() => {
                   setScreens(null);
                   setScreensError(null);
                   setScreensLoading(false);
                   void openLinesDialog();
                 }}
-              >
-                <RotateCcw aria-hidden />
-                Reintentar
-              </Button>
+              />
             </div>
           ) : screens === null || screensLoading ? (
             <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando pantallas">

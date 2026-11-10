@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CancelButton, SubmitButton } from "@/components/buttons";
 import { AppSelect } from "@/components/ui/app-select";
 import { updateOrderLinesAction } from "@/lib/order-actions";
 import { validateOrderLines } from "@/lib/order-lines";
@@ -218,14 +219,11 @@ export function OrderLinesForm({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={pending}>
+        <SubmitButton pending={pending}>
           <Save aria-hidden />
-          {pending ? "Guardando…" : `Guardar${grossMajor > 0 ? ` · ${formatMoney(Math.round(grossMajor * 100), orderCurrency)}` : ""}`}
-        </Button>
-        <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
-          <X aria-hidden />
-          Cancelar
-        </Button>
+          {`Guardar${grossMajor > 0 ? ` · ${formatMoney(Math.round(grossMajor * 100), orderCurrency)}` : ""}`}
+        </SubmitButton>
+        <CancelButton onCancel={onCancel} disabled={pending} />
         <span className="text-[11px] text-muted-foreground tabular-nums">
           {formatNumber(rows.length)} línea{rows.length === 1 ? "" : "s"}
         </span>
