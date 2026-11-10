@@ -548,6 +548,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     label="Deshabilitar pantalla"
                     title={enriching ? "Generando resumen inteligente…" : "Deshabilitar"}
                     disabled={!active || working || enriching}
+                    pending={working}
                     onClick={() => toggleActive(false)}
                   />
                 </AppTooltip>
@@ -557,6 +558,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     label="Habilitar pantalla"
                     title={enriching ? "Generando resumen inteligente…" : "Habilitar"}
                     disabled={active || working || enriching}
+                    pending={working}
                     onClick={() => toggleActive(true)}
                   />
                 </AppTooltip>
@@ -567,6 +569,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     title={enriching ? "Generando resumen inteligente…" : "Eliminar (solo propietario)"}
                     danger
                     disabled={working || enriching || !canDelete}
+                    pending={working}
                     onClick={() => setDelOpen(true)}
                   />
                 </AppTooltip>

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FilterX, LayoutGrid, List, Pencil, RotateCcw, X, type LucideIcon } from "lucide-react";
+import { FilterX, LayoutGrid, List, Loader2, Pencil, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { cn } from "cn";
@@ -13,15 +13,15 @@ import { cn } from "cn";
  * excepción documentada: llevan su propio foco).
  *
  * Recetas congeladas:
- * - Reintentar: outline + sm + w-fit + RotateCcw.
+ * - Reintentar: outline + sm + w-fit + RotateCcw (+ spinner en pending).
  * - Limpiar filtros: ghost + sm (xs solo en popovers) + FilterX.
  * - Vista lista/grilla: icon + default/outline + aria-pressed + tooltip.
  * - Segmentado (7/14/28d): default/outline + sm.
- * - Submit: default + disabled hasta completar + title qué falta.
+ * - Submit: default + disabled hasta completar + title qué falta + spinner en pending.
  * - Cancelar: outline + X. Editar: outline + sm + Pencil.
- * - Acción de fila icon-only: ghost + icon-sm + aria-label + title;
+ * - Acción de fila icon-only: ghost + icon-sm + aria-label + title + spinner en pending;
  *   `danger` tiñe a destructive (eliminar, cancelar orden).
- * - Acción destructiva con etiqueta: variant destructive + sm.
+ * - Acción destructiva con etiqueta: variant destructive + sm + spinner en pending.
  * - Link inline: variant link.
  */
 
@@ -29,16 +29,28 @@ import { cn } from "cn";
 export function RetryButton({
   onRetry,
   label = "Reintentar",
+  pending,
+  pendingLabel = "Reintentando…",
+  disabled,
   className,
 }: {
   onRetry: () => void;
   label?: string;
+  pending?: boolean;
+  pendingLabel?: ReactNode;
+  disabled?: boolean;
   className?: string;
 }) {
   return (
-    <Button variant="outline" size="sm" className={cn("w-fit", className)} onClick={onRetry}>
-      <RotateCcw aria-hidden />
-      {label}
+    <Button
+      variant="outline"
+      size="sm"
+      className={cn("w-fit", className)}
+      onClick={onRetry}
+      disabled={pending || disabled}
+    >
+      {pending ? <Loader2 className="animate-spin" aria-hidden /> : <RotateCcw aria-hidden />}
+      {pending ? pendingLabel : label}
     </Button>
   );
 }
@@ -160,7 +172,14 @@ export function SubmitButton({
 }) {
   return (
     <Button type={type} disabled={pending || disabled} title={title} onClick={onClick} className={className}>
-      {pending ? pendingLabel : children}
+      {pending ? (
+        <>
+          <Loader2 className="animate-spin" aria-hidden />
+          {pendingLabel}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 }
@@ -205,13 +224,14 @@ export function EditButton({
   );
 }
 
-/** Acción de fila icon-only: ver, quitar, eliminar. `danger` = rojo. */
+/** Acción de fila icon-only: ver, quitar, eliminar + spinner en pending. `danger` = rojo. */
 export function RowIconButton({
   icon: Icon,
   label,
   title,
   onClick,
   disabled,
+  pending,
   danger,
   type = "button",
   className,
@@ -221,6 +241,7 @@ export function RowIconButton({
   title?: string;
   onClick: () => void;
   disabled?: boolean;
+  pending?: boolean;
   danger?: boolean;
   type?: "button" | "submit";
   className?: string;
@@ -233,10 +254,10 @@ export function RowIconButton({
       aria-label={label}
       title={title ?? label}
       onClick={onClick}
-      disabled={disabled}
+      disabled={pending || disabled}
       className={cn(danger && "text-destructive hover:text-destructive", className)}
     >
-      <Icon aria-hidden />
+      {pending ? <Loader2 className="animate-spin" aria-hidden /> : <Icon aria-hidden />}
     </Button>
   );
 }
@@ -259,7 +280,14 @@ export function DangerButton({
 }) {
   return (
     <Button variant="destructive" size="sm" onClick={onClick} disabled={pending || disabled} className={className}>
-      {pending ? (pendingLabel ?? children) : children}
+      {pending ? (
+        <>
+          <Loader2 className="animate-spin" aria-hidden />
+          {pendingLabel ?? children}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 }

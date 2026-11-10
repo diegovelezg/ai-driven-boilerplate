@@ -1101,12 +1101,14 @@ export function NuevaOrdenForm({
                         icon={CalendarDays}
                         label={`Ver disponibilidad de ${s.name}`}
                         disabled={pending}
+                        pending={pending}
                         onClick={() => openCalendar(s.id)}
                       />
                       <RowIconButton
                         icon={X}
                         label={`Quitar ${s.name}`}
                         disabled={pending}
+                        pending={pending}
                         onClick={() => toggleScreen(s.id)}
                       />
                     </div>

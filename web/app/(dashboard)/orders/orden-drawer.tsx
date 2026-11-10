@@ -467,6 +467,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         label="Reactivar orden"
                         title="Reactivar"
                         disabled={isPending}
+                        pending={isPending}
                         onClick={() => setReactOpen(true)}
                       />
                     </AppTooltip>
@@ -481,6 +482,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         title="Cancelar"
                         danger
                         disabled={isPending}
+                        pending={isPending}
                         onClick={() => setCancelOpen(true)}
                       />
                     </AppTooltip>
@@ -494,6 +496,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       title="Eliminar (solo propietario)"
                       danger
                       disabled={isPending}
+                      pending={isPending}
                       onClick={() => setDelOpen(true)}
                     />
                   </AppTooltip>
@@ -847,6 +850,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           label={`Eliminar ${str(m.kind)} ${rawCode}`}
                           title="Eliminar (por error al registrar)"
                           disabled={isPending}
+                          pending={isPending}
                           onClick={() => void runFlow("OM eliminado", () => deleteAgencyOrderAction({ agencyOrderId: String(m.id) }))}
                         />
                       )}
@@ -922,6 +926,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           label={`Eliminar ${str(c.name)}`}
                           title="Eliminar (por error al adjuntar)"
                           disabled={isPending}
+                          pending={isPending}
                           onClick={() => void runFlow("Material eliminado", () => deleteCreativeAction({ creativeId: String(c.id) }))}
                         />
                       )}
@@ -987,6 +992,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         label="Eliminar adjunto"
                         title="Eliminar (por error al adjuntar)"
                         disabled={isPending}
+                        pending={isPending}
                         onClick={() => void runFlow("Adjunto eliminado", () => deletePhotoAction({ photoId: String(p.id) }))}
                       />
                     )}
