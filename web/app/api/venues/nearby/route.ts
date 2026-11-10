@@ -1,6 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { requireApiUser, requireStoreMember } from "@/lib/api/guard";
-import { resolveActiveStoreId } from "@/lib/tenant";
+import { requireActiveStoreAccess } from "@/lib/api/guard";
 
 /** Distancia en metros (Haversine). */
 function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -21,8 +20,6 @@ function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): numb
  * `locality`, y la región no siempre nombra la ciudad).
  */
 export async function GET(req: Request) {
-  const auth = await requireApiUser();
-  if (auth instanceof Response) return auth;
   const url = new URL(req.url);
   const lat = Number(url.searchParams.get("lat"));
   const lng = Number(url.searchParams.get("lng"));
@@ -31,10 +28,9 @@ export async function GET(req: Request) {
     return Response.json({ error: "lat/lng inválidos." }, { status: 400 });
   }
   try {
-    const storeId = await resolveActiveStoreId();
-    if (!storeId) return Response.json({ error: "Sin tienda." }, { status: 400 });
-    const denied = await requireStoreMember(storeId, auth);
-    if (denied) return denied;
+    const gated = await requireActiveStoreAccess();
+    if (gated instanceof Response) return gated;
+    const { storeId } = gated;
     const db = getSupabase();
     const { data, error } = await db
       .from("inv_venues")

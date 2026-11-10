@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowUpRight,
   Camera,
@@ -30,7 +30,7 @@ import { toast } from "@/components/ui/toast";
 import { formatTimeAgo } from "@/lib/format";
 import { matchScore, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 import { dismissInsightAction, restoreInsightAction } from "@/lib/insights-actions";
-import { audienceMentions, contextItems, insightHaystack } from "@/lib/insight-mentions";
+import { audienceMentions, buildDrawerHref, contextItems, insightCta, insightHaystack } from "@/lib/insight-mentions";
 import type { WallInsight } from "@/lib/insights";
 
 /** Icono + tinte por kind (mismo lenguaje que las alertas de Hoy). */
@@ -74,6 +74,18 @@ function InsightCard({ insight }: { insight: WallInsight }) {
   // Contexto humano exacto: items estructurados (cliente… o métricas de
   // urgencia por kind global). Mismo panel, distintas métricas.
   const items = contextItems(insight.context);
+  // CTA primario con deep-link a drawer (?order= abre OrdenDrawer en
+  //  /orders; globales van a lista filtrada). Nunca "Abrir" genérico.
+  const cta = insightCta({ kind: insight.kind, scopeKind: insight.scopeKind, scopeId: insight.scopeId, links: insight.links });
+  // Drawer = misma página (el DrawerHost del layout monta la ficha encima;
+  // al cerrar sigues en el inbox). Page = navegación real a la vista.
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const href =
+    cta.target === "drawer" && cta.param && cta.id
+      ? buildDrawerHref(pathname, searchParams.toString(), cta.param, cta.id)
+      : cta.href;
+  const extraLinks = (insight.links ?? []).filter((l) => l !== cta.href).slice(0, 1);
 
   async function dismiss() {
     setBusy("dismiss");
@@ -83,7 +95,7 @@ function InsightCard({ insight }: { insight: WallInsight }) {
         toast.add({ title: "No se pudo descartar", description: r.message, type: "error" });
         return;
       }
-      window.dispatchEvent(new CustomEvent("muro:update"));
+      window.dispatchEvent(new CustomEvent("inbox:update"));
       router.refresh();
     } finally {
       setBusy(null);
@@ -98,7 +110,7 @@ function InsightCard({ insight }: { insight: WallInsight }) {
         toast.add({ title: "No se pudo restaurar", description: r.message, type: "error" });
         return;
       }
-      window.dispatchEvent(new CustomEvent("muro:update"));
+      window.dispatchEvent(new CustomEvent("inbox:update"));
       router.refresh();
     } finally {
       setBusy(null);
@@ -165,14 +177,21 @@ function InsightCard({ insight }: { insight: WallInsight }) {
       <p className="text-sm leading-relaxed text-foreground/90">{insight.body}</p>
 
       <div className="flex items-center gap-3">
-        {(insight.links ?? []).slice(0, 2).map((l) => (
+        <Button
+          size="sm"
+          render={<Link href={href} aria-label={`${cta.label}: ${insight.title}`} />}
+          nativeButton={false}
+        >
+          {cta.label}
+          <ArrowUpRight className="size-3" aria-hidden />
+        </Button>
+        {extraLinks.map((l) => (
           <Link
             key={l}
             href={l}
-            className="inline-flex items-center gap-0.5 text-xs font-medium text-primary hover:underline hover:underline-offset-4"
+            className="inline-flex items-center gap-0.5 text-xs font-medium text-muted-foreground hover:underline hover:underline-offset-4"
           >
-            Abrir
-            <ArrowUpRight className="size-3" aria-hidden />
+            Ver lista
           </Link>
         ))}
         <span className="ms-auto" />
@@ -204,10 +223,10 @@ function InsightCard({ insight }: { insight: WallInsight }) {
   );
 }
 
-/** Muro de insights (issue #11): feed de lectura, no red social.
+/** Inbox de insights (issue #11): feed de lectura, no red social.
 //  Filtros en bloque propio (como todas las vistas); cada aviso es una card
 //  independiente con abrir + descartar/restaurar. Sin likes ni comentarios:
-//  leer (o descartar) es el cierre; si el hecho persiste, el muro lo regenera. */
+//  leer (o descartar) es el cierre; si el hecho persiste, el inbox lo regenera. */
 export function InsightsWall({ initial }: { initial: WallInsight[] }) {
   const [q, setQ] = useState("");
   const [vista, setVista] = useState<Vista>("todas");
@@ -242,17 +261,17 @@ export function InsightsWall({ initial }: { initial: WallInsight[] }) {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros del muro">
+      <div className="flex flex-wrap items-center gap-2.5" role="search" aria-label="Filtros del inbox">
         <FilterSearch
           initialValue={q}
-          placeholder="Buscar en el muro…"
-          ariaLabel="Buscar en el muro"
+          placeholder="Buscar en el inbox…"
+          ariaLabel="Buscar en el inbox"
           onSearch={(value) => setQ(value)}
         />
         <FilterSelect
           value={vista}
           onChange={(v) => setVista(v as Vista)}
-          ariaLabel="Filtrar avisos del muro"
+          ariaLabel="Filtrar avisos del inbox"
           placeholder="Vista"
           display={(value) => `Vista: ${VISTA_LABEL[value as Vista] ?? value}`}
           items={{ todas: "Todas", mias: "Mías", descartadas: "Descartadas" }}

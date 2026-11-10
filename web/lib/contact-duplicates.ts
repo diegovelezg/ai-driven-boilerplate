@@ -1,6 +1,8 @@
 // Duplicados de contactos (CRM DOOH): detección + datos para merge.
-// Criterio idéntico al dedupe de importación (lib/dooh-import.ts):
-// mismo email (case-insensitive) o mismo teléfono (dígitos, sin +51).
+// Criterio: mismo email (case-insensitive) o mismo teléfono (dígitos, sin +51).
+// El matching es agnóstico al estado (canónico CRM: HubSpot deduce por email,
+// Salesforce/Dynamics matchean activos e inactivos): el archivado también se
+// detecta —es lo que se quiere fusionar— y la UI lo marca con badge.
 // Puro y testeable; la escritura vive en crm-actions.ts (mergeContactsAction).
 import { getSupabase } from "@/lib/supabase";
 
@@ -14,6 +16,9 @@ export interface DuplicateContactRow {
   phone: string | null;
   job_title: string | null;
   is_primary: boolean;
+  /** Archivado (borrado lógico): se detecta igual —es el candidato a fusionar—,
+   *  y la UI lo marca con badge para no confundirlo con el vigente. */
+  archived: boolean;
 }
 
 export interface DuplicateGroup {
@@ -117,7 +122,7 @@ export async function listContactDuplicateGroups(
   for (let off = 0; ; off += PAGE) {
     const { data, error } = await db
       .from("crm_contacts")
-      .select("id,company_id,first_name,last_name,email,phone,job_title,is_primary")
+      .select("id,company_id,first_name,last_name,email,phone,job_title,is_primary,deleted_at")
       .eq("store_id", storeId)
       .order("id", { ascending: true })
       .range(off, off + PAGE - 1);
@@ -134,6 +139,7 @@ export async function listContactDuplicateGroups(
         phone: (c.phone as string | null) ?? null,
         job_title: (c.job_title as string | null) ?? null,
         is_primary: c.is_primary === true,
+        archived: (c.deleted_at as string | null) !== null,
       });
     }
     if (page.length < PAGE) break;

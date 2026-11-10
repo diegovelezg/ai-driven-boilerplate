@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { listWallInsights, type WallInsight } from "@/lib/insights";
 
-/** Muro del tenant para Hoy (server action: storeId siempre del servidor).
+/** Inbox del tenant para Hoy (server action: storeId siempre del servidor).
  *  Acepta `storeId` explícito para no resolver la tienda 2 veces (la página
  *  ya resolvió + chequeó membresía); sin arg, resuelve internamente. */
 export async function getWallAction(storeIdArg?: string): Promise<WallInsight[]> {
@@ -30,7 +30,7 @@ export async function getWallAction(storeIdArg?: string): Promise<WallInsight[]>
   return listWallInsights(storeId, { userId, email, role }).catch(() => []);
 }
 
-/** Contador para el badge del icono Muro: avisos activos (no descartados).
+/** Contador para el badge del icono Inbox: avisos activos (no descartados).
  *  Liviano para el sidebar (solo ids + reads, sin cuerpos). */
 export async function getUnreadWallCountAction(): Promise<number> {
   try {
@@ -50,7 +50,10 @@ export async function getUnreadWallCountAction(): Promise<number> {
       .limit(20);
     const ids = ((rows ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id));
     if (ids.length === 0) return 0;
-    if (!userId) return 0;
+    // Sin usuario (sesión no resuelta): todo cuenta como sin leer, no hay
+    // estado de dismiss per-user con que comparar. Antes devolvía 0 y el
+    // badge del icono Inbox nunca aparecía.
+    if (!userId) return ids.length;
     const { data: reads } = await db
       .from("sys_insight_reads")
       .select("insight_id")
@@ -83,7 +86,7 @@ export async function getUnreadWallCountAction(): Promise<number> {
       .upsert({ insight_id: insightId, user_id: data.user.id }, { onConflict: "insight_id,user_id" });
     if (error) return { ok: false, message: `DB write: ${error.message}` };
     revalidatePath("/");
-    revalidatePath("/muro");
+    revalidatePath("/inbox");
     return { ok: true, message: "Descartado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
@@ -122,7 +125,7 @@ export async function restoreInsightAction(insightId: string): Promise<{ ok: boo
     const { restoreInsight } = await import("@/lib/insights");
     await restoreInsight(insightId, g.userId);
     revalidatePath("/");
-    revalidatePath("/muro");
+    revalidatePath("/inbox");
     return { ok: true, message: "Restaurado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };

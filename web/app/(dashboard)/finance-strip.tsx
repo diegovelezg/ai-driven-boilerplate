@@ -149,27 +149,29 @@ export function FinanceStrip({
   currency: string | null;
 }) {
   const total12 = buckets.reduce((a, b) => a + b.salesMinor, 0);
-  if (total12 === 0 && kpis.orders30d === 0) return null;
+  if (total12 === 0 && kpis.ordersMes === 0) return null;
   return (
     <section aria-label="Salud del negocio" className="flex flex-col gap-4">
-      <MetricRow columns={3} aria-label="Salud del negocio · últimos 30 días">
+      <MetricRow columns={3} aria-label="Salud del negocio · mes en curso">
         <Metric
-          label="Ventas 30d"
+          label="Ventas mes"
           icon={TrendingUp}
-          value={formatMoney(kpis.sales30dMinor, currency)}
+          value={formatMoney(kpis.salesMesMinor, currency)}
           delta={kpis.salesDeltaPct}
+          deltaLabel="vs mismo tramo mes ant."
         />
         <Metric
-          label="Órdenes 30d"
+          label="Órdenes mes"
           icon={ShoppingCart}
-          value={formatNumber(kpis.orders30d)}
+          value={formatNumber(kpis.ordersMes)}
           delta={kpis.ordersDeltaPct}
+          deltaLabel="vs mismo tramo mes ant."
         />
         <Metric
           label="Ticket medio"
           icon={Receipt}
-          value={formatMoney(kpis.ticket30dMinor, currency)}
-          hint="Por orden, últimos 30 días"
+          value={formatMoney(kpis.ticketMesMinor, currency)}
+          hint="Por orden, mes en curso"
         />
       </MetricRow>
       <AppCard

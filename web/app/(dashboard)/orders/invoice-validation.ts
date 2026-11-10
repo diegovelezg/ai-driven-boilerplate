@@ -4,6 +4,8 @@
 // error = borde + toast, submit deshabilitado hasta completar.
 // Módulo puro (sin "use client"): importa FIELD_ERR_CLS directo de
 // form-feedback en el form, no desde aquí.
+// Fechas: SSOT en lib/format.ts.
+import { isValidISODate } from "@/lib/format";
 
 export type InvoiceFieldKey = "number" | "amount" | "issue" | "due" | "status";
 
@@ -18,7 +20,7 @@ export interface InvoiceFieldValues {
   status: string;
 }
 
-export const INVOICE_STATUS_OPTIONS = ["issued", "paid"] as const;
+const INVOICE_STATUS_OPTIONS = ["issued", "paid"] as const;
 
 /** "5,000.50" / "5000" → céntimos; null = inválido.
  *  La coma solo vale como separador de miles (1-3 dígitos + grupos de 3):
@@ -40,14 +42,7 @@ export function parseAmountToMinor(raw: string): number | null {
 }
 
 function isRealDate(v: string): boolean {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return false;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+  return isValidISODate(v);
 }
 
 /** Devuelve la lista de campos inválidos con su mensaje (vacío = válido). */

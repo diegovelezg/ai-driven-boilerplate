@@ -1,6 +1,12 @@
-// Formato numérico único del sitio (SSOT).
-// Regla: separador de miles ".", separador decimal "," y 0 decimales por defecto.
-// Todo valor numérico visible debe pasar por estos helpers (no formatear a mano).
+// Formato único del sitio (SSOT): números + fechas.
+// Números: separador de miles ".", separador decimal "," y 0 decimales por
+// defecto. Todo valor numérico visible debe pasar por estos helpers (no
+// formatear a mano).
+//
+// Fechas: display (`formatDate`, `formatDateTime`, `formatDayMonth`,
+// `formatTimeAgo`) + parse/canon (`parseISODate`, `toISODateLocal/UTC`,
+// `addDays`, `displayEndOf`…). Cero inlines: ningún otro archivo formatea,
+// parsea ni construye días a mano. Lo impone `tests/date-ssot.test.ts`.
 //
 // Unidades: los montos de la DB/API viajan en MINOR units (céntimos) y
 // `formatMoney` divide ÷100. Nunca pasar soles/pesos ya divididos.
@@ -12,7 +18,7 @@ import { normalizeCurrency } from "@/lib/currency";
 /** Locale de formateo. `es-ES` ≡ `es-PE` en agrupación/decimal ("."/","); se
  *  fija `es-ES` por disponibilidad garantizada en ICU de Node. Los símbolos de
  *  moneda son manuales (ver CURRENCY_SYMBOLS), no `Intl.Currency`. */
-export const FORMAT_LOCALE = "es-ES";
+const FORMAT_LOCALE = "es-ES";
 
 type NumberFormatOptions = {
   minimumFractionDigits?: number;
@@ -121,6 +127,18 @@ export function paymentTermsLabel(days: number | null | undefined): string {
   return days === 0 ? "Contado" : `${formatNumber(days)} días`;
 }
 
+/** Tasa del IGV aplicable a los contratos (montos guardados SIN IGV). */
+const IGV_RATE = 0.18;
+
+/** Desglose IGV de un bruto SIN IGV en minor units: redondeo half-up al
+ *  céntimo en el impuesto (`Math.round`), total = neto + impuesto exacto.
+ *  Ej.: splitIgv(500000) → { net: 500000, igv: 90000, total: 590000 }. */
+export function splitIgv(grossMinor: number): { net: number; igv: number; total: number } {
+  const net = Number.isFinite(grossMinor) ? Math.max(0, Math.round(grossMinor)) : 0;
+  const igv = Math.round((net * 18) / 100);
+  return { net, igv, total: net + igv };
+}
+
 /** Siglas que se conservan en mayúsculas en `toTitleCase` (con o sin puntos). */
 const TITLE_ACRONYMS = new Set(["SAC", "SA", "SRL", "EIRL", "SAA", "ID", "DNI"]);
 
@@ -163,16 +181,232 @@ export function formatTimeAgo(iso: string | null | undefined, nowMs = Date.now()
   if (min < 60) return `hace ${min} min`;
   const h = Math.floor(min / 60);
   if (h < 24) return `hace ${h} h`;
-  const d = Math.floor(h / 24);
+  const d = Math.floor(min / 60 / 24);
   if (d < 7) return `hace ${d} d`;
-  const dt = new Date(t);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(dt.getDate())}/${p(dt.getMonth() + 1)}`;
+  return formatDayMonth(iso);
+}
+
+// ---------------- Fechas (SSOT display + parse/canon) ----------------
+// Estilo único de fechas del sitio (ver encabezado: cero inlines fuera de
+// aquí). Display "dd/mm/yyyy" ("03/11/2026"), con hora "dd/mm/yyyy hh:mm"
+// en Lima ("03/11/2026 14:05"), corto "dd/mm" ("03/11"). Vacío/inválido →
+// "—" (mismo vacío que números).
+// Canon: el día es texto "yyyy-mm-dd" (comparable con `<`); el inicio de
+// día Lima para la BD sale de `limaDayStart`. Zona del negocio: Lima.
+
+/** Locale de display. Solo `formatDateTime`/`displayEndOf` usan `Intl`;
+ *  el resto se construye manual (dd/mm) para no depender del ICU. */
+export const DATE_LOCALE = "es-PE";
+
+/** Zona horaria del negocio: toda hora visible es Lima. */
+export const DATE_TIME_ZONE = "America/Lima";
+
+/** Día en ms. Aritmética de calendario siempre en UTC (sin DST). */
+export const DAY_MS = 86_400_000;
+
+/** Etiquetas cortas de mes en español (tendencia 12m). */
+export const MONTH_SHORT_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+/** "2026-11-03" exacto (validación) y prefijo (display tolerante a ISO). */
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATE_PREFIX_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** Medianoche UTC del día de `t` (comparaciones día a día, jobs diarios). */
+export function startOfDayUTC(t: number): number {
+  const d = new Date(t);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/** Primer día del mes (UTC) de `t` (ventanas mensuales). */
+export function startOfMonthUTC(t: number): number {
+  const d = new Date(t);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+
+/** ¿Forma "yyyy-mm-dd"? (sin validar calendario: para revalidar en server). */
+export function isISODateShape(v: unknown): boolean {
+  return typeof v === "string" && ISO_DATE_RE.test(v);
+}
+
+/** ¿Día calendario real "yyyy-mm-dd"? Rechaza 2026-02-30 (sin rollover). */
+export function isValidISODate(v: unknown): boolean {
+  if (typeof v !== "string") return false;
+  const m = ISO_DATE_RE.exec(v);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+/** Prefijo día "yyyy-mm-dd" de un ISO (fecha o timestamptz). null si no hay. */
+export function isoDayPart(v: unknown): string | null {
+  if (typeof v !== "string" || !v) return null;
+  const m = ISO_DATE_PREFIX_RE.exec(v);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+/** "2026-11-03" → Date local sin desfase (para pickers). Con round-trip:
+ *  rechaza 2026-02-30 (`new Date` hace rollover a 02-mar). */
+export function parseISODate(v: unknown): Date | undefined {
+  if (typeof v !== "string") return undefined;
+  const m = ISO_DATE_RE.exec(v);
+  if (!m) return undefined;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return undefined;
+  const dt = new Date(y, mo - 1, d);
+  if (Number.isNaN(dt.getTime())) return undefined;
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return undefined;
+  return dt;
+}
+
+/** Date → "yyyy-mm-dd" en hora local (round-trip de pickers). */
+export function toISODateLocal(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** Date → "yyyy-mm-dd" en UTC (canon para cómputo y sellos). */
+export function toISODateUTC(d: Date): string {
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+/** Día 1 del mes (hora local) de `d`. Base segura para `addMonths`. */
+export function firstOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+/** Suma N meses (sobre día 1 nunca hay rollover). */
+export function addMonths(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth() + n, d.getDate());
+}
+
+/** Clave de bucket mensual "2026-10" (hora local, como la UI). */
+export function toMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+/** Etiqueta corta de mes en español ("oct"). */
+export function monthLabelES(d: Date): string {
+  return MONTH_SHORT_ES[d.getMonth()] ?? "—";
+}
+
+/** "yyyy-mm-dd" → ordinal (UTC/DAY_MS) para aritmética de rangos. */
+export function isoDayToNum(day: string): number {
+  const [y, m, d] = day.split("-").map(Number);
+  return Date.UTC(y, m - 1, d) / DAY_MS;
+}
+
+/** Ordinal → "yyyy-mm-dd". */
+export function dayNumToISO(num: number): string {
+  const d = new Date(num * DAY_MS);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+/** Suma N días a un "yyyy-mm-dd" (cruza mes/año). */
+export function addDays(day: string, n: number): string {
+  return dayNumToISO(isoDayToNum(day) + n);
+}
+
+/** Días inclusivos entre inicio y fin (null si incompleto o invertido).
+ *  Acepta fecha o ISO (toma el prefijo): el fin exclusivo de BD
+ *  ("…T00:00:00-05:00") cuenta igual que su día inclusivo. */
+export function diffDaysInclusive(starts: unknown, ends: unknown): number | null {
+  const a = typeof starts === "string" ? ISO_DATE_PREFIX_RE.exec(starts) : null;
+  const b = typeof ends === "string" ? ISO_DATE_PREFIX_RE.exec(ends) : null;
+  if (!a || !b) return null;
+  const da = Date.UTC(Number(a[1]), Number(a[2]) - 1, Number(a[3]));
+  const db = Date.UTC(Number(b[1]), Number(b[2]) - 1, Number(b[3]));
+  const n = Math.round((db - da) / DAY_MS) + 1;
+  return n >= 1 ? n : null;
+}
+
+/** Hoy en Lima como "yyyy-mm-dd" (canon para ventanas y sellos UI). */
+export function todayLima(now = new Date()): string {
+  return now.toLocaleDateString("en-CA", { timeZone: DATE_TIME_ZONE });
+}
+
+/** Inicio de día Lima para la BD: "2026-11-03" → "2026-11-03T00:00:00-05:00". */
+export function limaDayStart(day: string): string {
+  return `${day}T00:00:00-05:00`;
+}
+
+/** Inicio de día UTC para filtros: "2026-11-03" → "2026-11-03T00:00:00Z". */
+export function utcDayStart(day: string): string {
+  return `${day}T00:00:00Z`;
+}
+
+/** "2026-11-03" o ISO "2026-11-03T00:00:00-05:00" → "03/11/2026". */
+export function formatDate(v: unknown): string {
+  if (typeof v !== "string" || !v) return "—";
+  const m = ISO_DATE_PREFIX_RE.exec(v);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
+}
+
+let dateTimeFmt: Intl.DateTimeFormat | null = null;
+let displayEndOfFmt: Intl.DateTimeFormat | null = null;
+
+/** Timestamptz → "03/11/2026 14:05" en Lima. Fecha sola → solo fecha. */
+export function formatDateTime(v: unknown): string {
+  if (typeof v !== "string" || !v) return "—";
+  if (ISO_DATE_RE.test(v)) return formatDate(v);
+  const t = Date.parse(v);
+  if (Number.isNaN(t)) return formatDate(v);
+  try {
+    dateTimeFmt ??= new Intl.DateTimeFormat(DATE_LOCALE, {
+      timeZone: DATE_TIME_ZONE,
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return dateTimeFmt.format(new Date(t)).replace(",", "");
+  } catch {
+    return formatDate(v);
+  }
 }
 
 /** Día/mes corto para vigencias ("2026-11-08" → "08/11"). Inválido → "—". */
 export function formatDayMonth(iso: string | null | undefined): string {
   if (typeof iso !== "string") return "—";
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  const m = ISO_DATE_PREFIX_RE.exec(iso);
   return m ? `${m[3]}/${m[2]}` : "—";
+}
+
+/** Fin exclusivo ISO (BD) → día inclusivo "yyyy-mm-dd" para mostrar.
+ *  Sin restar 24h a ciegas. El fin semiabierto puede traer hora no
+ *  medianoche; restar un día entero mostraba el día anterior. Se resta 1ms y
+ *  se formatea en Lima (zona de periodBounds). Falla cerrado (throw): el
+ *  display usa `displayEndOfSafe`. */
+export function displayEndOf(exclusiveIso: string): string {
+  if (!Number.isFinite(Date.parse(exclusiveIso))) throw new Error(`Fecha inválida: ${exclusiveIso}`);
+  const t = Date.parse(exclusiveIso) as number;
+  const d = new Date(t - 1);
+  displayEndOfFmt ??= new Intl.DateTimeFormat("en-CA", {
+    timeZone: DATE_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = displayEndOfFmt.formatToParts(d);
+  const get = (type: string) => parts.find((x) => x.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** Contrato display de `displayEndOf`: null si no hay día válido
+ *  (drawers/tablas), en vez de lanzar. */
+export function displayEndOfSafe(v: unknown): string | null {
+  if (typeof v !== "string" || !v) return null;
+  try {
+    return displayEndOf(v);
+  } catch {
+    return null;
+  }
 }

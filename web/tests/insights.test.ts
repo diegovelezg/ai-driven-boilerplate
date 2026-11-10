@@ -7,12 +7,15 @@ import { join } from "node:path";
 import {
   audienceMentions,
   buildBriefFacts,
+  buildDrawerHref,
   dedupeKey,
   describeContextShort,
+  insightCta,
   isMine,
   mapAudience,
   MAX_POSTS_PER_DAY,
   resolveMentions,
+  stripBodyLinks,
 } from "@/lib/insights";
 import type { DashboardSnapshot } from "@/lib/dashboard";
 
@@ -30,6 +33,10 @@ function snap(over: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     ocupacion14d: { ratio: null, diasVendidos: 0, diasDisponibles: 0 },
     alAire: { ois: 0, pantallas: 0 },
     porCertificar: 0,
+    cobranza: { invoicedMinor: 0, paidMinor: 0, pendingMinor: 0, overdueMinor: 0 },
+    cobranzaByCurrency: {},
+    deltas: { comprometido: null, cobranzaPendiente: null, alAireOis: null },
+    prev: { comprometidoMinor: 0, cobranzaPendingMinor: 0, alAireOis: 0 },
     renovacion30d: { conRelevo: 0, total: 0, ratio: null },
     alerts: [],
     huecos: [],
@@ -61,19 +68,20 @@ describe("muro de insights (issue #11)", () => {
     assert.equal(new Set(keys).size, keys.length, "dedupe por (kind+scope)");
   });
 
-  it("no repite KPIs: los hechos traen deep-link accionable", () => {
+  it("inbox es riesgos con acción: métricas de salud no emiten hechos (viven en el dashboard)", () => {
     const facts = buildBriefFacts(
       snap({
         porCertificar: 3,
+        // Salud comercial (dashboard): ocupación, huecos y relevo 30d
+        // nunca generan posts, aunque el snapshot los traiga.
+        renovacion30d: { conRelevo: 1, total: 4, ratio: 0.25 },
         ocupacion14d: { ratio: 0.42, diasVendidos: 42, diasDisponibles: 100 },
         huecos: [{ screenId: "s1", screenName: "Pantalla 1", diasLibres: 9 }],
       }),
     );
-    assert.ok(facts.length >= 3);
-    for (const f of facts) {
-      assert.ok(f.link.startsWith("/orders") || f.link.startsWith("/screens"), `sin deep-link: ${f.link}`);
-      assert.ok(f.detail.length > 0 && f.title.length > 0);
-    }
+    assert.equal(facts.length, 1);
+    assert.equal(facts[0].kind, "por_certificar");
+    assert.ok(facts[0].link.startsWith("/orders"), `sin deep-link: ${facts[0].link}`);
   });
 
   it("arrobas: creador==editor o null → un solo @; difieren → ambos; >30d → creador", () => {
@@ -113,6 +121,71 @@ describe("muro de insights (issue #11)", () => {
     assert.equal(describeContextShort({ company: null, brand: null, screens: 1, amountMinor: null, currency: null, startsAt: null, endsAt: null }), "Pantallas: 1");
     assert.equal(describeContextShort(null), null);
     assert.equal(describeContextShort({ company: null, brand: null, screens: null, amountMinor: 0, currency: "PEN", startsAt: null, endsAt: null }), null);
+  });
+
+  it("CTA con deep-link a drawer: orden abre ficha, global va a lista filtrada", () => {
+    assert.deepEqual(insightCta({ kind: "sin_om", scopeKind: "order", scopeId: "io-1", links: ["/orders?order=io-1"] }), {
+      label: "Registrar OM",
+      href: "/orders?order=io-1",
+      target: "drawer",
+      param: "order",
+      id: "io-1",
+    });
+    assert.deepEqual(insightCta({ kind: "material", scopeKind: "order", scopeId: "io-2", links: [] }), {
+      label: "Aprobar material",
+      href: "/orders?order=io-2",
+      target: "drawer",
+      param: "order",
+      id: "io-2",
+    });
+    assert.deepEqual(insightCta({ kind: "sin_evidencia", scopeKind: "order", scopeId: "io-3", links: [] }), {
+      label: "Subir evidencia",
+      href: "/orders?order=io-3",
+      target: "drawer",
+      param: "order",
+      id: "io-3",
+    });
+    assert.deepEqual(insightCta({ kind: "por_certificar", scopeKind: "global", scopeId: null, links: ["/orders"] }), {
+      label: "Certificar",
+      href: "/orders?stage=por_certificar",
+      target: "page",
+    });
+    assert.deepEqual(insightCta({ kind: "huecos", scopeKind: "global", scopeId: null, links: ["/screens"] }), {
+      label: "Cotizar huecos",
+      href: "/screens",
+      target: "page",
+    });
+    assert.deepEqual(insightCta({ kind: "ocupacion", scopeKind: "global", scopeId: null, links: ["/screens"] }), {
+      label: "Ver inventario",
+      href: "/screens",
+      target: "page",
+    });
+    assert.deepEqual(insightCta({ kind: "x", scopeKind: "order", scopeId: null, links: ["https://evil"] }), {
+      label: "Abrir",
+      href: "/orders",
+      target: "page",
+    });
+    assert.deepEqual(insightCta({ kind: "sin_om", scopeKind: null, scopeId: null, links: ["/orders?order=io-9"] }), {
+      label: "Registrar OM",
+      href: "/orders?order=io-9",
+      target: "drawer",
+      param: "order",
+      id: "io-9",
+    });
+  });
+
+  it("body sin rutas crudas: el deep-link vive en el CTA, no en el texto", () => {
+    assert.equal(
+      stripBodyLinks("Empezó hace 2d y sigue sin OM. Acción: registrar el OM en /orders?order=87c496a3-da68-4e94-8e9e-09f5775b92be."),
+      "Empezó hace 2d y sigue sin OM. Acción: registrar el OM.",
+    );
+    assert.equal(stripBodyLinks("Ver https://ejemplo.pe/doc y /screens ya."), "Ver y ya.");
+    assert.equal(stripBodyLinks("Relevo 30d · 2/5 (40%). Acción: ver relevo."), "Relevo 30d · 2/5 (40%). Acción: ver relevo.");
+  });
+  it("drawer href: misma página sin navegar, limpia otros drawers, preserva filtros", () => {
+    assert.equal(buildDrawerHref("/inbox", "", "order", "io-1"), "/inbox?order=io-1");
+    assert.equal(buildDrawerHref("/inbox", "q=om", "order", "io-1"), "/inbox?q=om&order=io-1");
+    assert.equal(buildDrawerHref("/inbox", "q=om&order=old", "pantalla", "s-2"), "/inbox?q=om&pantalla=s-2");
   });
 
   it("migración crea sys_insights + sys_insight_reads con RLS por tenant", () => {

@@ -44,7 +44,7 @@ export const BRANDS_SORT_ALIASES: Record<string, BrandsSortKey> = {
 };
 
 /** Resuelve ?sort= contra un mapa de alias; fallback si no calza. */
-export function resolveSortAlias<T extends string>(
+function resolveSortAlias<T extends string>(
   aliases: Record<string, T>,
   raw: string | undefined,
   fallback: T,

@@ -7,7 +7,7 @@ import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
-import { formatNumber } from "@/lib/format";
+import { addDays, formatDayMonth, formatNumber, todayLima } from "@/lib/format";
 import { PantallaDrawer } from "../screens/pantalla-drawer";
 import type { ScreenConflict } from "@/lib/availability";
 
@@ -16,22 +16,6 @@ export interface OccupancyScreen {
   name: string;
   city: string | null;
   venue_name: string | null;
-}
-
-function toNum(day: string): number {
-  const [y, m, d] = day.split("-").map(Number);
-  return Date.UTC(y, m - 1, d) / 86_400_000;
-}
-
-function toDay(num: number): string {
-  const d = new Date(num * 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-}
-
-function shortDay(day: string): string {
-  const [, m, d] = day.split("-");
-  return `${d}/${m}`;
 }
 
 export type OccupancyEstado = "all" | "libre" | "ocupada";
@@ -68,7 +52,7 @@ export function OccupancyTimeline({
   const [isPending, startTransition] = useTransition();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const days: string[] = Array.from({ length: dias }, (_, i) => toDay(toNum(desde) + i));
+  const days: string[] = Array.from({ length: dias }, (_, i) => addDays(desde, i));
   const byScreen = new Map<string, ScreenConflict[]>();
   for (const c of conflicts) {
     const list = byScreen.get(c.screen_id) ?? [];
@@ -112,14 +96,14 @@ export function OccupancyTimeline({
     if (np) params.set("proveedor", np);
     if (ne && ne !== "all") params.set("estado", ne);
     if (ndias !== 14) params.set("dias", String(ndias));
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Lima" });
+    const today = todayLima();
     if (nd !== today) params.set("desde", nd);
     startTransition(() => {
       router.replace(`/occupancy${params.toString() ? `?${params.toString()}` : ""}`);
     });
   };
 
-  const shift = (n: number) => go({ desde: toDay(toNum(desde) + n) });
+  const shift = (n: number) => go({ desde: addDays(desde, n) });
 
   return (
     <div className="flex flex-col gap-4">
@@ -211,7 +195,7 @@ export function OccupancyTimeline({
                 <th className="sticky left-0 z-10 min-w-[220px] bg-muted px-3 py-2 font-medium">Pantalla</th>
                 {days.map((d) => (
                   <th key={d} className="min-w-[44px] px-1 py-2 text-center font-medium tabular-nums">
-                    {shortDay(d)}
+                    {formatDayMonth(d)}
                   </th>
                 ))}
               </tr>

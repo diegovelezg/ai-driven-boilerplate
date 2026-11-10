@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { formatDecimal, formatNumber } from "@/lib/format";
+import { formatDecimal, formatNumber, toISODateUTC } from "@/lib/format";
 
 /** Compacta 1200 -> "1,2K", 2300000 -> "2,3M" (es-PE: decimal ","). */
 function compact(n: number): string {
@@ -17,7 +17,7 @@ function compact(n: number): string {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toISODateUTC(new Date());
 }
 
 /**

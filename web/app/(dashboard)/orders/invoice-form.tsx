@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { createInvoiceAction } from "@/lib/order-flow-actions";
 import { todayLima, addDays } from "@/lib/availability-utils";
+import { formatDate, parseISODate, toISODateLocal } from "@/lib/format";
 import { cn } from "cn";
 import { es } from "react-day-picker/locale";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
@@ -26,32 +27,6 @@ import {
   validateInvoiceFields,
   type InvoiceFieldKey,
 } from "./invoice-validation";
-
-/** "2026-11-03" → Date local sin desfase de zona horaria.
- *  Con round-trip: rechaza 2026-02-30 (new Date hace rollover a 02-mar). */
-function parseISODate(v: string): Date | undefined {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return undefined;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return undefined;
-  const dt = new Date(y, mo - 1, d);
-  if (Number.isNaN(dt.getTime())) return undefined;
-  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return undefined;
-  return dt;
-}
-
-function toISODate(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** "2026-11-03" → "03/11/2026". */
-function formatShort(v: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
-}
 
 /** Date picker shadcn (Popover + Calendar, mismo patrón que nueva-form):
  *  fecha válida o vacía (con X para limpiar), nunca texto libre. */
@@ -99,7 +74,7 @@ function InvoiceDatePicker({
                 )}
               >
                 <CalendarIcon aria-hidden />
-                {selected ? formatShort(value) : "Elegir…"}
+                {selected ? formatDate(value) : "Elegir…"}
               </Button>
             }
           />
@@ -111,7 +86,7 @@ function InvoiceDatePicker({
               disabled={disabledDays}
               onSelect={(d) => {
                 if (d) {
-                  onChange(toISODate(d));
+                  onChange(toISODateLocal(d));
                   setOpen(false);
                 }
               }}
@@ -308,7 +283,7 @@ export function InvoiceForm({
           onChange={(v) => { setIssue(v); clear("issue"); clear("due"); }}
           disabled={pending}
           invalid={invalid.has("issue")}
-          disabledDays={due ? (d) => toISODate(d) > due : undefined}
+          disabledDays={due ? (d) => toISODateLocal(d) > due : undefined}
           pickerLabel="Fecha de emisión"
         />
         <InvoiceDatePicker
@@ -318,7 +293,7 @@ export function InvoiceForm({
           onChange={(v) => { setDue(v); clear("due"); }}
           disabled={pending}
           invalid={invalid.has("due")}
-          disabledDays={issue ? (d) => toISODate(d) < issue : undefined}
+          disabledDays={issue ? (d) => toISODateLocal(d) < issue : undefined}
           pickerLabel="Fecha de vencimiento"
         />
       </div>

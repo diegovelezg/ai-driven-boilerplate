@@ -8,38 +8,7 @@ import {
   normalizeDomain,
   type DomainCandidate,
 } from "@/lib/company-domains";
-
-const UA = "Mozilla/5.0 (compatible; DoohBot/0.1)";
-const FETCH_TIMEOUT_MS = 12_000;
-
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function fetchHomepage(domain: string): Promise<{ text: string; url: string } | null> {
-  for (const url of [`https://${domain}`, `https://www.${domain}`]) {
-    try {
-      const res = await fetch(url, {
-        redirect: "follow",
-        headers: { "User-Agent": UA },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!res.ok) continue;
-      const text = htmlToText(await res.text());
-      if (text.length < 40) continue;
-      return { text, url: res.url || url };
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
+import { fetchHomepageText } from "@/lib/fetch-text";
 
 export interface DomainProfile {
   domain: string;
@@ -77,7 +46,7 @@ function isMissingTable(error: unknown): boolean {
   return /could not find the table/i.test(msg) || (msg as string).includes("PGRST205");
 }
 
-export async function getDomainProfile(domain: string): Promise<DomainProfile | null> {
+async function getDomainProfile(domain: string): Promise<DomainProfile | null> {
   const d = normalizeDomain(domain);
   if (!d) return null;
   const db = getSupabase();
@@ -130,7 +99,7 @@ export async function researchDomain(
     const cached = await getDomainProfile(d).catch(() => null);
     if (cached) return { status: "cached", profile: cached };
   }
-  const page = await fetchHomepage(d);
+  const page = await fetchHomepageText(d);
   if (!page) return { status: "no-homepage", profile: await getDomainProfile(d).catch(() => null) };
   let firm: Awaited<ReturnType<typeof extractFirmographics>>;
   try {

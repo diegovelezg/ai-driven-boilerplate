@@ -88,21 +88,21 @@ export function normalizeDomain(raw: unknown): string {
 }
 
 /** Dominio de un email: parte tras la última "@", normalizado. "" si no hay. */
-export function domainFromEmail(email: unknown): string {
+function domainFromEmail(email: unknown): string {
   if (typeof email !== "string") return "";
   const at = email.lastIndexOf("@");
   if (at < 0) return "";
   return normalizeDomain(email.slice(at + 1));
 }
 
-export function isWebmail(domain: string): boolean {
+function isWebmail(domain: string): boolean {
   const d = domain.trim().toLowerCase();
   if (!d) return false;
   if (WEBMAIL.has(d)) return true;
   return WEBMAIL_PREFIXES.some((p) => d.startsWith(p));
 }
 
-export function isInstitutional(domain: string): boolean {
+function isInstitutional(domain: string): boolean {
   const d = domain.trim().toLowerCase();
   return INSTITUTIONAL_SUFFIXES.some((s) => d.endsWith(s));
 }

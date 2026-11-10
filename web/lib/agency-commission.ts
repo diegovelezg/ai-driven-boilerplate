@@ -15,7 +15,7 @@ export function normalizeCommissionPct(v: unknown): number | null {
 
 /** Override IO > default empresa > 0. Marca directa (sin agencia) resuelve 0. */
 export function resolveCommissionPct(
-  ioOverride: number | null | undefined,
+  ioOverride: unknown,
   companyDefault: number | null | undefined,
 ): number {
   const o = normalizeCommissionPct(ioOverride);
@@ -32,6 +32,42 @@ export function isAgencyDeal(
 ): boolean {
   if (!advertiserId || !billingId) return false;
   return advertiserId !== billingId;
+}
+
+/** Agencia de la que hereda el % por defecto: intermediaria vinculada y, en
+ *  su ausencia, el billing cuando él mismo es agencia (caso agencia cliente).
+ *  El texto libre histórico no vincula: sin empresa no hay default. */
+export function resolveCommissionAgencyPct(
+  agencyCompanyPct: number | null | undefined,
+  billingKind: string | null | undefined,
+  billingCompanyPct: number | null | undefined,
+): number | null {
+  const linked = normalizeCommissionPct(agencyCompanyPct);
+  if (linked !== null) return linked;
+  if (billingKind === "agencia") {
+    const billing = normalizeCommissionPct(billingCompanyPct);
+    if (billing !== null) return billing;
+  }
+  return null;
+}
+
+/** % efectivo de la orden: override IO > default de la agencia vinculada
+ *  (o del billing si es agencia) > 0. Puesto aquí (no en el drawer) para
+ *  testear la precedencia sin BD. */
+export function effectiveOrderCommissionPct(input: {
+  ioOverride: unknown;
+  agencyCompanyPct: number | null | undefined;
+  billingKind: string | null | undefined;
+  billingCompanyPct: number | null | undefined;
+}): number {
+  return resolveCommissionPct(
+    input.ioOverride,
+    resolveCommissionAgencyPct(
+      input.agencyCompanyPct,
+      input.billingKind,
+      input.billingCompanyPct,
+    ),
+  );
 }
 
 export interface AgencySplit {

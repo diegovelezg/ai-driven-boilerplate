@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatDecimal, formatDayMonth, formatMoney, formatNumber, formatPercent, formatPercentPoints, formatTimeAgo, toTitleCase } from "@/lib/format";
+import { formatDecimal, formatDayMonth, formatMoney, formatNumber, formatPercent, formatPercentPoints, formatTimeAgo, splitIgv, toTitleCase } from "@/lib/format";
 
 describe("formato numérico único (es: miles '.' y decimales ',')", () => {
   it("formatNumber agrupa miles con punto y 0 decimales por defecto", () => {
@@ -87,5 +87,23 @@ describe("formatTimeAgo", () => {
     assert.equal(formatDayMonth("2026-11-08T00:00:00-05:00"), "08/11");
     assert.equal(formatDayMonth(null), "—");
     assert.equal(formatDayMonth("no-fecha"), "—");
+  });
+});
+
+describe("splitIgv (NP: bruto sin IGV → neto + IGV 18 % + total)", () => {
+  it("caso referencia S/ 5.000 + S/ 900 = S/ 5.900", () => {
+    assert.deepEqual(splitIgv(500000), { net: 500000, igv: 90000, total: 590000 });
+  });
+
+  it("redondea el impuesto al céntimo y cuadra el total", () => {
+    const { net, igv, total } = splitIgv(199);
+    assert.equal(net, 199);
+    assert.equal(igv, 36);
+    assert.equal(total, 235);
+  });
+
+  it("cero e inválidos dan cero", () => {
+    assert.deepEqual(splitIgv(0), { net: 0, igv: 0, total: 0 });
+    assert.deepEqual(splitIgv(Number.NaN), { net: 0, igv: 0, total: 0 });
   });
 });

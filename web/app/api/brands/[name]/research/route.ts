@@ -1,5 +1,4 @@
-import { requireApiUser, requireStoreMember } from "@/lib/api/guard";
-import { resolveActiveStoreId } from "@/lib/tenant";
+import { requireActiveStoreAccess } from "@/lib/api/guard";
 import { normalizeDomain } from "@/lib/company-domains";
 import {
   describeCompanyCandidates,
@@ -15,13 +14,9 @@ import {
  */
 
 async function guard() {
-  const auth = await requireApiUser();
-  if (auth instanceof Response) return { error: auth };
-  const storeId = await resolveActiveStoreId();
-  if (!storeId) return { error: Response.json({ error: "Sin tienda." }, { status: 400 }) };
-  const denied = await requireStoreMember(storeId, auth);
-  if (denied) return { error: denied };
-  return { auth, storeId };
+  const gated = await requireActiveStoreAccess();
+  if (gated instanceof Response) return { error: gated };
+  return gated;
 }
 
 /** GET /api/brands/:name/research — candidatos + perfiles guardados (sin LLM). */
@@ -53,16 +48,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ name: s
   const { name } = await params;
   const g = await guard();
   if ("error" in g) return g.error;
-  const { checkRateLimit } = await import("@/lib/rate-limit");
-  if (!checkRateLimit(`research:brand:${g.storeId}`, 12, 60_000)) {
-    return Response.json({ error: "Demasiadas investigaciones. Espera un momento." }, { status: 429 });
-  }
-  let body: { domains?: unknown; force?: unknown } = {};
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    body = {};
-  }
+  const { checkResearchRateLimit, parseResearchBody } = await import("@/lib/research-route");
+  const limited = await checkResearchRateLimit("brand", g.storeId);
+  if (limited) return limited;
+  const body = await parseResearchBody(req);
   try {
     const brand = decodeURIComponent(name ?? "").trim();
     if (!brand) return Response.json({ error: "Falta marca." }, { status: 400 });

@@ -5,6 +5,9 @@
 // Un borrador aparta (hold) solo si está fresco (HOLD_DAYS); vencido, libera.
 import { getSupabase } from "@/lib/supabase";
 import type { OccupiedRange } from "@/lib/availability-utils";
+import { addDays, DAY_MS, displayEndOf, isoDayPart, isValidISODate, limaDayStart } from "@/lib/format";
+
+export { displayEndOf };
 
 /** Días que un borrador aparta pantallas. Vencido, libera automáticamente. */
 export const HOLD_DAYS = 7;
@@ -28,33 +31,15 @@ export function isHoldFresh(createdAt: string | null | undefined, now = Date.now
   if (!createdAt) return false;
   const t = Date.parse(createdAt);
   if (Number.isNaN(t)) return false;
-  return t + HOLD_DAYS * 86_400_000 > now;
+  return t + HOLD_DAYS * DAY_MS > now;
 }
 
 /** Fecha UI "yyyy-mm-dd" válida o throw (fail-closed: nunca {} libre). */
-export function assertDateStr(v: string, field: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || !Number.isFinite(Date.parse(v))) {
+function assertDateStr(v: string, field: string): string {
+  if (!isValidISODate(v)) {
     throw new Error(`Fecha inválida en ${field}: ${v}`);
   }
   return v;
-}
-
-/** Fin exclusivo ISO (BD) → día inclusivo "yyyy-mm-dd" para mostrar.
- *  Issue #5: sin restar 24h a ciegas. El fin semiabierto puede traer hora no
- *  medianoche; restar un día entero mostraba el día anterior. Se resta 1ms y
- *  se formatea en Lima (zona de periodBounds). */
-export function displayEndOf(exclusiveIso: string): string {
-  if (!Number.isFinite(Date.parse(exclusiveIso))) throw new Error(`Fecha inválida: ${exclusiveIso}`);
-  const t = Date.parse(exclusiveIso) as number;
-  const d = new Date(t - 1);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Lima",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-  const get = (type: string) => parts.find((x) => x.type === type)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /** Periodo UI (inicio/fin inclusivos "yyyy-mm-dd") → rango semiabierto ISO Lima. */
@@ -62,33 +47,38 @@ export function periodBounds(starts: string, ends: string): { qStart: string; qE
   assertDateStr(starts, "starts");
   assertDateStr(ends, "ends");
   if (ends < starts) throw new Error(`Rango inválido: ${starts} > ${ends}`);
-  const [y, m, d] = ends.split("-").map(Number);
-  const t = new Date(Date.UTC(y, m - 1, d) + 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
   return {
-    qStart: `${starts}T00:00:00-05:00`,
-    qEnd: `${t.getUTCFullYear()}-${p(t.getUTCMonth() + 1)}-${p(t.getUTCDate())}T00:00:00-05:00`,
+    qStart: limaDayStart(starts),
+    qEnd: limaDayStart(addDays(ends, 1)),
   };
 }
 
-/** Pantallas ocupadas en [starts, ends] (fechas UI inclusivas). */
+/** Pantallas ocupadas en [starts, ends] (fechas UI inclusivas).
+ *  `excludeIoId`: ignora líneas y bookings de esa orden (editar sin
+ *  chocar consigo misma). */
 export async function getScreenConflicts(
   storeId: string,
   starts: string,
   ends: string,
+  opts: { excludeIoId?: string | null } = {},
 ): Promise<ScreenConflict[]> {
   const db = getSupabase();
   const { qStart, qEnd } = periodBounds(starts, ends);
   const out: ScreenConflict[] = [];
+  const excluded = typeof opts.excludeIoId === "string" && opts.excludeIoId ? opts.excludeIoId : null;
 
   const { data: lines, error: lerr } = await db
     .from("io_lines")
-    .select("screen_id,starts_at,ends_at,io_orders!inner(io_number,brand,status,created_at)")
+    .select("io_id,screen_id,starts_at,ends_at,io_orders!insertion_order_lines_io_id_fkey!inner(io_number,brand,status,created_at)")
     .eq("store_id", storeId)
+    // Cinturón + tirantes: la FK same-store ya lo garantiza, pero el join
+    // embebido también se scopea (vale aunque la migración aún no esté aplicada).
+    .eq("io_orders.store_id", storeId)
     .lt("starts_at", qEnd)
     .gt("ends_at", qStart);
   if (lerr) throw new Error(`Availability lines: ${lerr.message}`);
   for (const l of (lines ?? []) as Array<Record<string, unknown>>) {
+    if (excluded && String(l.io_id ?? "") === excluded) continue;
     const o = l.io_orders as unknown as Record<string, unknown> | null;
     if (!o || o.status === "cancelled") continue;
     // El borrador aparta solo 7 días; vencido, libera.
@@ -97,7 +87,7 @@ export async function getScreenConflicts(
       screen_id: String(l.screen_id),
       io_number: typeof o.io_number === "string" ? o.io_number : null,
       brand: typeof o.brand === "string" ? o.brand : null,
-      starts: String(l.starts_at).slice(0, 10),
+      starts: isoDayPart(l.starts_at) ?? "",
       ends: displayEndOf(String(l.ends_at)),
       source: "order",
     });
@@ -105,13 +95,17 @@ export async function getScreenConflicts(
 
   const { data: books, error: berr } = await db
     .from("inv_bookings")
-    .select("starts_at,ends_at,status,io_orders(io_number,brand),inv_slots!inner(screen_id)")
+    // io_orders es left join con io_id anulable: sin filtro embebido aquí
+    // (filtrar el embebido excluiría holds sin IO). El tenant lo da el
+    // store_id del booking + la FK same-store cuando hay IO.
+    .select("insertion_order_id,starts_at,ends_at,status,io_orders!bookings_insertion_order_id_fkey(io_number,brand),inv_slots!bookings_slot_id_fkey!inner(screen_id)")
     .eq("store_id", storeId)
     .neq("status", "cancelled")
     .lt("starts_at", qEnd)
     .gt("ends_at", qStart);
   if (berr) throw new Error(`Availability bookings: ${berr.message}`);
   for (const b of (books ?? []) as Array<Record<string, unknown>>) {
+    if (excluded && b.insertion_order_id != null && String(b.insertion_order_id) === excluded) continue;
     const slot = b.inv_slots as unknown as Record<string, unknown> | null;
     const o = b.io_orders as unknown as Record<string, unknown> | null;
     if (!slot) continue;
@@ -119,7 +113,7 @@ export async function getScreenConflicts(
       screen_id: String(slot.screen_id),
       io_number: o && typeof o.io_number === "string" ? o.io_number : null,
       brand: o && typeof o.brand === "string" ? o.brand : null,
-      starts: String(b.starts_at).slice(0, 10),
+      starts: isoDayPart(b.starts_at) ?? "",
       ends: displayEndOf(String(b.ends_at)),
       source: "booking",
     });
@@ -138,19 +132,18 @@ export async function getScreenOccupancy(
   assertDateStr(from, "from");
   const out: Record<string, OccupiedRange[]> = {};
   if (screenIds.length === 0) return out;
-  const [y, m, d] = from.split("-").map(Number);
-  const anchorEnd = new Date(Date.UTC(y, m - 1, d) + 400 * 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  const winStart = `${from}T00:00:00-05:00`;
-  const winEnd = `${anchorEnd.getUTCFullYear()}-${p(anchorEnd.getUTCMonth() + 1)}-${p(anchorEnd.getUTCDate())}T00:00:00-05:00`;
+  const winStart = limaDayStart(from);
+  const winEnd = limaDayStart(addDays(from, 400));
   const push = (id: string, starts: string, endsExcl: string) => {
-    (out[id] ??= []).push({ starts: String(starts).slice(0, 10), ends: displayEndOf(String(endsExcl)) });
+    (out[id] ??= []).push({ starts: isoDayPart(starts) ?? "", ends: displayEndOf(String(endsExcl)) });
   };
 
   const { data: lines, error: lerr } = await db
     .from("io_lines")
-    .select("screen_id,starts_at,ends_at,io_orders!inner(status,created_at)")
+    .select("screen_id,starts_at,ends_at,io_orders!insertion_order_lines_io_id_fkey!inner(status,created_at)")
     .eq("store_id", storeId)
+    // Mismo scope embebido que getScreenConflicts (FK same-store + filtro).
+    .eq("io_orders.store_id", storeId)
     .in("screen_id", screenIds)
     .gte("ends_at", winStart)
     .lte("starts_at", winEnd);

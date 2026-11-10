@@ -17,14 +17,20 @@ describe("cross-tenant fail-closed (issue #4 P0)", () => {
       "app/api/screens/[id]/route.ts",
     ]) {
       const src = readFileSync(join(ROOT, f), "utf8");
-      // Un solo requireStoreAccess (SSOT #8), sin requireStoreMember suelto.
-      assert.match(src, /requireStoreAccess/, `${f}: usa requireStoreAccess`);
+      // Un solo guard SSOT (#4/#8): requireRouteEntity, sin requireStoreMember suelto.
+      assert.match(src, /requireRouteEntity/, `${f}: usa requireRouteEntity`);
       assert.doesNotMatch(src, /requireStoreMember/, `${f}: sin doble stack`);
-      // 404 idéntico en ambas ramas (no encontrada inicial + denied).
+      // 404 propio + enmascarado en el guard (ver abajo): nunca 403.
       const n404 = (src.match(/status: 404/g) ?? []).length;
-      assert.ok(n404 >= 2, `${f}: ${n404} respuestas 404`);
+      assert.ok(n404 >= 1, `${f}: ${n404} respuestas 404`);
       assert.doesNotMatch(src, /status: 403/, `${f}: sin 403 oráculo`);
     }
+    // El choke point compartido: delega en requireStoreAccess y responde
+    // 404 idéntico en ausencia y en denegación.
+    const guard = readFileSync(join(ROOT, "lib/api/guard.ts"), "utf8");
+    assert.match(guard, /requireStoreAccess/, "guard delega en requireStoreAccess");
+    const guard404 = (guard.match(/status: 404/g) ?? []).length;
+    assert.ok(guard404 >= 2, `guard: ${guard404} respuestas 404`);
   });
   it("profile-actions resuelve storeId en servidor (nunca del cliente)", () => {
     const src = readFileSync(join(ROOT, "lib/profile-actions.ts"), "utf8");

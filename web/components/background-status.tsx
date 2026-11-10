@@ -37,7 +37,7 @@ interface BackgroundCtxValue {
 
 const BackgroundCtx = createContext<BackgroundCtxValue | null>(null);
 
-export function useBackground(): BackgroundCtxValue {
+function useBackground(): BackgroundCtxValue {
   const ctx = useContext(BackgroundCtx);
   if (!ctx) throw new Error("useBackground debe usarse dentro de <BackgroundStatus>");
   return ctx;

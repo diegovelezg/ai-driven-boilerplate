@@ -108,7 +108,7 @@ export async function getLastFinishedAt(storeId: string, kind: string): Promise<
   return (String(r.finished_at ?? r.started_at ?? "") || null) as string | null;
 }
 
-export async function hasRunningRun(
+async function hasRunningRun(
   storeId: string,
   filter?: { kinds?: string[]; scopeKind?: ScopeKind; scopeId?: string | null },
 ): Promise<boolean> {
@@ -169,7 +169,7 @@ function toActiveOp(r: BackgroundRun): ActiveOp {
 
 /** Primitiva del lock por compatibilidad (Fase 3): la corrida en curso
  *  incompatible con `{kind, scope}`, o `null` si hay vía libre. */
-export async function hasConflict(
+async function hasConflict(
   storeId: string,
   op: { kind: string; scopeKind?: ScopeKind; scopeId?: string | null },
 ): Promise<BackgroundRun | null> {
@@ -275,7 +275,7 @@ export async function claimRunSlot(
 }
 
 /** Actualiza el total de una corrida en curso (para progreso honesto 0/0 → N). */
-export async function setRunTotal(runId: string, total: number): Promise<void> {
+async function setRunTotal(runId: string, total: number): Promise<void> {
   const db = getSupabase();
   await db.from("sys_runs").update({ total }).eq("id", runId);
 }

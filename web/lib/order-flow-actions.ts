@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { requireMyStoreAccess } from "@/lib/tenant";
 import { normalizeCurrency } from "@/lib/currency";
+import { isValidISODate } from "@/lib/format";
 import { resolveActor } from "@/lib/actor";
 
 export interface OrderFlowState {
@@ -14,9 +15,31 @@ export interface OrderFlowState {
 /** Mutaciones del drawer: requieren vendedor o superior (viewer = solo lectura).
  *  null = anon-dev explícito (permite); sin auth y sin bypass = false (deniega). */
 async function denyViewer(storeId: string): Promise<string | null> {
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(storeId, "seller").catch(() => false);
-  return allowed === false ? "Requiere rol vendedor o superior." : null;
+  const { denyRole } = await import("@/lib/tenant");
+  return denyRole(storeId, "seller");
+}
+
+/** Carga una fila propia por id con chequeo de membresía (fail-closed).
+ *  Devuelve la fila + storeId, o el mensaje de error. "No encontrada"
+ *  enmascara tanto la ausencia como la falta de acceso (no oráculo).
+ *  Sin chequeo de rol: el caller aplica `denyViewer`/status después, en el
+ *  orden que cada flujo exige. */
+async function loadOwnedRow(
+  db: ReturnType<typeof getSupabase>,
+  table: "io_orders" | "io_agency_orders" | "io_creatives" | "io_photo_checks" | "io_invoices",
+  id: string,
+  columns: string,
+): Promise<{ row: Record<string, unknown>; storeId: string } | { error: string }> {
+  const { data, error } = await db.from(table).select(columns).eq("id", id).maybeSingle();
+  if (error || !data) return { error: "No encontrada." };
+  // Cliente sin tipar por tabla dinámica: la fila es objeto (o null, ya
+  // descartado arriba); el cast pasa por `unknown` en un solo lugar.
+  const row = data as unknown as Record<string, unknown>;
+  const storeId = String(row.store_id ?? "");
+  if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
+    return { error: "No encontrada." };
+  }
+  return { row, storeId };
 }
 
 /** Pasa la OI de borrador a firmada (el cliente la firmó). */
@@ -29,17 +52,14 @@ export async function signOrderAction(input: {
   if (!orderId) return { ok: false, message: "Falta la orden." };
   try {
     const db = getSupabase();
-    const { data, error } = await db
-      .from("io_orders")
-      .select("id,store_id,status")
-      .eq("id", orderId)
-      .maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const row = data as Record<string, unknown>;
-    const storeId = String(row.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
+    const loaded = await loadOwnedRow(
+      db,
+      "io_orders",
+      orderId,
+      "id,store_id,status,billing_company_id,agency_company_id,billing_contact_id,signer_contact_id,payment_contact_id,manager_contact_id",
+    );
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row, storeId } = loaded;
     if (String(row.status ?? "") === "cancelled") {
       return { ok: false, message: "La orden está cancelada." };
     }
@@ -48,8 +68,98 @@ export async function signOrderAction(input: {
     if (String(row.status ?? "") === "signed") {
       return { ok: false, message: "La orden ya está firmada." };
     }
+    // Nada nuevo con archivados: la firma congela la NP, así que las
+    // contrapartes deben estar activas (lo firmado vive en el snapshot).
+    {
+      const { archivedBlockerMessage } = await import("@/lib/order-guards");
+      const coIds = [row.billing_company_id, row.agency_company_id].filter((v): v is string => !!v);
+      const ctIds = [
+        row.billing_contact_id,
+        row.signer_contact_id,
+        row.payment_contact_id,
+        row.manager_contact_id,
+      ].filter((v): v is string => !!v);
+      const [{ data: cos }, { data: cts }] = await Promise.all([
+        coIds.length > 0
+          ? db.from("crm_companies").select("id,name,deleted_at").eq("store_id", storeId).in("id", [...new Set(coIds)])
+          : Promise.resolve({ data: [] }),
+        ctIds.length > 0
+          ? db
+              .from("crm_contacts")
+              .select("id,first_name,last_name,email,deleted_at")
+              .eq("store_id", storeId)
+              .in("id", [...new Set(ctIds)])
+          : Promise.resolve({ data: [] }),
+      ]);
+      const coById = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+      const ctById = new Map(((cts ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+      const labels: Array<[unknown, string]> = [
+        [row.billing_company_id, "facturador"],
+        [row.agency_company_id, "intermediaria"],
+      ];
+      const refs: Array<{ label: string; archived: boolean; name: string | null }> = labels
+        .filter(([id]) => !!id)
+        .map(([id, label]) => {
+          const r = coById.get(String(id));
+          // Sin fila = fuera del tenant: otra validación lo frena; aquí no duplica.
+          if (!r) return { label, archived: false, name: null };
+          return { label, archived: r.deleted_at != null, name: typeof r.name === "string" ? r.name : null };
+        });
+      const ctLabels = ["POC", "firmante", "pago", "responsable"] as const;
+      const ctKeys = ["billing_contact_id", "signer_contact_id", "payment_contact_id", "manager_contact_id"] as const;
+      ctKeys.forEach((k, i) => {
+        const id = row[k];
+        if (!id) return;
+        const r = ctById.get(String(id));
+        if (!r) return;
+        const n = [r.first_name, r.last_name].filter((v) => typeof v === "string" && (v as string).trim()).join(" ");
+        refs.push({
+          label: ctLabels[i],
+          archived: r.deleted_at != null,
+          name: n || (typeof r.email === "string" ? r.email : null),
+        });
+      });
+      const block = archivedBlockerMessage(refs);
+      if (block) return { ok: false, message: block };
+    }
     const actor = await resolveActor();
     const now = new Date().toISOString();
+    // Foto inmutable al firmar: el PDF la prefiere al dato vivo (resiste
+    // archivo o cambio de empresas/contactos). Falla abierto: si el detalle
+    // no carga, la firma igual procede (el PDF usa el vivo).
+    let snapshot_json: Record<string, unknown> | null = null;
+    try {
+      const { getOrderDetail } = await import("@/lib/orders-db");
+      const { buildOrderSnapshot } = await import("@/lib/order-snapshot");
+      const { normalizeCurrency } = await import("@/lib/currency");
+      const detail = await getOrderDetail(storeId, orderId);
+      if (detail) {
+        const gross = detail.lines.reduce((a, l) => a + Number(l.rate_minor ?? 0), 0);
+        const toContact = (c: { name: string; role: string | null; email: string | null; phone: string | null } | null) =>
+          c ? { name: c.name, role: c.role, email: c.email, phone: c.phone } : null;
+        snapshot_json = buildOrderSnapshot({
+          signed_at: now,
+          currency: normalizeCurrency((detail.order.currency as string | null | undefined) ?? "PEN"),
+          payment_terms_days:
+            typeof detail.order.payment_terms_days === "number" ? (detail.order.payment_terms_days as number) : null,
+          gross_minor: gross,
+          advertiser_name: detail.advertiser_name,
+          billing_name: detail.billing_name,
+          billing_tax_id: detail.billing_tax_id,
+          billing_city: detail.billing_city,
+          billing_country: detail.billing_country,
+          agency_name: detail.agency_name,
+          agency_tax_id: detail.agency_tax_id,
+          agency_commission_pct: detail.agency_commission_pct,
+          billing_contact: toContact(detail.contacts.billing),
+          signer_contact: toContact(detail.contacts.signer),
+          payment_contact: toContact(detail.contacts.payment),
+          manager_contact: toContact(detail.contacts.manager),
+        }) as unknown as Record<string, unknown>;
+      }
+    } catch {
+      snapshot_json = null;
+    }
     const { error: werr } = await db
       .from("io_orders")
       .update({
@@ -59,7 +169,9 @@ export async function signOrderAction(input: {
         signed_by_company: (input.signedByCompany ?? "").trim() || null,
         updated_at: now,
         updated_by: actor ?? null,
+        ...(snapshot_json ? { snapshot_json } : {}),
       })
+      .eq("store_id", storeId)
       .eq("id", orderId);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
     revalidatePath("/orders");
@@ -85,17 +197,9 @@ export async function createAgencyOrderAction(input: {
   const code = url;
   try {
     const db = getSupabase();
-    const { data, error } = await db
-      .from("io_orders")
-      .select("id,store_id,status")
-      .eq("id", orderId)
-      .maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const row = data as Record<string, unknown>;
-    const storeId = String(row.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
+    const loaded = await loadOwnedRow(db, "io_orders", orderId, "id,store_id,status");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row, storeId } = loaded;
     if (String(row.status ?? "") !== "signed") {
       return { ok: false, message: "Marca la orden como firmada primero." };
     }
@@ -121,6 +225,7 @@ export async function createAgencyOrderAction(input: {
     await db
       .from("io_orders")
       .update({ updated_at: now, updated_by: actor })
+      .eq("store_id", storeId)
       .eq("id", orderId);
     revalidatePath("/orders");
     return { ok: true, message: "Documento registrado: la orden está autorizada." };
@@ -133,20 +238,11 @@ async function orderStore(
   db: ReturnType<typeof getSupabase>,
   orderId: string,
 ): Promise<{ row: Record<string, unknown>; storeId: string } | { error: string }> {
-  const { data, error } = await db
-    .from("io_orders")
-    .select("id,store_id,status")
-    .eq("id", orderId)
-    .maybeSingle();
-  if (error || !data) return { error: "No encontrada." as const };
-  const row = data as Record<string, unknown>;
-  const storeId = String(row.store_id ?? "");
-  if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
-    return { error: "No encontrada." as const };
-  }
-  const denied = await denyViewer(storeId);
+  const loaded = await loadOwnedRow(db, "io_orders", orderId, "id,store_id,status");
+  if ("error" in loaded) return loaded;
+  const denied = await denyViewer(loaded.storeId);
   if (denied) return { error: denied };
-  return { row, storeId };
+  return loaded;
 }
 
 function httpUrl(raw: unknown): string | null {
@@ -161,20 +257,18 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
   if (!id) return { ok: false, message: "Falta el registro." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("io_agency_orders").select("id,store_id,io_id").eq("id", id).maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
-    const denied = await denyViewer(String(r.store_id ?? ""));
+    const loaded = await loadOwnedRow(db, "io_agency_orders", id, "id,store_id,io_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row: r, storeId: childStore } = loaded;
+    const denied = await denyViewer(childStore);
     if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
-    const { error: derr } = await db.from("io_agency_orders").delete().eq("id", id);
+    const { error: derr } = await db.from("io_agency_orders").delete().eq("store_id", childStore).eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", childStore)
       .eq("id", String(r.io_id ?? ""));
     revalidatePath("/orders");
     return { ok: true, message: "OM/OC eliminado." };
@@ -250,6 +344,7 @@ export async function attachCreativeAction(input: {
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", chk.storeId)
       .eq("id", orderId);
     revalidatePath("/orders");
     return { ok: true, message: "Material adjuntado." };
@@ -264,20 +359,18 @@ export async function deleteCreativeAction(input: { creativeId: string }): Promi
   if (!id) return { ok: false, message: "Falta la pieza." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("io_creatives").select("id,store_id,io_id").eq("id", id).maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
-    const denied = await denyViewer(String(r.store_id ?? ""));
+    const loaded = await loadOwnedRow(db, "io_creatives", id, "id,store_id,io_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row: r, storeId: childStore } = loaded;
+    const denied = await denyViewer(childStore);
     if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
-    const { error: derr } = await db.from("io_creatives").delete().eq("id", id);
+    const { error: derr } = await db.from("io_creatives").delete().eq("store_id", childStore).eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", childStore)
       .eq("id", String(r.io_id ?? ""));
     revalidatePath("/orders");
     return { ok: true, message: "Material eliminado." };
@@ -309,6 +402,7 @@ export async function attachPhotoAction(input: { orderId: string; url: string })
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor ?? null })
+      .eq("store_id", chk.storeId)
       .eq("id", orderId);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
     revalidatePath("/orders");
@@ -324,15 +418,12 @@ export async function deletePhotoAction(input: { photoId: string }): Promise<Ord
   if (!id) return { ok: false, message: "Falta el registro." };
   try {
     const db = getSupabase();
-    const { data, error } = await db.from("io_photo_checks").select("id,store_id").eq("id", id).maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const r = data as Record<string, unknown>;
-    if ((await requireMyStoreAccess(String(r.store_id ?? "")).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
+    const loaded = await loadOwnedRow(db, "io_photo_checks", id, "id,store_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row: r } = loaded;
     const denied = await denyViewer(String(r.store_id ?? ""));
     if (denied) return { ok: false, message: denied };
-    const { error: derr } = await db.from("io_photo_checks").delete().eq("id", id);
+    const { error: derr } = await db.from("io_photo_checks").delete().eq("store_id", String(r.store_id ?? "")).eq("id", id);
     if (derr) return { ok: false, message: `DB write: ${derr.message}` };
     revalidatePath("/orders");
     return { ok: true, message: "Adjunto eliminado." };
@@ -355,6 +446,7 @@ export async function cancelOrderAction(input: { orderId: string }): Promise<Ord
     const { error: werr } = await db
       .from("io_orders")
       .update({ status: "cancelled", updated_at: now, updated_by: actor })
+      .eq("store_id", chk.storeId)
       .eq("id", orderId);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
     revalidatePath("/orders");
@@ -364,15 +456,80 @@ export async function cancelOrderAction(input: { orderId: string }): Promise<Ord
   }
 }
 
+/** Reactiva una orden cancelada (vuelve a borrador). Requiere vendedor+. */
+export async function reactivateOrderAction(input: { orderId: string }): Promise<OrderFlowState> {
+  const orderId = String(input.orderId ?? "").trim();
+  if (!orderId) return { ok: false, message: "Falta la orden." };
+  try {
+    const db = getSupabase();
+    const chk = await orderStore(db, orderId);
+    if ("error" in chk) return { ok: false, message: chk.error };
+    if (String(chk.row.status ?? "") !== "cancelled") {
+      return { ok: false, message: "Solo se puede reactivar una orden cancelada." };
+    }
+    const actor = await resolveActor();
+    const now = new Date().toISOString();
+    const { error: werr } = await db
+      .from("io_orders")
+      .update({ status: "draft", updated_at: now, updated_by: actor })
+      .eq("store_id", chk.storeId)
+      .eq("id", orderId);
+    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    revalidatePath("/orders");
+    return { ok: true, message: "Orden reactivada como borrador." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/** Elimina una orden en borrador o cancelada (solo owner).
+ *  Líneas, OM/OC, materiales y foto checks caen por cascada (ON DELETE
+ *  CASCADE en BD). Bloqueado si tiene historia que quedaría huérfana
+ *  (facturas, reservas, campañas o play logs: SET NULL en BD). */
+export async function deleteOrderAction(input: { orderId: string }): Promise<OrderFlowState> {
+  const orderId = String(input.orderId ?? "").trim();
+  if (!orderId) return { ok: false, message: "Falta la orden." };
+  try {
+    const db = getSupabase();
+    const loaded = await loadOwnedRow(db, "io_orders", orderId, "id,store_id,status");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row, storeId } = loaded;
+    const { denyRole } = await import("@/lib/tenant");
+    const denied = await denyRole(storeId, "owner", "Solo el propietario puede eliminar órdenes.");
+    if (denied) return { ok: false, message: denied };
+    const status = String(row.status ?? "");
+    if (status !== "draft" && status !== "cancelled") {
+      return { ok: false, message: "Cancela la orden antes de eliminarla." };
+    }
+    const [invs, books, camps, plays] = await Promise.all([
+      db.from("io_invoices").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("io_id", orderId),
+      db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", orderId),
+      db.from("io_campaigns").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", orderId),
+      db.from("io_play_logs").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("io_id", orderId),
+    ]);
+    if ((invs.count ?? 0) > 0) {
+      return { ok: false, message: `No se puede eliminar: tiene ${invs.count} factura(s). Anúlalas o registra una nueva orden.` };
+    }
+    if ((books.count ?? 0) > 0) {
+      return { ok: false, message: `No se puede eliminar: tiene ${books.count} reserva(s).` };
+    }
+    if ((camps.count ?? 0) > 0) {
+      return { ok: false, message: `No se puede eliminar: tiene ${camps.count} campaña(s) vinculada(s).` };
+    }
+    if ((plays.count ?? 0) > 0) {
+      return { ok: false, message: `No se puede eliminar: tiene ${plays.count} registro(s) de emisión.` };
+    }
+    const { error: derr } = await db.from("io_orders").delete().eq("store_id", storeId).eq("id", orderId);
+    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    revalidatePath("/orders");
+    return { ok: true, message: "Orden eliminada." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
 function realDate(v: string): boolean {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return false;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+  return isValidISODate(v);
 }
 
 /** Registra una factura emitida contra la orden (monto, número, fechas, estado inicial).
@@ -406,17 +563,9 @@ export async function createInvoiceAction(input: {
   }
   try {
     const db = getSupabase();
-    const { data, error } = await db
-      .from("io_orders")
-      .select("id,store_id,status,currency,billing_company_id")
-      .eq("id", orderId)
-      .maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const row = data as Record<string, unknown>;
-    const storeId = String(row.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
+    const loaded = await loadOwnedRow(db, "io_orders", orderId, "id,store_id,status,currency,billing_company_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row, storeId } = loaded;
     if (String(row.status ?? "") === "cancelled") return { ok: false, message: "La orden está cancelada." };
     // Factura electrónica: exige razón social con RUC (no se factura al aire).
     const billingId = String(row.billing_company_id ?? "");
@@ -455,6 +604,7 @@ export async function createInvoiceAction(input: {
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", storeId)
       .eq("id", orderId);
     revalidatePath("/orders");
     revalidatePath("/");
@@ -490,17 +640,9 @@ export async function setInvoiceStatusAction(input: {
   }
   try {
     const db = getSupabase();
-    const { data, error } = await db
-      .from("io_invoices")
-      .select("id,store_id,io_id,status")
-      .eq("id", id)
-      .maybeSingle();
-    if (error || !data) return { ok: false, message: "No encontrada." };
-    const r = data as Record<string, unknown>;
-    const storeId = String(r.store_id ?? "");
-    if ((await requireMyStoreAccess(storeId).catch(() => false)) === false) {
-      return { ok: false, message: "No encontrada." };
-    }
+    const loaded = await loadOwnedRow(db, "io_invoices", id, "id,store_id,io_id,status");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const { row: r, storeId } = loaded;
     const denied = await denyViewer(storeId);
     if (denied) return { ok: false, message: denied };
     const current = String(r.status ?? "");
@@ -514,17 +656,19 @@ export async function setInvoiceStatusAction(input: {
     const { data: parent } = await db
       .from("io_orders")
       .select("status")
+      .eq("store_id", storeId)
       .eq("id", String(r.io_id ?? ""))
       .maybeSingle();
     if (String((parent as Record<string, unknown> | null)?.status ?? "") === "cancelled") {
       return { ok: false, message: "La orden está cancelada." };
     }
     const actor = await resolveActor();
-    const { error: werr } = await db.from("io_invoices").update({ status }).eq("id", id);
+    const { error: werr } = await db.from("io_invoices").update({ status }).eq("store_id", storeId).eq("id", id);
     if (werr) return { ok: false, message: `DB write: ${werr.message}` };
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
+      .eq("store_id", storeId)
       .eq("id", String(r.io_id ?? ""));
     revalidatePath("/orders");
     revalidatePath("/");

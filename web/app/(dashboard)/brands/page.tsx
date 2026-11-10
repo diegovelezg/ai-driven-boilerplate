@@ -1,8 +1,7 @@
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { listBrands, parseBrandsSort } from "@/lib/brand-db";
-import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { loadPageData } from "@/lib/page-data";
 import { connection } from "next/server";
 import { BrandsList } from "./brands-list";
 
@@ -22,26 +21,14 @@ export default async function MarcasPage({
   const selectedBrand = ((sp.brand ?? sp.marca) ?? "").trim() || null;
   const { key: sortKey, dir: sortDir } = parseBrandsSort({ sort: sp.sort, dir: sp.dir });
 
-  const dbReady = isSupabaseConfigured();
-  const activeStoreId = await resolveActiveStoreId();
-  const connected = Boolean(activeStoreId);
-
-  let rows: Awaited<ReturnType<typeof listBrands>> = [];
-  let error: string | null = null;
-
-  if (connected && dbReady) {
-    try {
-      const storeId = activeStoreId!;
-      if (!storeId) error = "Sin tienda.";
-      else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-        error = "Sin acceso a esta tienda.";
-      } else {
-        rows = await listBrands(storeId, { q, sortKey, sortDir });
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
-    }
-  }
+  const { data, connected, dbReady, error } = await loadPageData(
+    async (storeId) => {
+      const rows = await listBrands(storeId, { q, sortKey, sortDir });
+      return { rows };
+    },
+    { rows: [] as Awaited<ReturnType<typeof listBrands>> },
+  );
+  const { rows } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">

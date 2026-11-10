@@ -293,7 +293,7 @@ export function normalizeScreenRow(
 }
 
 /** Plantillas CSV de ejemplo por kind (header + 1 fila). */
-export const IMPORT_TEMPLATES: Record<ImportKind, string> = {
+const IMPORT_TEMPLATES: Record<ImportKind, string> = {
   companies:
     "name,tax_id,domain,email,phone,city,country,roles,external_ref\nAcme SAC,20123456789,acme.pe,contacto@acme.pe,+51999999999,Lima,PE,customer,acme-001",
   contacts:

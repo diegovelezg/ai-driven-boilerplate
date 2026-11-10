@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Suspense } from "react";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BackgroundStatus } from "@/components/background-status";
@@ -6,10 +7,11 @@ import { Toaster } from "@/components/ui/toast";
 import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppTooltipProvider } from "@/components/ui/app-tooltip";
-import { displayStoreName, listMyStores, getMyStoreRoles, type TenantStore } from "@/lib/tenant";
+import { displayStoreName, listMyStores, getMyStoreRoles, resolveActiveStoreId, type TenantStore } from "@/lib/tenant";
 import { createServerSupabase } from "@/lib/supabase-server";
 
 import { connection } from "next/server";
+import { DrawerHost } from "@/components/drawer-host";
 
 // La chrome del dashboard es siempre dinámica (auth + tenant por request),
 // así que se permite la ruta bloqueante. Sin esto, el `connection()` de
@@ -53,6 +55,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   } catch {
     userRoles = {};
   }
+  // Rol para los drawers del host central (misma resolución que las páginas).
+  const activeStoreId = await resolveActiveStoreId().catch(() => null);
+  const myRole = activeStoreId ? (userRoles[activeStoreId] ?? null) : null;
   return (
     <BackgroundStatus>
       <SidebarProvider defaultOpen={false}>
@@ -62,6 +67,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
             <SidebarInset>
               <AppHeader stores={stores} userEmail={userEmail} userRoles={userRoles} />
               <DashboardShell>{children}</DashboardShell>
+              <Suspense>
+                <DrawerHost myRole={myRole} />
+              </Suspense>
             </SidebarInset>
             <Toaster limit={3} />
           </AppTooltipProvider>

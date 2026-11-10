@@ -4,6 +4,7 @@ import { isCompanyKind } from "@/lib/crm";
 import { parseCompaniesSort } from "@/lib/crm-db";
 import { parseBrandsSort } from "@/lib/brand-db";
 import { minorToMajor, toCsv, type CsvCell } from "@/lib/csv";
+import { toISODateUTC } from "@/lib/format";
 
 // GET /api/export?entity=companies|contacts|brands|orders|screens + mismos filtros
 // de cada vista (q, tipo, company, stage, billing, proveedor, ciudad, estado,
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
     }
     const storeId = active.id;
     const q = (sp.get("q") ?? "").trim().slice(0, 100);
-    const stamp = new Date().toISOString().slice(0, 10);
+    const stamp = toISODateUTC(new Date());
 
     if (entity === "companies") {
       const kindRaw = sp.get("type") ?? sp.get("tipo");

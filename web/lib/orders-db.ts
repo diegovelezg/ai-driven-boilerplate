@@ -201,13 +201,62 @@ export async function listOrders(
   return filtered;
 }
 
+export interface OrderContactRef {
+  id: string;
+  company_id: string | null;
+  company_name: string | null;
+  name: string;
+  role: string | null;
+  email: string | null;
+  phone: string | null;
+  is_primary: boolean;
+}
+
+/** Fila crm_contacts (+ `crm_companies(name)` embebido) → ref para pickers y PDF. */
+export function toContactRef(r: Record<string, unknown>): OrderContactRef {
+  const first = typeof r.first_name === "string" ? r.first_name.trim() : "";
+  const last = typeof r.last_name === "string" ? r.last_name.trim() : "";
+  const email = typeof r.email === "string" && r.email.trim() ? r.email.trim() : null;
+  const v = r.crm_companies as unknown as { name?: unknown } | null;
+  const companyName = v && typeof v.name === "string" && v.name.trim() ? v.name.trim() : null;
+  return {
+    id: String(r.id),
+    company_id: r.company_id != null ? String(r.company_id) : null,
+    company_name: companyName,
+    name: [first, last].filter(Boolean).join(" ") || email || "—",
+    role: typeof r.job_title === "string" && r.job_title.trim() ? r.job_title.trim() : null,
+    email,
+    phone: typeof r.phone === "string" && r.phone.trim() ? r.phone.trim() : null,
+    is_primary: r.is_primary === true,
+  };
+}
+
 export interface OrderDetail {
   order: Record<string, unknown>;
   advertiser_name: string | null;
-  billing_name: string | null;
+  /** Contactos vinculados por rol (FK); el texto libre queda como fallback. */
+  contacts: {
+    billing: OrderContactRef | null;
+    signer: OrderContactRef | null;
+    payment: OrderContactRef | null;
+    manager: OrderContactRef | null;
+  };  billing_name: string | null;
   billing_kind: string | null;
   /** RUC de la razón social a facturar (crm_companies.tax_id). */
   billing_tax_id: string | null;
+  /** % de comisión del facturador cuando es agencia (default del caso agencia cliente). */
+  billing_commission_pct: number | null;
+  /** Intermediaria vinculada (Opción B); gana al texto libre en PDF y ficha. */
+  agency_company_id: string | null;
+  agency_name: string | null;
+  agency_tax_id: string | null;
+  agency_commission_pct: number | null;
+  /** Ciudad/país/dirección del facturador (crm_companies, solo lectura). */
+  advertiser_city: string | null;
+  advertiser_country: string | null;
+  billing_city: string | null;
+  billing_country: string | null;
+  billing_company_address: string | null;
   lines: Array<Record<string, unknown>>;
   io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
@@ -228,10 +277,13 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   if (error) throw new Error(`Order read: ${error.message}`);
   if (!order) return null;
   const o = order as Record<string, unknown>;
-  const [cos, lines, oms, creas, bookings, photos, invs] = await Promise.all([
-    db.from("crm_companies").select("id,name,kind,tax_id").eq("store_id", storeId).in(
+  const refIds = ["billing_contact_id", "signer_contact_id", "payment_contact_id", "manager_contact_id"]
+    .map((k) => (typeof o[k] === "string" && o[k] ? String(o[k]) : null))
+    .filter((x): x is string => x !== null);
+  const [cos, lines, oms, creas, bookings, photos, invs, refs] = await Promise.all([
+    db.from("crm_companies").select("id,name,kind,tax_id,city,country,address,agency_commission_pct").eq("store_id", storeId).in(
       "id",
-      [o.advertiser_company_id, o.billing_company_id].filter(Boolean).map(String),
+      [o.advertiser_company_id, o.billing_company_id, o.agency_company_id].filter(Boolean).map(String),
     ),
     db
       .from("io_lines")
@@ -244,6 +296,9 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
     db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
     db.from("io_photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
     db.from("io_invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),
+    refIds.length > 0
+      ? db.from("crm_contacts").select("id,company_id,first_name,last_name,email,phone,job_title,is_primary,crm_companies!contacts_company_id_fkey(name)").eq("store_id", storeId).in("id", refIds)
+      : Promise.resolve({ data: [], error: null }),
   ]);
   const nameBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), String(c.name ?? "")]),
@@ -251,29 +306,75 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
   const kindBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), typeof c.kind === "string" ? c.kind : null]),
   );
+  const cityBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [
+      String(c.id),
+      typeof c.city === "string" && c.city.trim() ? c.city.trim() : null,
+    ]),
+  );
+  const countryBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [
+      String(c.id),
+      typeof c.country === "string" && c.country.trim() ? c.country.trim() : null,
+    ]),
+  );
+  const addressBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [
+      String(c.id),
+      typeof c.address === "string" && c.address.trim() ? c.address.trim() : null,
+    ]),
+  );
+  const numOrNull = (v: unknown): number | null => {
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const commissionBy = new Map(
+    ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), numOrNull(c.agency_commission_pct)]),
+  );
   const taxBy = new Map(
     ((cos.data ?? []) as Array<Record<string, unknown>>).map((c) => [
       String(c.id),
       typeof c.tax_id === "string" && c.tax_id.trim() ? c.tax_id.trim() : null,
     ]),
   );
-  for (const [name, res] of [["companies", cos], ["lines", lines], ["oms", oms], ["creatives", creas], ["photos", photos], ["invoices", invs]] as const) {
+  for (const [name, res] of [["companies", cos], ["lines", lines], ["oms", oms], ["creatives", creas], ["photos", photos], ["invoices", invs], ["contacts", refs]] as const) {
     if (res.error) throw new Error(`Order read (${name}): ${res.error.message}`);
   }
+  const contactBy = new Map(
+    (((refs.data ?? []) as Array<Record<string, unknown>>)).map((r) => [String(r.id), toContactRef(r)]),
+  );
+  const contactRef = (key: string): OrderContactRef | null => {
+    const cid = typeof o[key] === "string" && o[key] ? String(o[key]) : null;
+    return cid ? (contactBy.get(cid) ?? null) : null;
+  };
   if (bookings.error) throw new Error(`Order read (bookings): ${bookings.error.message}`);
   const lineRows = ((lines.data ?? []) as Array<Record<string, unknown>>);
   const screenIds = [...new Set(lineRows.filter((l) => l.screen_id).map((l) => String(l.screen_id)))];
-  let screenBy = new Map<string, { name: string; detail: string | null }>();
+  interface ScreenInfo {
+    name: string;
+    detail: string | null;
+    /** Código de pantalla (external_ref, p. ej. MI010). */
+    code: string | null;
+    /** Ubicación / sede (venue). */
+    venue: string | null;
+    /** Distrito (sede). */
+    district: string | null;
+    /** Elemento / tecnología (p. ej. Pantalla led). */
+    technology: string | null;
+  }
+  let screenBy = new Map<string, ScreenInfo>();
   if (screenIds.length > 0) {
     const { data: screens } = await db
       .from("inv_screens")
-      .select("id,name,external_ref,technology,width_px,height_px,inv_venues(name)")
+      .select("id,name,external_ref,technology,width_px,height_px,inv_venues!screens_venue_id_fkey(name,district)")
       .eq("store_id", storeId)
       .in("id", screenIds);
     screenBy = new Map(
       ((screens ?? []) as Array<Record<string, unknown>>).map((s) => {
-        const v = s.inv_venues as unknown as { name?: unknown } | null;
+        const v = s.inv_venues as unknown as { name?: unknown; district?: unknown } | null;
         const venue = typeof v?.name === "string" ? v.name : "";
+        const venueDistrict = typeof v?.district === "string" && v.district.trim() ? v.district.trim() : "";
+        const district = venueDistrict || null;
         const w = Number(s.width_px);
         const h = Number(s.height_px);
         const res = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? `${w}×${h}` : "";
@@ -281,20 +382,59 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
           .map((x) => String(x ?? "").trim())
           .filter(Boolean)
           .join(" · ");
-        return [String(s.id), { name: String(s.name ?? ""), detail: detail || null }];
+        const code = typeof s.external_ref === "string" && s.external_ref.trim() ? s.external_ref.trim() : null;
+        const technology = typeof s.technology === "string" && s.technology.trim() ? s.technology.trim() : null;
+        return [
+          String(s.id),
+          {
+            name: String(s.name ?? ""),
+            detail: detail || null,
+            code,
+            venue: venue || null,
+            district: district || null,
+            technology,
+          },
+        ];
       }),
     );
   }
   const photoRows = ((photos.data ?? []) as Array<Record<string, unknown>>);
+  const advertiserId = typeof o.advertiser_company_id === "string" ? o.advertiser_company_id : o.advertiser_company_id != null ? String(o.advertiser_company_id) : null;
+  const billingId = typeof o.billing_company_id === "string" ? o.billing_company_id : o.billing_company_id != null ? String(o.billing_company_id) : null;
+  const agencyId = typeof o.agency_company_id === "string" ? o.agency_company_id : o.agency_company_id != null ? String(o.agency_company_id) : null;
   return {
     order: o,
-    advertiser_name: o.advertiser_company_id ? (nameBy.get(String(o.advertiser_company_id)) ?? null) : null,
-    billing_name: o.billing_company_id ? (nameBy.get(String(o.billing_company_id)) ?? null) : null,
-    billing_kind: o.billing_company_id ? (kindBy.get(String(o.billing_company_id)) ?? null) : null,
-    billing_tax_id: o.billing_company_id ? (taxBy.get(String(o.billing_company_id)) ?? null) : null,
+    advertiser_name: advertiserId ? (nameBy.get(advertiserId) ?? null) : null,
+    contacts: {
+      billing: contactRef("billing_contact_id"),
+      signer: contactRef("signer_contact_id"),
+      payment: contactRef("payment_contact_id"),
+      manager: contactRef("manager_contact_id"),
+    },
+    billing_name: billingId ? (nameBy.get(billingId) ?? null) : null,
+    billing_kind: billingId ? (kindBy.get(billingId) ?? null) : null,
+    billing_tax_id: billingId ? (taxBy.get(billingId) ?? null) : null,
+    billing_commission_pct: billingId ? (commissionBy.get(billingId) ?? null) : null,
+    agency_company_id: agencyId,
+    agency_name: agencyId ? (nameBy.get(agencyId) ?? null) : null,
+    agency_tax_id: agencyId ? (taxBy.get(agencyId) ?? null) : null,
+    agency_commission_pct: agencyId ? (commissionBy.get(agencyId) ?? null) : null,
+    advertiser_city: advertiserId ? (cityBy.get(advertiserId) ?? null) : null,
+    advertiser_country: advertiserId ? (countryBy.get(advertiserId) ?? null) : null,
+    billing_city: billingId ? (cityBy.get(billingId) ?? null) : null,
+    billing_country: billingId ? (countryBy.get(billingId) ?? null) : null,
+    billing_company_address: billingId ? (addressBy.get(billingId) ?? null) : null,
     lines: lineRows.map((l) => {
       const s = screenBy.get(String(l.screen_id));
-      return { ...l, screen_name: s?.name ?? null, screen_detail: s?.detail ?? null };
+      return {
+        ...l,
+        screen_name: s?.name ?? null,
+        screen_detail: s?.detail ?? null,
+        screen_code: s?.code ?? null,
+        screen_venue: s?.venue ?? null,
+        screen_district: s?.district ?? null,
+        screen_technology: s?.technology ?? null,
+      };
     }),
     io_agency_orders: (oms.data ?? []) as Array<Record<string, unknown>>,
     creatives: (creas.data ?? []) as Array<Record<string, unknown>>,

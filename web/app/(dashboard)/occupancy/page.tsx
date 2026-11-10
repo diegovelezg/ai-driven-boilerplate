@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { getScreenConflicts } from "@/lib/availability";
-import { todayLima } from "@/lib/availability-utils";
+import { addDays, isValidISODate, todayLima } from "@/lib/format";
 import { resolveActor } from "@/lib/actor";
 import { listScreens, listScreenFilterOptions } from "@/lib/screens-db";
 import { OccupancyTimeline } from "./occupancy-timeline";
@@ -12,15 +12,9 @@ import { OccupancyTimeline } from "./occupancy-timeline";
 export const instant = false;
 
 function validDay(v: string | undefined, fallback: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v ?? "");
-  if (!m) return fallback;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return fallback;
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return fallback;
-  return v!.trim();
+  const s = (v ?? "").trim();
+  if (!isValidISODate(s)) return fallback;
+  return s;
 }
 
 export default async function OcupacionPage({
@@ -192,10 +186,7 @@ export default async function OcupacionPage({
     cities = opts.cities;
     suppliers = opts.suppliers;
     // Fin inclusivo = último día visible (desde + dias - 1).
-    const [y, m, d] = desde.split("-").map(Number);
-    const p = (n: number) => String(n).padStart(2, "0");
-    const last = new Date(Date.UTC(y, m - 1, d) + (dias - 1) * 86_400_000);
-    const lastStr = `${last.getUTCFullYear()}-${p(last.getUTCMonth() + 1)}-${p(last.getUTCDate())}`;
+    const lastStr = addDays(desde, dias - 1);
     conflicts = await getScreenConflicts(storeId, desde, lastStr);
   } catch (e) {
     error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";

@@ -4,6 +4,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { BRANDS_SORT_ALIASES } from "@/lib/sort";
 import { joinHaystack, matchScore, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
+import { toISODateUTC } from "@/lib/format";
 
 export interface BrandRow {
   brand: string;
@@ -111,7 +112,7 @@ export async function getBrandDetail(storeId: string, brandKey: string): Promise
     }
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toISODateUTC(new Date());
   const detailIos: BrandIO[] = ios.map((o) => {
     const r = o as Record<string, unknown>;
     const id = String(r.id);
@@ -186,7 +187,6 @@ export async function getBrandDetail(storeId: string, brandKey: string): Promise
 }
 
 // SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
-export { BRANDS_SORT_ALIASES } from "@/lib/sort";
 
 export function parseBrandsSort(sp: { sort?: string; dir?: string }): {
   key: BrandsSortKey;
@@ -230,7 +230,7 @@ export async function listBrands(
     billingName.set(String(c.id), String(c.name ?? ""));
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toISODateUTC(new Date());
   const byBrand = new Map<string, BrandRow & { screensSet: Set<string>; agenciesSet: Set<string> }>();
   const keyOf = (b: string) => b.trim().toUpperCase();
   for (const o of ios) {

@@ -18,6 +18,7 @@ const row = (over: Partial<DuplicateContactRow> & { id: string }): DuplicateCont
   phone: null,
   job_title: null,
   is_primary: false,
+  archived: false,
   ...over,
 });
 

@@ -52,7 +52,7 @@ const VALID = {
   source: new Set(["web", "sector", "datos", "dicho"]),
 };
 /** Normalización B2B-only: cualquier modelo/arquetipo legacy se mapea a B2B. */
-export function normalizeB2BProfile(p: { business_model?: unknown; archetype?: unknown; company_required?: unknown }): {
+function normalizeB2BProfile(p: { business_model?: unknown; archetype?: unknown; company_required?: unknown }): {
   business_model: string;
   archetype: string | null;
   company_required: boolean;

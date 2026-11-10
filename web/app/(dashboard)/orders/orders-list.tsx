@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useTransition } from "react";
+import { useCallback, useMemo, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FilterX, Radio, TriangleAlert, Camera, Wallet } from "lucide-react";
 import { AppCard } from "@/components/app-card";
@@ -62,6 +62,15 @@ export function OrdersList({
   );
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // Prefetch del detalle al hover/foco: calienta la compilación de la ruta
+  // + DB antes de abrir (el drawer usa no-store, esto no sustituye su fetch;
+  // recorta el costo frío medido en el análisis perf 2026-11-09).
+  const prefetched = useRef(new Set<string>());
+  const prefetchOrder = useCallback((id: string) => {
+    if (prefetched.current.has(id)) return;
+    prefetched.current.add(id);
+    void fetch(`/api/orders/${id}`).catch(() => {});
+  }, []);
 
   const go = (patch: { q?: string; stage?: string | null; billing?: string | null }) => {
     const params = new URLSearchParams();
@@ -194,6 +203,8 @@ export function OrdersList({
                 role="button"
                 aria-label={`Abrir orden ${o.io_number}`}
                 onClick={() => openDrawer(o.id)}
+                onMouseEnter={() => prefetchOrder(o.id)}
+                onFocus={() => prefetchOrder(o.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -259,7 +270,7 @@ export function OrdersList({
         </DataTable>
       </AppCard>
 
-      {selectedId && <OrdenDrawer orderId={selectedId} myRole={myRole} onClose={closeDrawer} />}
+      {selectedId && <OrdenDrawer key={selectedId} orderId={selectedId} myRole={myRole} onClose={closeDrawer} />}
     </div>
   );
 }

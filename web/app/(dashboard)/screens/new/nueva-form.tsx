@@ -22,6 +22,7 @@ import {
   validateScreenFields,
   type ScreenFieldKey,
 } from "../screen-validation";
+import { failSubmit, useServerFieldErrors } from "@/components/ui/form-feedback";
 
 const initial: ScreensState = { ok: false, message: "" };
 
@@ -278,24 +279,12 @@ export function NuevaPantallaForm({
       plays: modality === "static" ? "" : String(fd.get("plays_per_day") ?? ""),
       impact: String(fd.get("impact_day") ?? ""),
     });
-    if (errs.length > 0) {
-      e.preventDefault();
-      fail(
-        errs.map((r) => r.key),
-        errs.length === 1 ? "Revisa el campo marcado" : "Revisa los campos marcados",
-        errs.map((r) => r.message).join(" "),
-      );
-    }
+    failSubmit(e, errs, fail);
   }
 
   // Errores del server action (p. ej. ubicación inexistente, sin permiso): mismo
   // tratamiento, borde + toast en vez de texto inline.
-  useEffect(() => {
-    if (!state.message || state.ok) return;
-    const keys = fieldsFromMessage(state.message);
-    setInvalid(new Set(keys));
-    toast.add({ title: "No se pudo crear la pantalla", description: state.message, type: "error" });
-  }, [state]);
+  useServerFieldErrors(state, fieldsFromMessage, setInvalid, "No se pudo crear la pantalla");
 
   // Éxito: toast + navegación (el toast sobrevive al push en la misma sesión).
   useEffect(() => {

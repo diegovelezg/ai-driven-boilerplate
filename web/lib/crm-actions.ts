@@ -35,9 +35,9 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
     return { ok: false, message: "Solo las agencias llevan comisión." };
   }
   if (hasCommissionInput) {
-    const { requireMinRole } = await import("@/lib/tenant");
-    const allowed = await requireMinRole(t.storeId, "admin").catch(() => false);
-    if (allowed === false) return { ok: false, message: "Requiere rol admin o propietario." };
+    const { denyRole } = await import("@/lib/tenant");
+    const denied = await denyRole(t.storeId, "admin");
+    if (denied) return { ok: false, message: denied };
   }
   const parsed = normalizeCompany({
     name: String(form.get("name") ?? ""),
@@ -78,12 +78,22 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
 export async function setCompanyKindAction(input: { companyId: string; kind: CompanyKind }): Promise<CrmState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   if (!isCompanyKind(input.kind)) return { ok: false, message: "Tipo requerido: agencia, anunciante o proveedor." };
   try {
     const db = getSupabase();
+    const { data: existing } = await db
+      .from("crm_companies")
+      .select("id,deleted_at")
+      .eq("store_id", t.storeId)
+      .eq("id", input.companyId)
+      .maybeSingle();
+    if (!existing) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    if ((existing as Record<string, unknown>).deleted_at) {
+      return { ok: false, message: "Empresa archivada: restáurala para editarla." };
+    }
     const { error } = await db
       .from("crm_companies")
       .update({ kind: input.kind, updated_by: await resolveActor(), updated_at: new Date().toISOString() })
@@ -118,21 +128,22 @@ export async function updateCompanyAction(input: {
 }): Promise<CrmState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   const companyId = String(input.companyId ?? "").trim();
   if (!companyId) return { ok: false, message: "Falta empresa." };
   try {
     const db = getSupabase();
     const { data: existing, error: rerr } = await db
       .from("crm_companies")
-      .select("id,name,kind,tax_id,domain,email,phone,address,city,country")
+      .select("id,name,kind,tax_id,domain,email,phone,address,city,country,deleted_at")
       .eq("store_id", t.storeId)
       .eq("id", companyId)
       .maybeSingle();
     if (rerr || !existing) return { ok: false, message: "Empresa no encontrada en esta tienda." };
     const row = existing as Record<string, unknown>;
+    if (row.deleted_at) return { ok: false, message: "Empresa archivada: restáurala para editarla." };
     if (!isCompanyKind(row.kind)) return { ok: false, message: "Define el tipo de empresa primero." };
     const p = (input.patch ?? {}) as Record<string, string | null | undefined>;
     const val = (k: string, fb: unknown) => (p[k] !== undefined ? p[k] : (fb as string | null));
@@ -191,21 +202,22 @@ export async function updateContactAction(input: {
 }): Promise<CrmState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   const contactId = String(input.contactId ?? "").trim();
   if (!contactId) return { ok: false, message: "Falta contacto." };
   try {
     const db = getSupabase();
     const { data: existing, error: rerr } = await db
       .from("crm_contacts")
-      .select("id,company_id,first_name,last_name,email,phone,job_title,is_primary")
+      .select("id,company_id,first_name,last_name,email,phone,job_title,is_primary,deleted_at")
       .eq("store_id", t.storeId)
       .eq("id", contactId)
       .maybeSingle();
     if (rerr || !existing) return { ok: false, message: "Contacto no encontrado en esta tienda." };
     const row = existing as Record<string, unknown>;
+    if (row.deleted_at) return { ok: false, message: "Contacto archivado: restáuralo para editarlo." };
     const p = (input.patch ?? {}) as Record<string, string | boolean | null | undefined>;
     const sVal = (k: string, fb: unknown) => (p[k] !== undefined ? (p[k] as string | null) : (fb as string | null));
     const parsed = normalizeContact({
@@ -254,9 +266,9 @@ export async function setAgencyCommissionAction(input: {
 }): Promise<CrmState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "admin").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol admin o propietario." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "admin");
+  if (denied) return { ok: false, message: denied };
   const pct = normalizeCommissionPct(input.pct);
   // Distingue "limpiar" (null/"") de valor inválido (p. ej. 150, 12.5 o texto).
   const raw = input.pct;
@@ -266,11 +278,14 @@ export async function setAgencyCommissionAction(input: {
     const db = getSupabase();
     const { data: co } = await db
       .from("crm_companies")
-      .select("id,kind")
+      .select("id,kind,deleted_at")
       .eq("store_id", t.storeId)
       .eq("id", input.companyId)
       .maybeSingle();
     if (!co) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    if ((co as Record<string, unknown>).deleted_at) {
+      return { ok: false, message: "Empresa archivada: restáurala para editarla." };
+    }
     if ((co as Record<string, unknown>).kind !== "agencia") {
       return { ok: false, message: "Solo las agencias llevan comisión." };
     }
@@ -288,12 +303,102 @@ export async function setAgencyCommissionAction(input: {
   }
 }
 
+/**
+ * Archiva o restaura una empresa (borrado lógico: las órdenes que la
+ * referencian conservan el vínculo y el historial intacto).
+ * Solo owner/admin (el maestro de empresas es dato sensible).
+ */
+export async function setCompanyArchivedAction(input: {
+  companyId: string;
+  archived: boolean;
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "admin");
+  if (denied) return { ok: false, message: denied };
+  const companyId = String(input.companyId ?? "").trim();
+  if (!companyId) return { ok: false, message: "Falta empresa." };
+  try {
+    const db = getSupabase();
+    const { data: existing } = await db
+      .from("crm_companies")
+      .select("id")
+      .eq("store_id", t.storeId)
+      .eq("id", companyId)
+      .maybeSingle();
+    if (!existing) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    const actor = await resolveActor();
+    const { error } = await db
+      .from("crm_companies")
+      .update({
+        deleted_at: input.archived ? new Date().toISOString() : null,
+        updated_by: actor,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("store_id", t.storeId)
+      .eq("id", companyId);
+    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    revalidatePath("/companies");
+    revalidatePath(`/companies/${companyId}`);
+    revalidatePath("/orders");
+    revalidatePath("/orders/new");
+    return { ok: true, message: input.archived ? "Empresa archivada." : "Empresa restaurada." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/**
+ * Archiva o restaura un contacto (borrado lógico). Requiere vendedor o superior.
+ */
+export async function setContactArchivedAction(input: {
+  contactId: string;
+  archived: boolean;
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
+  const contactId = String(input.contactId ?? "").trim();
+  if (!contactId) return { ok: false, message: "Falta contacto." };
+  try {
+    const db = getSupabase();
+    const { data: existing } = await db
+      .from("crm_contacts")
+      .select("id")
+      .eq("store_id", t.storeId)
+      .eq("id", contactId)
+      .maybeSingle();
+    if (!existing) return { ok: false, message: "Contacto no encontrado en esta tienda." };
+    const actor = await resolveActor();
+    const { error } = await db
+      .from("crm_contacts")
+      .update({
+        deleted_at: input.archived ? new Date().toISOString() : null,
+        updated_by: actor,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("store_id", t.storeId)
+      .eq("id", contactId);
+    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    revalidatePath("/companies");
+    revalidatePath("/contacts");
+    revalidatePath("/orders");
+    revalidatePath("/orders/new");
+    return { ok: true, message: input.archived ? "Contacto archivado." : "Contacto restaurado." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
 export async function createContactAction(form: FormData): Promise<CrmState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   const companyId = String(form.get("company_id") ?? "");
   if (!companyId) return { ok: false, message: "Falta empresa." };
   const parsed = normalizeContact({
@@ -361,16 +466,6 @@ export async function createContactRedirectAction(_prev: CrmState, form: FormDat
   const res = await createContactAction(form);
   if (res.ok) redirect("/contacts");
   return res;
-}
-// `(formData: FormData) => void | Promise<void>`, y el `action` debe ser
-// una referencia serializable a un Server Action (no un closure inline:
-// eso falla con "Functions cannot be passed directly to Client Components").
-export async function createCompanyFormAction(form: FormData): Promise<void> {
-  void await createCompanyAction(form);
-}
-
-export async function createContactFormAction(form: FormData): Promise<void> {
-  void await createContactAction(form);
 }
 
 /**

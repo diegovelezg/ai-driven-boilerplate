@@ -3,7 +3,6 @@
 // Validación cliente para contactos (drawer + página Nuevo): espejo liviano
 // del server (`crm.ts` exige email o teléfono). Sigue el default de forms:
 // sin validación nativa, error = borde + toast, submit deshabilitado.
-export { FIELD_ERR_CLS } from "@/components/ui/form-feedback";
 import { isValidEmail } from "@/lib/validation";
 
 export type ContactFieldKey = "email" | "phone";

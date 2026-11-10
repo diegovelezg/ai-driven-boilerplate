@@ -2,9 +2,15 @@
 // Fuente: io_orders + lines + io_agency_orders + creatives + io_photo_checks.
 // Sin prorrateo inventado más allá de lineal por tiempo solapado; sin
 // impresiones/GRP (io_play_logs del CMS vive fuera).
+// El snapshot alimenta dos superficies con propósitos distintos, sin
+// redundancia: la página Hoy pinta solo KPIs de negocio (comprometido con
+// delta, cobranza con delta, ocupación, al aire con delta, relevo, huecos);
+// los bloqueos (alerts) y por_certificar viven solo en el Inbox vía
+// buildBriefFacts.
 import { getSupabase } from "@/lib/supabase";
 import { normalizeCurrency } from "@/lib/currency";
-import { startOfDayUTC } from "@/lib/dates";
+import { aggregateCobranza, type BillingInvoice, type CobranzaTotals } from "@/lib/billing-status";
+import { DAY_MS, startOfDayUTC, startOfMonthUTC } from "@/lib/format";
 
 export type AlertKind = "sin_om" | "material" | "sin_evidencia" | "termina_sin_relevo";
 
@@ -38,6 +44,25 @@ export interface DashboardSnapshot {
   draftMesMinor: number;
   /** Totales por moneda de IO (nunca sumar mixto). */
   byCurrency: Record<string, CurrencyTotals>;
+  /** Cartera abierta (facturas emitidas no anuladas/borrador). */
+  cobranza: CobranzaTotals;
+  /** Cobranza por moneda de factura (nunca sumar mixto). */
+  cobranzaByCurrency: Record<string, CobranzaTotals>;
+  /** Cobranza por moneda de factura (nunca sumar mixto). */
+  /** Variación en puntos (base 100, como MetricDelta) vs periodo previo.
+   *  null = sin base. Deltas honestos: se calculan con la data actual,
+   *  sin historia almacenada. */
+  deltas: {
+    /** Comprometido mes actual vs mes anterior (moneda de la tienda). */
+    comprometido: number | null;
+    /** Pendiente de cobro (cartera) vs cierre del mes anterior
+     *  (bajar es bueno: la UI lo muestra invertido). */
+    cobranzaPendiente: number | null;
+    /** OIs al aire hoy vs ayer. */
+    alAireOis: number | null;
+  };
+  /** Bases de comparación de los deltas (misma moneda/unidad que el KPI). */
+  prev: { comprometidoMinor: number; cobranzaPendingMinor: number; alAireOis: number };
   ocupacion14d: { ratio: number | null; diasVendidos: number; diasDisponibles: number };
   alAire: { ois: number; pantallas: number };
   porCertificar: number;
@@ -49,9 +74,7 @@ export interface DashboardSnapshot {
   truncated: boolean;
 }
 
-const DAY_MS = 86_400_000;
-
-// SSOT: startOfDayUTC vive en lib/dates.ts (issue #8 P2).
+// SSOT: primitivos de fecha en lib/format.ts.
 
 function parseMs(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
@@ -69,7 +92,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const now = Date.now();
   const today00 = startOfDayUTC(now);
 
-  const [{ data: store, count: screensTotal }, { data: screens }, { data: ois, count: oisTotal }] = await Promise.all([
+  const [{ data: store, count: screensTotal }, { data: screens }, { data: ois, count: oisTotal }, { data: invoices }] = await Promise.all([
     db.from("sys_stores").select("shop_currency").eq("id", storeId).maybeSingle(),
     db.from("inv_screens").select("id,name", { count: "exact" }).eq("store_id", storeId).eq("is_active", true).limit(500),
     db
@@ -79,6 +102,11 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       .neq("status", "cancelled")
       .order("starts_at", { ascending: true })
       .limit(500),
+    db
+      .from("io_invoices")
+      .select("amount_minor,currency,status,issue_date,due_date")
+      .eq("store_id", storeId)
+      .limit(2000),
   ]);
   const truncated = (screensTotal ?? 0) > 500 || (oisTotal ?? 0) > 500;
 
@@ -177,13 +205,15 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     return Boolean(c?.any && !c.pending);
   };
 
-  // 1. Comprometido mes (prorrateo lineal por tiempo solapado, por moneda).
-  const dNow = new Date(today00);
-  const monthStart = Date.UTC(dNow.getUTCFullYear(), dNow.getUTCMonth(), 1);
-  const monthEnd = Date.UTC(dNow.getUTCFullYear(), dNow.getUTCMonth() + 1, 1);
+  // 1. Comprometido mes (prorrateo lineal por tiempo solapado, por moneda)
+  // + base mes anterior para el delta (mismo método, ventana previa).
+  const monthStart = startOfMonthUTC(today00);
+  const monthEnd = startOfMonthUTC(monthStart + 32 * DAY_MS);
+  const prevStart = startOfMonthUTC(monthStart - DAY_MS);
   let comprometido = 0;
   let firmado = 0;
   let draft = 0;
+  let prevComprometido = 0;
   const byCurrency: Record<string, CurrencyTotals> = {};
   const bump = (cur: string, part: number, signed: boolean) => {
     const c = normalizeCurrency(cur, currency);
@@ -202,13 +232,60 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   for (const l of lineRows) {
     if (l.starts_ms === null || l.ends_ms === null || l.ends_ms <= l.starts_ms) continue;
     if (!(l.rate_minor > 0)) continue;
-    const overlap = Math.max(0, Math.min(l.ends_ms, monthEnd) - Math.max(l.starts_ms, monthStart));
-    if (overlap <= 0) continue;
-    const part = (overlap / (l.ends_ms - l.starts_ms)) * l.rate_minor;
     const io = oiById.get(l.io_id);
     const st = io?.status;
-    bump(io?.currency ?? currency, part, st === "signed");
+    const overlap = Math.max(0, Math.min(l.ends_ms, monthEnd) - Math.max(l.starts_ms, monthStart));
+    if (overlap > 0) {
+      const part = (overlap / (l.ends_ms - l.starts_ms)) * l.rate_minor;
+      bump(io?.currency ?? currency, part, st === "signed");
+    }
+    // Delta honesto con la data actual (sin historia almacenada): misma
+    // fórmula sobre el mes previo. Solo moneda de la tienda.
+    const overlapPrev = Math.max(0, Math.min(l.ends_ms, monthStart) - Math.max(l.starts_ms, prevStart));
+    if (overlapPrev > 0 && st === "signed" && normalizeCurrency(io?.currency, currency) === currency) {
+      prevComprometido += (overlapPrev / (l.ends_ms - l.starts_ms)) * l.rate_minor;
+    }
   }
+
+  // 1b. Cobranza: cartera abierta (emitidas no anuladas/borrador con
+  // issue_date <= corte). Sin due_date no se presume vencido (los términos
+  // viven en la orden). Base del delta: misma cartera al cierre del mes
+  // anterior (issue_date < monthStart, corte = monthStart).
+  const issuedBy = (iso: unknown): number | null => {
+    if (typeof iso !== "string" || !iso) return null;
+    const t = Date.parse(iso.slice(0, 10));
+    return Number.isFinite(t) ? t : null;
+  };
+  const invRows = ((invoices ?? []) as Array<Record<string, unknown>>).map((v) => ({
+    inv: {
+      amount_minor: v.amount_minor as number | null | undefined,
+      status: v.status as string | null | undefined,
+      issue_date: v.issue_date as string | null | undefined,
+      due_date: v.due_date as string | null | undefined,
+    } as BillingInvoice,
+    currency: normalizeCurrency(v.currency, currency),
+  }));
+  const curGroups = new Map<string, BillingInvoice[]>();
+  const prevGroups = new Map<string, BillingInvoice[]>();
+  for (const v of invRows) {
+    const issued = issuedBy(v.inv.issue_date);
+    if (issued === null) continue;
+    if (issued <= Math.min(now, monthEnd)) {
+      const g = curGroups.get(v.currency) ?? [];
+      g.push(v.inv);
+      curGroups.set(v.currency, g);
+    }
+    if (issued < monthStart) {
+      const g = prevGroups.get(v.currency) ?? [];
+      g.push(v.inv);
+      prevGroups.set(v.currency, g);
+    }
+  }
+  const cobranzaByCurrency: Record<string, CobranzaTotals> = {};
+  for (const [c, list] of curGroups) cobranzaByCurrency[c] = aggregateCobranza(list, Math.min(now, monthEnd));
+  const prevByCurrency: Record<string, CobranzaTotals> = {};
+  // Corte al cierre del mes anterior: lo vencido después no contaba aún.
+  for (const [c, list] of prevGroups) prevByCurrency[c] = aggregateCobranza(list, monthStart);
 
   // 2. Ocupación 14d (pantalla-día por líneas, no por bookings hold).
   const WIN = 14;
@@ -238,13 +315,16 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const diasVendidos = occupied.size;
   const ocupacionRatio = diasDisponibles > 0 ? diasVendidos / diasDisponibles : null;
 
-  // 3. Al aire hoy.
-  const alAireOis = oiRows.filter((o) => {
-    const s = parseMs(o.starts_at);
-    const e = parseMs(o.ends_at);
-    if (s === null || e === null) return false;
-    return s <= now && now <= e + DAY_MS; // ends_at es fecha: incluye el día
-  });
+  // 3. Al aire hoy (y ayer, para el delta; misma data, corte distinto).
+  const alAireAt = (ref: number): typeof oiRows =>
+    oiRows.filter((o) => {
+      const s = parseMs(o.starts_at);
+      const e = parseMs(o.ends_at);
+      if (s === null || e === null) return false;
+      return s <= ref && ref <= e + DAY_MS; // ends_at es fecha: incluye el día
+    });
+  const alAireOis = alAireAt(now);
+  const prevAlAireOis = alAireAt(now - DAY_MS).length;
   const alAireScreens = new Set(
     lineRows.filter((l) => alAireOis.some((o) => o.id === l.io_id)).map((l) => l.screen_id),
   );
@@ -375,6 +455,22 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       draftMesMinor: Math.round(byCurrency[k].draftMesMinor),
     };
   }
+  for (const k of Object.keys(cobranzaByCurrency)) {
+    const t = cobranzaByCurrency[k];
+    cobranzaByCurrency[k] = {
+      invoicedMinor: Math.round(t.invoicedMinor),
+      paidMinor: Math.round(t.paidMinor),
+      pendingMinor: Math.round(t.pendingMinor),
+      overdueMinor: Math.round(t.overdueMinor),
+    };
+  }
+  const cobranza = cobranzaByCurrency[currency] ?? { invoicedMinor: 0, paidMinor: 0, pendingMinor: 0, overdueMinor: 0 };
+  const prevCobranzaPending = Math.round(prevByCurrency[currency]?.pendingMinor ?? 0);
+  prevComprometido = Math.round(prevComprometido);
+
+  /** Variación en puntos (base 100); null = sin base previa (mes anterior en 0). */
+  const pct = (cur: number, prev: number): number | null =>
+    prev > 0 ? Math.round(((cur - prev) / prev) * 100) : cur > 0 ? null : 0;
 
   return {
     currency,
@@ -382,6 +478,18 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     firmadoMesMinor: Math.round(firmado),
     draftMesMinor: Math.round(draft),
     byCurrency,
+    cobranza,
+    cobranzaByCurrency,
+    deltas: {
+      comprometido: pct(Math.round(comprometido), prevComprometido),
+      cobranzaPendiente: pct(cobranza.pendingMinor, prevCobranzaPending),
+      alAireOis: pct(alAireOis.length, prevAlAireOis),
+    },
+    prev: {
+      comprometidoMinor: prevComprometido,
+      cobranzaPendingMinor: prevCobranzaPending,
+      alAireOis: prevAlAireOis,
+    },
     ocupacion14d: { ratio: ocupacionRatio, diasVendidos, diasDisponibles },
     alAire: { ois: alAireOis.length, pantallas: alAireScreens.size },
     porCertificar,

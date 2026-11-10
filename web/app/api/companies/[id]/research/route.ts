@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { requireStoreAccess } from "@/lib/api/guard";
+import { requireRouteEntity } from "@/lib/api/guard";
 import { normalizeDomain } from "@/lib/company-domains";
 import {
   describeCompanyCandidates,
@@ -38,15 +38,9 @@ async function loadCompanyContext(storeId: string, id: string) {
 
 async function guard(id: string) {
   const NOT_FOUND = Response.json({ error: "Empresa no encontrada." }, { status: 404 });
-  const db = getSupabase();
-  const { data } = await db.from("crm_companies").select("store_id").eq("id", id).maybeSingle();
-  if (!data) return { error: NOT_FOUND };
-  const storeId = String((data as Record<string, unknown>).store_id ?? "");
-  // Anti-oráculo (misma forma que GET hermana): sin membresía o sin sesión
-  // se responde 404 idéntico, nunca 403/401 (no distingue existe/no-acceso).
-  const access = await requireStoreAccess(storeId);
-  if (access instanceof Response) return { error: NOT_FOUND };
-  return { auth: access, storeId };
+  const loaded = await requireRouteEntity("crm_companies", id, "store_id", "Empresa no encontrada.");
+  if (loaded instanceof Response) return { error: NOT_FOUND };
+  return { auth: loaded.auth, storeId: loaded.storeId };
 }
 
 /** GET /api/companies/:id/research — candidatos + perfiles guardados (sin LLM). */
@@ -72,16 +66,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const g = await guard(id);
   if ("error" in g) return g.error;
-  const { checkRateLimit } = await import("@/lib/rate-limit");
-  if (!checkRateLimit(`research:company:${g.storeId}`, 12, 60_000)) {
-    return Response.json({ error: "Demasiadas investigaciones. Espera un momento." }, { status: 429 });
-  }
-  let body: { domains?: unknown; force?: unknown } = {};
-  try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    body = {};
-  }
+  const { checkResearchRateLimit, parseResearchBody } = await import("@/lib/research-route");
+  const limited = await checkResearchRateLimit("company", g.storeId);
+  if (limited) return limited;
+  const body = await parseResearchBody(req);
   try {
     const ctx = await loadCompanyContext(g.storeId, id);
     if (!ctx) return Response.json({ error: "Empresa no encontrada." }, { status: 404 });

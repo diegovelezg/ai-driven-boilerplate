@@ -3,13 +3,13 @@
 // El mapeo agente → taxonomy_id lo hace el propio agente con juicio (nullable).
 import snapshot from "@/data/taxonomy-verticals.es.json";
 
-export interface TaxonomyVertical {
+interface TaxonomyVertical {
   taxonomy_id: string;
   prefix: string;
   name: string;
 }
 
-export const VERTICALS: TaxonomyVertical[] = (
+const VERTICALS: TaxonomyVertical[] = (
   snapshot as { verticals: TaxonomyVertical[] }
 ).verticals;
 

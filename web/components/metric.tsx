@@ -33,7 +33,7 @@ const TONE_ICON_BOX: Record<MetricTone, string> = {
  * rojo = empeora; `invert` cuando bajar es bueno (vencido, por certificar).
  * null = sin base previa, 0 = estable.
  */
-export function MetricDelta({
+function MetricDelta({
   pct,
   label = "vs 30d previos",
   invert = false,

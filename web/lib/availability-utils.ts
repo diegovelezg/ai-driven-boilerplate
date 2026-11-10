@@ -1,41 +1,27 @@
 // Utilidades puras de disponibilidad (sin imports de servidor: se usan en cliente).
 // Rangos ocupados con días inclusivos "yyyy-mm-dd".
+// SSOT de fechas en lib/format.ts: los primitivos (todayLima, addDays,
+// día↔ordinal) viven ahí; aquí solo la lógica de huecos. Se re-exportan
+// para compatibilidad con los imports existentes.
+import { dayNumToISO, isoDayToNum } from "@/lib/format";
+
+export { addDays, todayLima } from "@/lib/format";
+
 export interface OccupiedRange {
   starts: string;
   ends: string;
 }
 
-/** Hoy en Lima como "yyyy-mm-dd". */
-export function todayLima(now = new Date()): string {
-  return now.toLocaleDateString("en-CA", { timeZone: "America/Lima" });
-}
-
-function toNum(day: string): number {
-  const [y, m, d] = day.split("-").map(Number);
-  return Date.UTC(y, m - 1, d) / 86_400_000;
-}
-
-function toDay(num: number): string {
-  const d = new Date(num * 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-}
-
-/** Suma N días a un "yyyy-mm-dd". */
-export function addDays(day: string, n: number): string {
-  return toDay(toNum(day) + n);
-}
-
 /** ¿El día está cubierto por algún rango ocupado? */
 function covered(ranges: OccupiedRange[], dayNum: number): boolean {
-  return ranges.some((r) => toNum(r.starts) <= dayNum && dayNum <= toNum(r.ends));
+  return ranges.some((r) => isoDayToNum(r.starts) <= dayNum && dayNum <= isoDayToNum(r.ends));
 }
 
 /** Primer día libre ≥ from (horizonte 400 días). null si no hay. */
 export function firstFreeDay(ranges: OccupiedRange[], from: string, horizon = 400): string | null {
-  const start = toNum(from);
+  const start = isoDayToNum(from);
   for (let s = start; s <= start + horizon; s++) {
-    if (!covered(ranges, s)) return toDay(s);
+    if (!covered(ranges, s)) return dayNumToISO(s);
   }
   return null;
 }
@@ -49,12 +35,12 @@ export function nextFreeWindow(
   horizon = 365,
 ): string | null {
   if (duration < 1) return null;
-  const start = toNum(from);
+  const start = isoDayToNum(from);
   outer: for (let s = start; s <= start + horizon; s++) {
     for (let d = 0; d < duration; d++) {
       if (covered(ranges, s + d)) continue outer;
     }
-    return toDay(s);
+    return dayNumToISO(s);
   }
   return null;
 }

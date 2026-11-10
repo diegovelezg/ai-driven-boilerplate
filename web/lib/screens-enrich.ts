@@ -7,6 +7,7 @@
 // Nunca lanza: si falta token o falla la red, la pantalla queda creada
 // con lo determinista que se pudo calcular.
 import { getSupabase } from "@/lib/supabase";
+import { formatNumber } from "@/lib/format";
 import { chatCompletionParams, getLlmConfig, reasoningBody } from "@/lib/ai/llm-config";
 import { logLlmUsage, parseChatUsage } from "@/lib/ai/usage";
 
@@ -535,18 +536,6 @@ async function generarEmbeddingGemini(texto: string): Promise<{ values: number[]
 
 // --- Punto de entrada ---
 
-export interface EnrichInput {
-  screenName: string;
-  widthM: number | null;
-  heightM: number | null;
-  widthPx: number | null;
-  heightPx: number | null;
-  impactDay: number | null;
-  impressionsDay: number | null;
-  durationSec: number | null;
-  venueAddress: string | null;
-}
-
 /** Enriquecimiento best-effort de una pantalla recién creada. Nunca lanza. */
 export async function enrichScreen(storeId: string, screenId: string): Promise<void> {
   const markDone = async () => {
@@ -647,7 +636,7 @@ export async function enrichScreen(storeId: string, screenId: string): Promise<v
     try {
       narrativa = await completeText(
         `Eres un asesor comercial experto de publicidad digital exterior (DOOH) para emprendedores, negocios locales, medianas empresas y eventos en Perú. Tu tarea es redactar una descripción persuasiva, atractiva, fluida y clara para una pantalla publicitaria digital, pensada para captar el interés de dueños de negocios locales, concesionarios, clínicas dentales, veterinarias, productoras de eventos/conciertos, restaurantes, academias y comercios.\n\nREGLAS ESTRICTAS DE REDACCIÓN:\n1. IDIOMA 100% EN ESPAÑOL: PROHIBIDO terminantemente usar palabras en inglés como "spots", "dwell time", "branding", "SaaS", "Real Estate", "Telcos", "FMCG", "retail", etc.\n2. Longitud: 1 único párrafo continuo y fluido (110 a 150 palabras) en español.\n3. Tono comercial cercano, profesional y orientado a resultados (atraer clientes, llenar locales, generar ventas y recordación). NO menciones cifras técnicas de velocidad en km/h. Menciona explícitamente el distrito y la ciudad. Para reproducciones y alcance: menciona cómo "tu anuncio se reproduce X veces al día" con el volumen de "impactos diarios estimados". Integra los rubros sugeridos con la fórmula: "Ideal para captar clientes en negocios de..." o "Excelente para anunciar marcas y comercios de...".\n4. NODOS ANCLA Y GRANDES MARCAS: menciona SIEMPRE con su NOMBRE PROPIO real. NUNCA los generalices. Comercio local de barrio: descríbelo agrupado. Conectores: "Alrededor se encuentran...", "En las inmediaciones tienes...". PROHIBIDO "ecosistema".\n5. CERO relleno: sin introducciones, saludos ni viñetas. Empieza directo.\n6. NO inventes comercios ni calles que no vengan en los datos.`,
-        `Datos de la pantalla:\n- Pantalla: ${screenName}\n- Medidas / Formato: ${formatStr}\n- Ubicación: ${district}, ${city} – Perú\n- Tráfico e Impactos: ${Math.round(impact).toLocaleString()} impactos diarios estimados | Tu anuncio se reproduce ${Math.round(impressions).toLocaleString()} veces al día\n- Jerarquía de Vía y Flujo: ${geo.roadTierLabel}${geo.isMajorCorridor ? " | Corredor troncal de alto aforo con tiempo de contacto visual prolongado." : " | Tránsito constante de proximidad y comercio local."}\n- Nivel Comercial de la Zona: ${geo.scoreIntensidad}/100\n- Marcas y Nodos Ancla (mencionar con NOMBRE PROPIO): ${geo.anclas.join(", ") || "No detectadas"}\n- Comercio del Entorno (agrupado): ${comercioAgrupado}\n- Público y Contexto: ${p1.displayName} (${p1.mindset} | ${p1.argumento})\n${p2 ? `- Público Complementario: ${p2.displayName} (${p2.argumento})\n` : ""}- Negocios y Rubros Sugeridos: ${rubros.join(", ")}\n\nGenera la descripción comercial 100% en español:`,
+        `Datos de la pantalla:\n- Pantalla: ${screenName}\n- Medidas / Formato: ${formatStr}\n- Ubicación: ${district}, ${city} – Perú\n- Tráfico e Impactos: ${formatNumber(Math.round(impact))} impactos diarios estimados | Tu anuncio se reproduce ${formatNumber(Math.round(impressions))} veces al día\n- Jerarquía de Vía y Flujo: ${geo.roadTierLabel}${geo.isMajorCorridor ? " | Corredor troncal de alto aforo con tiempo de contacto visual prolongado." : " | Tránsito constante de proximidad y comercio local."}\n- Nivel Comercial de la Zona: ${geo.scoreIntensidad}/100\n- Marcas y Nodos Ancla (mencionar con NOMBRE PROPIO): ${geo.anclas.join(", ") || "No detectadas"}\n- Comercio del Entorno (agrupado): ${comercioAgrupado}\n- Público y Contexto: ${p1.displayName} (${p1.mindset} | ${p1.argumento})\n${p2 ? `- Público Complementario: ${p2.displayName} (${p2.argumento})\n` : ""}- Negocios y Rubros Sugeridos: ${rubros.join(", ")}\n\nGenera la descripción comercial 100% en español:`,
         storeId,
       );
     } catch {

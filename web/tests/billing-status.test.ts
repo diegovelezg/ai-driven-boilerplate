@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { billingStatus } from "../lib/billing-status";
+import { aggregateCobranza, billingStatus } from "../lib/billing-status";
 
 const DAY = 86_400_000;
 const now = Date.parse("2026-11-10T00:00:00Z");
@@ -90,5 +90,49 @@ describe("billingStatus", () => {
       invoices: [{ amount_minor: 3000, status: "overdue" }],
     });
     assert.equal(s.status, "vencido");
+  });
+});
+
+describe("aggregateCobranza", () => {
+  const inv = (over: Record<string, unknown> = {}) => ({
+    amount_minor: 10000,
+    status: "issued",
+    issue_date: "2026-11-05",
+    due_date: "2026-12-05",
+    ...over,
+  });
+  it("agrega emitido/pagado y calcula pendiente", () => {
+    const t = aggregateCobranza(
+      [inv({}), inv({ amount_minor: 5000, status: "paid", issue_date: "2026-11-02" })],
+      now,
+    );
+    assert.deepEqual(t, { invoicedMinor: 15000, paidMinor: 5000, pendingMinor: 10000, overdueMinor: 0 });
+  });
+  it("draft/cancelled se ignoran; sin due_date no se presume vencido", () => {
+    const t = aggregateCobranza(
+      [
+        inv({ status: "draft" }),
+        inv({ status: "cancelled" }),
+        inv({ due_date: null, issue_date: "2026-09-01" }),
+      ],
+      now,
+    );
+    assert.deepEqual(t, { invoicedMinor: 10000, paidMinor: 0, pendingMinor: 10000, overdueMinor: 0 });
+  });
+  it("vencido respeta el corte asOf (cierre de mes anterior)", () => {
+    const rows = [inv({ due_date: "2026-11-14" })];
+    // Al 09/11 aún no vence; al cierre de noviembre sí.
+    assert.equal(aggregateCobranza(rows, now).overdueMinor, 0);
+    assert.equal(aggregateCobranza(rows, Date.parse("2026-12-01T00:00:00Z")).overdueMinor, 10000);
+  });
+  it("overdue topado al pendiente", () => {
+    const t = aggregateCobranza(
+      [
+        { amount_minor: 8000, status: "overdue" },
+        { amount_minor: 8000, status: "paid" },
+      ],
+      now,
+    );
+    assert.deepEqual(t, { invoicedMinor: 16000, paidMinor: 8000, pendingMinor: 8000, overdueMinor: 8000 });
   });
 });

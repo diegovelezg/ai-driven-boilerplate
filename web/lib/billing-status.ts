@@ -2,7 +2,7 @@
 // Estándar OOH order-to-cash: la factura puede salir antes, durante o después
 // de la pauta (upfront, 50/50, net-30/45/60). Por eso el cobro NO es una etapa
 // lineal: se deriva de invoices vs bruto por montos, no por existencia.
-import { startOfDayUTC } from "@/lib/dates";
+import { DAY_MS, isoDayPart, startOfDayUTC, utcDayStart } from "@/lib/format";
 
 export type BillingStatusKey =
   | "sin_facturar"
@@ -43,10 +43,57 @@ export interface BillingSummary {
   isPrepaid: boolean;
 }
 
+/** Totales de cobranza de un conjunto de facturas (mes o cartera). */
+export interface CobranzaTotals {
+  invoicedMinor: number;
+  paidMinor: number;
+  pendingMinor: number;
+  overdueMinor: number;
+}
+
+/** Agrega facturas con corte `asOfMs`, mismo criterio que billingStatus:
+ *  draft/cancelled se ignoran; sin due_date no se presume vencido (los
+ *  términos viven en la orden, no en la factura). Puro y testeable. */
+export function aggregateCobranza(
+  invoices: BillingInvoice[],
+  asOfMs: number,
+): CobranzaTotals {
+  let invoiced = 0;
+  let paid = 0;
+  let overdueRaw = 0;
+  for (const inv of invoices ?? []) {
+    const amount = Math.max(0, Math.round(Number(inv.amount_minor ?? 0) || 0));
+    const st = String(inv.status ?? "");
+    if (st === "cancelled" || st === "draft" || amount < 0) continue;
+    if (st === "paid") {
+      invoiced += amount;
+      paid += amount;
+      continue;
+    }
+    if (st === "overdue") {
+      invoiced += amount;
+      overdueRaw += amount;
+      continue;
+    }
+    if (st === "issued") {
+      invoiced += amount;
+      const day = dayPart(inv.due_date);
+      const due = day ? Date.parse(utcDayStart(day)) : NaN;
+      if (Number.isFinite(due) && (due as number) < asOfMs) overdueRaw += amount;
+    }
+    // Otros estados futuros se ignoran (no suman facturado).
+  }
+  const pending = Math.max(0, invoiced - paid);
+  return {
+    invoicedMinor: invoiced,
+    paidMinor: paid,
+    pendingMinor: pending,
+    overdueMinor: Math.min(overdueRaw, pending),
+  };
+}
+
 function dayPart(v: string | null | undefined): string | null {
-  if (typeof v !== "string" || !v) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  return isoDayPart(v);
 }
 
 function effectiveDueMs(
@@ -55,14 +102,14 @@ function effectiveDueMs(
 ): number | null {
   const direct = dayPart(inv.due_date);
   if (direct) {
-    const t = Date.parse(`${direct}T00:00:00Z`);
+    const t = Date.parse(utcDayStart(direct));
     return Number.isFinite(t) ? t : null;
   }
   const issue = dayPart(inv.issue_date);
   if (issue && typeof paymentTermsDays === "number" && paymentTermsDays >= 0) {
-    const t = Date.parse(`${issue}T00:00:00Z`);
+    const t = Date.parse(utcDayStart(issue));
     if (!Number.isFinite(t)) return null;
-    return t + paymentTermsDays * 86_400_000;
+    return t + paymentTermsDays * DAY_MS;
   }
   return null;
 }

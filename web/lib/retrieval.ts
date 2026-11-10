@@ -22,7 +22,7 @@ import {
  * y toda la prospección cae. El storage es caché efímera: caer a tmpdir es
  * seguro. Exportado para tests.
  */
-export function firstWritableDir(
+function firstWritableDir(
   candidates: string[],
   // mkdir de un dir que ya existe no falla aunque sea read-only: hay que
   // comprobar escritura real con accessSync(W_OK), no solo la creación.
@@ -280,7 +280,7 @@ function cleanPhone(p: string, opts?: { bareOk?: boolean }): string | null {
 
 /** Extracción determinista de contactos públicos desde texto completo + hrefs.
  *  Pura y testeable: no requiere Cheerio ni red. Máx 3 emails / 3 tels / 6 RRSS. */
-export function extractLeadContacts(input: { text: string; hrefs: string[] }): LeadContacts {
+function extractLeadContacts(input: { text: string; hrefs: string[] }): LeadContacts {
   const emails: string[] = [];
   const seenEmail = new Set<string>();
   const phones: string[] = [];
@@ -386,7 +386,7 @@ export function extractLeadContacts(input: { text: string; hrefs: string[] }): L
 }
 
 /** Mejor contacto único para la columna legada `contact` (email > teléfono). */
-export function pickLeadContact(c: LeadContacts | null | undefined): string | null {
+function pickLeadContact(c: LeadContacts | null | undefined): string | null {
   if (!c) return null;
   return c.emails[0] ?? c.phones[0] ?? null;
 }
@@ -394,7 +394,7 @@ export function pickLeadContact(c: LeadContacts | null | undefined): string | nu
 /** Contacto válido = SOLO email o teléfono público. El LLM a veces devuelve
  *  nombres de personas ("Luis Cueva") o cargos: eso se descarta a null para
  *  que entre el fallback determinista (email > teléfono del scrape). */
-export function sanitizeLeadContact(raw: unknown): string | null {
+function sanitizeLeadContact(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const v = raw.trim().slice(0, 200);
   if (!v) return null;

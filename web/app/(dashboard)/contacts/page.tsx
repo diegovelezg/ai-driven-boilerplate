@@ -4,9 +4,10 @@ import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { listCrmCompanies, listCrmContacts } from "@/lib/crm-db";
+import { isCrmStatusFilter, type CrmStatusFilter } from "@/lib/crm";
 import { listContactDuplicateGroups } from "@/lib/contact-duplicates";
-import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId, getMyStoreRole } from "@/lib/tenant";
+import { loadPageData } from "@/lib/page-data";
+import { getMyStoreRole } from "@/lib/tenant";
 import type { MemberRole } from "@/lib/roles";
 import { connection } from "next/server";
 import { ContactsList } from "./contacts-list";
@@ -30,7 +31,7 @@ const VIEW_ALIASES: Record<string, "table" | "grid"> = {
 export default async function ContactosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string; view?: string; vista?: string }>;
+  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string; view?: string; vista?: string; status?: string; estado?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
@@ -38,42 +39,35 @@ export default async function ContactosPage({
   const companyId = ((sp.company ?? sp.empresa) ?? "").trim() || null;
   const selectedId = ((sp.contact ?? sp.contacto) ?? "").trim() || null;
   const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
+  const status: CrmStatusFilter = isCrmStatusFilter(sp.status ?? sp.estado) ? (sp.status ?? sp.estado) as CrmStatusFilter : "active";
 
-  const dbReady = isSupabaseConfigured();
-  const activeStoreId = await resolveActiveStoreId();
-  const connected = Boolean(activeStoreId);
-
-  let rows: Awaited<ReturnType<typeof listCrmContacts>>["rows"] = [];
-  let contactsTotal = 0;
-  let contactsTruncated = false;
-  let companies: Awaited<ReturnType<typeof listCrmCompanies>>["rows"] = [];
-  let dupeGroups = 0;
-  let myRole: MemberRole | null = null;
-  let error: string | null = null;
-
-  if (connected && dbReady) {
-    try {
-      const storeId = activeStoreId!;
-      if (!storeId) error = "Sin tienda.";
-      else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-        error = "Sin acceso a esta tienda.";
-      } else {
-        myRole = await getMyStoreRole(storeId).catch(() => null);
-        const [contactsRes, companiesRes, dupesRes] = await Promise.all([
-          listCrmContacts(storeId, { q, companyId: companyId ?? undefined }),
-          listCrmCompanies(storeId, { pageSize: 200 }),
-          listContactDuplicateGroups(storeId).catch(() => ({ groups: [] })),
-        ]);
-        rows = contactsRes.rows;
-        contactsTotal = contactsRes.total;
-        contactsTruncated = contactsRes.truncated;
-        companies = companiesRes.rows;
-        dupeGroups = dupesRes.groups.length;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
-    }
-  }
+  const { data, connected, dbReady, error } = await loadPageData(
+    async (storeId) => {
+      const myRole = await getMyStoreRole(storeId).catch(() => null);
+      const [contactsRes, companiesRes, dupesRes] = await Promise.all([
+        listCrmContacts(storeId, { q, companyId: companyId ?? undefined, status }),
+        listCrmCompanies(storeId, { pageSize: 200 }),
+        listContactDuplicateGroups(storeId).catch(() => ({ groups: [] })),
+      ]);
+      return {
+        rows: contactsRes.rows,
+        contactsTotal: contactsRes.total,
+        contactsTruncated: contactsRes.truncated,
+        companies: companiesRes.rows,
+        dupeGroups: dupesRes.groups.length,
+        myRole,
+      };
+    },
+    {
+      rows: [] as Awaited<ReturnType<typeof listCrmContacts>>["rows"],
+      contactsTotal: 0,
+      contactsTruncated: false,
+      companies: [] as Awaited<ReturnType<typeof listCrmCompanies>>["rows"],
+      dupeGroups: 0,
+      myRole: null as MemberRole | null,
+    },
+  );
+  const { rows, contactsTotal, contactsTruncated, companies, dupeGroups, myRole } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
@@ -107,6 +101,7 @@ export default async function ContactosPage({
           companies={companies.map((c) => ({ id: c.id, name: c.name }))}
           q={q}
           companyId={companyId}
+          status={status}
           initialView={vista}
           initialSelectedId={selectedId}
           myRole={myRole}

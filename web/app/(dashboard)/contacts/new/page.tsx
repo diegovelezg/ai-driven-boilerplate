@@ -1,8 +1,7 @@
 import { AppCard, AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { listCrmCompanies, listDistinctJobTitles } from "@/lib/crm-db";
-import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { loadPageData } from "@/lib/page-data";
 import { connection } from "next/server";
 import { NuevoContactoForm } from "./nuevo-form";
 
@@ -18,32 +17,17 @@ export default async function NuevoContactoPage({
   const sp = await searchParams;
   const initialCompanyId = ((sp.company ?? sp.empresa) ?? "").trim();
 
-  const dbReady = isSupabaseConfigured();
-  const activeStoreId = await resolveActiveStoreId();
-  const connected = Boolean(activeStoreId);
-
-  let companies: Array<{ id: string; name: string }> = [];
-  let jobTitles: string[] = [];
-  let error: string | null = null;
-
-  if (connected && dbReady) {
-    try {
-      const storeId = activeStoreId!;
-      if (!storeId) error = "Sin tienda.";
-      else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-        error = "Sin acceso a esta tienda.";
-      } else {
-        const [cos, titles] = await Promise.all([
-          listCrmCompanies(storeId, { pageSize: 200 }),
-          listDistinctJobTitles(storeId).catch(() => [] as string[]),
-        ]);
-        companies = cos.rows.map((c) => ({ id: c.id, name: c.name }));
-        jobTitles = titles;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
-    }
-  }
+  const { data, connected, dbReady, error } = await loadPageData(
+    async (storeId) => {
+      const [cos, titles] = await Promise.all([
+        listCrmCompanies(storeId, { pageSize: 200 }),
+        listDistinctJobTitles(storeId).catch(() => [] as string[]),
+      ]);
+      return { companies: cos.rows.map((c) => ({ id: c.id, name: c.name })), jobTitles: titles };
+    },
+    { companies: [] as Array<{ id: string; name: string }>, jobTitles: [] as string[] },
+  );
+  const { companies, jobTitles } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-8 p-6 md:p-8">

@@ -162,7 +162,7 @@ export function chatCompletionParams(
  * NO VERIFICADO (sin key, docs inaccesibles 2026-10-16) → siempre undefined:
  * no se envía thinking custom hasta poder hacer smoke.
  */
-export function getGeminiThinkingConfig(): Record<string, unknown> | undefined {
+function getGeminiThinkingConfig(): Record<string, unknown> | undefined {
   return undefined;
 }
 

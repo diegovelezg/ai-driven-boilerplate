@@ -1,7 +1,7 @@
 // Lecturas CRM (service_role, como customers-db). Escrituras en crm-actions.ts.
 import { getSupabase, isSupabaseMissingFunction } from "@/lib/supabase";
 import { COMPANIES_SORT_ALIASES } from "@/lib/sort";
-import type { CompanyKind } from "@/lib/crm";
+import type { CompanyKind, CrmStatusFilter } from "@/lib/crm";
 
 export interface CrmCompany {
   id: string;
@@ -16,6 +16,8 @@ export interface CrmCompany {
   country: string | null;
   external_ref: string | null;
   contacts_count: number;
+  /** Borrado lógico: null = activa. Listas y pickers muestran activas. */
+  deleted_at: string | null;
 }
 
 export interface CrmContact {
@@ -30,18 +32,12 @@ export interface CrmContact {
   is_primary: boolean;
   created_by?: string | null;
   updated_by?: string | null;
+  /** Borrado lógico: null = activo. */
+  deleted_at?: string | null;
 }
 
 export type CompaniesSortKey = "name" | "type" | "contacts" | "tax_id";
 export type CompaniesSortDir = "asc" | "desc";
-
-/** @deprecated Use CompaniesSortKey (renamed route i18n). */
-export type EmpresasSortKey = CompaniesSortKey;
-/** @deprecated Use CompaniesSortDir (renamed route i18n). */
-export type EmpresasSortDir = CompaniesSortDir;
-
-// SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
-export { COMPANIES_SORT_ALIASES } from "@/lib/sort";
 
 export function parseCompaniesSort(sp: { sort?: string; dir?: string }): {
   key: CompaniesSortKey;
@@ -53,12 +49,9 @@ export function parseCompaniesSort(sp: { sort?: string; dir?: string }): {
   return { key, dir: key === "contacts" ? "desc" : "asc" };
 }
 
-/** @deprecated Use parseCompaniesSort (renamed route i18n). */
-export const parseEmpresasSort = parseCompaniesSort;
-
 export async function listCrmCompanies(
   storeId: string,
-  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number } = {},
+  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
 ): Promise<{ rows: CrmCompany[]; total: number }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
@@ -76,6 +69,7 @@ export async function listCrmCompanies(
     p_dir: sortDir,
     p_limit: pageSize,
     p_offset: (page - 1) * pageSize,
+    p_status: opts.status ?? "active",
   });
   if (!rpc.error) {
     const data = (rpc.data ?? []) as Array<Record<string, unknown>>;
@@ -94,6 +88,7 @@ export async function listCrmCompanies(
         country: (r.country as string | null) ?? null,
         external_ref: (r.external_ref as string | null) ?? null,
         contacts_count: Number(r.contacts_count ?? 0),
+        deleted_at: (r.deleted_at as string | null) ?? null,
       })),
       total: Number.isFinite(total) ? total : 0,
     };
@@ -106,7 +101,7 @@ export async function listCrmCompanies(
 
 async function listCrmCompaniesLegacy(
   storeId: string,
-  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number } = {},
+  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
 ): Promise<{ rows: CrmCompany[]; total: number }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
@@ -120,7 +115,10 @@ async function listCrmCompaniesLegacy(
   })();
   // Total exacto para paginar (mismos filtros, sin orden ni rango).
   // La casa (kind IS NULL, red propia) nunca lista: no es contraparte.
+  // Borrado lógico: activas por defecto.
+  const status = opts.status ?? "active";
   let countQuery = db.from("crm_companies").select("id", { count: "exact", head: true }).eq("store_id", storeId).not("kind", "is", null);
+  if (status !== "all") countQuery = countQuery.filter("deleted_at", status === "active" ? "is" : "not.is", null);
   if (like) countQuery = countQuery.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
   if (opts.kind) countQuery = countQuery.eq("kind", opts.kind);
   const { count, error: countError } = await countQuery;
@@ -129,9 +127,10 @@ async function listCrmCompaniesLegacy(
   if (total === 0) return { rows: [], total };
   let query = db
     .from("crm_companies")
-    .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref")
+    .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref,deleted_at")
     .eq("store_id", storeId)
     .not("kind", "is", null);
+  if (status !== "all") query = query.filter("deleted_at", status === "active" ? "is" : "not.is", null);
   if (like) query = query.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
   if (opts.kind) query = query.eq("kind", opts.kind);
   // contactos es conteo calculado: se ordena en JS tras leer la página.
@@ -150,6 +149,7 @@ async function listCrmCompaniesLegacy(
       .from("crm_contacts")
       .select("company_id")
       .eq("store_id", storeId)
+      .is("deleted_at", null)
       .in("company_id", ids);
     for (const c of (counts ?? []) as Array<Record<string, unknown>>) {
       const cid = String(c.company_id);
@@ -169,6 +169,7 @@ async function listCrmCompaniesLegacy(
     country: (r.country as string | null) ?? null,
     external_ref: (r.external_ref as string | null) ?? null,
     contacts_count: countBy.get(String(r.id)) ?? 0,
+    deleted_at: (r.deleted_at as string | null) ?? null,
   }));
   if (sortKey === "contacts") {
     out.sort((a, b) => (ascending ? a.contacts_count - b.contacts_count : b.contacts_count - a.contacts_count));
@@ -203,19 +204,37 @@ export async function listDistinctJobTitles(storeId: string, limit = 200): Promi
 
 export async function listCrmContacts(
   storeId: string,
-  opts: { q?: string; companyId?: string; limit?: number } = {},
+  opts: { q?: string; companyId?: string; limit?: number; status?: CrmStatusFilter } = {},
 ): Promise<{ rows: CrmContactListItem[]; total: number; truncated: boolean }> {
   const db = getSupabase();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
   const q = (opts.q ?? "").trim();
+  const status = opts.status ?? "active";
 
   // Total exacto de la base (mismos filtros duros, sin texto): el RPC pagina
   // con límite, así que el total nunca sale de la muestra.
+  // En modo activo sin empresa concreta, los contactos de empresas
+  // archivadas no operan: se excluyen aquí igual que en el RPC
+  // (los sueltos company_id null se conservan).
+  let archivedCoIds: string[] = [];
+  if (status === "active" && !opts.companyId) {
+    const { data: arch } = await db
+      .from("crm_companies")
+      .select("id")
+      .eq("store_id", storeId)
+      .not("deleted_at", "is", null)
+      .limit(1000);
+    archivedCoIds = ((arch ?? []) as Array<Record<string, unknown>>).map((r) => String(r.id));
+  }
   let countQuery = db
     .from("crm_contacts")
     .select("id", { count: "exact", head: true })
     .eq("store_id", storeId);
   if (opts.companyId) countQuery = countQuery.eq("company_id", opts.companyId);
+  if (status !== "all") countQuery = countQuery.filter("deleted_at", status === "active" ? "is" : "not.is", null);
+  if (archivedCoIds.length > 0) {
+    countQuery = countQuery.or(`company_id.is.null,company_id.not.in.(${archivedCoIds.join(",")})`);
+  }
   const { count: baseTotal, error: countError } = await countQuery;
   if (countError) throw new Error(`CRM read: ${countError.message}`);
 
@@ -225,6 +244,7 @@ export async function listCrmContacts(
     p_q: q || null,
     p_company: opts.companyId ?? null,
     p_limit: limit,
+    p_status: status,
   });
   if (!rpc.error) {
     const rows = ((rpc.data ?? []) as Array<Record<string, unknown>>).map((c) => ({
@@ -240,6 +260,7 @@ export async function listCrmContacts(
       created_by: (c.created_by as string | null) ?? null,
       updated_by: (c.updated_by as string | null) ?? null,
       company_name: (c.company_name as string | null) ?? null,
+      deleted_at: (c.deleted_at as string | null) ?? null,
     }));
     // Sin texto el total es la base exacta; con texto vale sobre la muestra
     // y `truncated` lo declara (la UI pinta parcial, nunca total exacto).
@@ -249,23 +270,31 @@ export async function listCrmContacts(
   if (!isSupabaseMissingFunction(rpc.error as { code?: string; message?: string })) {
     throw new Error(`CRM read: ${(rpc.error as { message?: string }).message ?? rpc.error}`);
   }
-  return listCrmContactsLegacy(storeId, opts, baseTotal ?? 0);
+  return listCrmContactsLegacy(storeId, opts, baseTotal ?? 0, archivedCoIds);
 }
 
 async function listCrmContactsLegacy(
   storeId: string,
-  opts: { q?: string; companyId?: string; limit?: number } = {},
+  opts: { q?: string; companyId?: string; limit?: number; status?: CrmStatusFilter } = {},
   baseTotal = 0,
+  archivedCoIds: string[] = [],
 ): Promise<{ rows: CrmContactListItem[]; total: number; truncated: boolean }> {
   const db = getSupabase();
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
+  const status = opts.status ?? "active";
   let query = db
     .from("crm_contacts")
-    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,crm_companies(name)")
+    .select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,deleted_at,crm_companies!contacts_company_id_fkey(name)")
     .eq("store_id", storeId)
     .order("created_at", { ascending: true })
     .limit(limit);
+  if (status !== "all") query = query.filter("deleted_at", status === "active" ? "is" : "not.is", null);
   if (opts.companyId) query = query.eq("company_id", opts.companyId);
+  // Igual que el RPC y el conteo: en modo activo sin empresa concreta, fuera
+  // contactos de empresas archivadas (los sueltos se conservan).
+  if (status === "active" && !opts.companyId && archivedCoIds.length > 0) {
+    query = query.or(`company_id.is.null,company_id.not.in.(${archivedCoIds.join(",")})`);
+  }
   // El texto se filtra en JS (incluye nombre de empresa, que el `or` de
   // PostgREST no alcanza). Límite 200: escala suficiente para el CRM.
   const { data, error } = await query;
@@ -293,6 +322,7 @@ async function listCrmContactsLegacy(
       is_primary: c.is_primary === true,
       created_by: (c.created_by as string | null) ?? null,
       updated_by: (c.updated_by as string | null) ?? null,
+      deleted_at: (c.deleted_at as string | null) ?? null,
       company_name: (embedded && typeof embedded.name === "string" ? embedded.name : null) ?? (cid ? (names.get(cid) ?? null) : null),
     };
   });
@@ -339,7 +369,7 @@ export async function getCrmCompany(
   if (error) throw new Error(`CRM read: ${error.message}`);
   if (!data) return null;
   const [{ data: contacts }, { data: campaigns }, { data: ios }] = await Promise.all([
-    db.from("crm_contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
+    db.from("crm_contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,deleted_at").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
     db.from("io_campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
     db.from("io_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
   ]);
@@ -355,6 +385,7 @@ export async function getCrmCompany(
       phone: (c.phone as string | null) ?? null,
       job_title: (c.job_title as string | null) ?? null,
       is_primary: c.is_primary === true,
+      deleted_at: (c.deleted_at as string | null) ?? null,
     })),
     campaigns: ((campaigns ?? []) as Array<Record<string, unknown>>).map((m) => ({
       id: String(m.id),

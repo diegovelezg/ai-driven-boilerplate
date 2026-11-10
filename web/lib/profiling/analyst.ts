@@ -2,6 +2,7 @@
 // Sin LLM para los números; el synthesizer los interpreta.
 // Fase 2 DOOH: lee companies/contacts/io_orders, no customers/orders.
 import { getSupabase } from "@/lib/supabase";
+import { DAY_MS } from "@/lib/format";
 
 export interface TenantStats {
   customers: number;
@@ -57,7 +58,7 @@ export async function tenantStats(storeId: string): Promise<TenantStats & { samp
     const ts = dates.map((d) => Date.parse(d)).filter((t) => !Number.isNaN(t)).sort((a, b) => a - b);
     if (ts.length < 2) continue;
     const gaps: number[] = [];
-    for (let i = 1; i < ts.length; i += 1) gaps.push((ts[i] - ts[i - 1]) / 86_400_000);
+    for (let i = 1; i < ts.length; i += 1) gaps.push((ts[i] - ts[i - 1]) / DAY_MS);
     gaps.sort((a, b) => a - b);
     const mid = Math.floor(gaps.length / 2);
     medians.push(gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2);

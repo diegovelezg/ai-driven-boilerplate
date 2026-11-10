@@ -24,11 +24,13 @@ export async function POST(req: Request) {
     const { checkRateLimit } = await import("@/lib/rate-limit");
     // Clave por tienda+usuario: un usuario no agota la cuota de toda la tienda.
     let rateKey = `brief:${active.id}:anon`;
+    let actor: string | undefined;
     try {
       const { createServerSupabase } = await import("@/lib/supabase-server");
       const supabase = await createServerSupabase();
       const { data } = await supabase.auth.getUser();
       if (data.user?.id) rateKey = `brief:${active.id}:${data.user.id}`;
+      actor = data.user?.email ?? undefined;
     } catch {
       // sin sesión resoluble: cae a :anon (fail-closed en throttle)
     }
@@ -36,16 +38,13 @@ export async function POST(req: Request) {
       return Response.json({ error: "Demasiadas corridas. Espera un momento." }, { status: 429 });
     }
     if (!force) {
-      const { getLastFinishedAt } = await import("@/lib/background");
-      const { startOfDayUTC } = await import("@/lib/dates");
-      const last = await getLastFinishedAt(active.id, "brief").catch(() => null);
-      const t = last ? Date.parse(last) : NaN;
-      if (Number.isFinite(t) && t >= startOfDayUTC(Date.now())) {
+      const { briefAlreadyRanToday } = await import("@/lib/insights");
+      if (await briefAlreadyRanToday(active.id)) {
         return Response.json({ ok: true, skipped: true, summary: "Muro: ya corrió hoy." });
       }
     }
     const { runBriefJob } = await import("@/lib/insights");
-    const r = await runBriefJob(active.id);
+    const r = await runBriefJob(active.id, { force, actor });
     return Response.json({ ok: true, ...r });
   } catch (e) {
     console.error("[brief]", e instanceof Error ? e.message : e);

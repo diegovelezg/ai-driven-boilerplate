@@ -259,7 +259,7 @@ export const COUNTRIES: CountryEntry[] = [
   { code: "ZW", name: "Zimbabue" },
 ];
 
-export const COUNTRY_CODES = new Set(COUNTRIES.map((c) => c.code));
+const COUNTRY_CODES = new Set(COUNTRIES.map((c) => c.code));
 
 export function isCountryCode(v: unknown): v is string {
   return typeof v === "string" && COUNTRY_CODES.has(v.toUpperCase());

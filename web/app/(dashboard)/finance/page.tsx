@@ -8,7 +8,7 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
 import { bucketMonthly, computeFinanceKpis } from "@/lib/finance";
 import { invoiceMatchesOrder, isValidCurrency, normalizeCurrency } from "@/lib/currency";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { formatMoney, formatNumber, isoDayPart, startOfDayUTC, utcDayStart } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
 import { connection } from "next/server";
@@ -195,10 +195,7 @@ export default async function FinanzasPage({
     // Base primero, resto alfabético.
     const currencies = [...curSet].sort((a, b) => (a === viewCurrency ? -1 : b === viewCurrency ? 1 : a.localeCompare(b)));
 
-    const today00 = (() => {
-      const n = new Date();
-      return Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate());
-    })();
+    const today00 = startOfDayUTC(Date.now());
 
     const screenNameByAll = new Map<string, string>();
     const advNameByAll = new Map<string, string>();
@@ -265,10 +262,9 @@ export default async function FinanzasPage({
         }
         if (st === "issued") {
           invoicedMinor += amount;
-          const dueRaw = (v.due_date as string | null) ?? null;
-          const m = dueRaw ? /^(\d{4})-(\d{2})-(\d{2})/.exec(dueRaw) : null;
-          if (m) {
-            const due = Date.parse(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+          const dueDay = isoDayPart((v.due_date as string | null) ?? null);
+          if (dueDay) {
+            const due = Date.parse(utcDayStart(dueDay));
             if (Number.isFinite(due) && due < today00) {
               overdueMinor += amount;
               overdueCount += 1;

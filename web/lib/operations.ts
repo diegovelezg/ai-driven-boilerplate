@@ -43,7 +43,7 @@ export function conflictMessage(conflict: ActiveOp): string {
   return `En curso: ${conflict.label}…`;
 }
 
-export function busyMessage(conflict: ActiveOp): string {
+function busyMessage(conflict: ActiveOp): string {
   return conflictMessage(conflict);
 }
 

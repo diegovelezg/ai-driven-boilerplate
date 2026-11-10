@@ -1,8 +1,7 @@
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { listContactDuplicateGroups } from "@/lib/contact-duplicates";
-import { isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { loadPageData } from "@/lib/page-data";
 import { connection } from "next/server";
 import { DuplicatesList } from "./duplicates-list";
 
@@ -10,29 +9,14 @@ export const instant = false;
 
 export default async function ContactDuplicatesPage() {
   await connection();
-  const dbReady = isSupabaseConfigured();
-  const activeStoreId = await resolveActiveStoreId();
-  const connected = Boolean(activeStoreId);
-
-  let groups: Awaited<ReturnType<typeof listContactDuplicateGroups>>["groups"] = [];
-  let truncated = false;
-  let error: string | null = null;
-
-  if (connected && dbReady) {
-    try {
-      const storeId = activeStoreId!;
-      if (!storeId) error = "Sin tienda.";
-      else if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-        error = "Sin acceso a esta tienda.";
-      } else {
-        const res = await listContactDuplicateGroups(storeId);
-        groups = res.groups;
-        truncated = res.truncated;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
-    }
-  }
+  const { data, connected, dbReady, error } = await loadPageData(
+    async (storeId) => {
+      const res = await listContactDuplicateGroups(storeId);
+      return { groups: res.groups, truncated: res.truncated };
+    },
+    { groups: [] as Awaited<ReturnType<typeof listContactDuplicateGroups>>["groups"], truncated: false },
+  );
+  const { groups, truncated } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">

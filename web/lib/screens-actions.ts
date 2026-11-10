@@ -61,9 +61,9 @@ function optPrice(raw: unknown): number | null | undefined {
 export async function createScreenAction(form: FormData): Promise<ScreensState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
 
   const name = cleanStr(form.get("name"), 200);
   if (!name) return { ok: false, message: "Nombre de pantalla requerido (máx 200)." };
@@ -238,9 +238,9 @@ export async function updateScreenPlaybackAction(input: {
 }): Promise<ScreensState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   const screenId = String(input.screenId ?? "").trim();
   if (!screenId) return { ok: false, message: "Falta la pantalla." };
   const { duration_sec, plays_per_day, impact_day } = input;
@@ -293,9 +293,9 @@ export async function createScreenSubmitAction(_prev: ScreensState, form: FormDa
 export async function deleteScreenAction(input: { screenId: string }): Promise<ScreensState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "owner").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Solo el propietario puede eliminar pantallas." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "owner", "Solo el propietario puede eliminar pantallas.");
+  if (denied) return { ok: false, message: denied };
   const screenId = String(input.screenId ?? "").trim();
   if (!screenId) return { ok: false, message: "Falta la pantalla." };
   try {
@@ -360,9 +360,9 @@ export async function setScreenActiveAction(input: {
 }): Promise<ScreensState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, message: t.error };
-  const { requireMinRole } = await import("@/lib/tenant");
-  const allowed = await requireMinRole(t.storeId, "seller").catch(() => false);
-  if (allowed === false) return { ok: false, message: "Requiere rol vendedor o superior." };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
   const screenId = String(input.screenId ?? "").trim();
   if (!screenId) return { ok: false, message: "Falta la pantalla." };
   try {

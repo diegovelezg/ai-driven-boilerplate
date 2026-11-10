@@ -28,6 +28,21 @@ export function isCompanyKind(v: unknown): v is CompanyKind {
   return typeof v === "string" && (COMPANY_KINDS as readonly string[]).includes(v);
 }
 
+/** Estado de borrado lógico para listados (default: solo activas). */
+export type CrmStatusFilter = "active" | "archived" | "all";
+
+export const CRM_STATUS_VALUES: CrmStatusFilter[] = ["active", "archived", "all"];
+
+export const CRM_STATUS_LABELS: Record<CrmStatusFilter, string> = {
+  active: "Activas",
+  archived: "Archivadas",
+  all: "Todas",
+};
+
+export function isCrmStatusFilter(v: unknown): v is CrmStatusFilter {
+  return v === "active" || v === "archived" || v === "all";
+}
+
 export interface CompanyInput {
   name: string;
   kind?: CompanyKind | null;

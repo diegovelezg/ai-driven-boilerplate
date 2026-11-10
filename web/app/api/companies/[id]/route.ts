@@ -1,6 +1,5 @@
-import { getSupabase } from "@/lib/supabase";
 import { getCrmCompany } from "@/lib/crm-db";
-import { requireStoreAccess, userStoreRoles } from "@/lib/api/guard";
+import { requireRouteEntity, resolveMyRole } from "@/lib/api/guard";
 
 /**
  * GET /api/companies/:id — ficha para el drawer (Ficha + Contactos + Pedidos).
@@ -11,27 +10,17 @@ import { requireStoreAccess, userStoreRoles } from "@/lib/api/guard";
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const db = getSupabase();
-    const { data } = await db.from("crm_companies").select("store_id").eq("id", id).maybeSingle();
-    if (!data) return Response.json({ error: "Empresa no encontrada." }, { status: 404 });
-    const storeId = String((data as Record<string, unknown>).store_id ?? "");
-    // Anti-oráculo + SSOT (issues #4/#8): un solo requireStoreAccess;
-    // sin membresía o sin sesión se responde 404 idéntico, nunca 403.
-    const access = await requireStoreAccess(storeId);
-    if (access instanceof Response) return Response.json({ error: "Empresa no encontrada." }, { status: 404 });
-    const auth = access;
+    const loaded = await requireRouteEntity("crm_companies", id, "store_id", "Empresa no encontrada.");
+    if (loaded instanceof Response) return loaded;
+    const { storeId, auth } = loaded;
     const detail = await getCrmCompany(storeId, id);
     if (!detail) return Response.json({ error: "Empresa no encontrada." }, { status: 404 });
     // Rol del caller para gating de comisión (null = sin auth/dev: ve todo).
-    let myRole: string | null = null;
+    const myRole = await resolveMyRole(auth, storeId);
     let canViewCommission = true;
     if (auth) {
       const { isMemberRole, hasMinRole } = await import("@/lib/roles");
-      const roles = await userStoreRoles(auth.id).catch(() => new Map<string, string>());
-      const raw = roles.get(storeId) ?? null;
-      myRole = raw && isMemberRole(raw) ? raw : null;
-      canViewCommission =
-        myRole !== null && isMemberRole(myRole) && hasMinRole(myRole, "admin");
+      canViewCommission = myRole !== null && isMemberRole(myRole) && hasMinRole(myRole, "admin");
     }
     const company = { ...(detail.company as Record<string, unknown>) };
     if (!canViewCommission) delete company.agency_commission_pct;

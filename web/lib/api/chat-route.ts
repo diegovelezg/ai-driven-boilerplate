@@ -14,9 +14,6 @@ import { createAdkRunner } from "@/lib/adk/runner";
 import { getChatSessionService } from "@/lib/adk/sessions";
 import { buildChatPrompt, parseChatBody, sseEncode, type ChatMessageIn } from "@/lib/api/chat-protocol";
 
-export type { ChatMessageIn };
-export { buildChatPrompt, parseChatBody, sseEncode };
-
 export type ChatScope = "store" | "screen" | "company" | "order" | "contact" | "brand";
 
 /** Tablas por scope (SSOT: una sola rama en vez de ×4 duplicadas). */

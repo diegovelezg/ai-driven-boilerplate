@@ -1,9 +1,10 @@
 import { BaseLlm, type BaseLlmConnection, type LlmRequest, type LlmResponse } from "@google/adk";
 import type { Content, Part } from "@google/genai";
 import { getAnthropicEffort } from "@/lib/ai/llm-config";
-import { logLlmUsage, parseChatUsage } from "@/lib/ai/usage";
+import { parseChatUsage } from "@/lib/ai/usage";
 import { createLogger } from "@/lib/log";
 import { googleSchemaToJsonSchema } from "./json-schema";
+import { extractSystemPrompt, extractToolDeclaration, meterLlmUsage } from "./content-utils";
 
 const log = createLogger("adk");
 
@@ -132,21 +133,7 @@ export class AnthropicLlm extends BaseLlm {
       usageMetadata?: unknown;
     };
     const usage = parseChatUsage(data);
-    const meterStoreId = typeof config.storeId === "string" ? config.storeId : null;
-    const meterProcess = typeof config.process === "string" ? config.process : "customer_chat";
-    if (meterStoreId && usage) {
-      void logLlmUsage({
-        storeId: meterStoreId,
-        process: meterProcess,
-        provider: "anthropic",
-        model,
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
-        reasoningTokens: usage.reasoningTokens,
-        latencyMs: Date.now() - t0,
-      });
-    }
+    meterLlmUsage(config, usage, { provider: "anthropic", model, t0 });
 
     const parts: Part[] = [];
     for (const block of data.content ?? []) {
@@ -175,14 +162,7 @@ export class AnthropicLlm extends BaseLlm {
     contents: Content[],
     config?: Record<string, unknown>,
   ): { messages: Array<{ role: "user" | "assistant"; content: Block[] }>; systemPrompt?: string } {
-    let systemPrompt: string | undefined;
-    const si = config?.systemInstruction;
-    if (typeof si === "string") systemPrompt = si;
-    else if (si && typeof si === "object" && "parts" in (si as Record<string, unknown>)) {
-      systemPrompt = ((si as Content).parts ?? []).map((p) => (p as { text?: string }).text || "").join("\n");
-    } else if (Array.isArray(si)) {
-      systemPrompt = (si as Part[]).map((p) => (p as { text?: string }).text || "").join("\n");
-    }
+    const systemPrompt = extractSystemPrompt(config);
 
     const messages: Array<{ role: "user" | "assistant"; content: Block[] }> = [];
     const toolCallIdMap = new Map<string, string>();
@@ -240,21 +220,8 @@ export class AnthropicLlm extends BaseLlm {
     if (!toolsDict) return [];
     const tools: Array<Record<string, unknown>> = [];
     for (const tool of Object.values(toolsDict)) {
-      const t = tool as {
-        name?: string;
-        description?: string;
-        _getDeclaration?: () => { name?: string; description?: string; parameters?: unknown };
-      };
-      let decl: { name?: string; description?: string; parameters?: unknown } | undefined;
-      try {
-        decl = t._getDeclaration?.();
-      } catch {
-        decl = undefined;
-      }
-      if (!decl?.name) {
-        if (t.name) decl = { name: t.name, description: t.description };
-        else continue;
-      }
+      const decl = extractToolDeclaration(tool);
+      if (!decl) continue;
       tools.push({
         name: decl.name,
         description: decl.description || "",

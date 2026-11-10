@@ -4,11 +4,9 @@ import { logLlmUsage, parseChatUsage } from "./usage";
 import { createProfilerLogger } from "@/lib/profiling/log";
 import { isKnownTaxonomyId, taxonomyPromptFragment } from "@/lib/taxonomy";
 import type { DescriptionInterpretation } from "@/lib/profile-interpreter";
+import { fetchHomepageText } from "@/lib/fetch-text";
 
 const log = createProfilerLogger();
-
-const UA = "Mozilla/5.0 (compatible; DoohBot/0.1)";
-const FETCH_TIMEOUT_MS = 12_000;
 
 export interface InvestigateSources {
   url: string;
@@ -41,35 +39,6 @@ function extractWebsite(raw: string): string | null {
   }
   const domainMatch = text.match(/(?:^|[\s(,;])([a-z0-9-]+\.(?:com|pe|com\.pe|io|co|net|org|shop|store|lat|dev)(?:\.[a-z]{2})?)(?:[\s),;]|$)/i);
   if (domainMatch) return domainMatch[1].toLowerCase().replace(/^www\./, "");
-  return null;
-}
-
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-async function fetchHomepageText(domain: string): Promise<{ text: string; url: string } | null> {
-  for (const url of [`https://${domain}`, `https://www.${domain}`]) {
-    try {
-      const res = await fetch(url, {
-        redirect: "follow",
-        headers: { "User-Agent": UA },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
-      if (!res.ok) continue;
-      const text = htmlToText(await res.text());
-      if (text.length < 40) continue;
-      return { text: text.slice(0, 6000), url: res.url || url };
-    } catch {
-      // prueba siguiente variante
-    }
-  }
   return null;
 }
 
@@ -173,7 +142,7 @@ export async function investigateBusiness(
   // preferencia: si no hay dominio pegado, no hay fetch y se pregunta.
   // Equivocarse con confianza es peor que preguntar una vez.
   const target = extractWebsite(desc);
-  const page = target ? await fetchHomepageText(target) : null;
+  const page = target ? await fetchHomepageText(target, 6000) : null;
   log(`investigate input=${desc.slice(0, 80)} domain=${target} fetch=${page ? `${page.url} ${page.text.length}ch` : "fallo"}`);
   const verifiedCtx =
     page && target ? `Web verificada: ${target} (es la web del negocio; ignora variantes de dominio mencionadas antes).` : "";

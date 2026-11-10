@@ -29,7 +29,7 @@ export async function checkSchema(db: SupabaseClient): Promise<SchemaGap[]> {
   return gaps;
 }
 
-export function schemaGapMessage(gaps: SchemaGap[]): string {
+function schemaGapMessage(gaps: SchemaGap[]): string {
   const names = gaps.map((g) => g.relation).join(", ");
   return (
     `DB detrás del código: falta ${names}. ` +

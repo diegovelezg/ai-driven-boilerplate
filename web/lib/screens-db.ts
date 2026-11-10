@@ -9,7 +9,7 @@ import { SCREENS_SORT_ALIASES } from "@/lib/sort";
 import { joinHaystack, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
 
 // Re-export de compatibilidad (tests y otros módulos consumen desde aquí).
-export { joinHaystack, matchTokens, normalizeSearch, tokenizeSearch };
+export { normalizeSearch, tokenizeSearch };
 
 export interface ScreenListRow {
   id: string;
@@ -34,7 +34,6 @@ export type ScreensSortKey = "name" | "supplier" | "city" | "impact" | "price";
 export type ScreensSortDir = "asc" | "desc";
 
 // SSOT: mapa de alias en lib/sort.ts (issue #8 P2). Re-export de compat.
-export { SCREENS_SORT_ALIASES } from "@/lib/sort";
 
 export function parseScreensSort(sp: { sort?: string; dir?: string }): {
   key: ScreensSortKey;
@@ -147,7 +146,7 @@ export async function listScreens(
 }
 
 const LEGACY_COLUMNS =
-  "id,name,is_active,width_px,height_px,width_m,height_m,price_pen,impact_day,impressions_day,supplier_company_id,external_ref,inv_venues!inner(name,district,city)";
+  "id,name,is_active,width_px,height_px,width_m,height_m,price_pen,impact_day,impressions_day,supplier_company_id,external_ref,inv_venues!screens_venue_id_fkey!inner(name,district,city)";
 
 async function listScreensLegacy(
   storeId: string,
@@ -287,7 +286,7 @@ export async function getScreenDetail(storeId: string, screenId: string): Promis
   const db = getSupabase();
   const { data, error } = await db
     .from("inv_screens")
-    .select("*, inv_venues(*)")
+    .select("*, inv_venues!screens_venue_id_fkey(*)")
     .eq("store_id", storeId)
     .eq("id", screenId)
     .maybeSingle();

@@ -26,7 +26,7 @@ export interface AgentContext {
   focusLabel?: string | null;
 }
 
-export const CUSTOMER_AGENT_NAME = "dooh_agent";
+const CUSTOMER_AGENT_NAME = "dooh_agent";
 
 const DOOH_INSTRUCTION = `Eres dooh_agent, el asistente comercial DOOH de la tienda (único agente del día a día).
 Respondes sobre empresas (anunciantes, agencias, proveedores), órdenes de inserción, pantallas/inventario y finanzas.
@@ -448,7 +448,7 @@ function getFinanceTool(ctx: AgentContext) {
   return new FunctionTool({
     name: "get_finance",
     description:
-      "KPIs de finanzas DOOH en una moneda explícita: ventas 30d, órdenes, ticket, deltas y cobro (facturado/cobrado/pendiente). Nunca mezcla monedas.",
+      "KPIs de finanzas DOOH en una moneda explícita: ventas del mes, órdenes, ticket, deltas y cobro (facturado/cobrado/pendiente). Nunca mezcla monedas.",
     parameters: z.object({
       currency: z.string().regex(/^[A-Za-z]{3}$/).describe("ISO3 explícita (p.ej. PEN). Vacío = moneda base.").optional(),
     }),
@@ -459,9 +459,9 @@ function getFinanceTool(ctx: AgentContext) {
         const f = await fetchFinance(storeId, currency);
         return {
           currency: f.currency,
-          ventas_30d_minor: f.kpis.sales30dMinor,
-          ordenes_30d: f.kpis.orders30d,
-          ticket_medio_minor: f.kpis.ticket30dMinor,
+          ventas_mes_minor: f.kpis.salesMesMinor,
+          ordenes_mes: f.kpis.ordersMes,
+          ticket_medio_minor: f.kpis.ticketMesMinor,
           delta_ventas_pct: f.kpis.salesDeltaPct,
           delta_ordenes_pct: f.kpis.ordersDeltaPct,
           cobro: { facturado_minor: f.invoiced_minor, cobrado_minor: f.paid_minor, pendiente_minor: f.pending_minor },
@@ -476,7 +476,7 @@ function getFinanceTool(ctx: AgentContext) {
 }
 
 const EXPLAINABLE_KPIS = [
-  "ventas_30d",
+  "ventas_mes",
   "ticket",
   "cobranza",
   "ocupacion_14d",
@@ -503,21 +503,21 @@ function explainKpiTool(ctx: AgentContext) {
         const [snap, fin] = await Promise.all([getDashboardSnapshot(storeId), fetchFinance(storeId, currency)]);
         const cur = fin.currency;
         switch (kpi) {
-          case "ventas_30d":
+          case "ventas_mes":
             return {
               kpi,
               currency: cur,
-              lectura: `Vendes ${fin.kpis.orders30d} órdenes por ${fin.kpis.sales30dMinor} céntimos en 30d (ticket ${fin.kpis.ticket30dMinor}).`,
+              lectura: `Vendes ${fin.kpis.ordersMes} órdenes por ${fin.kpis.salesMesMinor} céntimos el mes en curso (ticket ${fin.kpis.ticketMesMinor}).`,
               numeros: fin.kpis,
-              accionable: fin.kpis.orders30d === 0 ? "Sin órdenes 30d: revisa inventario libre en /screens." : "Detalle por marca y pantalla en /finance.",
+              accionable: fin.kpis.ordersMes === 0 ? "Sin órdenes el mes: revisa inventario libre en /screens." : "Detalle por marca y pantalla en /finance.",
               deep_link: "/finance",
             };
           case "ticket":
             return {
               kpi,
               currency: cur,
-              lectura: `Ticket medio 30d: ${fin.kpis.ticket30dMinor} céntimos por orden.`,
-              numeros: { ticket: fin.kpis.ticket30dMinor, ordenes: fin.kpis.orders30d },
+              lectura: `Ticket medio del mes: ${fin.kpis.ticketMesMinor} céntimos por orden.`,
+              numeros: { ticket: fin.kpis.ticketMesMinor, ordenes: fin.kpis.ordersMes },
               accionable: "Compara mejor/peor mes en /finance.",
               deep_link: "/finance",
             };

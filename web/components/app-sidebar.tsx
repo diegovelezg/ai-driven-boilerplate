@@ -51,7 +51,7 @@ type NavGroup = {
 const groups: NavGroup[] = [
   { label: null, items: [
     { href: "/", label: "Hoy", icon: LayoutDashboard },
-    { href: "/muro", label: "Muro", icon: Inbox },
+    { href: "/inbox", label: "Inbox", icon: Inbox },
   ] },
   {
     label: "Operación",
@@ -99,8 +99,8 @@ function AppSidebarNav() {
     const qs = kept.toString();
     return qs ? `?${qs}` : "";
   })();
-  // Badge del Muro: avisos activos (no descartados). Se recarga al navegar
-  // y cuando el muro avisa mutación (`muro:update` tras descartar/restaurar).
+  // Badge del Inbox: avisos activos (no descartados). Se recarga al navegar
+  // y cuando el inbox avisa mutación (`inbox:update` tras descartar/restaurar).
   const [unread, setUnread] = useState(0);
   useEffect(() => {
     let alive = true;
@@ -115,10 +115,10 @@ function AppSidebarNav() {
     };
     void load();
     const onUpdate = () => void load();
-    window.addEventListener("muro:update", onUpdate);
+    window.addEventListener("inbox:update", onUpdate);
     return () => {
       alive = false;
-      window.removeEventListener("muro:update", onUpdate);
+      window.removeEventListener("inbox:update", onUpdate);
     };
   }, [pathname, suffix]);
   const { dock, toggleChat } = useChatDock();
@@ -169,14 +169,21 @@ function AppSidebarNav() {
                       >
                         <item.icon strokeWidth={1.75} />
                         <span>{item.label}</span>
-                        {item.href === "/muro" && unread > 0 && (
-                          <span
-                            className="ms-auto flex min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums group-data-[collapsible=icon]:hidden"
-                            aria-label={`${unread} avisos sin leer`}
-                            role="status"
-                          >
-                            {unread > 9 ? "9+" : unread}
-                          </span>
+                        {item.href === "/inbox" && unread > 0 && (
+                          <>
+                            <span
+                              className="ms-auto flex min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground tabular-nums group-data-[collapsible=icon]:hidden"
+                              aria-label={`${unread} avisos sin leer`}
+                              role="status"
+                            >
+                              {unread > 9 ? "9+" : unread}
+                            </span>
+                            {/* Modo icono colapsado: el pill se oculta, queda el punto. */}
+                            <span
+                              aria-hidden
+                              className="hidden size-2 shrink-0 rounded-full bg-primary group-data-[collapsible=icon]:block"
+                            />
+                          </>
                         )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>

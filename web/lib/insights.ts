@@ -9,12 +9,13 @@ import type { DashboardSnapshot } from "@/lib/dashboard";
 // El feed ("use client") importa de `@/lib/insight-mentions` directo:
 // importar `@/lib/insights` en cliente arrastraría supabase/retrieval
 // (crawlee → async_hooks) y rompería el bundle (ver _error 2026-11-08).
-import { audienceMentions, describeContextShort, isMine } from "@/lib/insight-mentions";
+import { audienceMentions, buildDrawerHref, describeContextShort, insightCta, isMine, stripBodyLinks } from "@/lib/insight-mentions";
+import { DAY_MS } from "@/lib/format";
 
-export { audienceMentions, describeContextShort, isMine };
+export { audienceMentions, buildDrawerHref, describeContextShort, insightCta, isMine, stripBodyLinks };
 
-export const BRIEF_KIND = "brief" as const;
-export const BRIEF_NARRATE_PROCESS = "brief_narrate" as const;
+const BRIEF_KIND = "brief" as const;
+const BRIEF_NARRATE_PROCESS = "brief_narrate" as const;
 export const MAX_POSTS_PER_DAY = 5;
 
 export type InsightScopeKind = "order" | "company" | "screen" | "global";
@@ -44,7 +45,7 @@ export interface BriefContext {
   metrics?: Array<{ label: string; value: string }> | null;
 }
 
-export interface InsightPost extends BriefFact {
+interface InsightPost extends BriefFact {
   body: string;
   severity: "info" | "warning" | "critical";
   audience: { user_ids: string[]; emails: string[]; roles: string[] };
@@ -56,9 +57,6 @@ const KIND_PRIORITY: Record<string, number> = {
   sin_evidencia: 2,
   por_certificar: 3,
   termina_sin_relevo: 4,
-  renovacion: 5,
-  ocupacion: 6,
-  huecos: 7,
 };
 
 const KIND_TITLE: Record<string, string> = {
@@ -67,14 +65,15 @@ const KIND_TITLE: Record<string, string> = {
   sin_evidencia: "Al aire sin evidencia",
   por_certificar: "Terminadas sin certificar",
   termina_sin_relevo: "Termina sin relevo",
-  renovacion: "Relevo del anunciante",
-  ocupacion: "Ocupación 14 días",
-  huecos: "Huecos vendibles",
 };
 
 /** Analizador determinista: hechos con números exactos del snapshot.
 //  Puro y testeable (tsx --test). Nunca inventa cifras: solo reformatea lo
-//  que ya trae getDashboardSnapshot(). */
+//  que ya trae getDashboardSnapshot().
+//  Contrato: el inbox es riesgos y bloqueos con dueño y acción (scope orden
+//  + por_certificar global). Las métricas de salud (ocupación, huecos,
+//  relevo 30d) viven solo en el dashboard: descartar una métrica no significa
+//  nada y el brief la regeneraría como nag permanente. */
 export function buildBriefFacts(snap: DashboardSnapshot, max = MAX_POSTS_PER_DAY): BriefFact[] {
   const facts: BriefFact[] = [];
   for (const a of snap.alerts ?? []) {
@@ -95,41 +94,6 @@ export function buildBriefFacts(snap: DashboardSnapshot, max = MAX_POSTS_PER_DAY
       title: `${KIND_TITLE.por_certificar} · ${snap.porCertificar}`,
       detail: `${snap.porCertificar} orden(es) terminada(s) sin foto-check — riesgo de disputa al cobrar.`,
       link: "/orders",
-    });
-  }
-  const ren = snap.renovacion30d;
-  if (ren.total > 0 && ren.conRelevo < ren.total) {
-    const pct = ren.ratio === null ? "—" : `${Math.round(ren.ratio * 100)}%`;
-    facts.push({
-      kind: "renovacion",
-      scopeKind: "global",
-      scopeId: null,
-      title: `Relevo 30d · ${ren.conRelevo}/${ren.total} (${pct})`,
-      detail: `${ren.total - ren.conRelevo} orden(es) que vencen en 30d sin siguiente orden del mismo anunciante.`,
-      link: "/orders",
-    });
-  }
-  const oc = snap.ocupacion14d;
-  if (oc.ratio !== null) {
-    facts.push({
-      kind: "ocupacion",
-      scopeKind: "global",
-      scopeId: null,
-      title: `Ocupación 14d · ${Math.round(oc.ratio * 100)}%`,
-      detail: `${oc.diasVendidos} de ${oc.diasDisponibles} pantalla-día vendidos en 14d.`,
-      link: "/screens",
-    });
-  }
-  if ((snap.huecos ?? []).length > 0) {
-    const top = (snap.huecos ?? []).slice(0, 3);
-    const libres = top.reduce((n, h) => n + h.diasLibres, 0);
-    facts.push({
-      kind: "huecos",
-      scopeKind: "global",
-      scopeId: null,
-      title: `Huecos · ${libres}d libres (top ${top.length})`,
-      detail: top.map((h) => `${h.screenName} ${h.diasLibres}d`).join(" · "),
-      link: "/screens",
     });
   }
   facts.sort(
@@ -175,7 +139,7 @@ export function resolveMentions(
   if (!c) return [u!];
   if (!u || u === c) return [c];
   const t = typeof updatedAt === "string" && updatedAt ? Date.parse(updatedAt) : NaN;
-  if (Number.isFinite(t) && nowMs - (t as number) > 30 * 86_400_000) return [c];
+  if (Number.isFinite(t) && nowMs - (t as number) > 30 * DAY_MS) return [c];
   return [c, u];
 }
 
@@ -286,7 +250,9 @@ export async function listWallInsights(
 
 function fallbackBody(f: BriefFact): string {
   const ctx = describeContextShort(f.context);
-  return `${f.detail}${ctx ? ` ${ctx}` : ""} Acción: abrir ${f.link}.`;
+  // Sin rutas crudas: el CTA de la card ya lleva el deep-link.
+  const action = insightCta({ kind: f.kind, scopeKind: f.scopeKind, scopeId: f.scopeId, links: [f.link] }).label;
+  return stripBodyLinks(`${f.detail}${ctx ? ` ${ctx}` : ""} Acción: ${action}.`);
 }
 
 /** Enriquece hechos con scope (OI) con contexto exacto de la DB
@@ -352,9 +318,9 @@ async function enrichOrderContext(
   return out;
 }
 
-/** Métricas de urgencia por kind global. Determinista, sin LLM:
- *  por_certificar = OIs terminadas sin foto (días esperando + monto en juego);
- *  renovacion = la más próxima sin relevo; ocupacion/huecos = del snapshot. */
+/** Métricas de urgencia para el único kind global del inbox
+ *  (por_certificar = OIs terminadas sin foto: días esperando + monto en
+ *  juego). Ocupación/huecos/relevo viven en el dashboard, no aquí. */
 async function enrichGlobalContext(
   storeId: string,
   snap: DashboardSnapshot,
@@ -363,11 +329,10 @@ async function enrichGlobalContext(
   const out = new Map<string, Array<{ label: string; value: string }>>();
   const want = new Set(facts.filter((f) => f.scopeKind === "global").map((f) => f.kind));
   if (want.size === 0) return out;
-  const { formatMoney, formatDayMonth } = await import("@/lib/format");
-  const { startOfDayUTC } = await import("@/lib/dates");
+  const { formatMoney, startOfDayUTC } = await import("@/lib/format");
   const db = getSupabase();
   const today00 = startOfDayUTC(Date.now());
-  const DAY = 86_400_000;
+  const DAY = DAY_MS;
   const t = (v: unknown): number | null => {
     const n = Date.parse(String(v ?? ""));
     return Number.isFinite(n) ? n : null;
@@ -410,70 +375,17 @@ async function enrichGlobalContext(
     }
   }
 
-  if (want.has("renovacion") && snap.renovacion30d.total > 0 && snap.renovacion30d.conRelevo < snap.renovacion30d.total) {
-    const { data: ois } = await db
-      .from("io_orders")
-      .select("id,starts_at,ends_at,advertiser_company_id,billing_company_id")
-      .eq("store_id", storeId)
-      .neq("status", "cancelled")
-      .limit(1000);
-    const rows = ((ois ?? []) as Array<Record<string, unknown>>);
-    const key = (r: Record<string, unknown>): string =>
-      String(r.advertiser_company_id ?? r.billing_company_id ?? "");
-    const in30 = rows.filter((r) => {
-      const e = t(r.ends_at);
-      return e !== null && e >= today00 && e <= today00 + 30 * DAY;
-    });
-    const without = in30.filter((o) => {
-      const e = t(o.ends_at) ?? 0;
-      const k = key(o);
-      if (!k) return true;
-      return !rows.some((x) => {
-        if (x === o || key(x) !== k) return false;
-        const s = t(x.starts_at);
-        return s !== null && s > e;
-      });
-    });
-    if (without.length > 0) {
-      const soonest = Math.min(...without.map((r) => t(r.ends_at) ?? today00));
-      const days = Math.max(0, Math.floor((soonest - today00) / DAY));
-      out.set(dedupeKey("renovacion", null), [
-        { label: "Sin relevo", value: `${without.length} de ${in30.length}` },
-        { label: "La más próxima", value: days === 0 ? "vence hoy" : `vence en ${days}d` },
-      ]);
-    }
-  }
-
-  if (want.has("ocupacion") && snap.ocupacion14d.ratio !== null) {
-    const oc = snap.ocupacion14d;
-    const top = (snap.huecos ?? [])[0];
-    const day = (ms: number): string => formatDayMonth(new Date(ms).toISOString());
-    const m = [
-      { label: "Vendidos", value: `${oc.diasVendidos} de ${oc.diasDisponibles}` },
-      { label: "Libres", value: `${oc.diasDisponibles - oc.diasVendidos} pantalla-día` },
-    ];
-    if (top && top.diasLibres > 0) m.push({ label: "Mayor hueco", value: `${top.screenName} · ${top.diasLibres}d` });
-    m.push({ label: "Ventana", value: `${day(today00)} → ${day(today00 + 14 * DAY)}` });
-    out.set(dedupeKey("ocupacion", null), m.slice(0, 4));
-  }
-
-  if (want.has("huecos") && (snap.huecos ?? []).length > 0) {
-    const top = (snap.huecos ?? []).slice(0, 3);
-    const libres = top.reduce((n, h) => n + h.diasLibres, 0);
-    const conHueco = (snap.huecos ?? []).filter((h) => h.diasLibres > 0).length;
-    out.set(dedupeKey("huecos", null), [
-      { label: "Días libres", value: `${libres}d (top ${top.length})` },
-      { label: "Con hueco", value: `${conHueco} de ${snap.counts.screens}` },
-      { label: "Ventana", value: "próximos 14d" },
-    ]);
-  }
   return out;
 }
 
 /** Narrador único (brief_narrate): hechos → 3-5 posts con explicación +
  *  1 accionable con deep-link. Prohibido inventar cifras: el prompt lo exige
- *  y el fallback ni siquiera toca un LLM. Con metering en ai_llm_usage. */
-async function narrateFacts(storeId: string, facts: BriefFact[]): Promise<Array<Pick<InsightPost, "title" | "body" | "severity"> & { kind: string; scopeKind: InsightScopeKind; scopeId: string | null; link: string }>> {
+ *  y el fallback ni siquiera toca un LLM. Con metering en ai_llm_usage.
+ *  Devuelve `degraded: true` cuando usó el fallback determinista. */
+async function narrateFacts(storeId: string, facts: BriefFact[]): Promise<{
+  posts: Array<Pick<InsightPost, "title" | "body" | "severity"> & { kind: string; scopeKind: InsightScopeKind; scopeId: string | null; link: string }>;
+  degraded: boolean;
+}> {
   try {
     const { getLlmConfig } = await import("@/lib/ai/llm-config");
     const { completeJson } = await import("@/lib/retrieval");
@@ -484,11 +396,13 @@ async function narrateFacts(storeId: string, facts: BriefFact[]): Promise<Array<
       "pantallas, monto, vigencia) y métricas de urgencia por kind global.",
       "PROHIBIDO inventar cifras, montos, porcentajes o nombres: nombra al",
       "cliente y usa sus cifras tal cual para que el aviso se lea humano,",
-      "y da 1 accionable con el deep-link dado. Sin novedad no hay post",
+      "y da 1 accionable en texto plano. PROHIBIDO URLs, rutas (/orders…),",
+      "queries (?order=…) o UUIDs en el body: la card ya tiene botón con",
+      "el deep-link. Sin novedad no hay post",
       "Responde SOLO JSON: {\"posts\": [{\"kind\": string, \"body\": string, \"severity\": \"info\"|\"warning\"|\"critical\"}]}.",
       "body: 1-2 frases de explicación con contexto + 1 accionable. Sin cifras nuevas.",
     ].join(" ");
-    const user = JSON.stringify({ facts: facts.map((f) => ({ kind: f.kind, scope: f.scopeId ?? "global", title: f.title, detail: f.detail, context: f.context ?? null, link: f.link })) });
+    const user = JSON.stringify({ facts: facts.map((f) => ({ kind: f.kind, scope: f.scopeId ?? "global", title: f.title, detail: f.detail, context: f.context ?? null })) });
     const order = [cfg.primary, cfg.fallback, cfg.fallback].filter(Boolean);
     let raw = "";
     for (let i = 0; i < order.length; i++) {
@@ -514,37 +428,61 @@ async function narrateFacts(storeId: string, facts: BriefFact[]): Promise<Array<
       const key = dedupeKey(fact.kind, fact.scopeId);
       if (!allowed.has(key)) continue;
       allowed.delete(key);
-      const body = p.body.trim().slice(0, 600);
+      // Cinturón y tirantes: el body nunca lleva rutas crudas (el CTA sí).
+      const body = stripBodyLinks(p.body.trim()).slice(0, 600);
       if (!body) continue;
       const sev = p.severity === "critical" || p.severity === "warning" ? p.severity : "info";
       out.push({ kind: fact.kind, scopeKind: fact.scopeKind, scopeId: fact.scopeId, title: fact.title, body, severity: sev, link: fact.link });
       if (out.length >= MAX_POSTS_PER_DAY) break;
     }
-    if (out.length > 0) return out;
+    if (out.length > 0) return { posts: out, degraded: false };
     throw new Error("narrate-empty");
   } catch {
-    return facts.map((f) => ({ kind: f.kind, scopeKind: f.scopeKind, scopeId: f.scopeId, title: f.title, body: fallbackBody(f), severity: "info" as const, link: f.link }));
+    return { posts: facts.map((f) => ({ kind: f.kind, scopeKind: f.scopeKind, scopeId: f.scopeId, title: f.title, body: fallbackBody(f), severity: "info" as const, link: f.link })), degraded: true };
+  }
+}
+
+/** ¿El brief ya corrió hoy (sys_runs kind='brief' terminado)? Para throttle
+ *  1x día compartido entre ruta manual y cron (ver scripts/run-brief.ts). */
+export async function briefAlreadyRanToday(storeId: string): Promise<boolean> {
+  try {
+    const { getLastFinishedAt } = await import("@/lib/background");
+    const { startOfDayUTC } = await import("@/lib/format");
+    const last = await getLastFinishedAt(storeId, BRIEF_KIND).catch(() => null);
+    const t = last ? Date.parse(last) : NaN;
+    return Number.isFinite(t) && t >= startOfDayUTC(Date.now());
+  } catch {
+    return false;
   }
 }
 
 /** Job determinista 1x día (sys_runs kind='brief'): snapshot → hechos →
  *  narrador → sys_insights. Silencio si sin cambios; tope 5/día. */
-export async function runBriefJob(storeId: string): Promise<{ inserted: number; runId: string | null; summary: string }> {
+export async function runBriefJob(
+  storeId: string,
+  opts: { force?: boolean; actor?: string } = {},
+): Promise<{ inserted: number; runId: string | null; summary: string }> {
   const { claimRunSlot, finishRun } = await import("@/lib/background");
   const { getDashboardSnapshot } = await import("@/lib/dashboard");
-  const { startOfDayUTC } = await import("@/lib/dates");
+  const { startOfDayUTC } = await import("@/lib/format");
   const db = getSupabase();
+  const notes: string[] = [];
+  if (opts.force && opts.actor) notes.push(`forzado por ${opts.actor}`);
   let runId: string | null = null;
   try {
     runId = await claimRunSlot(storeId, BRIEF_KIND, "Muro diario", 1).catch(() => null);
   } catch {
     runId = null;
   }
+  if (!runId) notes.push("sin slot de corrida (sys_runs sin tracking)");
   const done = async (summary: string, status: "done" | "error" = "done") => {
     if (runId) await finishRun(runId, { status, processed: 1, failed: 0, summary }).catch(() => undefined);
     return { inserted: 0, runId, summary };
   };
   try {
+    if (!opts.force && (await briefAlreadyRanToday(storeId))) {
+      return done("Muro: ya corrió hoy.");
+    }
     const today00 = startOfDayUTC(Date.now());
     const { data: today } = await db
       .from("sys_insights")
@@ -554,18 +492,22 @@ export async function runBriefJob(storeId: string): Promise<{ inserted: number; 
     const existing = new Set(((today ?? []) as Array<Record<string, unknown>>).map((r) => dedupeKey(String(r.kind ?? ""), (r.scope_id as string | null) ?? null)));
     if (existing.size >= MAX_POSTS_PER_DAY) return done(`Muro: techo ${MAX_POSTS_PER_DAY}/día alcanzado, silencio.`);
     const snap = await getDashboardSnapshot(storeId);
-    const facts = buildBriefFacts(snap, MAX_POSTS_PER_DAY).filter((f) => !existing.has(dedupeKey(f.kind, f.scopeId)));
-    if (facts.length === 0) return done("Muro: sin cambios, silencio.");
+    const fresh = buildBriefFacts(snap, MAX_POSTS_PER_DAY)
+      .filter((f) => !existing.has(dedupeKey(f.kind, f.scopeId)))
+      .slice(0, Math.max(0, MAX_POSTS_PER_DAY - existing.size));
+    if (fresh.length === 0) return done("Muro: sin cambios, silencio.");
     // Arrobas desde auditoría de las OIs con scope (issue #11).
-    const orderIds = [...new Set(facts.filter((f) => f.scopeKind === "order" && f.scopeId).map((f) => f.scopeId as string))];
+    const orderIds = [...new Set(fresh.filter((f) => f.scopeKind === "order" && f.scopeId).map((f) => f.scopeId as string))];
     let audit = new Map<string, { created_by: string | null; updated_by: string | null; updated_at: string | null }>();
     if (orderIds.length > 0) {
-      const { data } = await db.from("io_orders").select("id,created_by,updated_by,updated_at").in("id", orderIds).limit(100);
+      const { data } = await db.from("io_orders").select("id,created_by,updated_by,updated_at").eq("store_id", storeId).in("id", orderIds).limit(100);
       audit = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), {
         created_by: (r.created_by as string | null) ?? null,
         updated_by: (r.updated_by as string | null) ?? null,
         updated_at: (r.updated_at as string | null) ?? null,
       }]));
+      const missing = orderIds.filter((id) => !audit.has(id));
+      if (missing.length > 0) notes.push(`sin auditoría en ${missing.length} orden(es): menciones vacías`);
     }
     let members: Array<{ user_id: string; email: string | null }> = [];
     try {
@@ -573,20 +515,25 @@ export async function runBriefJob(storeId: string): Promise<{ inserted: number; 
       members = await listStoreMembers(storeId);
     } catch {
       members = [];
+      notes.push("sin miembros: audiencia sin user_ids");
     }
     // Contexto humano exacto (cliente, pantallas, monto, vigencia) para el
     // narrador y la card. Determinista, un batch por tabla.
-    const ctxBy = await enrichOrderContext(storeId, facts).catch(() => new Map<string, BriefContext>());
-    for (const f of facts) {
+    const ctxBy = await enrichOrderContext(storeId, fresh).catch(() => {
+      notes.push("sin contexto de OI: cards sin cliente/monto");
+      return new Map<string, BriefContext>();
+    });
+    for (const f of fresh) {
       if (f.scopeKind === "order" && f.scopeId && ctxBy.has(f.scopeId)) {
         f.context = ctxBy.get(f.scopeId);
       }
     }
     // Métricas de urgencia para kinds globales (mismas cifras, otro ángulo).
-    const gctx = await enrichGlobalContext(storeId, snap, facts).catch(
-      () => new Map<string, Array<{ label: string; value: string }>>(),
-    );
-    for (const f of facts) {
+    const gctx = await enrichGlobalContext(storeId, snap, fresh).catch(() => {
+      notes.push("sin métricas globales: cards sin urgencia");
+      return new Map<string, Array<{ label: string; value: string }>>();
+    });
+    for (const f of fresh) {
       if (f.scopeKind !== "global") continue;
       const m = gctx.get(dedupeKey(f.kind, f.scopeId));
       if (m) {
@@ -602,13 +549,14 @@ export async function runBriefJob(storeId: string): Promise<{ inserted: number; 
         };
       }
     }
-    const narrated = await narrateFacts(storeId, facts);
+    const narrated = await narrateFacts(storeId, fresh);
+    if (narrated.degraded) notes.push("LLM caído: cuerpos deterministas sin narración");
     const ctxOf = (kind: string, scopeId: string | null): BriefContext | null => {
       if (scopeId && ctxBy.has(scopeId)) return ctxBy.get(scopeId) as BriefContext;
-      const f = facts.find((x) => x.kind === kind && x.scopeId === scopeId);
+      const f = fresh.find((x) => x.kind === kind && x.scopeId === scopeId);
       return f?.context ?? null;
     };
-    const rows = narrated.slice(0, MAX_POSTS_PER_DAY - existing.size).map((p) => {
+    const rows = narrated.posts.map((p) => {
       const a = p.scopeKind === "order" && p.scopeId ? audit.get(p.scopeId) : undefined;
       const emails = a ? resolveMentions(a.created_by, a.updated_by, a.updated_at) : [];
       const roles = p.scopeKind === "global" ? ["seller", "admin"] : [];
@@ -628,7 +576,8 @@ export async function runBriefJob(storeId: string): Promise<{ inserted: number; 
     if (rows.length === 0) return done("Muro: sin cambios, silencio.");
     const { error } = await db.from("sys_insights").insert(rows);
     if (error) throw new Error(`Insights insert: ${error.message}`);
-    const summary = `Muro: ${rows.length} post(s) (hechos deterministas + ${BRIEF_NARRATE_PROCESS}).`;
+    const degraded = notes.length > 0 ? ` Avisos: ${notes.join("; ")}.` : "";
+    const summary = `Muro: ${rows.length} post(s) (hechos deterministas + ${BRIEF_NARRATE_PROCESS}).${degraded}`;
     if (runId) await finishRun(runId, { status: "done", processed: 1, failed: 0, summary }).catch(() => undefined);
     return { inserted: rows.length, runId, summary };
   } catch (e) {

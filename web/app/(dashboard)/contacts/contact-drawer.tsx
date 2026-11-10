@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Bot, Building2, FileText, Mail, Pencil, Phone, RotateCcw, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,8 +15,22 @@ import { CompanyIOBadge, CompanyPrincipalBadge } from "@/components/company-badg
 import { hasMinRole, type MemberRole } from "@/lib/roles";
 import { toTitleCase } from "@/lib/format";
 import type { CrmContactListItem } from "@/lib/crm-db";
-import { ContactChat } from "./contact-chat";
 import { ContactEditForm } from "./contact-edit-form";
+
+// Carga diferida: el chat solo se descarga al usarse (mismo patrón que
+// orden-drawer: el drawer inicial no paga react-markdown).
+function DrawerLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" aria-label={label}>
+      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+const ContactChat = dynamic(() => import("./contact-chat").then((m) => m.ContactChat), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando chat" />,
+});
 
 type Tab = "resumen" | "pedidos" | "agentes";
 
@@ -62,29 +77,38 @@ export function ContactDrawer({
   const name = fullName(contact);
   const displayName = name === "—" ? "Contacto" : toTitleCase(name);
 
-  const loadIos = useCallback(() => {
+  const loadIos = useCallback((signal?: AbortSignal) => {
     setIosError(null);
     if (!contact.company_id) {
       setIos([]);
       return;
     }
-    fetch(`/api/companies/${contact.company_id}`)
+    fetch(`/api/companies/${contact.company_id}`, { cache: "no-store", signal })
       .then(async (res) => {
         if (!res.ok) throw new Error("No se pudieron cargar los pedidos.");
         const j = (await res.json()) as { ios?: CompanyIO[] };
         setIos(j.ios ?? []);
       })
       .catch((e: unknown) => {
+        if (signal?.aborted) return;
         setIosError(e instanceof Error ? e.message : "No se pudieron cargar.");
       });
   }, [contact.company_id]);
 
+  // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
-    setTab("resumen");
-    setIos(null);
-    setIosError(null);
-    setEditingFicha(false);
-    loadIos();
+    const ac = new AbortController();
+    const h = setTimeout(() => {
+      setTab("resumen");
+      setIos(null);
+      setIosError(null);
+      setEditingFicha(false);
+      loadIos(ac.signal);
+    }, 0);
+    return () => {
+      clearTimeout(h);
+      ac.abort();
+    };
   }, [contact.id, loadIos]);
 
   const drawerTabs: DrawerTabDef[] = [
@@ -120,7 +144,7 @@ export function ContactDrawer({
           {iosError && (
             <div className="flex flex-col gap-3">
               <AppCardState>{iosError}</AppCardState>
-              <Button variant="outline" size="sm" className="w-fit" onClick={loadIos}>
+              <Button variant="outline" size="sm" className="w-fit" onClick={() => loadIos()}>
                 <RotateCcw aria-hidden />
                 Reintentar
               </Button>

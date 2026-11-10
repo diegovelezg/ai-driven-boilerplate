@@ -12,6 +12,10 @@
 // - `EntityCount`: "N resultados" + "muestra parcial" cuando truncated.
 // - `EntityEmpty`: vacío con SearchX + acción Limpiar.
 // - `EntityPagination`: Anterior/Siguiente con "Página x de y".
+// - `useListNav`: navegación de lista (replace con transition para no
+//   bloquear el render). Recibe la query ya construida por el `buildParams`
+//   de cada lista; los params que existen difieren por dominio y se quedan
+//   en cada archivo.
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, FilterX, SearchX } from "lucide-react";
@@ -63,6 +67,26 @@ export function useEntitySelection(
   }, [aliases, basePath, param, router]);
 
   return { selectedId, open, close };
+}
+
+/** Navegación de lista: `router.replace` con transition para no bloquear el
+ *  render (botones deshabilitados vía `isPending`). Recibe la query ya
+ *  construida por el `buildParams` de cada lista. */
+export function useListNav(basePath: string): {
+  go: (qs: string, opts?: { scroll?: boolean }) => void;
+  isPending: boolean;
+} {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const go = useCallback(
+    (qs: string, opts?: { scroll?: boolean }) => {
+      startTransition(() => {
+        router.replace(`${basePath}?${qs}`, opts);
+      });
+    },
+    [router, basePath],
+  );
+  return { go, isPending };
 }
 
 /** "N resultados" (+ "· muestra parcial" si la fuente se truncó). */

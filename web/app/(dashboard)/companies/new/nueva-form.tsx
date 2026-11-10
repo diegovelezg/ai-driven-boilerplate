@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
@@ -21,6 +21,7 @@ import {
   validateCompanyFields,
   type CompanyFieldKey,
 } from "../company-validation";
+import { failSubmit, useServerFieldErrors } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
 
@@ -53,24 +54,12 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
       country: String(fd.get("country") ?? ""),
       commission: showCommission ? String(fd.get("agency_commission_pct") ?? "") : "",
     });
-    if (errs.length > 0) {
-      e.preventDefault();
-      fail(
-        errs.map((r) => r.key),
-        errs.length === 1 ? "Revisa el campo marcado" : "Revisa los campos marcados",
-        errs.map((r) => r.message).join(" "),
-      );
-    }
+    failSubmit(e, errs, fail);
   }
 
   // Errores del server action (p. ej. Web inválida, sin permiso): mismo
   // tratamiento, borde + toast en vez de texto inline.
-  useEffect(() => {
-    if (!state.message || state.ok) return;
-    const keys = fieldsFromMessage(state.message);
-    setInvalid(new Set(keys));
-    toast.add({ title: "No se pudo crear la empresa", description: state.message, type: "error" });
-  }, [state]);
+  useServerFieldErrors(state, fieldsFromMessage, setInvalid, "No se pudo crear la empresa");
 
   return (
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">

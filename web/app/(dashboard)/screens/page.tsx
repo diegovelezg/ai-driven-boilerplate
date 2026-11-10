@@ -4,8 +4,8 @@ import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
-import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
-import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
+import { getSupabase } from "@/lib/supabase";
+import { loadPageData } from "@/lib/page-data";
 import { ScreensList } from "./screens-list";
 import { listScreenFilterOptions, listScreens, parseScreensSort } from "@/lib/screens-db";
 
@@ -58,44 +58,36 @@ export default async function InventarioPage({
   const selectedId = ((sp.pantalla ?? sp.screen) ?? "").trim() || null;
   const PAGE_SIZE = 20;
 
-  const dbReady = isSupabaseConfigured();
-  const activeStoreId = await resolveActiveStoreId();
-  const connected = Boolean(activeStoreId);
-
-  let rows: Awaited<ReturnType<typeof listScreens>>["rows"] = [];
-  let totalCount = 0;
-  let truncated = false;
-  let suppliers: Array<{ id: string; name: string }> = [];
-  let cities: string[] = [];
-  let counts: Record<string, number> = {};
-  let error: string | null = null;
-
-  if (connected && dbReady) {
-    try {
-      const storeId = activeStoreId!;
-      if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
-        error = "Sin acceso a esta tienda.";
-      } else {
-        const [list, opts] = await Promise.all([
-          listScreens(storeId, { q, supplierId, city, active, sortKey, sortDir, page, pageSize: PAGE_SIZE }),
-          listScreenFilterOptions(storeId),
-        ]);
-        rows = list.rows;
-        totalCount = list.total;
-        truncated = list.truncated ?? false;
-        suppliers = opts.suppliers;
-        cities = opts.cities;
-        const db = getSupabase();
-        const tables = ["inv_venues", "inv_screens", "inv_slots"] as const;
-        const settled = await Promise.all(
-          tables.map((t) => db.from(t).select("id", { count: "exact", head: true }).eq("store_id", storeId)),
-        );
-        counts = Object.fromEntries(tables.map((t, i) => [t, settled[i]?.count ?? 0]));
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
-    }
-  }
+  const { data, connected, dbReady, error } = await loadPageData(
+    async (storeId) => {
+      const [list, opts] = await Promise.all([
+        listScreens(storeId, { q, supplierId, city, active, sortKey, sortDir, page, pageSize: PAGE_SIZE }),
+        listScreenFilterOptions(storeId),
+      ]);
+      const db = getSupabase();
+      const tables = ["inv_venues", "inv_screens", "inv_slots"] as const;
+      const settled = await Promise.all(
+        tables.map((t) => db.from(t).select("id", { count: "exact", head: true }).eq("store_id", storeId)),
+      );
+      return {
+        rows: list.rows,
+        totalCount: list.total,
+        truncated: list.truncated ?? false,
+        suppliers: opts.suppliers,
+        cities: opts.cities,
+        counts: Object.fromEntries(tables.map((t, i) => [t, settled[i]?.count ?? 0])),
+      };
+    },
+    {
+      rows: [] as Awaited<ReturnType<typeof listScreens>>["rows"],
+      totalCount: 0,
+      truncated: false,
+      suppliers: [] as Array<{ id: string; name: string }>,
+      cities: [] as string[],
+      counts: {} as Record<string, number>,
+    },
+  );
+  const { rows, totalCount, truncated, suppliers, cities, counts } = data;
 
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">

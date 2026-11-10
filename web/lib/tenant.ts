@@ -29,7 +29,7 @@ export interface TenantStore {
 /** Lista tiendas ordenadas por creación. Si hay más de 50, valida el ?store=
  *  pedido por ID directo para no caer al tenant equivocado por ventana.
  *  `truncated` declara el corte (nunca total exacto silencioso). */
-export async function listStores(
+async function listStores(
   requestedId?: string | null,
 ): Promise<{ stores: TenantStore[]; truncated: boolean; total: number }> {
   const db = getSupabase();
@@ -60,41 +60,6 @@ export async function listStores(
     createLogger("tenant")(`stores truncados a 50/${total}: validar ?store= por ID directo`);
   }
   return { stores: ((data ?? []) as Array<Record<string, unknown>>).map(mapRow), truncated, total };
-}
-
-/** Valida ?store= contra la lista; si no existe, null (el caller aplica fallback). */
-export function pickRequestedStore(
-  stores: TenantStore[],
-  requestedId: string | null | undefined,
-): TenantStore | null {
-  if (!requestedId) return null;
-  return stores.find((s) => s.id === requestedId) ?? null;
-}
-
-/** Resuelve el tenant activo con el orden canónico. Nunca null si hay tiendas. */
-async function resolveActiveStore(
-  stores: TenantStore[],
-  requestedId: string | null | undefined,
-): Promise<TenantStore> {
-  const picked = pickRequestedStore(stores, requestedId);
-  if (picked) return picked;
-  return stores[0];
-}
-
-/** Atajo: lista + resuelve. `truncated` declara el corte a 50 (la UI que
- *  liste tiendas debe pintarlo; el ?store= hostil se valida por ID directo). */
-export async function getActiveStore(
-  requestedId: string | null | undefined,
-): Promise<{ stores: TenantStore[]; active: TenantStore | null; truncated: boolean }> {
-  const { stores, truncated } = await listStores();
-  if (requestedId && !stores.some((s) => s.id === requestedId)) {
-    const direct = await listStores(requestedId).catch(() => null);
-    for (const d of direct?.stores ?? []) {
-      if (!stores.some((s) => s.id === d.id)) stores.push(d);
-    }
-  }
-  if (stores.length === 0) return { stores, active: null, truncated };
-  return { stores, active: await resolveActiveStore(stores, requestedId), truncated };
 }
 
 /** Nombre propio: sys_stores.name. Sin fallback: si está vacío es un
@@ -188,7 +153,7 @@ export async function getMyStoreRole(storeId: string): Promise<MemberRole | null
 
 /** ¿El usuario actual alcanza el rol mínimo en `storeId`? null = anon-dev explícito.
  *  Sin auth y sin bypass: false (fail-closed). */
-export async function requireMinRole(
+async function requireMinRole(
   storeId: string,
   need: MemberRole,
 ): Promise<boolean | null> {
@@ -198,6 +163,27 @@ export async function requireMinRole(
   const role = roles.get(storeId) ?? null;
   if (role === null) return false; // sin membresía: deniega
   return hasMinRole(role, need);
+}
+
+/** Mensajes de denegación por rol (SSOT: una sola redacción por nivel). */
+const ROLE_DENY_MSG: Record<MemberRole, string> = {
+  viewer: "Requiere acceso a la tienda.",
+  seller: "Requiere rol vendedor o superior.",
+  admin: "Requiere rol admin o propietario.",
+  owner: "Solo el propietario puede realizar esta acción.",
+};
+
+/** Niega el acceso si el rol en `storeId` no alcanza `need`. Devuelve el
+ *  mensaje de denegación o null si ok. Fail-closed: si el chequeo lanza,
+ *  deniega. `message` permite el texto específico del flujo. */
+export async function denyRole(
+  storeId: string,
+  need: MemberRole,
+  message?: string,
+): Promise<string | null> {
+  const allowed = await requireMinRole(storeId, need).catch(() => false);
+  if (allowed === false) return message ?? ROLE_DENY_MSG[need];
+  return null;
 }
 
 /** Membresía por userId explícito (service_role, bypassa RLS para el check).
