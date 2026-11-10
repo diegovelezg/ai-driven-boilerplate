@@ -395,11 +395,76 @@ export async function getCrmCompany(
     .maybeSingle();
   if (error) throw new Error(`CRM read: ${error.message}`);
   if (!data) return null;
-  const [{ data: contacts }, { data: campaigns }, { data: ios }] = await Promise.all([
+  const [{ data: contacts }, { data: campaigns }, { data: iosAll }] = await Promise.all([
     db.from("crm_contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,deleted_at").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
     db.from("io_campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
-    db.from("io_orders").select("id,io_number,brand,status").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(50),
+    // Historial para la red comercial (drawer Vínculos): hasta 500 IOs donde
+    // participa (como anunciante o facturación). La marca es metadato del
+    // pedido (io_orders.brand), la contraparte se resuelve abajo.
+    db.from("io_orders").select("id,io_number,brand,status,advertiser_company_id,billing_company_id").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(500),
   ]);
+  const iosRows = ((iosAll ?? []) as Array<Record<string, unknown>>).map((o) => ({
+    id: String(o.id),
+    io_number: String(o.io_number ?? ""),
+    brand: (o.brand as string | null) ?? null,
+    status: String(o.status ?? ""),
+    advertiser_company_id: (o.advertiser_company_id as string | null) ?? null,
+    billing_company_id: (o.billing_company_id as string | null) ?? null,
+  }));
+  // Red derivada: marcas (distinct normalizado) + contrapartes por rol.
+  // Directa (advertiser=billing) no cuenta como agencia ni anunciante.
+  const brandCount = new Map<string, { brand: string; ios: number }>();
+  const agencyIds = new Map<string, number>();
+  const advertiserIds = new Map<string, number>();
+  for (const o of iosRows) {
+    const b = (o.brand ?? "").trim();
+    if (b) {
+      const k = b.toUpperCase();
+      const prev = brandCount.get(k);
+      if (prev) prev.ios += 1;
+      else brandCount.set(k, { brand: b, ios: 1 });
+    }
+    const adv = o.advertiser_company_id;
+    const bill = o.billing_company_id;
+    if (adv === companyId && bill && bill !== companyId) {
+      agencyIds.set(bill, (agencyIds.get(bill) ?? 0) + 1);
+    }
+    if (bill === companyId && adv && adv !== companyId) {
+      advertiserIds.set(adv, (advertiserIds.get(adv) ?? 0) + 1);
+    }
+  }
+  const counterpartIds = [...new Set([...agencyIds.keys(), ...advertiserIds.keys()])];
+  const nameBy = new Map<string, { name: string; kind: CompanyKind | null }>();
+  if (counterpartIds.length > 0) {
+    const { data: counterparties } = await db
+      .from("crm_companies")
+      .select("id,name,kind")
+      .eq("store_id", storeId)
+      .in("id", counterpartIds);
+    for (const c of ((counterparties ?? []) as Array<Record<string, unknown>>)) {
+      const id = String(c.id);
+      nameBy.set(id, {
+        name: String(c.name ?? "—"),
+        kind: (c.kind as CompanyKind | null) ?? null,
+      });
+    }
+  }
+  const toCompanies = (m: Map<string, number>): CompanyNetworkCompany[] =>
+    [...m.entries()]
+      .map(([id, ios]) => ({
+        id,
+        name: nameBy.get(id)?.name ?? "—",
+        kind: nameBy.get(id)?.kind ?? null,
+        ios,
+      }))
+      .sort((a, b) => b.ios - a.ios || a.name.localeCompare(b.name, "es"));
+  const network: CompanyNetwork = {
+    brands: [...brandCount.values()].sort((a, b) => b.ios - a.ios || a.brand.localeCompare(b.brand, "es")),
+    agencies: toCompanies(agencyIds),
+    advertisers: toCompanies(advertiserIds),
+  };
+  // Ficha: solo las 50 recientes (comportamiento previo intacto).
+  const ios = iosRows.slice(0, 50);
   return {
     company: data as Record<string, unknown>,
     contacts: ((contacts ?? []) as Array<Record<string, unknown>>).map((c) => ({
@@ -422,11 +487,7 @@ export async function getCrmCompany(
       ends_at: (m.ends_at as string | null) ?? null,
       primary_contact_id: (m.primary_contact_id as string | null) ?? null,
     })),
-    ios: ((ios ?? []) as Array<Record<string, unknown>>).map((o) => ({
-      id: String(o.id),
-      io_number: String(o.io_number ?? ""),
-      brand: (o.brand as string | null) ?? null,
-      status: String(o.status ?? ""),
-    })),
+    ios,
+    network,
   };
 }

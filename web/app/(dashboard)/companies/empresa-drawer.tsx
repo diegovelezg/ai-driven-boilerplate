@@ -3,15 +3,12 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Building2, Bot, FileText, Globe, Plus, UserRound } from "lucide-react";
-import { ArchiveToggleButton, EditButton, RetryButton, SubmitButton } from "@/components/buttons";
+import { Building2, Bot, FileText, Globe, Network, UserRound } from "lucide-react";
+import { ArchiveToggleButton, EditButton, RetryButton } from "@/components/buttons";
 import { ArchivedBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
-import { Separator } from "@/components/ui/separator";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Label } from "@/components/ui/label";
-import { ComboboxField } from "@/components/combobox-field";
 import { AppCard, AppCardState } from "@/components/app-card";
+import { SectionHeading } from "@/components/section-heading";
 import {
   DrawerShell,
   type DrawerTabDef,
@@ -24,9 +21,7 @@ import {
   DrawerTableTd,
   DrawerTableTh,
 } from "@/components/drawer-table";
-import { createContactAction, setCompanyArchivedAction, setContactArchivedAction, type CrmState } from "@/lib/crm-actions";
-import { EMAIL_RE } from "@/lib/validation";
-import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
+import { setCompanyArchivedAction, setContactArchivedAction, type CrmState } from "@/lib/crm-actions";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
@@ -85,142 +80,31 @@ interface DrawerCampaign {
   status: string;
 }
 
+interface NetworkBrand {
+  brand: string;
+  ios: number;
+}
+
+interface NetworkCompany {
+  id: string;
+  name: string;
+  kind: string | null;
+  ios: number;
+}
+
 interface EmpresaDetail {
   company: Record<string, unknown>;
   contacts: DrawerContact[];
   campaigns: DrawerCampaign[];
   ios: DrawerIO[];
+  network?: { brands: NetworkBrand[]; agencies: NetworkCompany[]; advertisers: NetworkCompany[] };
   myRole?: MemberRole | null;
 }
 
-type TabId = "ficha" | "perfil" | "contactos" | "pedidos" | "agentes";
+type TabId = "ficha" | "perfil" | "contactos" | "pedidos" | "vinculos" | "agentes";
 
 function contactName(c: DrawerContact): string {
   return [c.first_name, c.last_name].filter(Boolean).join(" ") || "—";
-}
-
-function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: string; siblingJobTitles: string[]; onSaved: () => void }) {
-  const [pending, startTransition] = useTransition();
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const { invalid, mark, clear, bad } = useInvalidFields<"email" | "phone">();
-  const [jobTitle, setJobTitle] = useState("");
-  const [isPrimary, setIsPrimary] = useState(false);
-  const [globalTitles, setGlobalTitles] = useState<string[]>([]);
-  // Cargos globales ya usados: evita repetir el mismo cargo con otra escritura.
-  // setState solo en el callback async del fetch (patrón permitido por el lint).
-  useEffect(() => {
-    let alive = true;
-    const ac = new AbortController();
-    const h = setTimeout(() => {
-      fetch("/api/contacts/job-titles", { cache: "no-store", signal: ac.signal })
-        .then(async (res) => (res.ok ? ((await res.json()) as { job_titles?: string[] }) : null))
-        .then((j) => {
-          if (!alive || !j || !Array.isArray(j.job_titles)) return;
-          setGlobalTitles(j.job_titles.filter((t): t is string => typeof t === "string" && t.trim() !== ""));
-        })
-        .catch(() => {});
-    }, 0);
-    return () => {
-      alive = false;
-      clearTimeout(h);
-      ac.abort();
-    };
-  }, []);
-  const jobTitles = useMemo(() => {
-    const merged: string[] = [];
-    for (const t of [...siblingJobTitles, ...globalTitles]) {
-      const v = t.trim();
-      if (v && !merged.some((m) => m.toLowerCase() === v.toLowerCase())) merged.push(v);
-    }
-    return merged.sort((a, b) => a.localeCompare(b, "es"));
-  }, [siblingJobTitles, globalTitles]);
-
-  async function submit(form: FormData) {
-    const em = String(form.get("email") ?? "").trim();
-    const ph = String(form.get("phone") ?? "").trim();
-    if (!em && !ph) {
-      mark(["email", "phone"]);
-      toastFormError("Revisa los campos marcados", "Email o teléfono requerido.");
-      return;
-    }
-    if (em && !EMAIL_RE.test(em)) {
-      mark(["email"]);
-      toastFormError("Revisa el campo marcado", "Email inválido.");
-      return;
-    }
-    startTransition(async () => {
-      const res: CrmState = await createContactAction(form);
-      if (!res.ok) {
-        const keys: Array<"email" | "phone"> = /teléfono|telefono/i.test(res.message) && /email/i.test(res.message)
-          ? ["email", "phone"]
-          : /email/i.test(res.message)
-            ? ["email"]
-            : /teléfono|telefono/i.test(res.message)
-              ? ["phone"]
-              : [];
-        mark(keys);
-        toastFormError("No se pudo agregar el contacto", res.message);
-        return;
-      }
-      onSaved();
-    });
-  }
-
-  const ready = email.trim() !== "" || phone.trim() !== "";
-
-  return (
-    <form action={submit} noValidate className="flex flex-wrap items-end gap-3">
-      <input type="hidden" name="company_id" value={companyId} />
-      <label className="flex flex-col gap-1 text-xs">
-        Nombre
-        <input name="first_name" maxLength={120} className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
-      </label>
-      <label className="flex flex-col gap-1 text-xs">
-        Apellido
-        <input name="last_name" maxLength={120} className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm" />
-      </label>
-      <label className="flex flex-col gap-1 text-xs">
-        Email
-        <input name="email" maxLength={320} value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} aria-invalid={invalid.has("email")} className={`h-8 rounded-lg border border-border bg-background px-2.5 text-sm${bad("email")}`} />
-      </label>
-      <label className="flex flex-col gap-1 text-xs">
-        Teléfono
-        <input name="phone" maxLength={40} value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} aria-invalid={invalid.has("phone")} className={`h-8 rounded-lg border border-border bg-background px-2.5 text-sm${bad("phone")}`} />
-      </label>
-      <div className="flex min-w-36 flex-col gap-1 text-xs">
-        Cargo
-        <input type="hidden" name="job_title" value={jobTitle} />
-        <ComboboxField
-          items={jobTitles}
-          value={jobTitle}
-          onChange={setJobTitle}
-          placeholder="Compras, Gerencia…"
-          emptyText={jobTitle.trim() ? "Enter para usar este cargo." : "Sin cargos registrados."}
-          customLabel={(q) => <>Usar “{q}”</>}
-          ariaLabel="Cargo"
-          disabled={pending}
-        />
-      </div>
-      <div className="flex h-8 items-center gap-2">
-        <input type="hidden" name="is_primary" value={isPrimary ? "on" : ""} />
-        <Checkbox
-          id="new-contact-is-primary"
-          checked={isPrimary}
-          onCheckedChange={(v) => setIsPrimary(v === true)}
-          disabled={pending}
-          aria-label="Contacto principal"
-        />
-        <Label htmlFor="new-contact-is-primary" className="text-xs font-normal">
-          Principal
-        </Label>
-      </div>
-      <SubmitButton pending={pending} disabled={!ready} title={!ready ? "Agrega email o teléfono" : undefined} pendingLabel="Agregando…">
-        <Plus aria-hidden />
-        Agregar
-      </SubmitButton>
-    </form>
-  );
 }
 
 export function EmpresaDrawer({
@@ -268,14 +152,6 @@ export function EmpresaDrawer({
   // Estable por identidad de `detail`: evita que `?? []` cree un array
   // nuevo en cada render y rompa el useMemo de abajo.
   const contacts = useMemo(() => detail?.contacts ?? [], [detail]);
-  const siblingJobTitles = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const c of contacts) {
-      const raw = (c.job_title ?? "").trim();
-      if (raw && !seen.has(raw.toLowerCase())) seen.set(raw.toLowerCase(), raw);
-    }
-    return [...seen.values()].sort((a, b) => a.localeCompare(b, "es"));
-  }, [contacts]);
   const ios = detail?.ios ?? [];
   const campaigns = detail?.campaigns ?? [];
   const company = detail?.company;
@@ -313,11 +189,22 @@ export function EmpresaDrawer({
         ? (normalizeCommissionPct(commissionRaw) ?? null)
         : null;
 
+  const isAdvertiser = kind === "anunciante";
+  const isProvider = kind === "proveedor";
+  const network = detail?.network;
+  const counterparties = isAdvertiser ? (network?.agencies ?? []) : (network?.advertisers ?? []);
+  const counterLabel = isAdvertiser ? "Agencias" : "Anunciantes";
+  const counterEmpty = isAdvertiser
+    ? "Sin agencias vinculadas: aún no hay órdenes intermediadas."
+    : "Sin anunciantes gestionados: aún no hay órdenes intermediadas.";
+
   const tabs: DrawerTabDef[] = [
     { id: "ficha", label: "Ficha", icon: Building2 },
     { id: "perfil", label: "Perfil", icon: Globe },
     { id: "contactos", label: `Contactos (${contacts.length})`, icon: UserRound },
     { id: "pedidos", label: `Órdenes (${ios.length})`, icon: FileText },
+    // Proveedor: sin red comercial (su vínculo es inventario, no órdenes).
+    ...(!isProvider ? [{ id: "vinculos", label: "Vínculos", icon: Network } as DrawerTabDef] : []),
     { id: "agentes", label: "Agentes", icon: Bot },
   ];
 
@@ -480,15 +367,15 @@ export function EmpresaDrawer({
       )}
 
       {detail && tab === "contactos" && (
-        <AppCard
-          title={`Contactos (${contacts.length})`}
-          description="Varios contactos por empresa. Solo uno puede ser principal."
-          aria-label="Contactos de la empresa"
-        >
+        <section className="flex flex-col gap-2" aria-label="Contactos de la empresa">
+          <SectionHeading
+            title={`Contactos (${contacts.length})`}
+            hint="Varios contactos por empresa. Solo uno puede ser principal."
+          />
           {contacts.length === 0 ? (
-            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-              <p className="text-[13px] text-muted-foreground">Sin contactos. Agrega el primero abajo.</p>
-            </div>
+            <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
+              Sin contactos.
+            </p>
           ) : (
             <DrawerTable>
               <DrawerTableHeader>
@@ -535,28 +422,20 @@ export function EmpresaDrawer({
               </DrawerTableBody>
             </DrawerTable>
           )}
-          {canEdit && (
-            <>
-              <Separator className="mt-1" />
-              <div className="mt-1">
-                <NewContactForm companyId={companyId} siblingJobTitles={siblingJobTitles} onSaved={() => { router.refresh(); void load(); }} />
-              </div>
-            </>
-          )}
-        </AppCard>
+        </section>
       )}
 
       {detail && tab === "pedidos" && (
         <>
-          <AppCard
-            title={`Pedidos (${ios.length})`}
-            description="Órdenes donde aparece como anunciante o responsable de facturación."
-            aria-label="Pedidos de la empresa"
-          >
+          <section className="flex flex-col gap-2" aria-label="Pedidos de la empresa">
+            <SectionHeading
+              title={`Pedidos (${ios.length})`}
+              hint="Órdenes donde aparece como anunciante o responsable de facturación."
+            />
             {ios.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                <p className="text-[13px] text-muted-foreground">Sin pedidos: aún no es cliente.</p>
-              </div>
+              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
+                Sin pedidos: aún no es cliente.
+              </p>
             ) : (
               <DrawerTable>
                 <DrawerTableHeader>
@@ -575,16 +454,16 @@ export function EmpresaDrawer({
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </AppCard>
-          <AppCard
-            title={`Campañas (${campaigns.length})`}
-            description="Pautas registradas en las que participa."
-            aria-label="Campañas de la empresa"
-          >
+          </section>
+          <section className="flex flex-col gap-2" aria-label="Campañas de la empresa">
+            <SectionHeading
+              title={`Campañas (${campaigns.length})`}
+              hint="Pautas registradas en las que participa."
+            />
             {campaigns.length === 0 ? (
-              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                <p className="text-[13px] text-muted-foreground">Sin campañas.</p>
-              </div>
+              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
+                Sin campañas.
+              </p>
             ) : (
               <DrawerTable>
                 <DrawerTableHeader>
@@ -601,7 +480,74 @@ export function EmpresaDrawer({
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </AppCard>
+          </section>
+        </>
+      )}
+
+      {detail && tab === "vinculos" && !isProvider && (
+        <>
+          <section className="flex flex-col gap-2" aria-label="Marcas vinculadas">
+            <SectionHeading
+              title={`Marcas (${network?.brands.length ?? 0})`}
+              hint={
+                isAdvertiser
+                  ? "Marcas publicitadas en sus órdenes (una empresa puede tener varias)."
+                  : "Marcas que esta agencia ha gestionado en órdenes."
+              }
+            />
+            {(network?.brands.length ?? 0) === 0 ? (
+              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
+                Sin marcas vinculadas: aún no hay órdenes.
+              </p>
+            ) : (
+              <DrawerTable>
+                <DrawerTableHeader>
+                  <DrawerTableTh>Marca</DrawerTableTh>
+                  <DrawerTableTh numeric>Órdenes</DrawerTableTh>
+                </DrawerTableHeader>
+                <DrawerTableBody>
+                  {(network?.brands ?? []).map((b) => (
+                    <DrawerTableRow key={b.brand.toUpperCase()}>
+                      <DrawerTableTd className="font-medium">{toTitleCase(b.brand)}</DrawerTableTd>
+                      <DrawerTableTd numeric>{b.ios}</DrawerTableTd>
+                    </DrawerTableRow>
+                  ))}
+                </DrawerTableBody>
+              </DrawerTable>
+            )}
+          </section>
+          <section className="flex flex-col gap-2" aria-label={counterLabel}>
+            <SectionHeading
+              title={`${counterLabel} (${counterparties.length})`}
+              hint={
+                isAdvertiser
+                  ? "Agencias que le han manejado campañas (derivado de órdenes)."
+                  : "Anunciantes que esta agencia ha gestionado (derivado de órdenes)."
+              }
+            />
+            {counterparties.length === 0 ? (
+              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
+                {counterEmpty}
+              </p>
+            ) : (
+              <DrawerTable>
+                <DrawerTableHeader>
+                  <DrawerTableTh>{isAdvertiser ? "Agencia" : "Anunciante"}</DrawerTableTh>
+                  <DrawerTableTh>Tipo</DrawerTableTh>
+                  <DrawerTableTh numeric>Órdenes</DrawerTableTh>
+                </DrawerTableHeader>
+                <DrawerTableBody>
+                  {counterparties.map((c) => (
+                    <DrawerTableRow key={c.id}>
+                      <DrawerTableTd className="font-medium">{toTitleCase(c.name)}</DrawerTableTd>
+                      <DrawerTableTd className="text-xs">{kindLabel(c.kind)}</DrawerTableTd>
+                      <DrawerTableTd numeric>{c.ios}</DrawerTableTd>
+                    </DrawerTableRow>
+                  ))}
+                </DrawerTableBody>
+              </DrawerTable>
+            )}
+          </section>
         </>
       )}
         </>

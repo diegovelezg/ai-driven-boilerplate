@@ -43,7 +43,7 @@ export default async function NuevoContactoPage({
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && (
-        <AppCard title="Datos" description="Indica la empresa y al menos un canal: email o teléfono.">
+        <AppCard title="Datos">
           <NuevoContactoForm companies={companies} jobTitles={jobTitles} initialCompanyId={initialCompanyId} />
         </AppCard>
       )}
