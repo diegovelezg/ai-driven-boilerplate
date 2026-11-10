@@ -2,7 +2,7 @@
 
 import { useActionState, useRef, useState } from "react";
 import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import { toast } from "@/components/ui/toast";
 import {
   Select,
@@ -161,10 +161,10 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
         </div>
       </div>
       <div>
-        <Button type="submit" disabled={pending || !nameOk} title={!nameOk ? "Completa el nombre para continuar" : undefined}>
+        <SubmitButton pending={pending} disabled={!nameOk} title={!nameOk ? "Completa el nombre para continuar" : undefined} pendingLabel="Creando…">
           <Plus aria-hidden />
-          {pending ? "Creando…" : "Crear empresa"}
-        </Button>
+          Crear empresa
+        </SubmitButton>
       </div>
     </form>
   );

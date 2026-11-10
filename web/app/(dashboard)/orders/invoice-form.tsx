@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Building2, CalendarIcon, Receipt, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RowIconButton } from "@/components/buttons";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -94,17 +95,13 @@ function InvoiceDatePicker({
           </PopoverContent>
         </Popover>
         {selected && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Limpiar ${pickerLabel}`}
+          <RowIconButton
+            icon={X}
+            label={`Limpiar ${pickerLabel}`}
             title="Limpiar fecha"
-            onClick={() => onChange("")}
             disabled={disabled}
-          >
-            <X className="size-3.5" aria-hidden />
-          </Button>
+            onClick={() => onChange("")}
+          />
         )}
       </div>
     </div>

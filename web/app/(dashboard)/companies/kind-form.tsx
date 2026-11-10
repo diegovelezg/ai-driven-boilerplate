@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Button } from "@/components/ui/button";
+import { SubmitButton } from "@/components/buttons";
 import {
   Select,
   SelectContent,
@@ -67,7 +67,7 @@ export function KindForm({ companyId, initial, onSaved }: { companyId: string; i
             </SelectContent>
           </Select>
         </div>
-        <Button onClick={save} disabled={pending || !ready} title={!ready ? "Elige un tipo para continuar" : undefined}>{pending ? "Guardando…" : "Guardar"}</Button>
+        <SubmitButton onClick={save} pending={pending} disabled={!ready} title={!ready ? "Elige un tipo para continuar" : undefined}>Guardar</SubmitButton>
       </div>
     </div>
   );

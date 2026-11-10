@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { RotateCcw, Save, X } from "lucide-react";
+import { Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CancelButton, RetryButton } from "@/components/buttons";
 import { updateOrderAction } from "@/lib/order-actions";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -275,22 +276,13 @@ export function OrderEditForm({
       <div className="flex flex-col gap-3">
         <AppCardState>{metaError ?? "No se pudieron cargar los datos."}</AppCardState>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-fit"
-            onClick={() => {
+          <RetryButton
+            onRetry={() => {
               setMetaError(null);
               setMetaNonce((n) => n + 1);
             }}
-          >
-            <RotateCcw aria-hidden />
-            Reintentar
-          </Button>
-          <Button variant="ghost" size="sm" className="w-fit" onClick={() => onCancel?.()}>
-            <X aria-hidden />
-            Cancelar
-          </Button>
+          />
+          <CancelButton onCancel={() => onCancel?.()} />
         </div>
       </div>
     );

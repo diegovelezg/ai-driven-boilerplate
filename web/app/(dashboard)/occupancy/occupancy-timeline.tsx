@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { CalendarDays } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/buttons";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { addDays, formatDayMonth, formatNumber, todayLima } from "@/lib/format";
@@ -162,18 +163,13 @@ export function OccupancyTimeline({
           <SelectItem value="libre">Libres</SelectItem>
           <SelectItem value="ocupada">Ocupadas</SelectItem>
         </FilterSelect>
-        {[7, 14, 28].map((n) => (
-          <Button
-            key={n}
-            type="button"
-            variant={dias === n ? "default" : "outline"}
-            size="sm"
-            disabled={isPending}
-            onClick={() => go({ dias: n })}
-          >
-            {n}d
-          </Button>
-        ))}
+        <SegmentedControl
+          options={[{ value: 7, label: "7d" }, { value: 14, label: "14d" }, { value: 28, label: "28d" }]}
+          value={dias}
+          onChange={(n) => go({ dias: n })}
+          disabled={isPending}
+          ariaLabel="Días visibles"
+        />
         <Button type="button" variant="outline" size="sm" disabled={isPending} onClick={() => shift(-dias)}>
           ←
         </Button>

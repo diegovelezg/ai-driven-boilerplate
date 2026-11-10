@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RowIconButton } from "@/components/buttons";
 import { SelectionBadge } from "@/components/badges";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AppSelect } from "@/components/ui/app-select";
@@ -302,17 +303,12 @@ function ScreenMultiSelect({
                       <span className="max-w-[40%] truncate text-[11px] text-muted-foreground">{s.detail}</span>
                     )}
                   </label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Ver disponibilidad de ${s.name}`}
-                    title="Ver disponibilidad"
+                  <RowIconButton
+                    icon={CalendarDays}
+                    label={`Ver disponibilidad de ${s.name}`}
                     onClick={() => onShowCalendar(s.id)}
                     className="shrink-0"
-                  >
-                    <CalendarDays aria-hidden />
-                  </Button>
+                  />
                 </div>
               );
             })}
@@ -1101,27 +1097,18 @@ export function NuevaOrdenForm({
                   </DataTableTd>
                   <DataTableTd className="w-20">
                     <div className="flex items-center justify-end gap-1">
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Ver disponibilidad de ${s.name}`}
-                        title="Ver disponibilidad"
+                      <RowIconButton
+                        icon={CalendarDays}
+                        label={`Ver disponibilidad de ${s.name}`}
                         disabled={pending}
                         onClick={() => openCalendar(s.id)}
-                      >
-                        <CalendarDays aria-hidden />
-                      </Button>
-                      <Button
-                        type="button"
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label={`Quitar ${s.name}`}
+                      />
+                      <RowIconButton
+                        icon={X}
+                        label={`Quitar ${s.name}`}
                         disabled={pending}
                         onClick={() => toggleScreen(s.id)}
-                      >
-                        <X aria-hidden />
-                      </Button>
+                      />
                     </div>
                   </DataTableTd>
                 </DataTableRow>

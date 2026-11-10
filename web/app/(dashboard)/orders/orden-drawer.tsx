@@ -8,6 +8,7 @@ import { AppCard, AppCardState } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
+import { DangerButton, RetryButton, RowIconButton } from "@/components/buttons";
 import { AttributeBadge } from "@/components/badges";
 import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge } from "@/components/order-badges";
 import { orderStageDisplay } from "@/lib/ui-badges";
@@ -461,49 +462,40 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 {isCancelled ? (
                   canEditRole && (
                     <AppTooltip tip="Reactivar orden (vuelve a borrador)">
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label="Reactivar orden"
+                      <RowIconButton
+                        icon={CircleCheckBig}
+                        label="Reactivar orden"
                         title="Reactivar"
                         disabled={isPending}
                         onClick={() => setReactOpen(true)}
-                      >
-                        <CircleCheckBig aria-hidden />
-                      </Button>
+                      />
                     </AppTooltip>
                   )
                 ) : (
                   canEdit &&
                   !isDraft && (
                     <AppTooltip tip="Cancelar orden">
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        aria-label="Cancelar orden"
+                      <RowIconButton
+                        icon={Ban}
+                        label="Cancelar orden"
                         title="Cancelar"
+                        danger
                         disabled={isPending}
                         onClick={() => setCancelOpen(true)}
-                        className="text-destructive hover:text-destructive"
-                      >
-                        <Ban aria-hidden />
-                      </Button>
+                      />
                     </AppTooltip>
                   )
                 )}
                 {canDeleteOrder && (
                   <AppTooltip tip="Eliminar orden (solo propietario)">
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label="Eliminar orden"
+                    <RowIconButton
+                      icon={Trash}
+                      label="Eliminar orden"
                       title="Eliminar (solo propietario)"
+                      danger
                       disabled={isPending}
                       onClick={() => setDelOpen(true)}
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash aria-hidden />
-                    </Button>
+                    />
                   </AppTooltip>
                 )}
               </span>
@@ -524,10 +516,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
-            <RotateCcw aria-hidden />
-            Reintentar
-          </Button>
+          <RetryButton onRetry={() => void load()} />
         </div>
       )}
       {!error && !detail && (
@@ -791,10 +780,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             )}
             {canEdit && !isDraft && (
               <div>
-                <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => setCancelOpen(true)} disabled={isPending}>
+                <DangerButton onClick={() => setCancelOpen(true)} disabled={isPending}>
                   <Ban aria-hidden />
                   Cancelar orden
-                </Button>
+                </DangerButton>
               </div>
             )}
             </>
@@ -853,16 +842,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       {canEdit && (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Eliminar ${str(m.kind)} ${rawCode}`}
+                        <RowIconButton
+                          icon={X}
+                          label={`Eliminar ${str(m.kind)} ${rawCode}`}
                           title="Eliminar (por error al registrar)"
-                          onClick={() => void runFlow("OM eliminado", () => deleteAgencyOrderAction({ agencyOrderId: String(m.id) }))}
                           disabled={isPending}
-                        >
-                          <X className="size-3.5" aria-hidden />
-                        </Button>
+                          onClick={() => void runFlow("OM eliminado", () => deleteAgencyOrderAction({ agencyOrderId: String(m.id) }))}
+                        />
                       )}
                     </span>
                   </li>
@@ -931,16 +917,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       )}
                       <OrderApprovalBadge approved={ok} />
                       {canEdit && (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Eliminar ${str(c.name)}`}
+                        <RowIconButton
+                          icon={X}
+                          label={`Eliminar ${str(c.name)}`}
                           title="Eliminar (por error al adjuntar)"
-                          onClick={() => void runFlow("Material eliminado", () => deleteCreativeAction({ creativeId: String(c.id) }))}
                           disabled={isPending}
-                        >
-                          <X className="size-3.5" aria-hidden />
-                        </Button>
+                          onClick={() => void runFlow("Material eliminado", () => deleteCreativeAction({ creativeId: String(c.id) }))}
+                        />
                       )}
                     </span>
                   </li>
@@ -999,16 +982,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       )}
                     </span>
                     {canEdit && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="Eliminar adjunto"
+                      <RowIconButton
+                        icon={X}
+                        label="Eliminar adjunto"
                         title="Eliminar (por error al adjuntar)"
-                        onClick={() => void runFlow("Adjunto eliminado", () => deletePhotoAction({ photoId: String(p.id) }))}
                         disabled={isPending}
-                      >
-                        <X className="size-3.5" aria-hidden />
-                      </Button>
+                        onClick={() => void runFlow("Adjunto eliminado", () => deletePhotoAction({ photoId: String(p.id) }))}
+                      />
                     )}
                   </li>
                   );
@@ -1292,10 +1272,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <Button variant="outline" size="sm" onClick={() => setCancelOpen(false)} disabled={isPending}>
               <CircleArrowLeft aria-hidden />Volver
             </Button>
-            <Button variant="destructive" size="sm" onClick={doCancelOrder} disabled={isPending}>
+            <DangerButton onClick={doCancelOrder} pending={isPending} pendingLabel="Cancelando…">
               <Ban aria-hidden />
-              {isPending ? "Cancelando…" : "Confirmar cancelación"}
-            </Button>
+              Confirmar cancelación
+            </DangerButton>
           </div>
         </DialogContent>
       </Dialog>
@@ -1333,10 +1313,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={isPending}>
               <CircleArrowLeft aria-hidden />Volver
             </Button>
-            <Button variant="destructive" size="sm" onClick={doDeleteOrder} disabled={isPending}>
+            <DangerButton onClick={doDeleteOrder} pending={isPending} pendingLabel="Eliminando…">
               <Trash aria-hidden />
-              {isPending ? "Eliminando…" : "Confirmar eliminación"}
-            </Button>
+              Confirmar eliminación
+            </DangerButton>
           </div>
         </DialogContent>
       </Dialog>

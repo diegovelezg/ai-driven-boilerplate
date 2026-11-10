@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Building2, Archive, ArchiveRestore, Bot, FileText, Globe, Pencil, Plus, RotateCcw, UserRound } from "lucide-react";
+import { Building2, Archive, ArchiveRestore, Bot, FileText, Globe, Plus, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EditButton, RetryButton, SubmitButton } from "@/components/buttons";
 import { ArchivedBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { Separator } from "@/components/ui/separator";
@@ -215,10 +216,10 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
           Principal
         </Label>
       </div>
-      <Button type="submit" disabled={pending || !ready} title={!ready ? "Agrega email o teléfono" : undefined}>
+      <SubmitButton pending={pending} disabled={!ready} title={!ready ? "Agrega email o teléfono" : undefined} pendingLabel="Agregando…">
         <Plus aria-hidden />
-        {pending ? "Agregando…" : "Agregar"}
-      </Button>
+        Agregar
+      </SubmitButton>
     </form>
   );
 }
@@ -359,10 +360,7 @@ export function EmpresaDrawer({
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => void load()}>
-            <RotateCcw aria-hidden />
-            Reintentar
-          </Button>
+          <RetryButton onRetry={() => void load()} />
         </div>
       )}
       {!error && !detail && (
@@ -399,10 +397,7 @@ export function EmpresaDrawer({
                   </Button>
                 )}
                 {canEdit && !editingDatos && !isArchived && (
-                  <Button variant="outline" size="sm" onClick={() => setEditingDatos(true)}>
-                    <Pencil aria-hidden />
-                    Editar
-                  </Button>
+                  <EditButton onEdit={() => setEditingDatos(true)} />
                 )}
               </span>
             }

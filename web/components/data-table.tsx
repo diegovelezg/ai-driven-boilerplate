@@ -101,7 +101,7 @@ export function SortHeaderButton({
       type="button"
       onClick={onClick}
       aria-label={ariaLabel}
-      className={`inline-flex items-center gap-1 rounded px-1 py-1 hover:text-foreground ${
+      className={`inline-flex items-center gap-1 rounded px-1 py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
         alignRight ? "flex-row-reverse" : ""
       } ${active ? "text-foreground" : ""}`}
     >

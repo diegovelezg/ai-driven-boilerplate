@@ -2,11 +2,11 @@
 
 import { useCallback, useMemo, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { FilterX, Radio, TriangleAlert, Camera, Wallet } from "lucide-react";
+import { Radio, TriangleAlert, Camera, Wallet } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { SectionHeading } from "@/components/section-heading";
 import { Metric, MetricRow } from "@/components/metric";
-import { Button } from "@/components/ui/button";
+import { ClearFiltersButton } from "@/components/buttons";
 import {
   DataTable,
   DataTableBody,
@@ -175,10 +175,7 @@ export function OrdersList({
           ))}
         </FilterSelect>
         {hasFilter && (
-          <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", stage: null, billing: null })}>
-            <FilterX aria-hidden />
-            Limpiar
-          </Button>
+          <ClearFiltersButton disabled={isPending} onClear={() => go({ q: "", stage: null, billing: null })} />
         )}
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar órdenes filtradas a CSV" />
         <EntityCount total={rows.length} pending={isPending} />

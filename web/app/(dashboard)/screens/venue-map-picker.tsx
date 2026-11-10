@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { Map as LeafletMap, Marker as LeafletMarker } from "leaflet";
 import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
+import { LinkButton } from "@/components/buttons";
 
 const MAPBOX_TOKEN =
   process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
@@ -168,13 +169,9 @@ export function VenueMapPicker({
             : "Clic en el mapa para marcar el punto"}
         </p>
         {(lat !== null || lng !== null) && (
-          <button
-            type="button"
-            onClick={onClear}
-            className="text-[11px] text-muted-foreground underline underline-offset-4 hover:text-foreground"
-          >
+          <LinkButton onClick={onClear}>
             Limpiar punto
-          </button>
+          </LinkButton>
         )}
       </div>
     </div>

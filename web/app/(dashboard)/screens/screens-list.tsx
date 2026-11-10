@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { FilterX, LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
+import { SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
-import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
+import { ClearFiltersButton, ViewToggle } from "@/components/buttons";
 import { PantallaDrawer } from "./pantalla-drawer";
 import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
@@ -203,42 +203,14 @@ export function ScreensList({
           <SelectItem value="inactive">Inactivas</SelectItem>
         </FilterSelect>
         {filtersActive && (
-          <Button
-            variant="ghost"
-            size="sm"
+          <ClearFiltersButton
             disabled={isPending}
-            onClick={() => {
+            onClear={() => {
               go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
             }}
-          >
-            <FilterX aria-hidden />
-            Limpiar
-          </Button>
+          />
         )}
-        <span className="flex items-center gap-1" role="group" aria-label="Cambiar vista">
-          <AppTooltip tip="Vista lista">
-            <Button
-              size="icon"
-              variant={view === "table" ? "default" : "outline"}
-              onClick={() => switchView("table")}
-              aria-pressed={view === "table"}
-              aria-label="Vista lista"
-            >
-              <ListIcon aria-hidden />
-            </Button>
-          </AppTooltip>
-          <AppTooltip tip="Vista grilla">
-            <Button
-              size="icon"
-              variant={view === "grid" ? "default" : "outline"}
-              onClick={() => switchView("grid")}
-              aria-pressed={view === "grid"}
-              aria-label="Vista grilla"
-            >
-              <LayoutGrid aria-hidden />
-            </Button>
-          </AppTooltip>
-        </span>
+        <ViewToggle view={view} onChange={switchView} />
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar pantallas filtradas a CSV" />
         <EntityCount total={totalCount} truncated={truncated} pending={isPending} />
       </div>
@@ -308,17 +280,14 @@ export function ScreensList({
                         {filtersActive ? "Prueba con otro nombre, proveedor o ciudad." : "Todavía no hay inventario cargado."}
                       </p>
                       {filtersActive && (
-                        <Button
-                          variant="outline"
-                          size="sm"
+                        <ClearFiltersButton
+                          label="Limpiar filtros"
                           className="mt-1"
-                          onClick={() => {
+                          disabled={isPending}
+                          onClear={() => {
                             go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
                           }}
-                        >
-                          <FilterX aria-hidden />
-                          Limpiar filtros
-                        </Button>
+                        />
                       )}
                     </div>
                   </DataTableTd>

@@ -5,6 +5,7 @@ import { Globe, RotateCcw, Search } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { AttributeBadge } from "@/components/badges";
 import { Button } from "@/components/ui/button";
+import { RetryButton } from "@/components/buttons";
 import { formatDate } from "@/lib/format";
 
 interface Candidate {
@@ -169,9 +170,7 @@ export function DomainResearchPanel({ researchBase, canResearch }: { researchBas
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => void reload()}>
-            Reintentar
-          </Button>
+          <RetryButton onRetry={() => void reload()} />
         </div>
       )}
       {!error && (candidates ?? []).length === 0 && (

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Save, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Save } from "lucide-react";
+import { CancelButton, SubmitButton } from "@/components/buttons";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { updateContactAction } from "@/lib/crm-actions";
@@ -119,8 +119,8 @@ export function ContactEditForm({
         </Label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={save} disabled={pending || !ready} title={!ready ? "Agrega email o teléfono para continuar" : undefined}><Save aria-hidden />{pending ? "Guardando…" : "Guardar"}</Button>
-        <Button variant="outline" onClick={onCancel} disabled={pending}><X aria-hidden />Cancelar</Button>
+        <SubmitButton onClick={save} pending={pending} disabled={!ready} title={!ready ? "Agrega email o teléfono para continuar" : undefined}><Save aria-hidden />Guardar</SubmitButton>
+        <CancelButton onCancel={onCancel} disabled={pending} />
       </div>
     </div>
   );

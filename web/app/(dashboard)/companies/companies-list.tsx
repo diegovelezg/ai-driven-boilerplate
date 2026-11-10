@@ -1,11 +1,9 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { FilterX, LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
-import { AppTooltip } from "@/components/ui/app-tooltip";
 import { ArchivedBadge, AttributeBadge } from "@/components/badges";
-import { Button } from "@/components/ui/button";
+import { ClearFiltersButton, ViewToggle } from "@/components/buttons";
 import { EmpresaDrawer } from "./empresa-drawer";
 import {
   DataTable,
@@ -159,42 +157,14 @@ export function CompaniesList({
         </FilterSelect>
         <CrmStatusFilterSelect status={status} onStatus={(s) => setFilter({ status: s })} />
         {filtersActive && (
-          <Button
-            variant="ghost"
-            size="sm"
+          <ClearFiltersButton
             disabled={isPending}
-            onClick={() => {
+            onClear={() => {
               go(buildParams({ q: "", type: null, status: null, page: 1 }));
             }}
-          >
-            <FilterX aria-hidden />
-            Limpiar
-          </Button>
+          />
         )}
-        <span className="flex items-center gap-1" role="group" aria-label="Cambiar vista">
-          <AppTooltip tip="Vista lista">
-            <Button
-              size="icon"
-              variant={view === "table" ? "default" : "outline"}
-              onClick={() => switchView("table")}
-              aria-pressed={view === "table"}
-              aria-label="Vista lista"
-            >
-              <ListIcon aria-hidden />
-            </Button>
-          </AppTooltip>
-          <AppTooltip tip="Vista grilla">
-            <Button
-              size="icon"
-              variant={view === "grid" ? "default" : "outline"}
-              onClick={() => switchView("grid")}
-              aria-pressed={view === "grid"}
-              aria-label="Vista grilla"
-            >
-              <LayoutGrid aria-hidden />
-            </Button>
-          </AppTooltip>
-        </span>
+        <ViewToggle view={view} onChange={switchView} />
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar empresas filtradas a CSV" />
         <EntityCount total={totalCount} pending={isPending} />
       </div>

@@ -30,7 +30,7 @@ export function Steps({
                 onClick={() => onGo?.(i)}
                 aria-current={active ? "step" : undefined}
                 className={cn(
-                  "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium transition-colors",
+                  "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   done && "border-primary bg-primary text-primary-foreground",
                   active && "border-primary text-primary ring-2 ring-primary/30",
                   !done && !active && "border-border text-muted-foreground",

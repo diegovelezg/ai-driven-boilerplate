@@ -1,12 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { FilterX, LayoutGrid, List as ListIcon, Star, Users } from "lucide-react";
+import { Star, Users } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
 import { SectionHeading } from "@/components/section-heading";
-import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Button } from "@/components/ui/button";
+import { ClearFiltersButton, ViewToggle } from "@/components/buttons";
 import {
   DataTable,
   DataTableBody,
@@ -151,35 +150,9 @@ export function ContactsList({
         </FilterSelect>
         <CrmStatusFilterSelect status={status} onStatus={(s) => go({ status: s })} />
         {hasFilter && (
-          <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", company: null, status: null })}>
-            <FilterX aria-hidden />
-            Limpiar
-          </Button>
+          <ClearFiltersButton disabled={isPending} onClear={() => go({ q: "", company: null, status: null })} />
         )}
-        <span className="flex items-center gap-1" role="group" aria-label="Cambiar vista">
-          <AppTooltip tip="Vista lista">
-            <Button
-              size="icon"
-              variant={view === "table" ? "default" : "outline"}
-              onClick={() => switchView("table")}
-              aria-pressed={view === "table"}
-              aria-label="Vista lista"
-            >
-              <ListIcon aria-hidden />
-            </Button>
-          </AppTooltip>
-          <AppTooltip tip="Vista tarjetas">
-            <Button
-              size="icon"
-              variant={view === "grid" ? "default" : "outline"}
-              onClick={() => switchView("grid")}
-              aria-pressed={view === "grid"}
-              aria-label="Vista tarjetas"
-            >
-              <LayoutGrid aria-hidden />
-            </Button>
-          </AppTooltip>
-        </span>
+        <ViewToggle view={view} onChange={switchView} gridLabel="Vista tarjetas" />
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar contactos filtrados a CSV" />
         <EntityCount total={rows.length} pending={isPending} />
       </div>

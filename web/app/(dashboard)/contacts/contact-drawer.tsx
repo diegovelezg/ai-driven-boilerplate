@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Bot, Building2, FileText, Mail, Pencil, Phone, RotateCcw, UserRound } from "lucide-react";
+import { Bot, Building2, FileText, Mail, Phone, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EditButton, RetryButton } from "@/components/buttons";
 import { AppCard, AppCardState } from "@/components/app-card";
 import {
   DrawerShell,
@@ -144,10 +145,7 @@ export function ContactDrawer({
           {iosError && (
             <div className="flex flex-col gap-3">
               <AppCardState>{iosError}</AppCardState>
-              <Button variant="outline" size="sm" className="w-fit" onClick={() => loadIos()}>
-                <RotateCcw aria-hidden />
-                Reintentar
-              </Button>
+              <RetryButton onRetry={() => loadIos()} />
             </div>
           )}
           {!iosError && ios === null && (
@@ -228,9 +226,7 @@ export function ContactDrawer({
             aria-label="Ficha del contacto"
             action={
               canEdit && !editingFicha ? (
-                <Button variant="outline" size="sm" onClick={() => setEditingFicha(true)}>
-                  <Pencil className="size-3.5" aria-hidden /> Editar
-                </Button>
+                <EditButton onEdit={() => setEditingFicha(true)} />
               ) : undefined
             }
           >

@@ -5,8 +5,9 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
+import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, Save, Trash, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DangerButton, RetryButton, RowIconButton } from "@/components/buttons";
 import {
   Dialog,
   DrawerDialogContent as DialogContent,
@@ -542,41 +543,32 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             {canManage && (
               <span className="ms-auto flex items-center gap-1">
                 <AppTooltip tip={active ? "Deshabilitar pantalla" : "Pantalla ya inactiva"}>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Deshabilitar pantalla"
+                  <RowIconButton
+                    icon={CircleOff}
+                    label="Deshabilitar pantalla"
                     title={enriching ? "Generando resumen inteligente…" : "Deshabilitar"}
                     disabled={!active || working || enriching}
                     onClick={() => toggleActive(false)}
-                  >
-                    <CircleOff aria-hidden />
-                  </Button>
+                  />
                 </AppTooltip>
                 <AppTooltip tip={active ? "Pantalla ya activa" : "Habilitar pantalla"}>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Habilitar pantalla"
+                  <RowIconButton
+                    icon={CircleCheckBig}
+                    label="Habilitar pantalla"
                     title={enriching ? "Generando resumen inteligente…" : "Habilitar"}
                     disabled={active || working || enriching}
                     onClick={() => toggleActive(true)}
-                  >
-                    <CircleCheckBig aria-hidden />
-                  </Button>
+                  />
                 </AppTooltip>
                 <AppTooltip tip="Eliminar pantalla (solo propietario)">
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label="Eliminar pantalla"
+                  <RowIconButton
+                    icon={Trash}
+                    label="Eliminar pantalla"
                     title={enriching ? "Generando resumen inteligente…" : "Eliminar (solo propietario)"}
+                    danger
                     disabled={working || enriching || !canDelete}
                     onClick={() => setDelOpen(true)}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    <Trash aria-hidden />
-                  </Button>
+                  />
                 </AppTooltip>
               </span>
             )}
@@ -596,10 +588,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
-          <Button variant="outline" size="sm" className="w-fit" onClick={retry}>
-            <RotateCcw aria-hidden />
-            Reintentar
-          </Button>
+          <RetryButton onRetry={retry} />
         </div>
       )}
       {!error && !detail && (
@@ -882,10 +871,10 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={working}>
               <CircleOff aria-hidden />Volver
             </Button>
-            <Button variant="destructive" size="sm" onClick={doDelete} disabled={working}>
+            <DangerButton onClick={doDelete} pending={working} pendingLabel="Eliminando…">
               <Trash aria-hidden />
-              {working ? "Eliminando…" : "Confirmar eliminación"}
-            </Button>
+              Confirmar eliminación
+            </DangerButton>
           </div>
         </DialogContent>
       </Dialog>

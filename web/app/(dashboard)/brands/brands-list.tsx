@@ -2,10 +2,9 @@
 
 import { useCallback, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { FilterX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Button } from "@/components/ui/button";
+import { ClearFiltersButton } from "@/components/buttons";
 import {
   DataTable,
   DataTableBody,
@@ -98,19 +97,14 @@ export function BrandsList({
           }}
         />
         {q.trim() !== "" && (
-          <Button
-            variant="ghost"
-            size="sm"
+          <ClearFiltersButton
             disabled={isPending}
-            onClick={() => {
+            onClear={() => {
               startTransition(() => {
                 router.replace(`/brands?${buildParams({ q: "" })}`);
               });
             }}
-          >
-            <FilterX aria-hidden />
-            Limpiar
-          </Button>
+          />
         )}
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar marcas filtradas a CSV" />
         <EntityCount total={rows.length} pending={isPending} singular="marca" plural="marcas" />

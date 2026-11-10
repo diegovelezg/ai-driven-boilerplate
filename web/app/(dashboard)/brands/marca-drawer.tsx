@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { Bot, Building2, FileText, Globe, Megaphone, RotateCcw } from "lucide-react";
+import { Bot, Building2, FileText, Globe, Megaphone } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
-import { Button } from "@/components/ui/button";
+import { RetryButton } from "@/components/buttons";
 import {
   DrawerShell,
   type DrawerTabDef,
@@ -153,10 +153,7 @@ export function MarcaDrawer({
       {error && (
         <div className="flex flex-col gap-3">
           <AppCardState>{error}</AppCardState>
-          <Button variant="outline" size="sm" className="w-fit" onClick={() => void reload()}>
-            <RotateCcw aria-hidden />
-            Reintentar
-          </Button>
+          <RetryButton onRetry={() => void reload()} />
         </div>
       )}
       {!error && !detail && loading && (

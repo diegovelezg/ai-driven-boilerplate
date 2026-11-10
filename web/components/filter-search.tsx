@@ -107,7 +107,7 @@ export function FilterSearch({
           type="button"
           onClick={clear}
           aria-label="Limpiar búsqueda"
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <X className="size-4" aria-hidden />
         </button>
