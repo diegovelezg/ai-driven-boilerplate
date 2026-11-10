@@ -51,7 +51,7 @@ export function parseCompaniesSort(sp: { sort?: string; dir?: string }): {
 
 export async function listCrmCompanies(
   storeId: string,
-  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
+  opts: { q?: string; kind?: CompanyKind | null; kinds?: readonly CompanyKind[]; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
 ): Promise<{ rows: CrmCompany[]; total: number }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
@@ -59,12 +59,18 @@ export async function listCrmCompanies(
   const sortKey = opts.sortKey ?? "name";
   const sortDir = opts.sortDir ?? (sortKey === "contacts" ? "desc" : "asc");
   const q = (opts.q ?? "").trim();
+  // Multiselect prima sobre el single legacy. [] = ninguno (sin roundtrip).
+  const kinds: readonly CompanyKind[] | undefined =
+    opts.kinds ?? (opts.kind ? [opts.kind] : undefined);
+  if (kinds !== undefined && kinds.length === 0) return { rows: [], total: 0 };
 
   // Vía rápida: un roundtrip con ranking + total exacto en Postgres.
+  // p_kinds null = todos; array vacío no llega (corto arriba).
+  const rpcKinds: string[] | null = kinds !== undefined ? [...kinds] : null;
   const rpc = await db.rpc("crm_search_companies", {
     p_store: storeId,
     p_q: q || null,
-    p_kind: opts.kind ?? null,
+    p_kinds: rpcKinds,
     p_sort: sortKey,
     p_dir: sortDir,
     p_limit: pageSize,
@@ -101,7 +107,7 @@ export async function listCrmCompanies(
 
 async function listCrmCompaniesLegacy(
   storeId: string,
-  opts: { q?: string; kind?: CompanyKind | null; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
+  opts: { q?: string; kind?: CompanyKind | null; kinds?: readonly CompanyKind[]; sortKey?: CompaniesSortKey; sortDir?: CompaniesSortDir; page?: number; pageSize?: number; status?: CrmStatusFilter } = {},
 ): Promise<{ rows: CrmCompany[]; total: number }> {
   const db = getSupabase();
   const pageSize = Math.min(Math.max(opts.pageSize ?? 50, 1), 200);
@@ -117,10 +123,13 @@ async function listCrmCompaniesLegacy(
   // La casa (kind IS NULL, red propia) nunca lista: no es contraparte.
   // Borrado lógico: activas por defecto.
   const status = opts.status ?? "active";
+  const kinds: readonly CompanyKind[] | undefined =
+    opts.kinds ?? (opts.kind ? [opts.kind] : undefined);
+  if (kinds !== undefined && kinds.length === 0) return { rows: [], total: 0 };
   let countQuery = db.from("crm_companies").select("id", { count: "exact", head: true }).eq("store_id", storeId).not("kind", "is", null);
   if (status !== "all") countQuery = countQuery.filter("deleted_at", status === "active" ? "is" : "not.is", null);
   if (like) countQuery = countQuery.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
-  if (opts.kind) countQuery = countQuery.eq("kind", opts.kind);
+  if (kinds !== undefined) countQuery = countQuery.in("kind", [...kinds]);
   const { count, error: countError } = await countQuery;
   if (countError) throw new Error(`CRM read: ${countError.message}`);
   const total = count ?? 0;
@@ -132,7 +141,7 @@ async function listCrmCompaniesLegacy(
     .not("kind", "is", null);
   if (status !== "all") query = query.filter("deleted_at", status === "active" ? "is" : "not.is", null);
   if (like) query = query.or(`name.ilike.${like},tax_id.ilike.${like},domain.ilike.${like},email.ilike.${like}`);
-  if (opts.kind) query = query.eq("kind", opts.kind);
+  if (kinds !== undefined) query = query.in("kind", [...kinds]);
   // contactos es conteo calculado: se ordena en JS tras leer la página.
   if (sortKey === "name") query = query.order("name", { ascending });
   else if (sortKey === "type") query = query.order("kind", { ascending });
@@ -355,10 +364,28 @@ export interface CrmCampaign {
   primary_contact_id: string | null;
 }
 
+export interface CompanyNetworkBrand {
+  brand: string;
+  ios: number;
+}
+
+export interface CompanyNetworkCompany {
+  id: string;
+  name: string;
+  kind: CompanyKind | null;
+  ios: number;
+}
+
+export interface CompanyNetwork {
+  brands: CompanyNetworkBrand[];
+  agencies: CompanyNetworkCompany[];
+  advertisers: CompanyNetworkCompany[];
+}
+
 export async function getCrmCompany(
   storeId: string,
   companyId: string,
-): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string }> } | null> {
+): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string; advertiser_company_id: string | null; billing_company_id: string | null }>; network: CompanyNetwork } | null> {
   const db = getSupabase();
   const { data, error } = await db
     .from("crm_companies")

@@ -28,6 +28,79 @@ export function isCompanyKind(v: unknown): v is CompanyKind {
   return typeof v === "string" && (COMPANY_KINDS as readonly string[]).includes(v);
 }
 
+/** Default del filtro de empresas: agencia + anunciante (sin proveedor). */
+export const DEFAULT_COMPANY_KINDS: readonly CompanyKind[] = ["agencia", "anunciante"];
+
+function collectKindTokens(raw: unknown, out: string[]): boolean {
+  // true = había parámetro presente (aunque sea vacío/inválido).
+  if (raw === undefined || raw === null) return false;
+  const arr = Array.isArray(raw) ? raw : [raw];
+  let present = false;
+  for (const v of arr) {
+    if (typeof v !== "string") continue;
+    // URLSearchParams decodifica "?type" sin valor como "".
+    present = true;
+    for (const t of v.split(",")) {
+      const s = t.trim().toLowerCase();
+      if (s) out.push(s);
+    }
+  }
+  return present;
+}
+
+/**
+ * Parsea el filtro multiselect de tipo (?type / ?tipo, repetido o coma).
+ * - Sin parámetro → default (agencia + anunciante).
+ * - "all"/"todo(s)" → los 3 tipos. "none"/"ninguno" → [] (ninguno).
+ * - Con parámetro pero sin kinds válidos → default (links legacy/typos no rompen).
+ * Orden de salida = orden canónico de COMPANY_KINDS.
+ */
+export function parseCompanyKinds(raw: unknown): CompanyKind[] {
+  const tokens: string[] = [];
+  const present = collectKindTokens(raw, tokens);
+  if (!present) return [...DEFAULT_COMPANY_KINDS];
+  const lower = tokens.map((t) => t);
+  if (lower.includes("all") || lower.includes("todo") || lower.includes("todos") || lower.includes("todas")) {
+    return [...COMPANY_KINDS];
+  }
+  if (lower.includes("none") || lower.includes("ninguno") || lower.includes("ninguna") || lower.includes("sin")) {
+    return [];
+  }
+  const set = new Set<CompanyKind>();
+  for (const t of lower) {
+    if (isCompanyKind(t)) set.add(t);
+  }
+  if (set.size === 0) return [...DEFAULT_COMPANY_KINDS];
+  return COMPANY_KINDS.filter((k) => set.has(k));
+}
+
+/** ¿La selección es el default (agencia + anunciante)? Orden-insensible. */
+export function isDefaultCompanyKinds(kinds: readonly CompanyKind[]): boolean {
+  return (
+    kinds.length === DEFAULT_COMPANY_KINDS.length &&
+    DEFAULT_COMPANY_KINDS.every((k) => (kinds as readonly string[]).includes(k))
+  );
+}
+
+/**
+ * Serializa la selección a query (?type=). null = omitir (es el default).
+ * "all" nunca se emite: los 3 tipos se serializan explícitos.
+ */
+export function serializeCompanyKinds(kinds: readonly CompanyKind[]): string | null {
+  if (isDefaultCompanyKinds(kinds)) return null;
+  if (kinds.length === 0) return "none";
+  return COMPANY_KINDS.filter((k) => (kinds as readonly string[]).includes(k)).join(",");
+}
+
+/** Etiqueta corta del filtro multiselect (trigger). */
+export function companyKindsLabel(kinds: readonly CompanyKind[]): string {
+  if (kinds.length === 0) return "Sin tipo";
+  if (kinds.length === COMPANY_KINDS.length) return "Todo tipo";
+  return COMPANY_KINDS.filter((k) => (kinds as readonly string[]).includes(k))
+    .map((k) => COMPANY_KIND_LABELS[k])
+    .join(", ");
+}
+
 /** Estado de borrado lógico para listados (default: solo activas). */
 export type CrmStatusFilter = "active" | "archived" | "all";
 

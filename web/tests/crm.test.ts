@@ -4,11 +4,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   COMPANY_KIND_LABELS,
+  companyKindsLabel,
   isCompanyKind,
+  isDefaultCompanyKinds,
   kindLabel,
   normalizeCompany,
   normalizeContact,
   normalizeDomain,
+  parseCompanyKinds,
+  serializeCompanyKinds,
 } from "@/lib/crm";
 
 describe("crm kinds", () => {
@@ -26,6 +30,41 @@ describe("crm kinds", () => {
   });
 });
 
+describe("company kinds multiselect", () => {
+  it("sin parámetro → default agencia + anunciante (sin proveedor)", () => {
+    assert.deepEqual(parseCompanyKinds(undefined), ["agencia", "anunciante"]);
+    assert.deepEqual(parseCompanyKinds(null), ["agencia", "anunciante"]);
+  });
+
+  it("acepta repetido, coma y legacy single", () => {
+    assert.deepEqual(parseCompanyKinds("proveedor"), ["proveedor"]);
+    assert.deepEqual(parseCompanyKinds("agencia,proveedor"), ["agencia", "proveedor"]);
+    assert.deepEqual(parseCompanyKinds(["agencia", "anunciante"]), ["agencia", "anunciante"]);
+    assert.deepEqual(parseCompanyKinds(["agencia,proveedor"]), ["agencia", "proveedor"]);
+  });
+
+  it("all → los 3; none → ninguno; inválido → default", () => {
+    assert.deepEqual(parseCompanyKinds("all"), ["agencia", "anunciante", "proveedor"]);
+    assert.deepEqual(parseCompanyKinds("none"), []);
+    assert.deepEqual(parseCompanyKinds("invalido"), ["agencia", "anunciante"]);
+  });
+
+  it("serialize: default se omite; resto explícito", () => {
+    assert.equal(serializeCompanyKinds(["agencia", "anunciante"]), null);
+    assert.equal(serializeCompanyKinds(["anunciante", "agencia"]), null);
+    assert.equal(serializeCompanyKinds(["agencia", "anunciante", "proveedor"]), "agencia,anunciante,proveedor");
+    assert.equal(serializeCompanyKinds(["proveedor"]), "proveedor");
+    assert.equal(serializeCompanyKinds([]), "none");
+  });
+
+  it("label e isDefault", () => {
+    assert.equal(isDefaultCompanyKinds(["agencia", "anunciante"]), true);
+    assert.equal(isDefaultCompanyKinds(["agencia"]), false);
+    assert.equal(companyKindsLabel(["agencia", "anunciante"]), "Agencia, Anunciante");
+    assert.equal(companyKindsLabel(["agencia", "anunciante", "proveedor"]), "Todo tipo");
+    assert.equal(companyKindsLabel([]), "Sin tipo");
+  });
+});
 describe("normalizeCompany", () => {
   it("exige nombre y normaliza dominio", () => {
     assert.equal(normalizeCompany({ name: "  " }).ok, false);

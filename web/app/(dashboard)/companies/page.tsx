@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { listCrmCompanies, parseCompaniesSort } from "@/lib/crm-db";
 import { loadPageData } from "@/lib/page-data";
-import { isCompanyKind, isCrmStatusFilter, type CrmStatusFilter } from "@/lib/crm";
+import { isCrmStatusFilter, parseCompanyKinds, isDefaultCompanyKinds, type CrmStatusFilter } from "@/lib/crm";
 import { connection } from "next/server";
 import { CompaniesList } from "./companies-list";
 
@@ -24,13 +24,14 @@ const VIEW_ALIASES: Record<string, "table" | "grid"> = {
 export default async function EmpresasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; type?: string; tipo?: string; view?: string; vista?: string; sort?: string; dir?: string; page?: string; company?: string; empresa?: string; status?: string; estado?: string }>;
+  searchParams: Promise<{ q?: string; type?: string | string[]; tipo?: string | string[]; view?: string; vista?: string; sort?: string; dir?: string; page?: string; company?: string; empresa?: string; status?: string; estado?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
-  const rawKind = sp.type ?? sp.tipo;
-  const kind = isCompanyKind(rawKind) ? rawKind : null;
+  // Multiselect: ?type=a&type=b, ?type=a,b o ?tipo=. Sin parámetro → default
+  // (agencia + anunciante, sin proveedor). Acepta legacy ?type=agencia.
+  const kinds = parseCompanyKinds(sp.type ?? sp.tipo);
   const status: CrmStatusFilter = isCrmStatusFilter(sp.status ?? sp.estado) ? (sp.status ?? sp.estado) as CrmStatusFilter : "active";
   const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
   const { key: sortKey, dir: sortDir } = parseCompaniesSort({ sort: sp.sort, dir: sp.dir });
@@ -40,7 +41,7 @@ export default async function EmpresasPage({
 
   const { data, connected, dbReady, error } = await loadPageData(
     async (storeId) => {
-      const res = await listCrmCompanies(storeId, { q, kind, sortKey, sortDir, page, pageSize: PAGE_SIZE, status });
+      const res = await listCrmCompanies(storeId, { q, kinds, sortKey, sortDir, page, pageSize: PAGE_SIZE, status });
       return { rows: res.rows, totalCount: res.total };
     },
     { rows: [] as Awaited<ReturnType<typeof listCrmCompanies>>["rows"], totalCount: 0 },
@@ -67,7 +68,7 @@ export default async function EmpresasPage({
 
       {connected && dbReady && !error && (
         <>
-          {rows.length === 0 && !q && !kind && status === "active" ? (
+          {rows.length === 0 && !q && isDefaultCompanyKinds(kinds) && status === "active" ? (
             <AppCardState>
               Aún no hay empresas.{" "}
               <Link href="/companies/new" className="underline underline-offset-4">
@@ -92,7 +93,7 @@ export default async function EmpresasPage({
               page={page}
               pageSize={PAGE_SIZE}
               q={q}
-              kind={kind}
+              kinds={kinds}
               status={status}
               sortKey={sortKey}
               sortDir={sortDir}

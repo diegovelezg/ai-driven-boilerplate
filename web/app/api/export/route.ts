@@ -1,6 +1,6 @@
 import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { isCompanyKind } from "@/lib/crm";
+import { parseCompanyKinds } from "@/lib/crm";
 import { parseCompaniesSort } from "@/lib/crm-db";
 import { parseBrandsSort } from "@/lib/brand-db";
 import { minorToMajor, toCsv, type CsvCell } from "@/lib/csv";
@@ -34,14 +34,16 @@ export async function GET(req: Request) {
     const stamp = toISODateUTC(new Date());
 
     if (entity === "companies") {
-      const kindRaw = sp.get("type") ?? sp.get("tipo");
-      const kind = isCompanyKind(kindRaw) ? kindRaw : null;
+      // Multiselect (?type=a&type=b, ?type=a,b, alias ?tipo). Sin parámetro
+      // → todos (el default agencia+anunciante es solo de la vista).
+      const rawTypes = [...sp.getAll("type"), ...sp.getAll("tipo")];
+      const kinds = rawTypes.length > 0 ? parseCompanyKinds(rawTypes) : undefined;
       const { key, dir } = parseCompaniesSort({ sort: sp.get("sort") ?? undefined, dir: sp.get("dir") ?? undefined });
       const { listCrmCompanies } = await import("@/lib/crm-db");
       const rows: CsvCell[][] = [];
       const PAGE = 200;
       for (let page = 1; page <= 10; page += 1) {
-        const res = await listCrmCompanies(storeId, { q, kind, sortKey: key, sortDir: dir, page, pageSize: PAGE });
+        const res = await listCrmCompanies(storeId, { q, kinds, sortKey: key, sortDir: dir, page, pageSize: PAGE });
         for (const c of res.rows) {
           rows.push([c.id, c.name, c.kind ?? "", c.tax_id ?? "", c.domain ?? "", c.email ?? "", c.phone ?? "", c.city ?? "", c.country ?? "", c.contacts_count]);
         }

@@ -15,11 +15,11 @@ import {
   SortHeaderButton,
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
-import { FilterSelect, SelectItem } from "@/components/filter-select";
+import { FilterMultiSelect } from "@/components/filter-multi-select";
 import { CrmStatusFilterSelect } from "@/components/crm-status-filter";
 import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
-import { COMPANY_KINDS, COMPANY_KIND_LABELS, kindLabel, type CompanyKind, type CrmStatusFilter } from "@/lib/crm";
+import { COMPANY_KINDS, COMPANY_KIND_LABELS, companyKindsLabel, isDefaultCompanyKinds, serializeCompanyKinds, kindLabel, DEFAULT_COMPANY_KINDS, type CompanyKind, type CrmStatusFilter } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { CompaniesSortDir, CompaniesSortKey } from "@/lib/crm-db";
@@ -42,7 +42,7 @@ export function CompaniesList({
   page,
   pageSize,
   q,
-  kind,
+  kinds,
   status,
   sortKey,
   sortDir,
@@ -54,7 +54,7 @@ export function CompaniesList({
   page: number;
   pageSize: number;
   q: string;
-  kind: CompanyKind | null;
+  kinds: readonly CompanyKind[];
   status: CrmStatusFilter;
   sortKey: CompaniesSortKey;
   sortDir: CompaniesSortDir;
@@ -80,12 +80,13 @@ export function CompaniesList({
   }, []);
 
   const buildParams = useCallback(
-    (overrides: { q?: string; type?: string | null; status?: string | null; sort?: string; dir?: string; view?: string; page?: number }) => {
+    (overrides: { q?: string; types?: readonly CompanyKind[] | null; status?: string | null; sort?: string; dir?: string; view?: string; page?: number }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
       if (nextQ.trim()) params.set("q", nextQ.trim());
-      const nextTipo = overrides.type !== undefined ? overrides.type : kind;
-      if (nextTipo) params.set("type", nextTipo);
+      const nextKinds = overrides.types !== undefined ? overrides.types : kinds;
+      const serialized = nextKinds == null ? null : serializeCompanyKinds(nextKinds);
+      if (serialized) params.set("type", serialized);
       const nextStatus = overrides.status !== undefined ? overrides.status : status;
       if (nextStatus && nextStatus !== "active") params.set("status", nextStatus);
       params.set("sort", overrides.sort ?? sortKey);
@@ -94,7 +95,7 @@ export function CompaniesList({
       params.set("page", String(overrides.page ?? page));
       return params.toString();
     },
-    [q, kind, status, sortKey, sortDir, view, page],
+    [q, kinds, status, sortKey, sortDir, view, page],
   );
 
   // El sort ordena en servidor (Supabase) sobre todos los datos.
@@ -109,15 +110,18 @@ export function CompaniesList({
     go(buildParams({ page: 1, sort: key, dir: nextDir }));
   };
 
-  const setFilter = (patch: { type?: string | null; status?: string | null }) => {
+  const setFilter = (patch: { types?: readonly CompanyKind[] | null; status?: string | null }) => {
     go(buildParams({ page: 1, ...patch }));
   };
 
-  const filtersActive = q.trim() !== "" || kind !== null || status !== "active";
+  const filtersActive = q.trim() !== "" || !isDefaultCompanyKinds(kinds) || status !== "active";
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const exportParams = new URLSearchParams({ entity: "companies" });
   if (q.trim()) exportParams.set("q", q.trim());
-  if (kind) exportParams.set("type", kind);
+  // Explícito siempre (incluido el default): la exportación debe coincidir
+  // con lo visible. serializeCompanyKinds omite el default para URLs limpias.
+  if (kinds.length === 0) exportParams.set("type", "none");
+  else exportParams.set("type", [...kinds].join(","));
   exportParams.set("sort", sortKey);
   exportParams.set("dir", sortDir);
 
@@ -141,26 +145,20 @@ export function CompaniesList({
             go(buildParams({ q: value, page: 1 }));
           }}
         />
-        <FilterSelect
-          value={kind ?? "all"}
-          onChange={(v) => setFilter({ type: v === "all" ? null : v })}
+        <FilterMultiSelect<CompanyKind>
+          values={kinds}
+          options={COMPANY_KINDS.map((k) => ({ value: k, label: COMPANY_KIND_LABELS[k] }))}
+          onChange={(next) => setFilter({ types: next })}
           ariaLabel="Filtrar por tipo"
           placeholder="Tipo"
-          display={(value) =>
-            value === "all" ? "Todo tipo" : COMPANY_KIND_LABELS[value as CompanyKind] ?? String(value)
-          }
-        >
-          <SelectItem value="all">Todo tipo</SelectItem>
-          {COMPANY_KINDS.map((k) => (
-            <SelectItem key={k} value={k}>{COMPANY_KIND_LABELS[k]}</SelectItem>
-          ))}
-        </FilterSelect>
+          display={(v) => companyKindsLabel(v)}
+        />
         <CrmStatusFilterSelect status={status} onStatus={(s) => setFilter({ status: s })} />
         {filtersActive && (
           <ClearFiltersButton
             disabled={isPending}
             onClear={() => {
-              go(buildParams({ q: "", type: null, status: null, page: 1 }));
+              go(buildParams({ q: "", types: [...DEFAULT_COMPANY_KINDS], status: null, page: 1 }));
             }}
           />
         )}
@@ -262,7 +260,7 @@ export function CompaniesList({
           emptyHint="Crea la primera desde Nueva empresa."
           filteredHint="Prueba con otro nombre o tipo."
           onClear={() => {
-            go(buildParams({ q: "", type: null, status: null, page: 1 }));
+            go(buildParams({ q: "", types: [...DEFAULT_COMPANY_KINDS], status: null, page: 1 }));
           }}
         />
       )}
