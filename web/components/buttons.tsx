@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { FilterX, LayoutGrid, List, Loader2, Pencil, RotateCcw, X, type LucideIcon } from "lucide-react";
+import { Archive, ArchiveRestore, CircleArrowLeft, FilterX, LayoutGrid, List, Loader2, Paperclip, Pencil, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { cn } from "cn";
@@ -23,6 +23,7 @@ import { cn } from "cn";
  * - Acción de fila icon-only: ghost + icon-sm + aria-label + title + spinner en pending;
  *   `danger` tiñe a destructive (eliminar, cancelar orden).
  * - Acción destructiva con etiqueta: variant destructive + sm + spinner en pending.
+ * - Volver en diálogos: outline sm. Adjuntar: card = outline, vacío = primary.
  * - Link inline: variant link.
  */
 
@@ -213,16 +214,18 @@ export function CancelButton({
 export function EditButton({
   onEdit,
   label = "Editar",
+  title,
   disabled,
   className,
 }: {
   onEdit: () => void;
   label?: string;
+  title?: string;
   disabled?: boolean;
   className?: string;
 }) {
   return (
-    <Button variant="outline" size="sm" onClick={onEdit} disabled={disabled} className={className}>
+    <Button variant="outline" size="sm" onClick={onEdit} disabled={disabled} title={title} className={className}>
       <Pencil aria-hidden />
       {label}
     </Button>
@@ -293,6 +296,91 @@ export function DangerButton({
       ) : (
         children
       )}
+    </Button>
+  );
+}
+
+/** Volver en diálogos (outline sm). Unifica los 4 Volver de drawers. */
+export function DialogVolverButton({
+  onClose,
+  disabled,
+  label = "Volver",
+  className,
+}: {
+  onClose: () => void;
+  disabled?: boolean;
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <Button variant="outline" size="sm" onClick={onClose} disabled={disabled} className={className}>
+      <CircleArrowLeft aria-hidden />
+      {label}
+    </Button>
+  );
+}
+
+/** Adjuntar (drawers): card = outline en AppCard action, empty = primary en vacío. */
+export function AttachButton({
+  onAttach,
+  disabled,
+  pending,
+  placement = "empty",
+  label = "Adjuntar",
+  className,
+}: {
+  onAttach: () => void;
+  disabled?: boolean;
+  pending?: boolean;
+  placement?: "card" | "empty";
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <Button
+      variant={placement === "card" ? "outline" : "default"}
+      size="sm"
+      onClick={onAttach}
+      disabled={pending || disabled}
+      className={className}
+    >
+      {pending ? <Loader2 className="animate-spin" aria-hidden /> : <Paperclip aria-hidden />}
+      {label}
+    </Button>
+  );
+}
+
+/** Toggle archivar/restaurar (empresa/contacto). row = ghost xs en tabla. */
+export function ArchiveToggleButton({
+  archived,
+  onToggle,
+  pending,
+  noun,
+  itemName,
+  placement = "row",
+  className,
+}: {
+  archived: boolean;
+  onToggle: () => void;
+  pending?: boolean;
+  noun: string;
+  itemName?: string;
+  placement?: "row" | "header";
+  className?: string;
+}) {
+  const verb = archived ? "Restaurar" : "Archivar";
+  return (
+    <Button
+      variant={placement === "header" ? "outline" : "ghost"}
+      size={placement === "header" ? "sm" : "xs"}
+      onClick={onToggle}
+      disabled={pending}
+      aria-label={`${verb} ${noun}${itemName ? ` ${itemName}` : ""}`}
+      title={archived ? `${verb} ${noun}` : `${verb} ${noun} (las órdenes conservan sus datos)`}
+      className={className}
+    >
+      {archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+      {verb}
     </Button>
   );
 }

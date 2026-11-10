@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Ban, Bot, CircleArrowLeft, CircleCheckBig, FileDown, FileText, Package, Paperclip, Pencil, PenLine, Receipt, Trash, X } from "lucide-react";
+import { Ban, Bot, CircleCheckBig, FileDown, FileText, Package, Paperclip, Pencil, PenLine, Receipt, Trash, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
-import { DangerButton, EditButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
+import { AttachButton, DangerButton, DialogVolverButton, EditButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
 import { AttributeBadge } from "@/components/badges";
 import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge } from "@/components/order-badges";
 import { orderStageDisplay } from "@/lib/ui-badges";
@@ -549,10 +549,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 Cuando el cliente firme la orden, márcala aquí. Recién entonces podrás registrar el OM/OC.
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => setSignOpen(true)} disabled={isPending}>
+                <SubmitButton size="sm" type="button" onClick={() => setSignOpen(true)} disabled={isPending}>
                   <PenLine aria-hidden />
                   Marcar firmada
-                </Button>
+                </SubmitButton>
                 <Button variant="outline" size="sm" render={<Link href={`/orders/${orderId}/print`} target="_blank" rel="noreferrer" />} nativeButton={false}>
                   <FileDown aria-hidden />
                   Exportar PDF
@@ -704,9 +704,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               <p className="text-[13px] text-muted-foreground">Sin pantallas en esta orden.</p>
               {isDraft && canEdit && (
                 <div>
-                  <Button size="sm" onClick={() => void openLinesDialog()} disabled={isPending}>
+                  <SubmitButton size="sm" type="button" onClick={() => void openLinesDialog()} disabled={isPending}>
                     <Pencil className="size-3.5" aria-hidden /> Agregar pantallas
-                  </Button>
+                  </SubmitButton>
                 </div>
               )}
             </div>
@@ -768,10 +768,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           </>
             {isCancelled && canEditRole && (
               <div>
-                <Button variant="outline" size="sm" onClick={() => setReactOpen(true)} disabled={isPending}>
+                <SubmitButton size="sm" type="button" onClick={() => setReactOpen(true)} disabled={isPending}>
                   <CircleCheckBig aria-hidden />
                   Reactivar orden
-                </Button>
+                </SubmitButton>
               </div>
             )}
             {canEdit && !isDraft && (
@@ -792,9 +792,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Autorización de la agencia. Sin ella, la orden no avanza a producción."
             action={
               canEdit && !isDraft && oms.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => setOmOpen(true)} disabled={isPending}>
-                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                </Button>
+                <AttachButton placement="card" onAttach={() => setOmOpen(true)} disabled={isPending} />
               ) : undefined
             }
             tone="sky"
@@ -809,9 +807,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 {canEdit && !isDraft && (
                   <div>
-                    <Button size="sm" onClick={() => setOmOpen(true)} disabled={isPending}>
-                      <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                    </Button>
+                    <AttachButton onAttach={() => setOmOpen(true)} disabled={isPending} />
                   </div>
                 )}
               </div>
@@ -860,9 +856,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Adjunta la pieza; queda aprobada y libera la salida al aire."
             action={
               canEdit && creatives.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => setMatOpen(true)} disabled={isPending}>
-                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                </Button>
+                <AttachButton placement="card" onAttach={() => setMatOpen(true)} disabled={isPending} />
               ) : undefined
             }
             tone="violet"
@@ -875,9 +869,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 {canEdit && (
                   <div>
-                    <Button size="sm" onClick={() => setMatOpen(true)} disabled={isPending}>
-                      <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                    </Button>
+                    <AttachButton onAttach={() => setMatOpen(true)} disabled={isPending} />
                   </div>
                 )}
               </div>
@@ -936,9 +928,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Evidencia fotográfica de la pauta al aire. Corre en paralelo a la cobranza."
             action={
               canEdit && photos.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => setPhotoOpen(true)} disabled={isPending}>
-                  <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                </Button>
+                <AttachButton placement="card" onAttach={() => setPhotoOpen(true)} disabled={isPending} />
               ) : undefined
             }
             tone="emerald"
@@ -952,9 +942,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     : "Sin adjuntos. La certificación corre en paralelo a la cobranza."}
                 </p>
                 <div>
-                  <Button size="sm" onClick={() => setPhotoOpen(true)} disabled={isPending}>
-                    <Paperclip className="size-3.5" aria-hidden /> Adjuntar
-                  </Button>
+                  <AttachButton onAttach={() => setPhotoOpen(true)} disabled={isPending} />
                 </div>
               </div>
             )}
@@ -1183,14 +1171,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           </DialogHeader>
           <div className="grid gap-3">
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setSignOpen(false)} disabled={isPending}>
-                <X aria-hidden />
-                Cancelar
-              </Button>
-              <Button size="sm" onClick={doSign} disabled={isPending}>
+              <CancelButton size="sm" onCancel={() => setSignOpen(false)} disabled={isPending} />
+              <SubmitButton size="sm" type="button" onClick={doSign} pending={isPending} pendingLabel="Firmando…">
                 <PenLine aria-hidden />
-                {isPending ? "Firmando…" : "Confirmar firma"}
-              </Button>
+                Confirmar firma
+              </SubmitButton>
             </div>
           </div>
         </DialogContent>
@@ -1262,9 +1247,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setCancelOpen(false)} disabled={isPending}>
-              <CircleArrowLeft aria-hidden />Volver
-            </Button>
+            <DialogVolverButton onClose={() => setCancelOpen(false)} disabled={isPending} />
             <DangerButton onClick={doCancelOrder} pending={isPending} pendingLabel="Cancelando…">
               <Ban aria-hidden />
               Confirmar cancelación
@@ -1282,13 +1265,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setReactOpen(false)} disabled={isPending}>
-              <CircleArrowLeft aria-hidden />Volver
-            </Button>
-            <Button size="sm" onClick={doReactivateOrder} disabled={isPending}>
+            <DialogVolverButton onClose={() => setReactOpen(false)} disabled={isPending} />
+            <SubmitButton size="sm" type="button" onClick={doReactivateOrder} pending={isPending} pendingLabel="Reactivando…">
               <CircleCheckBig aria-hidden />
-              {isPending ? "Reactivando…" : "Confirmar reactivación"}
-            </Button>
+              Confirmar reactivación
+            </SubmitButton>
           </div>
         </DialogContent>
       </Dialog>
@@ -1303,9 +1284,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={isPending}>
-              <CircleArrowLeft aria-hidden />Volver
-            </Button>
+            <DialogVolverButton onClose={() => setDelOpen(false)} disabled={isPending} />
             <DangerButton onClick={doDeleteOrder} pending={isPending} pendingLabel="Eliminando…">
               <Trash aria-hidden />
               Confirmar eliminación

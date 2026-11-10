@@ -5,9 +5,8 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, Save, Trash } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { DangerButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
+import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Save, Trash } from "lucide-react";
+import { DangerButton, DialogVolverButton, EditButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
 import {
   Dialog,
   DrawerDialogContent as DialogContent,
@@ -728,10 +727,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                     </Field>
                   </dl>
                   <div>
-                    <Button variant="outline" size="sm" onClick={startEditPlayback} disabled={enriching} title={enriching ? "Generando resumen inteligente…" : undefined}>
-                      <Pencil aria-hidden />
-                      Editar pauta
-                    </Button>
+                    <EditButton label="Editar pauta" onEdit={startEditPlayback} disabled={enriching} title={enriching ? "Generando resumen inteligente…" : undefined} />
                   </div>
                 </>
               ) : (
@@ -868,9 +864,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={working}>
-              <CircleOff aria-hidden />Volver
-            </Button>
+            <DialogVolverButton onClose={() => setDelOpen(false)} disabled={working} />
             <DangerButton onClick={doDelete} pending={working} pendingLabel="Eliminando…">
               <Trash aria-hidden />
               Confirmar eliminación

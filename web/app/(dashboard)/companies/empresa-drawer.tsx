@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Building2, Archive, ArchiveRestore, Bot, FileText, Globe, Plus, UserRound } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { EditButton, RetryButton, SubmitButton } from "@/components/buttons";
+import { Building2, Bot, FileText, Globe, Plus, UserRound } from "lucide-react";
+import { ArchiveToggleButton, EditButton, RetryButton, SubmitButton } from "@/components/buttons";
 import { ArchivedBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { Separator } from "@/components/ui/separator";
@@ -380,21 +379,17 @@ export function EmpresaDrawer({
             action={
               <span className="flex flex-wrap items-center gap-2">
                 {canAdmin && !editingDatos && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
+                  <ArchiveToggleButton
+                    placement="header"
+                    archived={isArchived}
+                    noun="empresa"
+                    pending={archiving}
+                    onToggle={() =>
                       runArchive(isArchived ? "Empresa restaurada" : "Empresa archivada", () =>
                         setCompanyArchivedAction({ companyId, archived: !isArchived }),
                       )
                     }
-                    disabled={archiving}
-                    aria-label={isArchived ? "Restaurar empresa" : "Archivar empresa"}
-                    title={isArchived ? "Restaurar empresa" : "Archivar empresa (las órdenes conservan sus datos)"}
-                  >
-                    {isArchived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-                    {isArchived ? "Restaurar" : "Archivar"}
-                  </Button>
+                  />
                 )}
                 {canEdit && !editingDatos && !isArchived && (
                   <EditButton onEdit={() => setEditingDatos(true)} />
@@ -521,21 +516,17 @@ export function EmpresaDrawer({
                     <DrawerTableTd className="text-xs text-muted-foreground" title={typeof c.created_by === "string" && c.created_by ? `Agregado por ${c.created_by}` : undefined}>{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
                     {canEdit && (
                       <DrawerTableTd>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() =>
+                        <ArchiveToggleButton
+                          archived={archived}
+                          noun="contacto"
+                          itemName={contactName(c)}
+                          pending={archiving}
+                          onToggle={() =>
                             runArchive(archived ? "Contacto restaurado" : "Contacto archivado", () =>
                               setContactArchivedAction({ contactId: c.id, archived: !archived }),
                             )
                           }
-                          disabled={archiving}
-                          aria-label={archived ? `Restaurar contacto ${contactName(c)}` : `Archivar contacto ${contactName(c)}`}
-                          title={archived ? "Restaurar contacto" : "Archivar contacto (las órdenes conservan sus datos)"}
-                        >
-                          {archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-                          {archived ? "Restaurar" : "Archivar"}
-                        </Button>
+                        />
                       </DrawerTableTd>
                     )}
                   </DrawerTableRow>
