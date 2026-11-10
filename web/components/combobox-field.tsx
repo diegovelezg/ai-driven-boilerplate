@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -11,12 +11,14 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 
-/** Campo autocomplete reutilizable (Combobox nativo shadcn).
- *  Escribe para filtrar, elige sugerencia o fija texto libre. El texto libre
- *  confirmado se vuelve item real: si no, Base UI lo borra al cerrar
- *  (sincroniza el input al valor seleccionado = null → "").
- *  `displayItem` solo cambia cómo se ve la sugerencia; el valor guardado es el
- *  original. `allowCustom={false}` lo vuelve selección estricta de la lista. */
+/** Autocomplete estándar reutilizable (Base UI Combobox vía ui/combobox).
+ *  Escribe para filtrar, elige de la lista o fija texto libre.
+ *  - X limpia lo escrito/seleccionado y reabre la lista (reselect).
+ *  - El valor solo se propaga al elegir, con Enter, con el botón
+ *    Usar "..." o al perder foco. Escribir no contamina al padre.
+ *  - Escape revierte al valor confirmado. Sin `allowCustom` el texto
+ *    ajeno a la lista se revierte al perder foco o cerrar.
+ *  - `displayItem` solo cambia cómo se ve la sugerencia en la lista. */
 export function ComboboxField({
   items,
   value,
@@ -44,18 +46,25 @@ export function ComboboxField({
   const [query, setQuery] = useState(value);
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const [customs, setCustoms] = useState<string[]>([]);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   // El padre puede resetear/fijar `value` (p. ej. limpiar el form):
-  // el texto visible lo sigue. Sin esto el input queda stale.
-  useEffect(() => {
+  // ajuste durante el render, sin efecto (patrón del proyecto, sin cascadas).
+  // Mientras el usuario escribe, `value` no cambia y no se toca el texto.
+  const [prevValue, setPrevValue] = useState(value);
+  if (prevValue !== value) {
+    setPrevValue(value);
     setQuery(value);
-  }, [value]);
+  }
 
   const allItems = useMemo(() => {
     const base = [...items];
     for (const c of customs) if (!base.includes(c)) base.push(c);
     return base;
   }, [items, customs]);
+
+  const trimmed = query.trim();
+  const isKnown = trimmed !== "" && allItems.includes(trimmed);
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -65,33 +74,75 @@ export function ComboboxField({
 
   const showItem = displayItem ?? ((b: string) => b);
 
-  const commitCustom = (raw: string) => {
-    const v = raw.trim();
-    if (!v) return;
-    if (!items.includes(v)) setCustoms((prev) => (prev.includes(v) ? prev : [...prev, v]));
-    setQuery(v);
-    onChange(v);
+  function commit(v: string) {
+    const t = v.trim();
+    if (!t) {
+      setQuery("");
+      if (value !== "") onChange("");
+      setOpen(false);
+      return;
+    }
+    if (!allItems.includes(t)) {
+      if (!allowCustom) {
+        setQuery(value);
+        setOpen(false);
+        return;
+      }
+      setCustoms((prev) => (prev.includes(t) ? prev : [...prev, t]));
+    }
+    setQuery(t);
+    if (t !== value) onChange(t);
     setOpen(false);
-  };
+  }
+
+  function handleClear() {
+    setQuery("");
+    if (value !== "") onChange("");
+    setOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
+  function handleBlur() {
+    if (!trimmed) {
+      if (value !== "") {
+        setQuery("");
+        onChange("");
+      }
+      return;
+    }
+    // Click en "Usar ..." hace mousedown preventDefault: no hay blur.
+    if (allItems.includes(trimmed)) {
+      if (trimmed !== value) {
+        setQuery(trimmed);
+        onChange(trimmed);
+      } else if (query !== trimmed) {
+        setQuery(trimmed);
+      }
+      return;
+    }
+    if (allowCustom) commit(trimmed);
+    else setQuery(value);
+  }
 
   return (
     <Combobox
       items={matches}
-      value={allItems.includes(query) ? query : null}
+      value={isKnown ? trimmed : null}
       onValueChange={(v) => {
-        if (typeof v === "string") {
-          setQuery(v);
-          onChange(v);
-        }
+        if (typeof v !== "string") return;
+        setQuery(v);
+        if (v !== value) onChange(v);
       }}
       inputValue={query}
-      onInputValueChange={(v) => {
-        setQuery(v);
-        onChange(v);
-      }}
+      onInputValueChange={setQuery}
       onItemHighlighted={(v) => setHighlighted(typeof v === "string" ? v : null)}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next && !allowCustom && !allItems.includes(query.trim())) {
+          setQuery(value);
+        }
+      }}
       autoHighlight
     >
       <ComboboxInput
@@ -99,29 +150,46 @@ export function ComboboxField({
         disabled={disabled}
         aria-label={ariaLabel}
         className="w-full"
-        onBlur={() => {
-          if (allowCustom && query.trim() && !allItems.includes(query.trim())) commitCustom(query);
+        inputRef={inputRef}
+        onClear={handleClear}
+        clearVisible={query !== "" && !disabled}
+        onBlur={handleBlur}
+        onFocus={(e) => {
+          if (disabled) return;
+          setOpen(true);
+          // Texto seleccionado: escribir reemplaza, borrar muestra todo.
+          e.currentTarget.select();
         }}
         onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            if (query !== value) {
+              e.preventDefault();
+              setQuery(value);
+            }
+            setOpen(false);
+            return;
+          }
           if (!allowCustom || e.key !== "Enter" || highlighted) return;
-          const q = query.trim();
-          if (!q || allItems.includes(q)) return;
+          if (!trimmed || allItems.includes(trimmed)) return;
           e.preventDefault();
-          commitCustom(q);
+          commit(trimmed);
         }}
       />
       <ComboboxContent>
         <ComboboxEmpty>
-          {allowCustom && query.trim() !== "" ? (
+          {allowCustom && trimmed !== "" && !isKnown ? (
             <Button
               type="button"
               variant="ghost"
               size="sm"
               className="w-full justify-start font-normal"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => commitCustom(query)}
+              onClick={() => {
+                commit(trimmed);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
             >
-              {customLabel ? customLabel(query.trim()) : <>Usar “{query.trim()}”</>}
+              {customLabel ? customLabel(trimmed) : <>Usar “{trimmed}”</>}
             </Button>
           ) : (
             emptyText

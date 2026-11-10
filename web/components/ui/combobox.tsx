@@ -55,18 +55,42 @@ function ComboboxInput({
   disabled = false,
   showTrigger = true,
   showClear = false,
+  onClear,
+  clearVisible,
+  inputRef,
   ...props
 }: ComboboxPrimitive.Input.Props & {
   showTrigger?: boolean
   showClear?: boolean
+  /** X propio: visible aunque el valor no esté confirmado (texto libre).
+   *  Si se pasa, reemplaza al Clear nativo (atado al valor). */
+  onClear?: (e: React.MouseEvent<HTMLButtonElement>) => void
+  clearVisible?: boolean
+  inputRef?: React.Ref<HTMLInputElement>
 }) {
+  const showCustomClear = !!onClear && (clearVisible ?? true)
   return (
     <InputGroup className={cn("w-auto", className)}>
       <ComboboxPrimitive.Input
+        ref={inputRef}
         render={<InputGroupInput disabled={disabled} />}
         {...props}
       />
       <InputGroupAddon align="inline-end">
+        {showCustomClear && (
+          <InputGroupButton
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Limpiar campo"
+            title="Limpiar"
+            disabled={disabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onClear}
+          >
+            <XIcon className="pointer-events-none" />
+          </InputGroupButton>
+        )}
         {showTrigger && (
           <InputGroupButton
             size="icon-xs"
@@ -77,7 +101,7 @@ function ComboboxInput({
             disabled={disabled}
           />
         )}
-        {showClear && <ComboboxClear disabled={disabled} />}
+        {showClear && !onClear && <ComboboxClear disabled={disabled} />}
       </InputGroupAddon>
       {children}
     </InputGroup>
