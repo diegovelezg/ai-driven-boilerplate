@@ -1,11 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { BarChart3, Bot, CalendarDays, CircleCheckBig, CircleOff, MapPin, Monitor, Pencil, RotateCcw, Save, Trash, X } from "lucide-react";
-import { mapPinCheckInsideSvg } from "@/components/map-pin-svg";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Badge } from "@/components/ui/badge";
+import { AttributeBadge, GeneratingBadge, ScreenActiveBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { deleteScreenAction, setScreenActiveAction, updateScreenPlaybackAction } from "@/lib/screens-actions";
 import { hasMinRole, type MemberRole } from "@/lib/roles";
@@ -143,12 +143,127 @@ function SplitBar({ vehicular, peatonal }: { vehicular: number | null; peatonal:
 }
 
 function Chip({ children }: { children: ReactNode }) {
-  return <Badge variant="secondary">{children}</Badge>;
+  return <AttributeBadge title="Atributo de pantalla">{children}</AttributeBadge>;
 }
 
 import { ScreenMap } from "./screen-map";
-import { PantallaChat } from "./pantalla-chat";
-import { PantallaOcupacion } from "./pantalla-ocupacion";
+
+// Carga diferida: chat y ocupación solo se descargan al usarse (mismo
+// patrón que orden-drawer: el drawer inicial no paga react-markdown ni
+// react-day-picker).
+function DrawerLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" aria-label={label}>
+      <div className="h-4 w-1/3 animate-pulse rounded bg-muted" />
+      <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+const PantallaChat = dynamic(() => import("./pantalla-chat").then((m) => m.PantallaChat), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando chat" />,
+});
+const PantallaOcupacion = dynamic(
+  () => import("./pantalla-ocupacion").then((m) => m.PantallaOcupacion),
+  {
+    ssr: false,
+    loading: () => <DrawerLoading label="Cargando ocupación" />,
+  },
+);
+
+/** Entero > 0 o null (vacío); undefined = inválido. */
+function parsePlaybackInt(raw: string): number | null | undefined {
+  const t = raw.trim();
+  if (!t) return null;
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Form de pauta con estado LOCAL: escribir aquí ya NO re-renderiza el
+ * drawer (perf 2026-11-09: antes cada tecla reconciliaba el drawer entero
+ * de 700+ líneas, con JSON.parse + geoItems reconstruidos por render).
+ */
+function ScreenPlaybackForm({
+  initial,
+  pending,
+  serverError,
+  onSave,
+  onCancel,
+}: {
+  initial: { duration: string; plays: string; impact: string };
+  pending: boolean;
+  serverError: string | null;
+  onSave: (v: { duration: number | null; plays: number | null; impact: number | null }) => void;
+  onCancel: () => void;
+}) {
+  const [durInput, setDurInput] = useState(initial.duration);
+  const [playsInput, setPlaysInput] = useState(initial.plays);
+  const [impactInput, setImpactInput] = useState(initial.impact);
+  const [error, setError] = useState<string | null>(null);
+  const save = () => {
+    const duration = parsePlaybackInt(durInput);
+    const plays = parsePlaybackInt(playsInput);
+    const impact = parsePlaybackInt(impactInput);
+    if (duration === undefined || plays === undefined || impact === undefined) {
+      setError("Enteros > 0 (vacío = sin dato).");
+      return;
+    }
+    setError(null);
+    onSave({ duration, plays, impact });
+  };
+  return (
+    <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1 text-xs">
+          Duración spot (s)
+          <input
+            value={durInput}
+            onChange={(e) => setDurInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            inputMode="numeric"
+            placeholder="10"
+            disabled={pending}
+            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          Reproducciones / día
+          <input
+            value={playsInput}
+            onChange={(e) => setPlaysInput(e.target.value.replace(/\D/g, "").slice(0, 7))}
+            inputMode="numeric"
+            placeholder="900"
+            disabled={pending}
+            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          Impactos / día
+          <input
+            value={impactInput}
+            onChange={(e) => setImpactInput(e.target.value.replace(/\D/g, "").slice(0, 9))}
+            inputMode="numeric"
+            placeholder="150000"
+            disabled={pending}
+            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+          />
+        </label>
+      </div>
+      {(error ?? serverError) && <p className="text-xs text-destructive">{error ?? serverError}</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={save} disabled={pending}>
+          <Save aria-hidden />
+          {pending ? "Guardando…" : "Guardar"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onCancel} disabled={pending}>
+          <X aria-hidden />
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClose: () => void }) {
   const router = useRouter();
@@ -156,9 +271,6 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   const [detail, setDetail] = useState<ScreenDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingPlayback, setEditingPlayback] = useState(false);
-  const [durInput, setDurInput] = useState("");
-  const [playsInput, setPlaysInput] = useState("");
-  const [impactInput, setImpactInput] = useState("");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [savingPlayback, startPlayback] = useTransition();
   const [delOpen, setDelOpen] = useState(false);
@@ -167,40 +279,34 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   const canManage = detail?.myRole ? hasMinRole(detail.myRole, "seller") : false;
   const canDelete = detail?.myRole ? hasMinRole(detail.myRole, "owner") : false;
 
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setError(null);
+    try {
+      const res = await fetch(`/api/screens/${screenId}`, { cache: "no-store", signal });
+      if (!res.ok) throw new Error("No se pudo cargar la pantalla.");
+      setDetail((await res.json()) as ScreenDetail);
+    } catch (e) {
+      if (signal?.aborted) return;
+      setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
+    }
+  }, [screenId]);
+
   // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
-    let alive = true;
+    const ac = new AbortController();
     const h = setTimeout(() => {
-      fetch(`/api/screens/${screenId}`, { cache: "no-store" })
-        .then(async (res) => {
-          if (!res.ok) throw new Error("No se pudo cargar la pantalla.");
-          return (await res.json()) as ScreenDetail;
-        })
-        .then((j) => {
-          if (!alive) return;
-          setDetail(j);
-        })
-        .catch((e: unknown) => {
-          if (!alive) return;
-          setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
-        });
+      void load(ac.signal);
     }, 0);
     return () => {
-      alive = false;
       clearTimeout(h);
+      ac.abort();
     };
-  }, [screenId]);
+  }, [screenId, load]);
 
   const retry = () => {
     setError(null);
     setDetail(null);
-    fetch(`/api/screens/${screenId}`, { cache: "no-store" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error("No se pudo cargar la pantalla.");
-        return (await res.json()) as ScreenDetail;
-      })
-      .then((j) => setDetail(j))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "No se pudieron cargar los datos."));
+    void load();
   };
 
   const s = detail?.screen;
@@ -214,6 +320,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
   useEffect(() => {
     if (!enriching) return;
     let alive = true;
+    const ac = new AbortController();
     let tries = 0;
     const h = setInterval(() => {
       tries++;
@@ -221,7 +328,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
         clearInterval(h);
         return;
       }
-      fetch(`/api/screens/${screenId}`, { cache: "no-store" })
+      fetch(`/api/screens/${screenId}`, { cache: "no-store", signal: ac.signal })
         .then(async (res) => {
           if (!res.ok) throw new Error("No se pudo cargar la pantalla.");
           return (await res.json()) as ScreenDetail;
@@ -236,41 +343,25 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
     return () => {
       alive = false;
       clearInterval(h);
+      ac.abort();
     };
   }, [screenId, enriching]);
 
   // Pauta editable: duración del spot + reproducciones/día.
   const startEditPlayback = () => {
-    setDurInput(s?.duration_sec != null && s.duration_sec !== "" ? String(s.duration_sec) : "");
-    setPlaysInput(s?.plays_per_day != null && s.plays_per_day !== "" ? String(s.plays_per_day) : "");
-    setImpactInput(s?.impact_day != null && s.impact_day !== "" ? String(s.impact_day) : "");
     setPlaybackError(null);
     setEditingPlayback(true);
   };
 
-  const savePlayback = () => {
-    const parse = (raw: string): number | null | undefined => {
-      const t = raw.trim();
-      if (!t) return null;
-      if (!/^\d+$/.test(t)) return undefined;
-      const n = Number(t);
-      return Number.isSafeInteger(n) && n > 0 ? n : undefined;
-    };
-    const duration = parse(durInput);
-    const plays = parse(playsInput);
-    const impact = parse(impactInput);
-    if (duration === undefined || plays === undefined || impact === undefined) {
-      setPlaybackError("Enteros > 0 (vacío = sin dato).");
-      return;
-    }
+  const savePlayback = (v: { duration: number | null; plays: number | null; impact: number | null }) => {
     setPlaybackError(null);
     startPlayback(async () => {
-      const res = await updateScreenPlaybackAction({ screenId, duration_sec: duration, plays_per_day: plays, impact_day: impact });
+      const res = await updateScreenPlaybackAction({ screenId, duration_sec: v.duration, plays_per_day: v.plays, impact_day: v.impact });
       if (!res.ok) {
         setPlaybackError(res.message);
         return;
       }
-      setDetail((d) => (d ? { ...d, screen: { ...d.screen, duration_sec: duration, plays_per_day: plays, impact_day: impact } } : d));
+      setDetail((d) => (d ? { ...d, screen: { ...d.screen, duration_sec: v.duration, plays_per_day: v.plays, impact_day: v.impact } } : d));
       setEditingPlayback(false);
       toast.add({ title: "Pauta actualizada", description: res.message, type: "success" });
     });
@@ -443,10 +534,8 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
       badges={
         s && (
           <span className="flex flex-wrap items-center gap-1.5">
-            <Badge variant={s.is_active === true ? "success" : "secondary"}>
-              {s.is_active === true ? "Activa" : "Inactiva"}
-            </Badge>
-            {enriching && <Badge variant="outline">Generando resumen inteligente…</Badge>}
+            <ScreenActiveBadge isActive={s.is_active === true} />
+            {enriching && <GeneratingBadge />}
             <span className="text-[11px] text-muted-foreground tabular-nums">
               {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas en órdenes
             </span>
@@ -657,54 +746,18 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                   </div>
                 </>
               ) : (
-                <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <label className="flex flex-col gap-1 text-xs">
-                      Duración spot (s)
-                      <input
-                        value={durInput}
-                        onChange={(e) => setDurInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                        inputMode="numeric"
-                        placeholder="10"
-                        disabled={savingPlayback}
-                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs">
-                      Reproducciones / día
-                      <input
-                        value={playsInput}
-                        onChange={(e) => setPlaysInput(e.target.value.replace(/\D/g, "").slice(0, 7))}
-                        inputMode="numeric"
-                        placeholder="900"
-                        disabled={savingPlayback}
-                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-xs">
-                      Impactos / día
-                      <input
-                        value={impactInput}
-                        onChange={(e) => setImpactInput(e.target.value.replace(/\D/g, "").slice(0, 9))}
-                        inputMode="numeric"
-                        placeholder="150000"
-                        disabled={savingPlayback}
-                        className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
-                      />
-                    </label>
-                  </div>
-                  {playbackError && <p className="text-xs text-destructive">{playbackError}</p>}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button size="sm" onClick={savePlayback} disabled={savingPlayback}>
-                      <Save aria-hidden />
-                      {savingPlayback ? "Guardando…" : "Guardar"}
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setEditingPlayback(false)} disabled={savingPlayback}>
-                      <X aria-hidden />
-                      Cancelar
-                    </Button>
-                  </div>
-                </div>
+                <ScreenPlaybackForm
+                  key={`${String(s?.duration_sec ?? "")}-${String(s?.plays_per_day ?? "")}-${String(s?.impact_day ?? "")}`}
+                  initial={{
+                    duration: s?.duration_sec != null && s.duration_sec !== "" ? String(s.duration_sec) : "",
+                    plays: s?.plays_per_day != null && s.plays_per_day !== "" ? String(s.plays_per_day) : "",
+                    impact: s?.impact_day != null && s.impact_day !== "" ? String(s.impact_day) : "",
+                  }}
+                  pending={savingPlayback}
+                  serverError={playbackError}
+                  onSave={savePlayback}
+                  onCancel={() => setEditingPlayback(false)}
+                />
               )}
             </div>
           </AppCard>
@@ -728,9 +781,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5" aria-label="Etiquetas">
                   {tags.map((t) => (
-                    <Badge key={t} variant="secondary" className="tabular-nums">
-                      {t}
-                    </Badge>
+                    <AttributeBadge key={t} label={t} title="Etiqueta" className="tabular-nums" />
                   ))}
                 </div>
               )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useTransition } from "react";
+import { useCallback, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FilterX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
@@ -16,7 +16,7 @@ import {
   SortHeaderButton,
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
-import { Badge } from "@/components/ui/badge";
+import { BrandPautaBadge } from "@/components/badges";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { BrandsSortDir, BrandsSortKey, BrandRow } from "@/lib/brand-db";
 import { MarcaDrawer } from "./marca-drawer";
@@ -38,6 +38,13 @@ export function BrandsList({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  // Prefetch del detalle al hover/foco (mismo patrón que orders-list).
+  const prefetched = useRef(new Set<string>());
+  const prefetchBrand = useCallback((brand: string) => {
+    if (prefetched.current.has(brand)) return;
+    prefetched.current.add(brand);
+    void fetch(`/api/brands/${encodeURIComponent(brand)}`).catch(() => {});
+  }, []);
   // Selección con deep-link (?brand=, alias ?marca=). Ver entity-list.tsx.
   const { selectedId: selectedBrand, open: openDrawer, close: closeDrawer } = useEntitySelection(
     "/brands",
@@ -152,6 +159,8 @@ export function BrandsList({
                 role="button"
                 aria-label={`Abrir marca ${r.brand}`}
                 onClick={() => openDrawer(r.brand)}
+                onMouseEnter={() => prefetchBrand(r.brand)}
+                onFocus={() => prefetchBrand(r.brand)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -162,9 +171,7 @@ export function BrandsList({
               >
                 <DataTableTd className="max-w-[220px] truncate px-3 py-4 font-medium">{r.brand}</DataTableTd>
                 <DataTableTd className="px-3 py-4">
-                  <Badge variant={r.active ? "success" : "secondary"} className="font-normal" title={r.active ? "Marca con pauta vigente" : "Marca sin pauta vigente"}>
-                    {r.active ? "En pauta" : "Sin pauta"}
-                  </Badge>
+                  <BrandPautaBadge active={r.active} />
                 </DataTableTd>
                 <DataTableTd numeric className="px-3 py-4 tabular-nums">
                   {formatNumber(r.ios)}

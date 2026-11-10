@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import { FilterX, LayoutGrid, List as ListIcon, Star, Users } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
@@ -18,9 +17,12 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
-import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
+import { CrmStatusFilterSelect } from "@/components/crm-status-filter";
+import { EntityCount, EntityEmpty, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { CompanyPrincipalBadge } from "@/components/company-badges";
+import { ArchivedBadge } from "@/components/badges";
+import { type CrmStatusFilter } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { CrmContactListItem } from "@/lib/crm-db";
@@ -36,6 +38,7 @@ export function ContactsList({
   companies,
   q,
   companyId,
+  status,
   initialView,
   initialSelectedId,
   myRole,
@@ -46,6 +49,7 @@ export function ContactsList({
   companies: Array<{ id: string; name: string }>;
   q: string;
   companyId: string | null;
+  status: CrmStatusFilter;
   initialView: "table" | "grid";
   initialSelectedId: string | null;
   myRole: MemberRole | null;
@@ -60,30 +64,27 @@ export function ContactsList({
     ["contacto"],
   );
   const [view, setView] = useState<"table" | "grid">(initialView);
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const { go: goNav, isPending } = useListNav("/contacts");
 
-  const buildParams = (patch: { q?: string; company?: string | null; view?: string }) => {
+  const buildParams = (patch: { q?: string; company?: string | null; status?: string | null; view?: string }) => {
     const params = new URLSearchParams();
     const nextQ = patch.q ?? q;
     if (nextQ.trim()) params.set("q", nextQ.trim());
     const nextCompany = patch.company !== undefined ? patch.company : companyId;
     if (nextCompany) params.set("company", nextCompany);
+    const nextStatus = patch.status !== undefined ? patch.status : status;
+    if (nextStatus && nextStatus !== "active") params.set("status", nextStatus);
     params.set("view", patch.view ?? (view === "grid" ? "grid" : "table"));
     return params.toString();
   };
 
-  const go = (patch: { q?: string; company?: string | null }) => {
-    startTransition(() => {
-      router.replace(`/contacts?${buildParams(patch)}`);
-    });
+  const go = (patch: { q?: string; company?: string | null; status?: string | null }) => {
+    goNav(buildParams(patch));
   };
 
   const switchView = (next: "table" | "grid") => {
     setView(next);
-    startTransition(() => {
-      router.replace(`/contacts?${buildParams({ view: next })}`, { scroll: false });
-    });
+    goNav(buildParams({ view: next }), { scroll: false });
   };
 
   const summary = useMemo(() => {
@@ -93,7 +94,7 @@ export function ContactsList({
   }, [rows]);
 
   const selected = rows.find((r) => r.id === selectedId) ?? null;
-  const hasFilter = q.trim() !== "" || companyId !== null;
+  const hasFilter = q.trim() !== "" || companyId !== null || status !== "active";
   const exportParams = new URLSearchParams({ entity: "contacts" });
   if (q.trim()) exportParams.set("q", q.trim());
   if (companyId) exportParams.set("company", companyId);
@@ -148,8 +149,9 @@ export function ContactsList({
             </SelectItem>
           ))}
         </FilterSelect>
+        <CrmStatusFilterSelect status={status} onStatus={(s) => go({ status: s })} />
         {hasFilter && (
-          <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", company: null })}>
+          <Button variant="ghost" size="sm" disabled={isPending} onClick={() => go({ q: "", company: null, status: null })}>
             <FilterX aria-hidden />
             Limpiar
           </Button>
@@ -208,7 +210,7 @@ export function ContactsList({
                 }}
                 className="cursor-pointer focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
-                <DataTableTd className="font-medium">{fullName(c) === "—" ? "—" : toTitleCase(fullName(c))}</DataTableTd>
+                <DataTableTd className="font-medium">{fullName(c) === "—" ? "—" : toTitleCase(fullName(c))}{c.deleted_at && <ArchivedBadge className="ml-2" />}</DataTableTd>
                 <DataTableTd
                   className="max-w-[220px] truncate text-[13px] text-muted-foreground"
                   title={c.company_name ?? undefined}
@@ -249,7 +251,10 @@ export function ContactsList({
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-medium tracking-tight">{displayName}</h3>
-                  <CompanyPrincipalBadge isPrimary={c.is_primary} />
+                  <span className="flex items-center gap-1.5">
+                    {c.deleted_at && <ArchivedBadge />}
+                    <CompanyPrincipalBadge isPrimary={c.is_primary} />
+                  </span>
                 </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   {[c.company_name ? toTitleCase(c.company_name) : null, c.job_title].filter(Boolean).join(" · ") || "—"}
@@ -266,11 +271,11 @@ export function ContactsList({
           filtered={hasFilter}
           emptyTitle="Aún no hay contactos"
           emptyHint="Crea el primero o agrégalo desde la ficha de su empresa."
-          onClear={hasFilter ? () => go({ q: "", company: null }) : undefined}
+          onClear={hasFilter ? () => go({ q: "", company: null, status: null }) : undefined}
         />
       )}
 
-      {selected && <ContactDrawer contact={selected} myRole={myRole} onClose={closeDrawer} />}
+      {selected && <ContactDrawer key={selected.id} contact={selected} myRole={myRole} onClose={closeDrawer} />}
     </div>
   );
 }

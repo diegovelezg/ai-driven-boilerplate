@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, Bot, CircleArrowLeft, FileText, Package, Paperclip, Pencil, PenLine, Receipt, RotateCcw, X } from "lucide-react";
+import Link from "next/link";
+import { Ban, Bot, CircleArrowLeft, CircleCheckBig, FileDown, FileText, Package, Paperclip, Pencil, PenLine, Receipt, RotateCcw, Trash, X } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
+import { AppTooltip } from "@/components/ui/app-tooltip";
 import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge, orderStageDisplay } from "@/components/order-badges";
+import { AttributeBadge } from "@/components/badges";
+import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge } from "@/components/order-badges";
+import { orderStageDisplay } from "@/lib/ui-badges";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -23,13 +26,41 @@ import { SectionHeading } from "@/components/section-heading";
 import { DrawerTable, DrawerTableBody, DrawerTableHeader, DrawerTableRow, DrawerTableTd, DrawerTableTh } from "@/components/drawer-table";
 import { ORDER_STEPS, orderStage } from "@/lib/order-stage";
 import { BILLING_LABELS, billingStatus } from "@/lib/billing-status";
-import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction, setInvoiceStatusAction } from "@/lib/order-flow-actions";
-import { OrdenChat } from "./orden-chat";
-import { OrderEditForm } from "./order-edit-form";
-import { InvoiceForm } from "./invoice-form";
+import dynamic from "next/dynamic";
+import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction, reactivateOrderAction, deleteOrderAction, setInvoiceStatusAction } from "@/lib/order-flow-actions";
+
+// Carga diferida: chat y forms solo se descargan al usarse. El drawer
+// inicial no paga react-markdown/day-picker (análisis perf 2026-11-09:
+// ~60 chunks en la primera apertura, micromark el más pesado).
+function FormLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" aria-label={label}>
+      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+const OrdenChat = dynamic(() => import("./orden-chat").then((m) => m.OrdenChat), {
+  ssr: false,
+  loading: () => <FormLoading label="Cargando chat" />,
+});
+const OrderEditForm = dynamic(() => import("./order-edit-form").then((m) => m.OrderEditForm), {
+  ssr: false,
+  loading: () => <FormLoading label="Cargando formulario" />,
+});
+const OrderLinesForm = dynamic(() => import("./order-lines-form").then((m) => m.OrderLinesForm), {
+  ssr: false,
+  loading: () => <FormLoading label="Cargando pantallas" />,
+});
+const InvoiceForm = dynamic(() => import("./invoice-form").then((m) => m.InvoiceForm), {
+  ssr: false,
+  loading: () => <FormLoading label="Cargando factura" />,
+});
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { normalizeCurrency } from "@/lib/currency";
-import { formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
+import { effectiveOrderCommissionPct, splitAgencyAmounts } from "@/lib/agency-commission";
+import type { OrderContactRef } from "@/lib/orders-db";
+import { diffDaysInclusive, displayEndOfSafe, formatDate, formatDateTime, formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
 
 interface Detail {
   order: Record<string, unknown>;
@@ -37,6 +68,12 @@ interface Detail {
   billing_name: string | null;
   billing_kind: string | null;
   billing_tax_id: string | null;
+  billing_commission_pct: number | null;
+  billing_company_address: string | null;
+  agency_company_id: string | null;
+  agency_name: string | null;
+  agency_tax_id: string | null;
+  agency_commission_pct: number | null;
   lines: Array<Record<string, unknown>>;
   io_agency_orders: Array<Record<string, unknown>>;
   creatives: Array<Record<string, unknown>>;
@@ -44,58 +81,12 @@ interface Detail {
   photos: Array<Record<string, unknown>>;
   photos_count: number;
   invoices: Array<Record<string, unknown>>;
-}
-
-/** "2026-11-03" o ISO "2026-11-03T00:00:00-05:00" → "03/11/2026". */
-function fmtFecha(v: unknown): string {
-  if (typeof v !== "string" || !v) return "—";
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
-}
-
-/** Timestamptz → "03/11/2026 14:05" en Lima. Fecha sola → solo fecha. */
-function fmtFechaHora(v: unknown): string {
-  if (typeof v !== "string" || !v) return "—";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return fmtFecha(v);
-  const t = Date.parse(v);
-  if (Number.isNaN(t)) return fmtFecha(v);
-  try {
-    const f = new Intl.DateTimeFormat("es-PE", {
-      timeZone: "America/Lima",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-    return f.format(new Date(t)).replace(",", "");
-  } catch {
-    return fmtFecha(v);
-  }
-}
-
-/** Fin exclusivo de línea (BD, '[)') → día inclusivo "yyyy-mm-dd". */
-function inclusiveEndOf(exclusiveIso: unknown): string | null {
-  if (typeof exclusiveIso !== "string" || !exclusiveIso) return null;
-  const t = Date.parse(exclusiveIso);
-  if (Number.isNaN(t)) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(exclusiveIso);
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-  }
-  const d = new Date(t - 86_400_000);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-}
-
-function diffDias(inicio: unknown, finInclusivo: unknown): number | null {
-  const a = typeof inicio === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(inicio) : null;
-  const b = typeof finInclusivo === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(finInclusivo) : null;
-  if (!a || !b) return null;
-  const da = Date.UTC(Number(a[1]), Number(a[2]) - 1, Number(a[3]));
-  const db = Date.UTC(Number(b[1]), Number(b[2]) - 1, Number(b[3]));
-  const n = Math.round((db - da) / 86_400_000) + 1;
-  return n >= 1 ? n : null;
+  contacts: {
+    billing: OrderContactRef | null;
+    signer: OrderContactRef | null;
+    payment: OrderContactRef | null;
+    manager: OrderContactRef | null;
+  };
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -113,6 +104,81 @@ function by(v: Record<string, unknown>): string | null {
   return typeof a === "string" && a ? a : null;
 }
 
+/** Línea desde el contacto vinculado; null si no hay vínculo. */
+function contactLine(ref: OrderContactRef | null | undefined): string | null {
+  if (!ref) return null;
+  return [ref.name, ref.role, ref.email].filter(Boolean).join(" · ") || null;
+}
+
+/**
+ * Dialog genérico "pegar URL y adjuntar" (autorización / material / foto).
+ * El input vive AQUÍ (estado local): escribir ya NO re-renderiza el drawer
+ * (perf 2026-11-09: antes cada tecla reconciliaba tabla + cards + badges).
+ */
+function AttachUrlDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  inputId,
+  emptyHint,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  title: string;
+  description: string;
+  inputId: string;
+  emptyHint: string;
+  pending: boolean;
+  onConfirm: (url: string) => void;
+}) {
+  const [url, setUrl] = useState("");
+  // Sin reset manual: el Portal desmonta al cerrar (keepMounted=false),
+  // así que cada apertura parte de "".
+  const confirm = () => {
+    if (!url.trim()) {
+      toast.add({ title: "Falta la URL", description: emptyHint, type: "error" });
+      return;
+    }
+    onConfirm(url.trim());
+  };
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onOpenChange(false)}>
+      <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor={inputId}>Adjunto (URL) *</Label>
+            <Input
+              id={inputId}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…"
+              inputMode="url"
+              disabled={pending}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={pending}>
+              <X aria-hidden />
+              Cancelar
+            </Button>
+            <Button size="sm" onClick={confirm} disabled={pending || !url.trim()}>
+              <Paperclip aria-hidden />
+              {pending ? "Adjuntando…" : "Adjuntar"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myRole: MemberRole | null; onClose: () => void }) {
   const router = useRouter();
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -122,31 +188,66 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const [isPending, startTransition] = useTransition();
   const [signOpen, setSignOpen] = useState(false);
   const [omOpen, setOmOpen] = useState(false);
-  const [omUrl, setOmUrl] = useState("");
   const [matOpen, setMatOpen] = useState(false);
-  const [matUrl, setMatUrl] = useState("");
   const [photoOpen, setPhotoOpen] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState("");
   const [invOpen, setInvOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [linesOpen, setLinesOpen] = useState(false);
+  const [linesNonce, setLinesNonce] = useState(0);
+  const [screens, setScreens] = useState<Array<{ id: string; name: string; price_pen: number | null }> | null>(null);
+  const [screensError, setScreensError] = useState<string | null>(null);
+  const [screensLoading, setScreensLoading] = useState(false);
+  const [reactOpen, setReactOpen] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
 
-  const load = useCallback(async () => {
+  // Reloj fijo al montar: el render debe ser puro (regla react-hooks/purity);
+  // congelar "ahora" evita que la etapa parpadee entre renders.
+  const [nowMs] = useState(() => Date.now());
+
+  const load = useCallback(async (signal?: AbortSignal) => {
     setError(null);
     try {
-      const res = await fetch(`/api/orders/${orderId}`, { cache: "no-store" });
+      const res = await fetch(`/api/orders/${orderId}`, { cache: "no-store", signal });
       if (!res.ok) throw new Error("No se pudo cargar la orden.");
       setDetail((await res.json()) as Detail);
     } catch (e) {
+      if (signal?.aborted) return;
       setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     }
   }, [orderId]);
 
+  // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
-    setTab("resumen");
-    setDetail(null);
-    setEditingFicha(false);
-    void load();
+    const ac = new AbortController();
+    const h = setTimeout(() => {
+      setTab("resumen");
+      setDetail(null);
+      setEditingFicha(false);
+      void load(ac.signal);
+    }, 0);
+    return () => {
+      clearTimeout(h);
+      ac.abort();
+    };
   }, [load]);
+
+  const openLinesDialog = useCallback(async () => {
+    setLinesOpen(true);
+    setLinesNonce((n) => n + 1);
+    if (screens !== null || screensLoading) return;
+    setScreensLoading(true);
+    setScreensError(null);
+    try {
+      const res = await fetch("/api/screens?limit=200", { cache: "no-store" });
+      if (!res.ok) throw new Error("No se pudieron cargar las pantallas.");
+      const data = (await res.json()) as { screens?: Array<{ id: string; name: string; price_pen: number | null }> };
+      setScreens(Array.isArray(data.screens) ? data.screens : []);
+    } catch (e) {
+      setScreensError(e instanceof Error ? e.message : "No se pudieron cargar las pantallas.");
+    } finally {
+      setScreensLoading(false);
+    }
+  }, [screens, screensLoading]);
 
   const doSign = () => {
     startTransition(async () => {
@@ -161,17 +262,12 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     });
   };
 
-  const doCreateOm = () => {
-    if (!omUrl.trim()) {
-      toast.add({ title: "Falta la URL", description: "Pega la URL del documento.", type: "error" });
-      return;
-    }
+  const doCreateOm = (documentUrl: string) => {
     startTransition(async () => {
-      const res = await createAgencyOrderAction({ orderId, documentUrl: omUrl.trim() });
+      const res = await createAgencyOrderAction({ orderId, documentUrl });
       if (res.ok) {
         toast.add({ title: "OM registrada", description: res.message, type: "success" });
         setOmOpen(false);
-        setOmUrl("");
         await load();
       } else {
         toast.add({ title: "No se pudo registrar", description: res.message, type: "error" });
@@ -187,25 +283,15 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     });
   };
 
-  const openMatDialog = () => {
-    setMatUrl("");
-    setMatOpen(true);
-  };
-
-  const doAttachMat = () => {
-    if (!matUrl.trim()) {
-      toast.add({ title: "Falta la URL", description: "Pega la URL del material.", type: "error" });
-      return;
-    }
+  const doAttachMat = (fileUrl: string) => {
     startTransition(async () => {
       const res = await attachCreativeAction({
         orderId,
-        fileUrl: matUrl.trim(),
+        fileUrl,
       });
       if (res.ok) {
         toast.add({ title: "Material adjuntado", description: res.message, type: "success" });
         setMatOpen(false);
-        setMatUrl("");
         await load();
       } else {
         toast.add({ title: "No se pudo adjuntar", description: res.message, type: "error" });
@@ -213,17 +299,12 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     });
   };
 
-  const doAttachPhoto = () => {
-    if (!photoUrl.trim()) {
-      toast.add({ title: "Falta la URL", description: "Pega el enlace de la foto o video.", type: "error" });
-      return;
-    }
+  const doAttachPhoto = (url: string) => {
     startTransition(async () => {
-      const res = await attachPhotoAction({ orderId, url: photoUrl.trim() });
+      const res = await attachPhotoAction({ orderId, url });
       if (res.ok) {
         toast.add({ title: "Adjunto guardado", description: res.message, type: "success" });
         setPhotoOpen(false);
-        setPhotoUrl("");
         await load();
       } else {
         toast.add({ title: "No se pudo adjuntar", description: res.message, type: "error" });
@@ -244,6 +325,34 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     });
   };
 
+  const doReactivateOrder = () => {
+    startTransition(async () => {
+      const res = await reactivateOrderAction({ orderId });
+      if (res.ok) {
+        toast.add({ title: "Orden reactivada", description: res.message, type: "success" });
+        setReactOpen(false);
+        await load();
+      } else {
+        toast.add({ title: "No se pudo reactivar", description: res.message, type: "error" });
+      }
+    });
+  };
+
+  const doDeleteOrder = () => {
+    startTransition(async () => {
+      const res = await deleteOrderAction({ orderId });
+      if (res.ok) {
+        toast.add({ title: "Orden eliminada", description: res.message, type: "success" });
+        setDelOpen(false);
+        onClose();
+        router.replace("/orders");
+        router.refresh();
+      } else {
+        toast.add({ title: "No se pudo eliminar", description: res.message, type: "error" });
+      }
+    });
+  };
+
   const o = detail?.order;
   const orderCurrency = normalizeCurrency((o as Record<string, unknown> | undefined)?.currency ?? "PEN");
   const lines = detail?.lines ?? [];
@@ -259,7 +368,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
         signed: o.status === "signed",
         hasOm: oms.length > 0,
         materialsOk: creatives.length > 0 && !pendingCreative,
-        ended: o.ends_at ? Date.parse(String(o.ends_at)) <= Date.now() : false,
+        ended: o.ends_at ? Date.parse(String(o.ends_at)) <= nowMs : false,
         certified: (detail?.photos_count ?? 0) > 0,
       })
     : null;
@@ -278,11 +387,18 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       })
     : null;
 
-  const diasOi = o ? diffDias(str(o.starts_at) === "—" ? null : o.starts_at, str(o.ends_at) === "—" ? null : o.ends_at) : null;
+  const diasOi = o ? diffDaysInclusive(str(o.starts_at) === "—" ? null : o.starts_at, str(o.ends_at) === "—" ? null : o.ends_at) : null;
   const brand = typeof o?.brand === "string" && o.brand ? o.brand : null;
   const contratante = detail?.billing_name ?? null;
   const contratanteKind = detail?.billing_kind === "agencia" ? "Agencia" : detail?.billing_kind === "anunciante" ? "Anunciante" : null;
-  const ended = o?.ends_at ? Date.parse(String(o.ends_at)) <= Date.now() : false;
+  const contactBillingLine = contactLine(detail?.contacts.billing);
+  const contactSignerLine = contactLine(detail?.contacts.signer);
+  // Sin responsable si la intermediaria es el contratante.
+  const billingId = typeof o?.billing_company_id === "string" ? o.billing_company_id : null;
+  const isAgencySelf = !!detail?.agency_company_id && detail.agency_company_id === billingId;
+  const contactManagerLine = isAgencySelf ? null : contactLine(detail?.contacts.manager);
+  const contactPaymentLine = contactLine(detail?.contacts.payment);
+  const ended = o?.ends_at ? Date.parse(String(o.ends_at)) <= nowMs : false;
   const nextAction: string | null = !st
     ? null
     : st.stage === "cancelada"
@@ -294,7 +410,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           : st.stage === "materiales"
             ? "En Materiales: falta aprobar QC + legal de todas las piezas."
             : st.stage === "al_aire"
-              ? `En emisión${o?.ends_at ? ` hasta el ${fmtFecha(o.ends_at)}` : ""}: el cobro corre en paralelo.`
+              ? `En emisión${o?.ends_at ? ` hasta el ${formatDate(o.ends_at)}` : ""}: el cobro corre en paralelo.`
               : st.stage === "por_certificar"
                 ? "Terminó la pauta: sube el foto check / PoP para cerrar."
                 : "Ciclo operativo completo. Revisa que el cobro esté en Pagado.";
@@ -304,6 +420,22 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   // Sin auth (dev: myRole null) se permite editar; viewer = solo lectura.
   const canEditRole = myRole === null || (isMemberRole(myRole) && hasMinRole(myRole, "seller"));
   const canEdit = canEditRole && !isCancelled;
+  // Eliminar: solo owner (como pantallas), en borrador o cancelada.
+  const canDelete = myRole === null || (isMemberRole(myRole) && hasMinRole(myRole, "owner"));
+  const canDeleteOrder = canDelete && (isDraft || isCancelled);
+  // Override de comisión por orden: solo admin (como el default por empresa).
+  const canEditCommission = myRole === null || (isMemberRole(myRole) && hasMinRole(myRole, "admin"));
+  // Comisión informativa (no mueve cobranza): override > intermediaria
+  // vinculada > billing si es agencia > 0.
+  const commissionPct = detail
+    ? effectiveOrderCommissionPct({
+        ioOverride: detail.order.commission_pct ?? null,
+        agencyCompanyPct: detail.agency_commission_pct ?? null,
+        billingKind: detail.billing_kind ?? null,
+        billingCompanyPct: detail.billing_commission_pct ?? null,
+      })
+    : 0;
+  const commissionSplit = gross > 0 && commissionPct > 0 ? splitAgencyAmounts(gross, commissionPct) : null;
   const drawerTabs: DrawerTabDef[] = [
     { id: "resumen", label: "Resumen", icon: FileText },
     { id: "produccion", label: "Producción", icon: Package },
@@ -324,6 +456,58 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <OrderStageBadge stage={st.stage} isDraft={isDraft} />
             {oms.length > 0 && st.stage !== "cancelada" && <OrderAutorizadaBadge />}
             {bill && <OrderBillingBadge status={bill.status} prepaid={bill.isPrepaid} prefixed />}
+            {(canEditRole || canDelete) && (
+              <span className="ms-auto flex items-center gap-1">
+                {isCancelled ? (
+                  canEditRole && (
+                    <AppTooltip tip="Reactivar orden (vuelve a borrador)">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Reactivar orden"
+                        title="Reactivar"
+                        disabled={isPending}
+                        onClick={() => setReactOpen(true)}
+                      >
+                        <CircleCheckBig aria-hidden />
+                      </Button>
+                    </AppTooltip>
+                  )
+                ) : (
+                  canEdit &&
+                  !isDraft && (
+                    <AppTooltip tip="Cancelar orden">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        aria-label="Cancelar orden"
+                        title="Cancelar"
+                        disabled={isPending}
+                        onClick={() => setCancelOpen(true)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Ban aria-hidden />
+                      </Button>
+                    </AppTooltip>
+                  )
+                )}
+                {canDeleteOrder && (
+                  <AppTooltip tip="Eliminar orden (solo propietario)">
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="Eliminar orden"
+                      title="Eliminar (solo propietario)"
+                      disabled={isPending}
+                      onClick={() => setDelOpen(true)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash aria-hidden />
+                    </Button>
+                  </AppTooltip>
+                )}
+              </span>
+            )}
           </span>
         )
       }
@@ -375,27 +559,19 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Cuando el cliente firme la orden, márcala aquí. Recién entonces podrás registrar el OM/OC.
               </p>
-              <div>
+              <div className="flex flex-wrap gap-2">
                 <Button size="sm" onClick={() => setSignOpen(true)} disabled={isPending}>
                   <PenLine aria-hidden />
                   Marcar firmada
                 </Button>
+                <Button variant="outline" size="sm" render={<Link href={`/orders/${orderId}/print`} target="_blank" rel="noreferrer" />} nativeButton={false}>
+                  <FileDown aria-hidden />
+                  Exportar PDF
+                </Button>
               </div>
             </section>
           )}
-          <AppCard
-            title="Ficha"
-            description="Contratante, marca, periodo y condiciones de pago."
-            aria-label="Ficha de la orden"
-            action={
-              canEdit && !editingFicha ? (
-                <Button variant="outline" size="sm" onClick={() => setEditingFicha(true)}>
-                  <Pencil className="size-3.5" aria-hidden /> Editar
-                </Button>
-              ) : undefined
-            }
-          >
-            {editingFicha ? (
+          {editingFicha ? (
               <OrderEditForm
                 key={orderId}
                 orderId={orderId}
@@ -403,7 +579,21 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   brand: typeof o.brand === "string" ? o.brand : "",
                   payment_terms_days: typeof o.payment_terms_days === "number" ? String(o.payment_terms_days) : "",
                   notes: typeof o.notes === "string" ? o.notes : "",
+                  doc_orden_medios: o.doc_orden_medios === true,
+                  doc_orden_compra: o.doc_orden_compra === true,
+                  doc_contrato: o.doc_contrato === true,
+                  billing_company_id: typeof o.billing_company_id === "string" ? o.billing_company_id : "",
+                  billing_portal_email: typeof o.billing_portal_email === "string" ? o.billing_portal_email : "",
+                  billing_detail: typeof o.billing_detail === "string" ? o.billing_detail : "",
+                  invoice_registration: typeof o.invoice_registration === "string" ? o.invoice_registration : "",
+                  agency_company_id: typeof o.agency_company_id === "string" ? o.agency_company_id : "",
+                  commission_pct: o.commission_pct === null || o.commission_pct === undefined || o.commission_pct === "" ? "" : String(o.commission_pct),
+                  billing_contact_id: typeof o.billing_contact_id === "string" ? o.billing_contact_id : "",
+                  signer_contact_id: typeof o.signer_contact_id === "string" ? o.signer_contact_id : "",
+                  payment_contact_id: typeof o.payment_contact_id === "string" ? o.payment_contact_id : "",
+                  manager_contact_id: typeof o.manager_contact_id === "string" ? o.manager_contact_id : "",
                 }}
+                canEditCommission={canEditCommission}
                 onSaved={() => {
                   setEditingFicha(false);
                   router.refresh();
@@ -412,6 +602,24 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 onCancel={() => setEditingFicha(false)}
               />
             ) : (
+            <>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold">Ficha</h2>
+                <p className="text-xs text-muted-foreground">Contratante, marca, periodo, facturación e intermediario.</p>
+              </div>
+              <span className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" render={<Link href={`/orders/${orderId}/print`} target="_blank" rel="noreferrer" />} nativeButton={false} aria-label="Exportar borrador a PDF">
+                  <FileDown className="size-3.5" aria-hidden /> PDF
+                </Button>
+                {canEdit && (
+                  <Button variant="outline" size="sm" onClick={() => setEditingFicha(true)}>
+                    <Pencil className="size-3.5" aria-hidden /> Editar
+                  </Button>
+                )}
+              </span>
+            </div>
+            <AppCard title="Contratante" aria-label="Contratante de la orden" tone="sky">
             <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
               <div><dt className="text-xs text-muted-foreground">Contratante</dt><dd className="mt-0.5 text-[13px] font-medium">{contratante ? `${toTitleCase(contratante)}${contratanteKind ? ` · ${contratanteKind}` : ""}` : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Marca</dt><dd className="mt-0.5 text-[13px]">{brand ? toTitleCase(brand) : "—"}</dd></div>
@@ -419,31 +627,103 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 <dt className="text-xs text-muted-foreground">Periodo</dt>
                 <dd className="mt-0.5 text-[13px] tabular-nums">
                   {o.starts_at && o.ends_at
-                    ? `${fmtFecha(o.starts_at)} → ${fmtFecha(o.ends_at)}${diasOi ? ` · ${formatNumber(diasOi)} días` : ""}`
+                    ? `${formatDate(o.starts_at)} → ${formatDate(o.ends_at)}${diasOi ? ` · ${formatNumber(diasOi)} días` : ""}`
                     : "—"}
                 </dd>
               </div>
               <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-0.5 text-[13px] font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"} <span className="text-[11px] font-normal text-muted-foreground">{orderCurrency}</span></dd></div>
+              {commissionSplit && (
+                <>
+                  <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(commissionSplit.commissionMinor, orderCurrency)}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Neto</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(commissionSplit.netMinor, orderCurrency)} <span className="text-[11px] font-normal text-muted-foreground">informativo</span></dd></div>
+                </>
+              )}
               <div><dt className="text-xs text-muted-foreground">Condición de pago</dt><dd className="mt-0.5 text-[13px]">{typeof o.payment_terms_days === "number" ? paymentTermsLabel(o.payment_terms_days) : str(o.payment_terms)}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Estado</dt><dd className="mt-0.5 text-[13px]">{STATUS_LABEL[String(o.status ?? "")] ?? str(o.status)}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Firma</dt><dd className="mt-0.5 text-[13px] tabular-nums">{o.signed_at ? fmtFechaHora(o.signed_at) : "—"}</dd></div>
+              {contactBillingLine && (
+                <div><dt className="text-xs text-muted-foreground">Contacto</dt><dd className="mt-0.5 text-[13px]">{contactBillingLine}</dd></div>
+              )}
+              {contactSignerLine && (
+                <div><dt className="text-xs text-muted-foreground">Firmante</dt><dd className="mt-0.5 text-[13px]">{contactSignerLine}</dd></div>
+              )}
+              {typeof o.notes === "string" && o.notes.trim() && (
+                <div><dt className="text-xs text-muted-foreground">Notas</dt><dd className="mt-0.5 text-[13px]">{o.notes.trim()}</dd></div>
+              )}
+              <div><dt className="text-xs text-muted-foreground">Firma</dt><dd className="mt-0.5 text-[13px] tabular-nums">{o.signed_at ? formatDateTime(o.signed_at) : "—"}</dd></div>
               <div>
                 <dt className="text-xs text-muted-foreground">Creada</dt>
-                <dd className="mt-0.5 text-[13px] tabular-nums">{o.created_at ? fmtFechaHora(o.created_at) : "—"}{o.created_by ? ` · ${str(o.created_by)}` : ""}</dd>
+                <dd className="mt-0.5 text-[13px] tabular-nums">{o.created_at ? formatDateTime(o.created_at) : "—"}{o.created_by ? ` · ${str(o.created_by)}` : ""}</dd>
               </div>
               {typeof o.updated_at === "string" && o.updated_at && o.updated_at !== o.created_at && (
                 <div>
                   <dt className="text-xs text-muted-foreground">Actualizada</dt>
-                  <dd className="mt-0.5 text-[13px] tabular-nums">{fmtFechaHora(o.updated_at)}{typeof o.updated_by === "string" && o.updated_by ? ` · ${o.updated_by}` : ""}</dd>
+                  <dd className="mt-0.5 text-[13px] tabular-nums">{formatDateTime(o.updated_at)}{typeof o.updated_by === "string" && o.updated_by ? ` · ${o.updated_by}` : ""}</dd>
                 </div>
               )}
             </dl>
-            )}
-          </AppCard>
+            </AppCard>
+            <AppCard title="Facturación" aria-label="Facturación de la orden" tone="violet">
+            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
+              {(o.doc_orden_medios === true || o.doc_orden_compra === true || o.doc_contrato === true) && (
+                <div><dt className="text-xs text-muted-foreground">Documento</dt><dd className="mt-0.5 text-[13px]">{[
+                  o.doc_orden_medios === true ? "Orden de Medios" : null,
+                  o.doc_orden_compra === true ? "Orden de Compra" : null,
+                  o.doc_contrato === true ? "Contrato" : null,
+                ].filter(Boolean).join(" + ")}</dd></div>
+              )}
+              {contactPaymentLine && (
+                <div><dt className="text-xs text-muted-foreground">Contacto de pago</dt><dd className="mt-0.5 text-[13px]">{contactPaymentLine}</dd></div>
+              )}
+              {typeof o.billing_portal_email === "string" && o.billing_portal_email.trim() && (
+                <div><dt className="text-xs text-muted-foreground">Correo / Portal</dt><dd className="mt-0.5 text-[13px]">{o.billing_portal_email}</dd></div>
+              )}
+              {typeof o.billing_detail === "string" && o.billing_detail.trim() && (
+                <div><dt className="text-xs text-muted-foreground">Indicaciones de facturación</dt><dd className="mt-0.5 text-[13px]">{o.billing_detail}</dd></div>
+              )}
+              {typeof o.invoice_registration === "string" && o.invoice_registration.trim() && (
+                <div><dt className="text-xs text-muted-foreground">Obs. registro de factura</dt><dd className="mt-0.5 text-[13px]">{o.invoice_registration}</dd></div>
+              )}
+              {detail?.billing_company_address && (
+                <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-0.5 text-[13px]">{detail.billing_company_address}</dd></div>
+              )}
+            </dl>
+            </AppCard>
+            <AppCard title="Intermediario" aria-label="Intermediario de la orden" tone="emerald">
+            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
+              {detail?.agency_name && (
+                <div><dt className="text-xs text-muted-foreground">Intermediario</dt><dd className="mt-0.5 text-[13px]">{[detail.agency_name, detail.agency_tax_id].filter(Boolean).join(" · ")}{detail.agency_commission_pct !== null && detail.agency_commission_pct !== undefined ? ` · ${detail.agency_commission_pct}%` : ""}</dd></div>
+              )}
+              {contactManagerLine && (
+                <div><dt className="text-xs text-muted-foreground">Responsable</dt><dd className="mt-0.5 text-[13px]">{contactManagerLine}</dd></div>
+              )}
+            </dl>
+            </AppCard>
+            </>
+          )}
 
+          <>
+          {isDraft && canEdit && lines.length > 0 && (
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={() => void openLinesDialog()} disabled={isPending}>
+                <Pencil className="size-3.5" aria-hidden /> Editar
+              </Button>
+            </div>
+          )}
+          <AppCard
+            tone="primary"
+            variant={lines.length === 0 ? "default" : "table"}
+            aria-label="Pantallas de la orden"
+          >
           {lines.length === 0 ? (
-            <div className="rounded-lg bg-muted/40 px-3 py-3">
+            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-[13px] text-muted-foreground">Sin pantallas en esta orden.</p>
+              {isDraft && canEdit && (
+                <div>
+                  <Button size="sm" onClick={() => void openLinesDialog()} disabled={isPending}>
+                    <Pencil className="size-3.5" aria-hidden /> Agregar pantallas
+                  </Button>
+                </div>
+              )}
             </div>
           ) : (
               <DrawerTable>
@@ -455,10 +735,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </DrawerTableHeader>
                 <DrawerTableBody>
                   {lines.map((l) => {
-                    const finIncl = inclusiveEndOf(l.ends_at);
+                    const finIncl = displayEndOfSafe(l.ends_at);
                     const dias = typeof l.cant_dias === "number" && l.cant_dias > 0
                       ? l.cant_dias
-                      : diffDias(typeof l.starts_at === "string" ? l.starts_at : null, finIncl);
+                      : diffDaysInclusive(typeof l.starts_at === "string" ? l.starts_at : null, finIncl);
                     const regular = Number(l.tarifa_regular_minor ?? NaN);
                     return (
                       <DrawerTableRow key={String(l.id)}>
@@ -477,7 +757,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           )}
                         </DrawerTableTd>
                         <DrawerTableTd className="text-xs tabular-nums">
-                          {fmtFecha(l.starts_at)} → {finIncl ? fmtFecha(finIncl) : "—"}
+                          {formatDate(l.starts_at)} → {finIncl ? formatDate(finIncl) : "—"}
                         </DrawerTableTd>
                         <DrawerTableTd numeric className="text-xs tabular-nums">
                           {dias ?? "—"}
@@ -499,8 +779,15 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          {typeof o.notes === "string" && o.notes && (
-              <p className="text-xs leading-relaxed text-muted-foreground">{o.notes}</p>
+          </AppCard>
+          </>
+            {isCancelled && canEditRole && (
+              <div>
+                <Button variant="outline" size="sm" onClick={() => setReactOpen(true)} disabled={isPending}>
+                  <CircleCheckBig aria-hidden />
+                  Reactivar orden
+                </Button>
+              </div>
             )}
             {canEdit && !isDraft && (
               <div>
@@ -520,7 +807,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Autorización de la agencia. Sin ella, la orden no avanza a producción."
             action={
               canEdit && !isDraft && oms.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => { setOmUrl(""); setOmOpen(true); }} disabled={isPending}>
+                <Button variant="outline" size="sm" onClick={() => setOmOpen(true)} disabled={isPending}>
                   <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
@@ -537,7 +824,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 {canEdit && !isDraft && (
                   <div>
-                    <Button size="sm" onClick={() => { setOmUrl(""); setOmOpen(true); }} disabled={isPending}>
+                    <Button size="sm" onClick={() => setOmOpen(true)} disabled={isPending}>
                       <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                     </Button>
                   </div>
@@ -553,7 +840,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   return (
                   <li key={String(m.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                     <span className="flex min-w-0 items-center gap-2 text-[13px]">
-                      <Badge variant="secondary" className="font-normal">{str(m.kind)}</Badge>
+                      <AttributeBadge label={str(m.kind)} title="Tipo de material" />
                       {!codeIsUrl && <span className="truncate font-medium">{rawCode}</span>}
                       {href && (
                         <a href={href} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-primary underline-offset-4 hover:underline">
@@ -590,7 +877,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Adjunta la pieza; queda aprobada y libera la salida al aire."
             action={
               canEdit && creatives.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={openMatDialog} disabled={isPending}>
+                <Button variant="outline" size="sm" onClick={() => setMatOpen(true)} disabled={isPending}>
                   <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
@@ -605,7 +892,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </p>
                 {canEdit && (
                   <div>
-                    <Button size="sm" onClick={openMatDialog} disabled={isPending}>
+                    <Button size="sm" onClick={() => setMatOpen(true)} disabled={isPending}>
                       <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                     </Button>
                   </div>
@@ -668,7 +955,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             description="Evidencia fotográfica de la pauta al aire. Corre en paralelo a la cobranza."
             action={
               canEdit && photos.length > 0 ? (
-                <Button variant="outline" size="sm" onClick={() => { setPhotoUrl(""); setPhotoOpen(true); }} disabled={isPending}>
+                <Button variant="outline" size="sm" onClick={() => setPhotoOpen(true)} disabled={isPending}>
                   <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                 </Button>
               ) : undefined
@@ -684,7 +971,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     : "Sin adjuntos. La certificación corre en paralelo a la cobranza."}
                 </p>
                 <div>
-                  <Button size="sm" onClick={() => { setPhotoUrl(""); setPhotoOpen(true); }} disabled={isPending}>
+                  <Button size="sm" onClick={() => setPhotoOpen(true)} disabled={isPending}>
                     <Paperclip className="size-3.5" aria-hidden /> Adjuntar
                   </Button>
                 </div>
@@ -698,7 +985,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   return (
                   <li key={String(p.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
                     <span className="flex min-w-0 items-center gap-2 text-[13px]">
-                      <Badge variant="secondary" className="font-normal">{isVideo ? "Video" : "Foto"}</Badge>
+                      <AttributeBadge label={isVideo ? "Video" : "Foto"} title="Tipo de adjunto" />
                       {url ? (
                         <a href={url} target="_blank" rel="noreferrer" className="truncate font-medium text-primary underline-offset-4 hover:underline">
                           Ver adjunto
@@ -706,7 +993,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       ) : (
                         <span className="truncate font-medium">Adjunto</span>
                       )}
-                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{fmtFechaHora(p.taken_at)}</span>
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatDateTime(p.taken_at)}</span>
                       {by(p) && (
                         <span className="shrink-0 truncate text-[11px] text-muted-foreground" title={`Agregado por ${by(p)}`}>{by(p)}</span>
                       )}
@@ -793,10 +1080,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                             {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency) : "—"}
                           </DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
-                            {typeof v.issue_date === "string" && v.issue_date ? fmtFecha(v.issue_date) : "—"}
+                            {typeof v.issue_date === "string" && v.issue_date ? formatDate(v.issue_date) : "—"}
                           </DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
-                            {typeof v.due_date === "string" && v.due_date ? fmtFecha(v.due_date) : "—"}
+                            {typeof v.due_date === "string" && v.due_date ? formatDate(v.due_date) : "—"}
                           </DrawerTableTd>
                           {canEdit && (
                             <DrawerTableTd>
@@ -864,6 +1151,55 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       </>
       )}
 
+      <Dialog open={linesOpen} onOpenChange={(v) => !v && setLinesOpen(false)}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto p-6 sm:min-w-[620px]">
+          <DialogHeader>
+            <DialogTitle>Editar pantallas</DialogTitle>
+            <DialogDescription>
+              Solo borradores sin facturas ni reservas. El reemplazo verifica disponibilidad y es atómico.
+            </DialogDescription>
+          </DialogHeader>
+          {screensError ? (
+            <div className="flex flex-col gap-3">
+              <AppCardState>{screensError}</AppCardState>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                onClick={() => {
+                  setScreens(null);
+                  setScreensError(null);
+                  setScreensLoading(false);
+                  void openLinesDialog();
+                }}
+              >
+                <RotateCcw aria-hidden />
+                Reintentar
+              </Button>
+            </div>
+          ) : screens === null || screensLoading ? (
+            <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando pantallas">
+              <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+              <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+            </div>
+          ) : (
+            <OrderLinesForm
+              key={`${orderId}-${linesNonce}`}
+              orderId={orderId}
+              orderCurrency={orderCurrency}
+              initialLines={lines}
+              screens={screens}
+              onSaved={() => {
+                setLinesOpen(false);
+                toast.add({ title: "Pantallas actualizadas", description: "El bruto y el periodo se recalcularon.", type: "success" });
+                void load();
+              }}
+              onCancel={() => setLinesOpen(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={signOpen} onOpenChange={(v) => !v && setSignOpen(false)}>
         <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
           <DialogHeader>
@@ -887,107 +1223,38 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
         </DialogContent>
       </Dialog>
 
-      <Dialog open={omOpen} onOpenChange={(v) => !v && setOmOpen(false)}>
-        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Adjuntar autorización</DialogTitle>
-            <DialogDescription>
-              Pega la URL del documento. La autorización libera Materiales.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="ord-om-url">Adjunto (URL) *</Label>
-              <Input
-                id="ord-om-url"
-                value={omUrl}
-                onChange={(e) => setOmUrl(e.target.value)}
-                placeholder="https://…"
-                inputMode="url"
-                disabled={isPending}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setOmOpen(false)} disabled={isPending}>
-                <X aria-hidden />
-                Cancelar
-              </Button>
-              <Button size="sm" onClick={doCreateOm} disabled={isPending || !omUrl.trim()}>
-                <Paperclip aria-hidden />
-                {isPending ? "Adjuntando…" : "Adjuntar"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AttachUrlDialog
+        open={omOpen}
+        onOpenChange={setOmOpen}
+        title="Adjuntar autorización"
+        description="Pega la URL del documento. La autorización libera Materiales."
+        inputId="ord-om-url"
+        emptyHint="Pega la URL del documento."
+        pending={isPending}
+        onConfirm={doCreateOm}
+      />
 
-      <Dialog open={matOpen} onOpenChange={(v) => !v && setMatOpen(false)}>
-        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Adjuntar material</DialogTitle>
-            <DialogDescription>
-              Pega la URL del material. Nace aprobado.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="ord-mat-url">Adjunto (URL) *</Label>
-              <Input
-                id="ord-mat-url"
-                value={matUrl}
-                onChange={(e) => setMatUrl(e.target.value)}
-                placeholder="https://…"
-                inputMode="url"
-                disabled={isPending}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setMatOpen(false)} disabled={isPending}>
-                <X aria-hidden />
-                Cancelar
-              </Button>
-              <Button size="sm" onClick={doAttachMat} disabled={isPending || !matUrl.trim()}>
-                <Paperclip aria-hidden />
-                {isPending ? "Adjuntando…" : "Adjuntar"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AttachUrlDialog
+        open={matOpen}
+        onOpenChange={setMatOpen}
+        title="Adjuntar material"
+        description="Pega la URL del material. Nace aprobado."
+        inputId="ord-mat-url"
+        emptyHint="Pega la URL del material."
+        pending={isPending}
+        onConfirm={doAttachMat}
+      />
 
-      <Dialog open={photoOpen} onOpenChange={(v) => !v && setPhotoOpen(false)}>
-        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
-          <DialogHeader>
-            <DialogTitle>Adjuntar foto check</DialogTitle>
-            <DialogDescription>
-              Foto o video por URL. Si termina en .mp4/.mov/.webm se guarda como video.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="ord-photo-url">Adjunto (URL) *</Label>
-              <Input
-                id="ord-photo-url"
-                value={photoUrl}
-                onChange={(e) => setPhotoUrl(e.target.value)}
-                placeholder="https://…"
-                inputMode="url"
-                disabled={isPending}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setPhotoOpen(false)} disabled={isPending}>
-                <X aria-hidden />
-                Cancelar
-              </Button>
-              <Button size="sm" onClick={doAttachPhoto} disabled={isPending || !photoUrl.trim()}>
-                <Paperclip aria-hidden />
-                {isPending ? "Adjuntando…" : "Adjuntar"}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AttachUrlDialog
+        open={photoOpen}
+        onOpenChange={setPhotoOpen}
+        title="Adjuntar foto check"
+        description="Foto o video por URL. Si termina en .mp4/.mov/.webm se guarda como video."
+        inputId="ord-photo-url"
+        emptyHint="Pega el enlace de la foto o video."
+        pending={isPending}
+        onConfirm={doAttachPhoto}
+      />
 
       <Dialog open={invOpen} onOpenChange={(v) => !v && setInvOpen(false)}>
         <DialogContent className="p-6 sm:min-w-[480px]">
@@ -1028,6 +1295,47 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <Button variant="destructive" size="sm" onClick={doCancelOrder} disabled={isPending}>
               <Ban aria-hidden />
               {isPending ? "Cancelando…" : "Confirmar cancelación"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reactOpen} onOpenChange={(v) => !v && setReactOpen(false)}>
+        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Reactivar orden</DialogTitle>
+            <DialogDescription>
+              {o ? `${String(o.io_number ?? "La orden")} volverá a borrador: podrás firmarla de nuevo.` : "Volverá a borrador."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setReactOpen(false)} disabled={isPending}>
+              <CircleArrowLeft aria-hidden />Volver
+            </Button>
+            <Button size="sm" onClick={doReactivateOrder} disabled={isPending}>
+              <CircleCheckBig aria-hidden />
+              {isPending ? "Reactivando…" : "Confirmar reactivación"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={delOpen} onOpenChange={(v) => !v && setDelOpen(false)}>
+        <DialogContent className="w-auto max-w-[calc(100%-2rem)] sm:min-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Eliminar orden</DialogTitle>
+            <DialogDescription>
+              {o ? `Se eliminará ${String(o.io_number ?? "la orden")} con sus líneas, autorizaciones y adjuntos. Esta acción no se puede deshacer.` : "Esta acción no se puede deshacer."}
+              {" Con facturas, reservas, campañas o emisiones vinculadas no se puede eliminar."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setDelOpen(false)} disabled={isPending}>
+              <CircleArrowLeft aria-hidden />Volver
+            </Button>
+            <Button variant="destructive" size="sm" onClick={doDeleteOrder} disabled={isPending}>
+              <Trash aria-hidden />
+              {isPending ? "Eliminando…" : "Confirmar eliminación"}
             </Button>
           </div>
         </DialogContent>

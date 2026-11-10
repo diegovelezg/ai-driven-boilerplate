@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { Bot, Building2, FileText, Globe, Megaphone, RotateCcw } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Button } from "@/components/ui/button";
@@ -20,9 +21,26 @@ import { CompanyIOBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
 import type { BrandDetail } from "@/lib/brand-db";
-import { MarcaChat } from "./marca-chat";
-import { MarcaResearch } from "./marca-research";
-import { Badge } from "@/components/ui/badge";
+import { BrandPautaBadge } from "@/components/badges";
+
+// Carga diferida: chat y research solo se descargan al usarse (mismo
+// patrón que orden-drawer: el drawer inicial no paga react-markdown).
+function DrawerLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" aria-label={label}>
+      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+const MarcaChat = dynamic(() => import("./marca-chat").then((m) => m.MarcaChat), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando chat" />,
+});
+const MarcaResearch = dynamic(() => import("./marca-research").then((m) => m.MarcaResearch), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando investigación" />,
+});
 
 interface MarcaDetail extends BrandDetail {
   myRole?: MemberRole | null;
@@ -50,40 +68,40 @@ export function MarcaDrawer({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const res = await fetch(`/api/brands/${encodeURIComponent(brandName)}`, { cache: "no-store" });
-        if (!res.ok) throw new Error("No se pudo cargar la marca.");
-        if (!alive) return;
-        setDetail((await res.json()) as MarcaDetail);
-        setError(null);
-      } catch (e) {
-        if (!alive) return;
-        setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [brandName]);
-
-  const reload = useCallback(async () => {
-    setLoading(true);
+  // Un solo loader abortable (reintento incluido): evita el doble fetch del
+  // doble-montaje StrictMode (mismo patrón que orden-drawer).
+  const load = useCallback(async (signal?: AbortSignal) => {
     setError(null);
     try {
-      const res = await fetch(`/api/brands/${encodeURIComponent(brandName)}`, { cache: "no-store" });
+      const res = await fetch(`/api/brands/${encodeURIComponent(brandName)}`, { cache: "no-store", signal });
       if (!res.ok) throw new Error("No se pudo cargar la marca.");
+      if (signal?.aborted) return;
       setDetail((await res.json()) as MarcaDetail);
     } catch (e) {
+      if (signal?.aborted) return;
       setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [brandName]);
+
+  // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
+  useEffect(() => {
+    const ac = new AbortController();
+    const h = setTimeout(() => {
+      void load(ac.signal);
+    }, 0);
+    return () => {
+      clearTimeout(h);
+      ac.abort();
+    };
+  }, [load]);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    setDetail(null);
+    void load();
+  }, [load]);
 
   const ios = detail?.ios ?? [];
   const companies = detail?.companies ?? [];
@@ -115,9 +133,7 @@ export function MarcaDrawer({
       badges={
         detail && (
           <span className="flex flex-wrap items-center gap-1.5" aria-label={`${detail.brand}, ${ios.length} pedidos`}>
-            <Badge variant={detail.active ? "success" : "secondary"}>
-              {detail.active ? "En pauta" : "Sin pauta"}
-            </Badge>
+            <BrandPautaBadge active={detail.active} />
             <span className="text-[11px] text-muted-foreground">
               {companies.length} empresa{companies.length === 1 ? "" : "s"} · {screens.length} pantalla{screens.length === 1 ? "" : "s"}
             </span>
@@ -168,7 +184,7 @@ export function MarcaDrawer({
       )}
 
       {detail && tab === "perfil" && (
-        <MarcaResearch key={detail.brand} brandName={detail.brand} canResearch={canEdit} />
+        <MarcaResearch brandName={detail.brand} canResearch={canEdit} />
       )}
 
       {detail && tab === "pedidos" && (

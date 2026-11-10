@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useRef, useState } from "react";
 import { FilterX, LayoutGrid, List as ListIcon } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
-import { Badge } from "@/components/ui/badge";
+import { ArchivedBadge, AttributeBadge } from "@/components/badges";
 import { Button } from "@/components/ui/button";
 import { EmpresaDrawer } from "./empresa-drawer";
 import {
@@ -19,9 +18,10 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
-import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
+import { CrmStatusFilterSelect } from "@/components/crm-status-filter";
+import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
-import { COMPANY_KINDS, COMPANY_KIND_LABELS, kindLabel, type CompanyKind } from "@/lib/crm";
+import { COMPANY_KINDS, COMPANY_KIND_LABELS, kindLabel, type CompanyKind, type CrmStatusFilter } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { CompaniesSortDir, CompaniesSortKey } from "@/lib/crm-db";
@@ -35,6 +35,7 @@ export interface EmpresaRow {
   email: string | null;
   city: string | null;
   contacts_count: number;
+  deleted_at: string | null;
 }
 
 export function CompaniesList({
@@ -44,6 +45,7 @@ export function CompaniesList({
   pageSize,
   q,
   kind,
+  status,
   sortKey,
   sortDir,
   initialView,
@@ -55,6 +57,7 @@ export function CompaniesList({
   pageSize: number;
   q: string;
   kind: CompanyKind | null;
+  status: CrmStatusFilter;
   sortKey: CompaniesSortKey;
   sortDir: CompaniesSortDir;
   initialView: "table" | "grid";
@@ -69,23 +72,31 @@ export function CompaniesList({
     initialSelectedId,
     ["empresa"],
   );
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const { go, isPending } = useListNav("/companies");
+  // Prefetch del detalle al hover/foco (mismo patrón que orders-list).
+  const prefetched = useRef(new Set<string>());
+  const prefetchCompany = useCallback((id: string) => {
+    if (prefetched.current.has(id)) return;
+    prefetched.current.add(id);
+    void fetch(`/api/companies/${id}`).catch(() => {});
+  }, []);
 
   const buildParams = useCallback(
-    (overrides: { q?: string; type?: string | null; sort?: string; dir?: string; view?: string; page?: number }) => {
+    (overrides: { q?: string; type?: string | null; status?: string | null; sort?: string; dir?: string; view?: string; page?: number }) => {
       const params = new URLSearchParams();
       const nextQ = overrides.q ?? q;
       if (nextQ.trim()) params.set("q", nextQ.trim());
       const nextTipo = overrides.type !== undefined ? overrides.type : kind;
       if (nextTipo) params.set("type", nextTipo);
+      const nextStatus = overrides.status !== undefined ? overrides.status : status;
+      if (nextStatus && nextStatus !== "active") params.set("status", nextStatus);
       params.set("sort", overrides.sort ?? sortKey);
       params.set("dir", overrides.dir ?? sortDir);
       params.set("view", overrides.view ?? (view === "grid" ? "grid" : "table"));
       params.set("page", String(overrides.page ?? page));
       return params.toString();
     },
-    [q, kind, sortKey, sortDir, view, page],
+    [q, kind, status, sortKey, sortDir, view, page],
   );
 
   // El sort ordena en servidor (Supabase) sobre todos los datos.
@@ -97,18 +108,14 @@ export function CompaniesList({
     } else {
       nextDir = key === "contacts" ? "desc" : "asc";
     }
-    startTransition(() => {
-      router.replace(`/companies?${buildParams({ page: 1, sort: key, dir: nextDir })}`);
-    });
+    go(buildParams({ page: 1, sort: key, dir: nextDir }));
   };
 
-  const setFilter = (patch: { type?: string | null }) => {
-    startTransition(() => {
-      router.replace(`/companies?${buildParams({ page: 1, ...patch })}`);
-    });
+  const setFilter = (patch: { type?: string | null; status?: string | null }) => {
+    go(buildParams({ page: 1, ...patch }));
   };
 
-  const filtersActive = q.trim() !== "" || kind !== null;
+  const filtersActive = q.trim() !== "" || kind !== null || status !== "active";
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const exportParams = new URLSearchParams({ entity: "companies" });
   if (q.trim()) exportParams.set("q", q.trim());
@@ -117,16 +124,12 @@ export function CompaniesList({
   exportParams.set("dir", sortDir);
 
   const goTo = (next: number) => {
-    startTransition(() => {
-      router.replace(`/companies?${buildParams({ page: next })}`);
-    });
+    go(buildParams({ page: next }));
   };
 
   const switchView = (next: "table" | "grid") => {
     setView(next);
-    startTransition(() => {
-      router.replace(`/companies?${buildParams({ view: next })}`, { scroll: false });
-    });
+    go(buildParams({ view: next }), { scroll: false });
   };
 
   return (
@@ -137,9 +140,7 @@ export function CompaniesList({
           placeholder="Buscar por nombre, ID fiscal, dominio o email…"
           ariaLabel="Buscar empresas"
           onSearch={(value) => {
-            startTransition(() => {
-              router.replace(`/companies?${buildParams({ q: value, page: 1 })}`);
-            });
+            go(buildParams({ q: value, page: 1 }));
           }}
         />
         <FilterSelect
@@ -156,15 +157,14 @@ export function CompaniesList({
             <SelectItem key={k} value={k}>{COMPANY_KIND_LABELS[k]}</SelectItem>
           ))}
         </FilterSelect>
+        <CrmStatusFilterSelect status={status} onStatus={(s) => setFilter({ status: s })} />
         {filtersActive && (
           <Button
             variant="ghost"
             size="sm"
             disabled={isPending}
             onClick={() => {
-              startTransition(() => {
-                router.replace(`/companies?${buildParams({ q: "", type: null, page: 1 })}`);
-              });
+              go(buildParams({ q: "", type: null, status: null, page: 1 }));
             }}
           >
             <FilterX aria-hidden />
@@ -229,11 +229,14 @@ export function CompaniesList({
                 <DataTableRow
                   key={c.id}
                   onClick={() => openDrawer(c.id)}
+                  onMouseEnter={() => prefetchCompany(c.id)}
+                  onFocus={() => prefetchCompany(c.id)}
                   className="cursor-pointer"
                 >
                   <DataTableTd className="max-w-[260px] truncate px-3 py-4 font-medium">
                     {toTitleCase(c.name)}
                     {c.domain && <span className="ml-2 font-normal text-muted-foreground">{c.domain}</span>}
+                    {c.deleted_at && <ArchivedBadge fem className="ml-2" />}
                   </DataTableTd>
                   <DataTableTd className="px-3 py-4 text-[13px]">{kindLabel(c.kind)}</DataTableTd>
                   <DataTableTd numeric className="px-3 py-4 tabular-nums">
@@ -260,11 +263,15 @@ export function CompaniesList({
             <article
               key={c.id}
               onClick={() => openDrawer(c.id)}
+              onMouseEnter={() => prefetchCompany(c.id)}
               className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-medium tracking-tight">{toTitleCase(c.name)}</h3>
-                <Badge variant="secondary">{kindLabel(c.kind)}</Badge>
+                <span className="flex items-center gap-1.5">
+                  {c.deleted_at && <ArchivedBadge fem />}
+                  <AttributeBadge label={kindLabel(c.kind)} title="Tipo de contraparte" />
+                </span>
               </div>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {formatNumber(c.contacts_count)} contacto{c.contacts_count === 1 ? "" : "s"}
@@ -285,15 +292,13 @@ export function CompaniesList({
           emptyHint="Crea la primera desde Nueva empresa."
           filteredHint="Prueba con otro nombre o tipo."
           onClear={() => {
-            startTransition(() => {
-              router.replace(`/companies?${buildParams({ q: "", type: null, page: 1 })}`);
-            });
+            go(buildParams({ q: "", type: null, status: null, page: 1 }));
           }}
         />
       )}
 
       {selectedId && (
-        <EmpresaDrawer companyId={selectedId} onClose={closeDrawer} />
+        <EmpresaDrawer key={selectedId} companyId={selectedId} onClose={closeDrawer} />
       )}
 
       <EntityPagination page={page} totalPages={totalPages} pending={isPending} onGo={goTo} />

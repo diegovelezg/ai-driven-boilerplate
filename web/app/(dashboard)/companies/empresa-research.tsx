@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Globe, RotateCcw, Search } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
-import { Badge } from "@/components/ui/badge";
+import { AttributeBadge } from "@/components/badges";
 import { Button } from "@/components/ui/button";
+import { formatDate } from "@/lib/format";
 
 interface Candidate {
   domain: string;
@@ -36,9 +37,7 @@ const SOURCE_LABEL: Record<Candidate["source"], string> = {
 function SourceBadge({ c }: { c: Candidate }) {
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      <Badge variant="secondary" className="font-normal" title={`Fuente del dominio: ${SOURCE_LABEL[c.source]}`}>
-        {SOURCE_LABEL[c.source]}
-      </Badge>
+      <AttributeBadge label={SOURCE_LABEL[c.source]} title={`Fuente del dominio: ${SOURCE_LABEL[c.source]}`} />
       {c.source === "contact" && c.count > 1 && (
         <span className="text-[11px] tabular-nums text-muted-foreground">×{c.count} contactos</span>
       )}
@@ -239,7 +238,7 @@ export function DomainResearchPanel({ researchBase, canResearch }: { researchBas
                           <Globe className="size-3.5" aria-hidden /> {p.source_url}
                         </a>
                       ) : "—"}
-                      {p.enriched_at && <span className="ml-2 text-xs text-muted-foreground">· {new Date(p.enriched_at).toLocaleDateString("es-PE")}</span>}
+                      {p.enriched_at && <span className="ml-2 text-xs text-muted-foreground">· {formatDate(p.enriched_at)}</span>}
                     </dd>
                   </div>
                 </dl>

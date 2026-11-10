@@ -1,5 +1,6 @@
 import { Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { attributeDisplay } from "@/lib/ui-badges";
 import { MEMBER_ROLE_LABELS, hasMinRole, MEMBER_ROLES, type MemberRole } from "@/lib/roles";
 import { cn } from "cn";
 
@@ -20,15 +21,19 @@ export function RestrictedVisibilityBadge({
   const allowed = MEMBER_ROLES.filter((r) => hasMinRole(r, minRole))
     .map((r) => MEMBER_ROLE_LABELS[r])
     .join(" · ");
+  const d = attributeDisplay(
+    `Solo ${allowed}`,
+    `Solo visible para: ${allowed}. Contenido restringido por rol.`,
+  );
   return (
     <Badge
-      variant="outline"
+      variant={d.variant}
       className={cn("font-normal", className)}
-      title={`Solo visible para: ${allowed}. Contenido restringido por rol.`}
+      title={d.title}
       aria-label={`Visibilidad restringida: solo ${allowed}`}
     >
       <Eye className="size-2.5" aria-hidden />
-      Solo {allowed}
+      {d.label}
     </Badge>
   );
 }

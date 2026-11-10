@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useRef, useState } from "react";
 import { FilterX, LayoutGrid, List as ListIcon, SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import { Button } from "@/components/ui/button";
 import { PantallaDrawer } from "./pantalla-drawer";
-import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection } from "@/components/entity-list";
+import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import {
   DataTable,
@@ -20,7 +19,7 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
-import { Badge } from "@/components/ui/badge";
+import { ScreenActiveBadge } from "@/components/badges";
 import { formatDecimal, formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { ScreenListRow, ScreensSortDir, ScreensSortKey } from "@/lib/screens-db";
@@ -72,8 +71,14 @@ export function ScreensList({
     initialSelectedId,
     ["screen"],
   );
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const { go, isPending } = useListNav("/screens");
+  // Prefetch del detalle al hover/foco (mismo patrón que orders-list).
+  const prefetched = useRef(new Set<string>());
+  const prefetchScreen = useCallback((id: string) => {
+    if (prefetched.current.has(id)) return;
+    prefetched.current.add(id);
+    void fetch(`/api/screens/${id}`).catch(() => {});
+  }, []);
 
   // URL sleek: solo salen los params no-default (q, filtros, página >1,
   // vista no-tabla, sort/dir no-default). Menos ruido, share limpio.
@@ -119,15 +124,11 @@ export function ScreensList({
 
   const toggleSort = (key: ScreensSortKey) => {
     const nextDir: ScreensSortDir = key === sortKey ? (sortDir === "asc" ? "desc" : "asc") : key === "name" || key === "supplier" || key === "city" ? "asc" : "desc";
-    startTransition(() => {
-      router.replace(`/screens?${buildParams({ page: 1, sort: key, dir: nextDir })}`);
-    });
+    go(buildParams({ page: 1, sort: key, dir: nextDir }));
   };
 
   const setFilter = (patch: { supplier?: string | null; city?: string | null; active?: string }) => {
-    startTransition(() => {
-      router.replace(`/screens?${buildParams({ page: 1, ...patch })}`);
-    });
+    go(buildParams({ page: 1, ...patch }));
   };
 
   const filtersActive = q.trim() !== "" || supplierId !== null || city !== null || active !== "all";
@@ -141,16 +142,12 @@ export function ScreensList({
   exportParams.set("dir", sortDir);
 
   const goTo = (next: number) => {
-    startTransition(() => {
-      router.replace(`/screens?${buildParams({ page: next })}`);
-    });
+    go(buildParams({ page: next }));
   };
 
   const switchView = (next: "table" | "grid") => {
     setView(next);
-    startTransition(() => {
-      router.replace(`/screens?${buildParams({ view: next })}`, { scroll: false });
-    });
+    go(buildParams({ view: next }), { scroll: false });
   };
 
   return (
@@ -161,9 +158,7 @@ export function ScreensList({
           placeholder="Buscar pantalla, distrito, ciudad, proveedor o código…"
           ariaLabel="Buscar pantallas"
           onSearch={(value) => {
-            startTransition(() => {
-              router.replace(`/screens?${buildParams({ q: value, page: 1 })}`);
-            });
+            go(buildParams({ q: value, page: 1 }));
           }}
         />
         <FilterSelect
@@ -213,9 +208,7 @@ export function ScreensList({
             size="sm"
             disabled={isPending}
             onClick={() => {
-              startTransition(() => {
-                router.replace(`/screens?${buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 })}`);
-              });
+              go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
             }}
           >
             <FilterX aria-hidden />
@@ -284,7 +277,7 @@ export function ScreensList({
             </DataTableHeader>
             <DataTableBody>
               {rows.map((s) => (
-                <DataTableRow key={s.id} onClick={() => openDrawer(s.id)} className="cursor-pointer">
+                <DataTableRow key={s.id} onClick={() => openDrawer(s.id)} onMouseEnter={() => prefetchScreen(s.id)} onFocus={() => prefetchScreen(s.id)} className="cursor-pointer">
                   <DataTableTd className="max-w-[260px] truncate px-3 py-4 font-medium">
                     {toTitleCase(s.name)}
                     {s.district && <span className="ml-2 font-normal text-muted-foreground">{s.district}</span>}
@@ -299,9 +292,7 @@ export function ScreensList({
                     {s.price_pen !== null ? `S/ ${formatNumber(s.price_pen)}` : "—"}
                   </DataTableTd>
                   <DataTableTd className="px-3 py-4">
-                    <Badge variant={s.is_active ? "success" : "secondary"} className="font-normal" title={s.is_active ? "Pantalla activa" : "Pantalla inactiva"}>
-                      {s.is_active ? "Activa" : "Inactiva"}
-                    </Badge>
+                    <ScreenActiveBadge isActive={s.is_active} />
                   </DataTableTd>
                 </DataTableRow>
               ))}
@@ -322,9 +313,7 @@ export function ScreensList({
                           size="sm"
                           className="mt-1"
                           onClick={() => {
-                            startTransition(() => {
-                              router.replace(`/screens?${buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 })}`);
-                            });
+                            go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
                           }}
                         >
                           <FilterX aria-hidden />
@@ -344,13 +333,12 @@ export function ScreensList({
             <article
               key={s.id}
               onClick={() => openDrawer(s.id)}
+              onMouseEnter={() => prefetchScreen(s.id)}
               className="cursor-pointer rounded-xl bg-card p-5 ring-1 ring-foreground/10 transition-shadow hover:shadow-md hover:ring-primary/30"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-medium tracking-tight">{toTitleCase(s.name)}</h3>
-                <Badge variant={s.is_active ? "success" : "secondary"} className="font-normal" title={s.is_active ? "Pantalla activa" : "Pantalla inactiva"}>
-                  {s.is_active ? "Activa" : "Inactiva"}
-                </Badge>
+                <ScreenActiveBadge isActive={s.is_active} />
               </div>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {[s.supplier_name, [s.district, s.city].filter(Boolean).join(", ")].filter(Boolean).join(" · ") || "—"}
@@ -370,9 +358,7 @@ export function ScreensList({
           emptyHint="Todavía no hay inventario cargado."
           filteredHint="Prueba con otro nombre, proveedor o ciudad."
           onClear={() => {
-            startTransition(() => {
-              router.replace(`/screens?${buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 })}`);
-            });
+            go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
           }}
         />
       )}

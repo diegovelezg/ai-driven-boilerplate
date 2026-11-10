@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Building2, Bot, FileText, Globe, Pencil, Plus, RotateCcw, UserRound } from "lucide-react";
+import { Building2, Archive, ArchiveRestore, Bot, FileText, Globe, Pencil, Plus, RotateCcw, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ArchivedBadge } from "@/components/badges";
+import { toast } from "@/components/ui/toast";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -21,7 +24,7 @@ import {
   DrawerTableTd,
   DrawerTableTh,
 } from "@/components/drawer-table";
-import { createContactAction, type CrmState } from "@/lib/crm-actions";
+import { createContactAction, setCompanyArchivedAction, setContactArchivedAction, type CrmState } from "@/lib/crm-actions";
 import { EMAIL_RE } from "@/lib/validation";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 import { kindLabel } from "@/lib/crm";
@@ -31,10 +34,31 @@ import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { toTitleCase } from "@/lib/format";
 import { KindForm } from "./kind-form";
-import { CompanyEditForm } from "./company-edit-form";
 import { AgencyCommissionForm } from "./agency-commission-form";
-import { EmpresaChat } from "./empresa-chat";
-import { EmpresaResearch } from "./empresa-research";
+
+// Carga diferida: chat, research y editor solo se descargan al usarse
+// (mismo patrón que orden-drawer: el drawer inicial no paga
+// react-markdown ni el catálogo de países).
+function DrawerLoading({ label }: { label: string }) {
+  return (
+    <div className="flex flex-col gap-2" aria-busy="true" aria-label={label}>
+      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+      <div className="h-24 animate-pulse rounded-lg bg-muted/60" />
+    </div>
+  );
+}
+const CompanyEditForm = dynamic(() => import("./company-edit-form").then((m) => m.CompanyEditForm), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando formulario" />,
+});
+const EmpresaChat = dynamic(() => import("./empresa-chat").then((m) => m.EmpresaChat), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando chat" />,
+});
+const EmpresaResearch = dynamic(() => import("./empresa-research").then((m) => m.EmpresaResearch), {
+  ssr: false,
+  loading: () => <DrawerLoading label="Cargando investigación" />,
+});
 
 interface DrawerContact {
   id: string;
@@ -45,6 +69,7 @@ interface DrawerContact {
   job_title: string | null;
   is_primary: boolean;
   created_by?: string | null;
+  deleted_at?: string | null;
 }
 
 interface DrawerIO {
@@ -86,8 +111,9 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
   // setState solo en el callback async del fetch (patrón permitido por el lint).
   useEffect(() => {
     let alive = true;
+    const ac = new AbortController();
     const h = setTimeout(() => {
-      fetch("/api/contacts/job-titles", { cache: "no-store" })
+      fetch("/api/contacts/job-titles", { cache: "no-store", signal: ac.signal })
         .then(async (res) => (res.ok ? ((await res.json()) as { job_titles?: string[] }) : null))
         .then((j) => {
           if (!alive || !j || !Array.isArray(j.job_titles)) return;
@@ -98,6 +124,7 @@ function NewContactForm({ companyId, siblingJobTitles, onSaved }: { companyId: s
     return () => {
       alive = false;
       clearTimeout(h);
+      ac.abort();
     };
   }, []);
   const jobTitles = useMemo(() => {
@@ -211,25 +238,36 @@ export function EmpresaDrawer({
   const [editingDatos, setEditingDatos] = useState(false);
   const router = useRouter();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setError(null);
     try {
-      const res = await fetch(`/api/companies/${companyId}`, { cache: "no-store" });
+      const res = await fetch(`/api/companies/${companyId}`, { cache: "no-store", signal });
       if (!res.ok) throw new Error("No se pudo cargar la empresa.");
       setDetail((await res.json()) as EmpresaDetail);
     } catch (e) {
+      if (signal?.aborted) return;
       setError(e instanceof Error ? e.message : "No se pudieron cargar los datos.");
     }
   }, [companyId]);
 
+  // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
-    setTab("ficha");
-    setDetail(null);
-    setEditingDatos(false);
-    void load();
+    const ac = new AbortController();
+    const h = setTimeout(() => {
+      setTab("ficha");
+      setDetail(null);
+      setEditingDatos(false);
+      void load(ac.signal);
+    }, 0);
+    return () => {
+      clearTimeout(h);
+      ac.abort();
+    };
   }, [load]);
 
-  const contacts = detail?.contacts ?? [];
+  // Estable por identidad de `detail`: evita que `?? []` cree un array
+  // nuevo en cada render y rompa el useMemo de abajo.
+  const contacts = useMemo(() => detail?.contacts ?? [], [detail]);
   const siblingJobTitles = useMemo(() => {
     const seen = new Map<string, string>();
     for (const c of contacts) {
@@ -247,6 +285,25 @@ export function EmpresaDrawer({
   // Sin auth (dev: myRole null) se permite ver/gestionar; viewer = solo lectura.
   const canEdit = myRole === null || hasMinRole(myRole, "seller");
   const canViewCommission = myRole === null || hasMinRole(myRole, "admin");
+  const canAdmin = myRole === null || hasMinRole(myRole, "admin");
+  const [archiving, startArchiving] = useTransition();
+  const isArchived = typeof company?.deleted_at === "string" && !!company.deleted_at;
+
+  const runArchive = (
+    title: string,
+    fn: () => Promise<CrmState>,
+  ) => {
+    startArchiving(() => {
+      void (async () => {
+        const res = await fn();
+        toast.add({ title, description: res.message, type: res.ok ? "success" : "error" });
+        if (res.ok) {
+          router.refresh();
+          await load();
+        }
+      })();
+    });
+  };
   const isAgency = kind === "agencia";
   const commissionRaw = company?.agency_commission_pct;
   const commissionInitial =
@@ -279,6 +336,7 @@ export function EmpresaDrawer({
         detail && (
           <span className="flex flex-wrap items-center gap-1.5" aria-label={`Empresa ${kindLabel(kind)}, ${contacts.length} contactos, ${ios.length} pedidos`}>
             <CompanyKindBadge kind={kind} />
+            {isArchived && <ArchivedBadge fem />}
             <span className="text-[11px] text-muted-foreground">
               {contacts.length} contacto{contacts.length === 1 ? "" : "s"} · {ios.length} pedido{ios.length === 1 ? "" : "s"}
             </span>
@@ -322,12 +380,31 @@ export function EmpresaDrawer({
             description="Nombre, identificación y datos de contacto."
             aria-label="Datos de la empresa"
             action={
-              canEdit && !editingDatos ? (
-                <Button variant="outline" size="sm" onClick={() => setEditingDatos(true)}>
-                  <Pencil aria-hidden />
-                  Editar
-                </Button>
-              ) : undefined
+              <span className="flex flex-wrap items-center gap-2">
+                {canAdmin && !editingDatos && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      runArchive(isArchived ? "Empresa restaurada" : "Empresa archivada", () =>
+                        setCompanyArchivedAction({ companyId, archived: !isArchived }),
+                      )
+                    }
+                    disabled={archiving}
+                    aria-label={isArchived ? "Restaurar empresa" : "Archivar empresa"}
+                    title={isArchived ? "Restaurar empresa" : "Archivar empresa (las órdenes conservan sus datos)"}
+                  >
+                    {isArchived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+                    {isArchived ? "Restaurar" : "Archivar"}
+                  </Button>
+                )}
+                {canEdit && !editingDatos && !isArchived && (
+                  <Button variant="outline" size="sm" onClick={() => setEditingDatos(true)}>
+                    <Pencil aria-hidden />
+                    Editar
+                  </Button>
+                )}
+              </span>
             }
           >
             {editingDatos ? (
@@ -431,18 +508,44 @@ export function EmpresaDrawer({
                 <DrawerTableTh>Cargo</DrawerTableTh>
                 <DrawerTableTh>Principal</DrawerTableTh>
                 <DrawerTableTh>Agregado por</DrawerTableTh>
+                {canEdit && <DrawerTableTh>Acciones</DrawerTableTh>}
               </DrawerTableHeader>
               <DrawerTableBody>
-                {contacts.map((c) => (
+                {contacts.map((c) => {
+                  const archived = typeof c.deleted_at === "string" && !!c.deleted_at;
+                  return (
                   <DrawerTableRow key={c.id}>
-                    <DrawerTableTd className="font-medium">{contactName(c)}</DrawerTableTd>
+                    <DrawerTableTd className="font-medium">
+                      {contactName(c)}
+                      {archived && <ArchivedBadge className="ml-2" />}
+                    </DrawerTableTd>
                     <DrawerTableTd className="text-xs">{c.email ?? c.phone ?? "—"}</DrawerTableTd>
                     <DrawerTableTd className="text-xs tabular-nums">{c.phone ?? "—"}</DrawerTableTd>
                     <DrawerTableTd className="text-xs">{c.job_title ?? "—"}</DrawerTableTd>
                     <DrawerTableTd><CompanyPrincipalBadge isPrimary={c.is_primary} /></DrawerTableTd>
                     <DrawerTableTd className="text-xs text-muted-foreground" title={typeof c.created_by === "string" && c.created_by ? `Agregado por ${c.created_by}` : undefined}>{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
+                    {canEdit && (
+                      <DrawerTableTd>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() =>
+                            runArchive(archived ? "Contacto restaurado" : "Contacto archivado", () =>
+                              setContactArchivedAction({ contactId: c.id, archived: !archived }),
+                            )
+                          }
+                          disabled={archiving}
+                          aria-label={archived ? `Restaurar contacto ${contactName(c)}` : `Archivar contacto ${contactName(c)}`}
+                          title={archived ? "Restaurar contacto" : "Archivar contacto (las órdenes conservan sus datos)"}
+                        >
+                          {archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+                          {archived ? "Restaurar" : "Archivar"}
+                        </Button>
+                      </DrawerTableTd>
+                    )}
                   </DrawerTableRow>
-                ))}
+                  );
+                })}
               </DrawerTableBody>
             </DrawerTable>
           )}

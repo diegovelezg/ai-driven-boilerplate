@@ -8,7 +8,8 @@ import { AppCard } from "@/components/app-card";
 import { toast } from "@/components/ui/toast";
 import { mergeContactsAction } from "@/lib/crm-actions";
 import type { DuplicateGroup } from "@/lib/contact-duplicates";
-import { Badge } from "@/components/ui/badge";
+import { ArchivedBadge } from "@/components/badges";
+import { CompanyPrincipalBadge } from "@/components/company-badges";
 import { EntityEmpty } from "@/components/entity-list";
 
 function displayName(r: DuplicateGroup["rows"][number]): string {
@@ -97,7 +98,8 @@ function GroupCard({
                 <strong>{displayName(r)}</strong>
                 {r.job_title && <span className="text-muted-foreground">{r.job_title}</span>}
                 {r.company_name && <span className="text-muted-foreground">· {r.company_name}</span>}
-                {r.is_primary && <Badge>principal</Badge>}
+                {r.is_primary && <CompanyPrincipalBadge isPrimary />}
+                {r.archived && <ArchivedBadge />}
                 <span className="w-full text-xs text-muted-foreground tabular-nums">
                   {[r.email, r.phone].filter(Boolean).join(" · ") || "sin canal"}
                 </span>

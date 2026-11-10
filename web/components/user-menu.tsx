@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Badge } from "@/components/ui/badge";
+import { AttributeBadge } from "@/components/badges";
 import { signOutAction } from "@/lib/auth-actions";
 import { toast } from "@/components/ui/toast";
 import { createBrowserSupabase } from "@/lib/supabase-browser";
@@ -178,9 +178,7 @@ export function UserMenu({
               </span>
             </span>
             {roleLabel ? (
-              <Badge variant="secondary" className="shrink-0">
-                {roleLabel}
-              </Badge>
+              <AttributeBadge label={roleLabel} title="Rol del miembro" className="shrink-0" />
             ) : null}
           </div>
         ) : null}

@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { es } from "react-day-picker/locale";
 import { CalendarDays } from "lucide-react";
 import { AppCard, AppCardState } from "@/components/app-card";
-import { Badge } from "@/components/ui/badge";
+import { HistoryBadge, OccupancyBadge, UpcomingBadge } from "@/components/badges";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { formatNumber } from "@/lib/format";
+import { formatDate, formatNumber, parseISODate } from "@/lib/format";
 import { addDays, firstFreeDay, todayLima, type OccupiedRange } from "@/lib/availability-utils";
 
 interface OccupancyItem {
@@ -25,20 +25,6 @@ interface OccupancyData {
   today: string;
   ranges: OccupiedRange[];
   items: OccupancyItem[];
-}
-
-/** "2026-11-03" → Date local sin desfase de zona horaria. */
-function parseISODate(v: string): Date | undefined {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return undefined;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return Number.isNaN(d.getTime()) ? undefined : d;
-}
-
-/** "2026-11-03" → "03/11/2026". */
-function fmtShort(v: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
 }
 
 const ORDER_STATUS: Record<string, string> = {
@@ -128,19 +114,12 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
   const today = todayLima();
   const horizonEnd = addDays(today, 29);
 
-  const toNum = (day: string): number => {
-    const [y, m, d] = day.split("-").map(Number);
-    return Date.UTC(y, m - 1, d) / 86_400_000;
-  };
   const isCovered = (day: string): boolean =>
-    ranges.some((r) => toNum(r.starts) <= toNum(day) && toNum(day) <= toNum(r.ends));
+    ranges.some((r) => r.starts <= day && day <= r.ends);
 
   let busy30 = 0;
-  for (let n = toNum(today); n <= toNum(horizonEnd); n++) {
-    const d = new Date(n * 86_400_000);
-    const p = (x: number) => String(x).padStart(2, "0");
-    const day = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
-    if (isCovered(day)) busy30 += 1;
+  for (let i = 0; i < 30; i += 1) {
+    if (isCovered(addDays(today, i))) busy30 += 1;
   }
   const occPct = Math.round((busy30 / 30) * 100);
   const todayHit = items.find((i) => i.starts <= today && today <= i.ends) ?? null;
@@ -162,7 +141,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <AppCard title="Próximos 30 días" description={`${fmtShort(today)} → ${fmtShort(horizonEnd)}`} aria-label="Ocupación próximos 30 días">
+      <AppCard title="Próximos 30 días" description={`${formatDate(today)} → ${formatDate(horizonEnd)}`} aria-label="Ocupación próximos 30 días">
         <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
           <div className="min-w-0">
             <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Hoy</p>
@@ -173,7 +152,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
               {todayHit
                 ? [todayHit.io_number, todayHit.brand].filter(Boolean).join(" · ") || todayHit.source
                 : free
-                  ? `Libre desde ${fmtShort(free)}`
+                  ? `Libre desde ${formatDate(free)}`
                   : "—"}
             </p>
           </div>
@@ -186,7 +165,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
           </div>
           <div className="min-w-0">
             <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Libre desde</p>
-            <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{free ? fmtShort(free) : "—"}</p>
+            <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{free ? formatDate(free) : "—"}</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
               {next30.length === 0 ? "Todo libre en 30 días" : `${formatNumber(next30.length)} pauta${next30.length === 1 ? "" : "s"} en 30 días`}
             </p>
@@ -224,18 +203,12 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
                       {[it.io_number, it.brand].filter(Boolean).join(" · ") || (it.source === "booking" ? "Reserva" : "—")}
                     </span>
                     <span className="block text-xs text-muted-foreground tabular-nums">
-                      {fmtShort(it.starts)} → {fmtShort(it.ends)}
+                      {formatDate(it.starts)} → {formatDate(it.ends)}
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1.5">
-                    {within30 && (
-                      <Badge variant="default" className="font-normal" title="Dentro de los próximos 30 días">
-                        ≤30d
-                      </Badge>
-                    )}
-                    <Badge variant={it.status === "cancelled" ? "destructive" : "secondary"} className="font-normal">
-                      {statusLabel(it)}
-                    </Badge>
+                    {within30 && <UpcomingBadge />}
+                    <OccupancyBadge status={it.status} source={it.source} label={statusLabel(it)} />
                   </span>
                 </li>
               );
@@ -260,12 +233,10 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
                     {[it.io_number, it.brand].filter(Boolean).join(" · ") || (it.source === "booking" ? "Reserva" : "—")}
                   </span>
                   <span className="block text-xs text-muted-foreground tabular-nums">
-                    {fmtShort(it.starts)} → {fmtShort(it.ends)}
+                    {formatDate(it.starts)} → {formatDate(it.ends)}
                   </span>
                 </span>
-                <Badge variant="secondary" className="shrink-0 font-normal">
-                  {statusLabel(it)}
-                </Badge>
+                <HistoryBadge label={statusLabel(it)} />
               </li>
             ))}
           </ul>

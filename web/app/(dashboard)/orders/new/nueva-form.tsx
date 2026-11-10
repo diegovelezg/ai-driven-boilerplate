@@ -3,7 +3,9 @@
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { SelectionBadge } from "@/components/badges";
+import { Checkbox } from "@/components/ui/checkbox";
+import { AppSelect } from "@/components/ui/app-select";
 import { AppCard } from "@/components/app-card";
 import { Calendar } from "@/components/ui/calendar";
 import { ComboboxField } from "@/components/combobox-field";
@@ -37,13 +39,12 @@ import {
 import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
 import { es } from "react-day-picker/locale";
-import { formatMoney, formatNumber, toTitleCase } from "@/lib/format";
+import { addDays, diffDaysInclusive, formatDate, formatMoney, formatNumber, parseISODate, toISODateLocal, toTitleCase } from "@/lib/format";
 import { filterPickScreens } from "@/lib/screen-pick";
 import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
 import { PantallaDrawer } from "../../screens/pantalla-drawer";
 import type { ScreenConflict } from "@/lib/availability";
 import {
-  addDays,
   firstFreeDay,
   nextFreeWindow,
   todayLima,
@@ -62,32 +63,13 @@ interface Screen {
   price_pen: number | null;
 }
 
-/** "2026-11-03" → Date local sin desfase de zona horaria. */
-function parseISODate(v: string): Date | undefined {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return undefined;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return Number.isNaN(d.getTime()) ? undefined : d;
-}
-
-function toISODate(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** "2026-11-03" → "03/11/2026". */
-function formatShort(v: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
-}
-
-/** Días inclusivos entre inicio y fin; null si el rango está incompleto o invertido. */
-function diffDaysInclusive(starts: string, ends: string): number | null {
-  const s = parseISODate(starts);
-  const e = parseISODate(ends);
-  if (!s || !e) return null;
-  const days = Math.round((e.getTime() - s.getTime()) / 86_400_000) + 1;
-  return days >= 1 ? days : null;
+interface CompanyContact {
+  id: string;
+  company_id: string | null;
+  name: string;
+  role: string | null;
+  email: string | null;
+  companyName: string;
 }
 
 function PeriodDatePicker({
@@ -125,7 +107,7 @@ function PeriodDatePicker({
               )}
             >
               <CalendarIcon aria-hidden />
-              {selected ? formatShort(value) : "Elegir…"}
+              {selected ? formatDate(value) : "Elegir…"}
             </Button>
           }
         />
@@ -137,7 +119,7 @@ function PeriodDatePicker({
             disabled={disabledDays}
             onSelect={(d) => {
               if (d) {
-                onChange(toISODate(d));
+                onChange(toISODateLocal(d));
                 setOpen(false);
               }
             }}
@@ -284,7 +266,7 @@ function ScreenMultiSelect({
               const blocked = occupied.length > 0 && !checked;
               const until = untilOf(s.id);
               const note = occupied.length > 0
-                ? `No disponible · ${[occupied[0].io_number, occupied[0].brand].filter(Boolean).join(" · ") || "ocupada"}${until ? ` · hasta ${formatShort(until)}` : ""}`
+                ? `No disponible · ${[occupied[0].io_number, occupied[0].brand].filter(Boolean).join(" · ") || "ocupada"}${until ? ` · hasta ${formatDate(until)}` : ""}`
                 : null;
               return (
                 <div
@@ -375,18 +357,13 @@ function ScreenMultiSelect({
             const s = screens.find((x) => x.id === id);
             if (!s) return null;
             return (
-              <Badge key={id} variant="secondary" className="gap-1 pr-1 font-normal">
-                <span className="max-w-[220px] truncate">{s.name}</span>
-                <button
-                  type="button"
-                  onClick={() => onToggle(id)}
-                  disabled={disabled}
-                  aria-label={`Quitar ${s.name}`}
-                  className="rounded-full p-0.5 hover:bg-muted"
-                >
-                  <X aria-hidden className="size-3" />
-                </button>
-              </Badge>
+              <SelectionBadge
+                key={id}
+                label={s.name}
+                removeLabel={`Quitar ${s.name}`}
+                onRemove={() => onToggle(id)}
+                disabled={disabled}
+              />
             );
           })}
         </div>
@@ -452,16 +429,16 @@ function ScreenCalendarDialog({
             />
             <p className="text-[11px] text-muted-foreground tabular-nums">
               <span className="mr-1 inline-block size-2.5 rounded-sm bg-destructive/20 align-middle" aria-hidden />
-              ocupado · libre desde {free ? formatShort(free) : "—"}
+              ocupado · libre desde {free ? formatDate(free) : "—"}
               {windowStart && (
-                <> · hueco de {formatNumber(duration)} día{plural(duration)}: {formatShort(windowStart)}</>
+                <> · hueco de {formatNumber(duration)} día{plural(duration)}: {formatDate(windowStart)}</>
               )}
             </p>
             {windowStart && (
               <div>
                 <Button type="button" size="sm" variant="outline" onClick={() => onApply(windowStart)}>
                   <CalendarDays aria-hidden />
-                  Usar {formatShort(windowStart)} → {formatShort(addDays(windowStart, duration - 1))}
+                  Usar {formatDate(windowStart)} → {formatDate(addDays(windowStart, duration - 1))}
                 </Button>
               </div>
             )}
@@ -486,6 +463,22 @@ export function NuevaOrdenForm({
   const [state, action, pending] = useActionState(createOrderRedirectAction, initial);
   const [company, setCompany] = useState<string>("");
   const [brand, setBrand] = useState<string>("");
+  const [notes, setNotes] = useState<string>("");
+  const [agencyId, setAgencyId] = useState<string>("");
+  const [agencySelf, setAgencySelf] = useState<boolean>(true);
+  const [pocId, setPocId] = useState<string>("");
+  const [signerId, setSignerId] = useState<string>("");
+  const [paymentId, setPaymentId] = useState<string>("");
+  const [managerId, setManagerId] = useState<string>("");
+  const [billingDoc, setBillingDoc] = useState<string>("");
+  const [billingDetail, setBillingDetail] = useState<string>("");
+  const [invoiceRegistration, setInvoiceRegistration] = useState<string>("");
+  const [billingPortal, setBillingPortal] = useState<string>("");
+  const [contratanteContacts, setContratanteContacts] = useState<CompanyContact[]>([]);
+  const [agencyContacts, setAgencyContacts] = useState<CompanyContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  // Intermediaria efectiva: el contratante (check) o la agencia definida.
+  const agencyRealId = !agencySelf && agencyId !== "" ? agencyId : null;
   const [paymentTerms, setPaymentTerms] = useState<string>("");
   const [currency, setCurrency] = useState<string>(normalizeCurrency(defaultCurrency, "PEN"));
   const [starts, setStarts] = useState<string>("");
@@ -503,6 +496,70 @@ export function NuevaOrdenForm({
   const formRef = useRef<HTMLFormElement>(null);
 
   const dias = diffDaysInclusive(starts, ends);
+
+  // Agencias del tenant para vincular intermediaria (o texto manual si no existe).
+  const agencies = companies.filter((c) => c.kind === "agencia");
+  // Responsable: de la intermediaria (o del contratante si es él).
+  const managerOpts = agencySelf ? contratanteContacts : agencyContacts;
+
+  // Contactos por bloque: cada empresa seleccionada trae los suyos
+  // (contratante → POC/firmante/pago; intermediaria → responsable).
+  useEffect(() => {
+    const ids = [company, agencyRealId].filter((x): x is string => !!x);
+    if (ids.length === 0) {
+      setContratanteContacts([]);
+      setAgencyContacts([]);
+      return;
+    }
+    let alive = true;
+    setContactsLoading(true);
+    void Promise.all(
+      ids.map((id) => fetch(`/api/companies/${id}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)),
+    )
+      .then((details) => {
+        if (!alive) return;
+        const byCompany = new Map<string, CompanyContact[]>();
+        for (const d of details) {
+          if (!d) continue;
+          const co = d.company as Record<string, unknown> | undefined;
+          const cid = typeof co?.id === "string" ? co.id : "";
+          const cname = toTitleCase(typeof co?.name === "string" && co.name ? co.name : "");
+          const opts: CompanyContact[] = [];
+          for (const c of ((d.contacts ?? []) as Array<Record<string, unknown>>)) {
+            const first = typeof c.first_name === "string" ? c.first_name.trim() : "";
+            const last = typeof c.last_name === "string" ? c.last_name.trim() : "";
+            const email = typeof c.email === "string" && c.email.trim() ? c.email.trim() : null;
+            opts.push({
+              id: String(c.id),
+              company_id: typeof c.company_id === "string" ? c.company_id : cid || null,
+              name: [first, last].filter(Boolean).join(" ") || email || "—",
+              role: typeof c.job_title === "string" && c.job_title.trim() ? c.job_title.trim() : null,
+              email,
+              companyName: cname,
+            });
+          }
+          if (cid) byCompany.set(cid, opts);
+        }
+        const cc = company ? (byCompany.get(company) ?? []) : [];
+        // Check ON (es el contratante): responsable sale del contratante.
+        const ac = agencySelf ? cc : agencyRealId ? (byCompany.get(agencyRealId) ?? []) : [];
+        setContratanteContacts(cc);
+        setAgencyContacts(agencySelf ? [] : ac);
+        // Limpia selecciones huérfanas al cambiar de empresa.
+        const keepIn = (opts: CompanyContact[]) => (prev: string) =>
+          prev !== "" && !opts.some((o) => o.id === prev) ? "" : prev;
+        setPocId(keepIn(cc));
+        setSignerId(keepIn(cc));
+        setPaymentId(keepIn(cc));
+        setManagerId(keepIn(ac));
+      })
+      .finally(() => {
+        if (alive) setContactsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [company, agencySelf, agencyId]);
 
   // Error del server: borde + toast + foco (el botón ya se deshabilita con `missing`).
   useEffect(() => {
@@ -640,14 +697,20 @@ export function NuevaOrdenForm({
       ? nextFreeWindow(unionRanges(rows.map((r) => occupancy[r.id])), starts, dias)
       : null;
   const occupiedCount = dias !== null ? screens.filter((s) => conflictBy.has(s.id)).length : 0;
-  const periodLabel = dias !== null ? `${formatShort(starts)}→${formatShort(ends)}` : null;
+  const periodLabel = dias !== null ? `${formatDate(starts)}→${formatDate(ends)}` : null;
   const nextWindowLabel =
     commonWindow && dias !== null
-      ? `Mover al próximo hueco: ${formatShort(commonWindow)} → ${formatShort(addDays(commonWindow, dias - 1))}`
+      ? `Mover al próximo hueco: ${formatDate(commonWindow)} → ${formatDate(addDays(commonWindow, dias - 1))}`
       : null;
 
   const missing: string[] = [];
   if (!company) missing.push("quién firma");
+  if (!brand.trim()) missing.push("marca");
+  if (!paymentTerms) missing.push("condición de pago");
+  if (pocId === "") missing.push("contacto contratante");
+  if (signerId === "") missing.push("firmante");
+  if (billingDoc === "") missing.push("documento para facturación");
+  if (!agencySelf && agencyId === "") missing.push("empresa intermediaria");
   if (dias === null) missing.push("el periodo");
   if (rows.length === 0) missing.push("al menos una pantalla");
   else if (invalidRows.length > 0) missing.push(`precio de ${invalidRows.length} pantalla${plural(invalidRows.length)}`);
@@ -690,7 +753,7 @@ export function NuevaOrdenForm({
           </div>
 
           <div className="flex min-w-0 flex-col gap-1 text-xs">
-            Marca
+            Marca *
             <input type="hidden" name="brand" value={brand} />
             <ComboboxField
               items={brands}
@@ -704,7 +767,7 @@ export function NuevaOrdenForm({
             />
           </div>
           <div className="flex min-w-0 flex-col gap-1 text-xs">
-            Condición de pago
+            Condición de pago *
               <input type="hidden" name="payment_terms_days" value={paymentTerms} />
               <Select
                 value={paymentTerms}
@@ -724,7 +787,7 @@ export function NuevaOrdenForm({
               </Select>
           </div>
           <div className="flex min-w-0 flex-col gap-1 text-xs">
-            Moneda de la orden
+            Moneda de la orden *
               <input type="hidden" name="currency" value={currency} />
               <Select
                 value={currency}
@@ -741,6 +804,162 @@ export function NuevaOrdenForm({
                 </SelectContent>
               </Select>
           </div>
+          <ContactPicker
+            label="Contacto contratante"
+            field="billing_contact_id"
+            value={pocId}
+            onChange={setPocId}
+            options={contratanteContacts}
+            disabled={pending}
+            required
+          />
+          <ContactPicker
+            label="Firmante"
+            field="signer_contact_id"
+            value={signerId}
+            onChange={setSignerId}
+            options={contratanteContacts}
+            disabled={pending}
+            required
+          />
+          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
+            Notas
+            <input type="hidden" name="notes" value={notes} />
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              maxLength={2000}
+              disabled={pending}
+              placeholder="Observaciones para la nota de pedido…"
+              aria-label="Notas"
+              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+            />
+          </label>
+        </div>
+        {contactsLoading ? (
+          <p className="mt-2 text-[11px] text-muted-foreground" role="status">Cargando contactos…</p>
+        ) : company && contratanteContacts.length === 0 ? (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            El contratante no tiene contactos. Créalos en Empresas → Contactos.
+          </p>
+        ) : null}
+      </AppCard>
+
+      <AppCard title="Facturación">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="flex min-w-0 flex-col gap-1 text-xs">
+            Documento para facturación *
+            <input type="hidden" name="billing_doc" value={billingDoc} />
+            <AppSelect
+              value={billingDoc}
+              onChange={setBillingDoc}
+              options={[
+                { value: "orden_medios", label: "Orden de Medios" },
+                { value: "orden_compra", label: "Orden de Compra" },
+                { value: "contrato", label: "Contrato" },
+              ]}
+              placeholder="Elegir documento…"
+              ariaLabel="Documento para facturación"
+              disabled={pending}
+              allowClear={false}
+            />
+          </div>
+          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-3">
+            Indicaciones para facturación
+            <input type="hidden" name="billing_detail" value={billingDetail} />
+            <input
+              value={billingDetail}
+              onChange={(e) => setBillingDetail(e.target.value)}
+              maxLength={500}
+              disabled={pending}
+              placeholder="HES, una factura por OC…"
+              aria-label="Indicaciones para facturación"
+              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+            />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
+            Observaciones para registro de factura
+            <input type="hidden" name="invoice_registration" value={invoiceRegistration} />
+            <input
+              value={invoiceRegistration}
+              onChange={(e) => setInvoiceRegistration(e.target.value)}
+              maxLength={500}
+              disabled={pending}
+              placeholder="Envíe su factura a más tardar el día 3…"
+              aria-label="Observaciones para registro de factura"
+              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+            />
+          </label>
+          <ContactPicker
+            label="Contacto de pago"
+            field="payment_contact_id"
+            value={paymentId}
+            onChange={setPaymentId}
+            options={contratanteContacts}
+            disabled={pending}
+          />
+          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2">
+            Correo electrónico y/o portal
+            <input type="hidden" name="billing_portal_email" value={billingPortal} />
+            <input
+              value={billingPortal}
+              onChange={(e) => setBillingPortal(e.target.value)}
+              maxLength={320}
+              disabled={pending}
+              placeholder="Empresa | correo…"
+              aria-label="Correo electrónico y/o portal"
+              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+            />
+          </label>
+        </div>
+      </AppCard>
+
+      <AppCard title="Intermediario">
+        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+          <label className="flex cursor-pointer flex-row items-center gap-2 text-xs">
+            <Checkbox
+              checked={agencySelf}
+              onCheckedChange={(v) => {
+                const on = v === true;
+                setAgencySelf(on);
+                if (on) {
+                  setAgencyId("");
+                  setManagerId("");
+                }
+              }}
+              disabled={pending}
+              aria-label="Es contratante"
+            />
+            Es contratante
+            <input type="hidden" name="agency_is_self" value={agencySelf ? "1" : ""} />
+          </label>
+          {!agencySelf && (
+            <div className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs">
+              Empresa intermediaria *
+              <input type="hidden" name="agency_company_id" value={agencyId === "" ? "" : agencyId} />
+              <AppSelect
+                value={agencyId}
+                onChange={setAgencyId}
+                options={agencies.map((c) => ({ value: c.id, label: toTitleCase(c.name) }))}
+                placeholder="Elegir agencia…"
+                ariaLabel="Agencia intermediaria"
+                disabled={pending}
+                allowClear={false}
+              />
+            </div>
+          )}
+          {!agencySelf && (
+            <div className="min-w-[220px] flex-1">
+              <ContactPicker
+                label="Persona responsable"
+                field="manager_contact_id"
+                value={managerId}
+                onChange={setManagerId}
+                options={managerOpts}
+                disabled={pending}
+              />
+            </div>
+          )}
         </div>
       </AppCard>
 
@@ -748,7 +967,7 @@ export function NuevaOrdenForm({
         <div className="flex flex-col gap-2">
           <div className="grid grid-cols-3 gap-2">
             <PeriodDatePicker
-              label="Inicio"
+              label="Inicio *"
               pickerLabel="Inicio del periodo"
               value={starts}
               disabled={pending}
@@ -756,7 +975,7 @@ export function NuevaOrdenForm({
               onChange={setStarts}
             />
             <PeriodDatePicker
-              label="Fin"
+              label="Fin *"
               pickerLabel="Fin del periodo"
               value={ends}
               disabled={pending}
@@ -777,7 +996,7 @@ export function NuevaOrdenForm({
         </div>
       </AppCard>
 
-      <AppCard title={`Pantallas${rows.length > 0 ? ` (${formatNumber(rows.length)})` : ""}`}>
+      <AppCard title={`Pantallas *${rows.length > 0 ? ` (${formatNumber(rows.length)})` : ""}`}>
         <div className="flex flex-col gap-4">
           {screens.length === 0 ? (
             <p className="text-xs text-muted-foreground">
@@ -819,7 +1038,7 @@ export function NuevaOrdenForm({
                   {dias !== null && (commonWindow ? (
                     <Button type="button" size="xs" variant="outline" onClick={() => applyWindow(commonWindow)}>
                       <ArrowRight aria-hidden />
-                      Mover al próximo hueco: {formatShort(commonWindow)} → {formatShort(addDays(commonWindow, dias - 1))}
+                      Mover al próximo hueco: {formatDate(commonWindow)} → {formatDate(addDays(commonWindow, dias - 1))}
                     </Button>
                   ) : checking ? (
                     <span className="text-[11px] text-muted-foreground">Buscando hueco común…</span>
@@ -831,7 +1050,7 @@ export function NuevaOrdenForm({
               <DataTable>
             <DataTableHeader>
               <DataTableTh>Pantalla</DataTableTh>
-              <DataTableTh numeric>Precio/día ({currency})</DataTableTh>
+              <DataTableTh numeric>Precio/día * ({currency})</DataTableTh>
               <DataTableTh numeric>Días</DataTableTh>
               <DataTableTh numeric>Subtotal ({currency})</DataTableTh>
               <DataTableTh aria-label="Acciones" />
@@ -960,4 +1179,38 @@ export function NuevaOrdenForm({
 
 function plural(n: number): string {
   return n === 1 ? "" : "s";
+}
+
+function ContactPicker({
+  label,
+  field,
+  value,
+  onChange,
+  options,
+  disabled,
+  required,
+}: {
+  label: string;
+  field: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: CompanyContact[];
+  disabled?: boolean;
+  required?: boolean;
+}) {
+  const optionLabel = (c: CompanyContact) => (c.email ? `${c.name} (${c.email})` : c.name);
+  return (
+    <div className="flex min-w-0 flex-col gap-1 text-xs">
+      {label}{required ? " *" : ""}
+      <input type="hidden" name={field} value={value} />
+      <AppSelect
+        value={value}
+        onChange={onChange}
+        options={options.map((c) => ({ value: c.id, label: optionLabel(c) }))}
+        placeholder="Sin definir…"
+        ariaLabel={label}
+        disabled={disabled}
+      />
+    </div>
+  );
 }
