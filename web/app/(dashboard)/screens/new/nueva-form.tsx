@@ -312,7 +312,7 @@ export function NuevaPantallaForm({
 
   return (
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
-      <AppCard title="Ubicación" description="Dónde está la pantalla.">
+      <AppCard title="Ubicación">
         <div className="flex flex-col gap-4">
       <div className="form-field">
         Punto en el mapa *

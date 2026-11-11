@@ -141,7 +141,7 @@ export function CompaniesList({
       <div className="flex flex-wrap items-center gap-2.5">
         <FilterSearch
           initialValue={q}
-          placeholder="Buscar por nombre, ID fiscal, dominio o email…"
+          placeholder="Buscar por nombre comercial, razón social, ID fiscal, dominio o email…"
           ariaLabel="Buscar empresas"
           onSearch={(value) => {
             go(buildParams({ q: value, page: 1 }));
@@ -219,8 +219,17 @@ export function CompaniesList({
               ))}
               {rows.length === 0 && (
                 <DataTableRow>
-                  <DataTableTd colSpan={4} className="px-3 py-8 text-center text-muted-foreground">
-                    {q ? `Sin resultados para “${q}”.` : "Sin empresas."}
+                  <DataTableTd colSpan={4} className="px-3 py-4">
+                    <EntityEmpty
+                      inline
+                      filtered={filtersActive}
+                      emptyTitle="Aún no hay empresas"
+                      emptyHint="Crea la primera desde Nueva empresa."
+                      filteredHint="Prueba con otro nombre o tipo."
+                      onClear={() => {
+                        go(buildParams({ q: "", types: [...DEFAULT_COMPANY_KINDS], status: null, page: 1 }));
+                      }}
+                    />
                   </DataTableTd>
                 </DataTableRow>
               )}

@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { getSupabase } from "@/lib/supabase";
 import { loadPageData } from "@/lib/page-data";
+import { resolveSupplierDefault } from "@/lib/default-supplier";
 import { ScreensList } from "./screens-list";
 import { listScreenFilterOptions, listScreens, parseScreensSort } from "@/lib/screens-db";
 
@@ -49,7 +50,13 @@ export default async function InventarioPage({
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
-  const supplierId = (sp.proveedor ?? "").trim() || null;
+  // Explícito manda: uuid, "own" (red propia) o "all". Sin param, default =
+  // proveedor de la empresa logueada (ver lib/default-supplier). "all"
+  // explícito debe persistir (?proveedor=all); tratarlo como ausente
+  // rebotaba siempre al default de la empresa.
+  const hasProveedorParam = sp.proveedor !== undefined;
+  const rawProveedor = (sp.proveedor ?? "").trim().toLowerCase();
+  const explicitProveedor = !hasProveedorParam || rawProveedor === "" ? null : rawProveedor;
   const city = (sp.ciudad ?? "").trim() || null;
   const active = ACTIVE_ALIASES[sp.estado ?? ""] ?? "all";
   const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
@@ -60,8 +67,15 @@ export default async function InventarioPage({
 
   const { data, connected, dbReady, error } = await loadPageData(
     async (storeId) => {
+      const def = await resolveSupplierDefault(storeId, explicitProveedor).catch(() => ({
+        supplierValue: explicitProveedor ?? "all",
+        defaultSupplierValue: explicitProveedor ?? "all",
+        supplierId: explicitProveedor && explicitProveedor !== "own" && explicitProveedor !== "all" ? explicitProveedor : null,
+        ownOnly: explicitProveedor === "own",
+        casaName: null as string | null,
+      }));
       const [list, opts] = await Promise.all([
-        listScreens(storeId, { q, supplierId, city, active, sortKey, sortDir, page, pageSize: PAGE_SIZE }),
+        listScreens(storeId, { q, supplierId: def.supplierId, ownOnly: def.ownOnly, city, active, sortKey, sortDir, page, pageSize: PAGE_SIZE }),
         listScreenFilterOptions(storeId),
       ]);
       const db = getSupabase();
@@ -76,6 +90,9 @@ export default async function InventarioPage({
         suppliers: opts.suppliers,
         cities: opts.cities,
         counts: Object.fromEntries(tables.map((t, i) => [t, settled[i]?.count ?? 0])),
+        supplierValue: def.supplierValue,
+        defaultSupplierValue: def.defaultSupplierValue,
+        casaName: def.casaName,
       };
     },
     {
@@ -85,9 +102,12 @@ export default async function InventarioPage({
       suppliers: [] as Array<{ id: string; name: string }>,
       cities: [] as string[],
       counts: {} as Record<string, number>,
+      supplierValue: explicitProveedor ?? "all",
+      defaultSupplierValue: explicitProveedor ?? "all",
+      casaName: null as string | null,
     },
   );
-  const { rows, totalCount, truncated, suppliers, cities, counts } = data;
+  const { rows, totalCount, truncated, suppliers, cities, counts, supplierValue, defaultSupplierValue, casaName } = data;
 
   return (
     <div className="page-shell max-w-[1200px]">
@@ -116,7 +136,7 @@ export default async function InventarioPage({
 
       {connected && dbReady && !error && (
         <>
-          {totalCount === 0 && !q && !supplierId && !city && active === "all" ? (
+          {(counts.inv_screens ?? 0) === 0 && totalCount === 0 && !q && supplierValue === defaultSupplierValue && !city && active === "all" ? (
             <AppCardState>
               Aún no hay pantallas.{" "}
               <Link href="/screens/new" className="underline underline-offset-4">
@@ -131,7 +151,9 @@ export default async function InventarioPage({
               page={page}
               pageSize={PAGE_SIZE}
               q={q}
-              supplierId={supplierId}
+              supplierValue={supplierValue}
+              defaultSupplierValue={defaultSupplierValue}
+              casaName={casaName}
               suppliers={suppliers}
               city={city}
               cities={cities}

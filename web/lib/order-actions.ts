@@ -29,6 +29,10 @@ async function mintIoNumber(
 export async function createOrderAction(form: FormData): Promise<CrmState> {
   const t = await resolveTenantStore("seller");
   if ("error" in t) return { ok: false, message: t.error };
+  // Anunciante (bloque 1): requerido siempre; el contratante es él mismo
+  // (directo) o una agencia. La marca sigue siendo texto libre del pedido.
+  const advertiserRaw = String(form.get("advertiser_company_id") ?? "").trim() || null;
+  if (!advertiserRaw) return { ok: false, message: "Anunciante requerido." };
   const company = String(form.get("company_id") ?? "").trim() || null;
   if (!company) return { ok: false, message: "Empresa requerida." };
   const brand = String(form.get("brand") ?? "").trim() || null;
@@ -148,10 +152,41 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       if (block) return { ok: false, message: block };
     }
     // El tipo manda: agencia → factura ella y el anunciante queda en la marca;
-    // anunciante → anuncia y paga directo.
-    const isAgency = (cos as Record<string, unknown>).kind === "agencia";
-    const billing = company;
-    const advertiser = isAgency ? null : company;
+    // anunciante → anuncia y paga directo. Proveedor (o sin tipo) no puede
+    // ser contratante: el picker no lo ofrece y aquí se rechaza el POST
+    // directo ("contratante" marca el campo en el form).
+    const kind = (cos as Record<string, unknown>).kind;
+    // Anunciante: misma tienda, tipo anunciante, no archivado.
+    const { data: adv, error: adverr } = await db
+      .from("crm_companies")
+      .select("id,kind,name,deleted_at")
+      .eq("store_id", t.storeId)
+      .eq("id", advertiserRaw)
+      .maybeSingle();
+    if (adverr || !adv) return { ok: false, message: "Anunciante no encontrado en esta tienda." };
+    {
+      const { archivedBlockerMessage } = await import("@/lib/order-guards");
+      const block = archivedBlockerMessage([
+        {
+          label: "anunciante",
+          archived: (adv as Record<string, unknown>).deleted_at != null,
+          name: (adv as Record<string, unknown>).name as string | null,
+        },
+      ]);
+      if (block) return { ok: false, message: block };
+    }
+    // Reglas puras (testeadas): anunciante tipo anunciante; contratante =
+    // el propio anunciante (directo) o una agencia.
+    const { resolveOrderParties } = await import("@/lib/company-links");
+    const parties = resolveOrderParties({
+      billingId: company,
+      billingKind: kind,
+      advertiserId: advertiserRaw,
+      advertiserKind: (adv as Record<string, unknown>).kind,
+    });
+    if (!parties.ok) return { ok: false, message: parties.error };
+    const billing = parties.billingCompanyId;
+    const advertiser = parties.advertiserCompanyId;
     // Intermediaria (Opción B): check "es el contratante" (default) o agencia
     // definida desde Empresas. Sin texto manual: todo sale de Empresas.
     const agencySelf = String(form.get("agency_is_self") ?? "") === "1";
@@ -348,7 +383,8 @@ export async function createOrderRedirectAction(_prev: CrmState, form: FormData)
 /**
  * Edición inline de la ficha (drawer): marca, condición de pago y notas.
  * No toca líneas ni fechas (afectan disponibilidad/inventario).
- * Requiere rol vendedor o superior; bloqueada si la orden está cancelada.
+ * Requiere rol vendedor o superior; solo borradores (firmada/autorizada
+ * congela la NP: lo firmado vive en el snapshot inmutable).
  */
 export async function updateOrderAction(input: {
   orderId: string;
@@ -386,8 +422,12 @@ export async function updateOrderAction(input: {
       .eq("id", orderId)
       .maybeSingle();
     if (rerr || !existing) return { ok: false, message: "Orden no encontrada en esta tienda." };
-    if (String((existing as Record<string, unknown>).status ?? "") === "cancelled") {
+    const st = String((existing as Record<string, unknown>).status ?? "");
+    if (st === "cancelled") {
       return { ok: false, message: "La orden está cancelada." };
+    }
+    if (st !== "draft") {
+      return { ok: false, message: "La orden ya está firmada: la ficha ya no se edita." };
     }
     const p = (input.patch ?? {}) as Record<string, unknown>;
     const brand = p.brand !== undefined ? String(p.brand ?? "").trim() || null : undefined;
@@ -668,10 +708,12 @@ export async function updateOrderLinesAction(input: {
   }
 }
 
-/** Disponibilidad por periodo para el formulario (el server action revalida al crear). */
+/** Disponibilidad por periodo para el formulario (el server action revalida al crear).
+ *  `excludeIoId`: editar sin chocar consigo misma. */
 export async function checkAvailabilityAction(input: {
   starts: string;
   ends: string;
+  excludeIoId?: string | null;
 }): Promise<AvailabilityState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, conflicts: [], message: t.error };
@@ -679,7 +721,8 @@ export async function checkAvailabilityAction(input: {
     return { ok: false, conflicts: [], message: "Periodo inválido." };
   }
   try {
-    return { ok: true, conflicts: await getScreenConflicts(t.storeId, input.starts, input.ends), message: "" };
+    const exclude = typeof input.excludeIoId === "string" && input.excludeIoId ? input.excludeIoId : null;
+    return { ok: true, conflicts: await getScreenConflicts(t.storeId, input.starts, input.ends, { excludeIoId: exclude }), message: "" };
   } catch (e) {
     return { ok: false, conflicts: [], message: e instanceof Error ? e.message : "Error." };
   }
@@ -695,6 +738,7 @@ export interface OccupancyState {
 export async function getScreenOccupancyAction(input: {
   screenIds: string[];
   from: string;
+  excludeIoId?: string | null;
 }): Promise<OccupancyState> {
   const t = await resolveTenantStore();
   if ("error" in t) return { ok: false, occupancy: {}, message: t.error };
@@ -703,7 +747,8 @@ export async function getScreenOccupancyAction(input: {
     return { ok: false, occupancy: {}, message: "Parámetros inválidos." };
   }
   try {
-    return { ok: true, occupancy: await getScreenOccupancy(t.storeId, ids, input.from), message: "" };
+    const exclude = typeof input.excludeIoId === "string" && input.excludeIoId ? input.excludeIoId : null;
+    return { ok: true, occupancy: await getScreenOccupancy(t.storeId, ids, input.from, { excludeIoId: exclude }), message: "" };
   } catch (e) {
     return { ok: false, occupancy: {}, message: e instanceof Error ? e.message : "Error." };
   }

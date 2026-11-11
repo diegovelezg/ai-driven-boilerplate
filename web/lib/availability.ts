@@ -127,11 +127,13 @@ export async function getScreenOccupancy(
   storeId: string,
   screenIds: string[],
   from: string,
+  opts: { excludeIoId?: string | null } = {},
 ): Promise<Record<string, OccupiedRange[]>> {
   const db = getSupabase();
   assertDateStr(from, "from");
   const out: Record<string, OccupiedRange[]> = {};
   if (screenIds.length === 0) return out;
+  const excluded = typeof opts.excludeIoId === "string" && opts.excludeIoId ? opts.excludeIoId : null;
   const winStart = limaDayStart(from);
   const winEnd = limaDayStart(addDays(from, 400));
   const push = (id: string, starts: string, endsExcl: string) => {
@@ -140,7 +142,7 @@ export async function getScreenOccupancy(
 
   const { data: lines, error: lerr } = await db
     .from("io_lines")
-    .select("screen_id,starts_at,ends_at,io_orders!insertion_order_lines_io_id_fkey!inner(status,created_at)")
+    .select("io_id,screen_id,starts_at,ends_at,io_orders!insertion_order_lines_io_id_fkey!inner(status,created_at)")
     .eq("store_id", storeId)
     // Mismo scope embebido que getScreenConflicts (FK same-store + filtro).
     .eq("io_orders.store_id", storeId)
@@ -149,6 +151,7 @@ export async function getScreenOccupancy(
     .lte("starts_at", winEnd);
   if (lerr) throw new Error(`Occupancy lines: ${lerr.message}`);
   for (const l of (lines ?? []) as Array<Record<string, unknown>>) {
+    if (excluded && String(l.io_id ?? "") === excluded) continue;
     const o = l.io_orders as unknown as Record<string, unknown> | null;
     if (!o || o.status === "cancelled") continue;
     if (o.status === "draft" && !isHoldFresh(typeof o.created_at === "string" ? o.created_at : null)) continue;
@@ -167,7 +170,7 @@ export async function getScreenOccupancy(
   if (slotById.size > 0) {
     const { data: books, error: berr } = await db
       .from("inv_bookings")
-      .select("slot_id,starts_at,ends_at,status")
+      .select("slot_id,insertion_order_id,starts_at,ends_at,status")
       .eq("store_id", storeId)
       .in("slot_id", [...slotById.keys()])
       .neq("status", "cancelled")
@@ -175,6 +178,7 @@ export async function getScreenOccupancy(
       .lte("starts_at", winEnd);
     if (berr) throw new Error(`Occupancy bookings: ${berr.message}`);
     for (const b of (books ?? []) as Array<Record<string, unknown>>) {
+      if (excluded && b.insertion_order_id != null && String(b.insertion_order_id) === excluded) continue;
       const screenId = slotById.get(String(b.slot_id));
       if (!screenId) continue;
       push(screenId, String(b.starts_at), String(b.ends_at));

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { AppCardState } from "@/components/app-card";
+import { EntityEmpty } from "@/components/entity-list";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { listCrmCompanies, parseCompaniesSort } from "@/lib/crm-db";
@@ -69,13 +70,11 @@ export default async function EmpresasPage({
       {connected && dbReady && !error && (
         <>
           {rows.length === 0 && !q && isDefaultCompanyKinds(kinds) && status === "active" ? (
-            <AppCardState>
-              Aún no hay empresas.{" "}
-              <Link href="/companies/new" className="underline underline-offset-4">
-                Crea la primera
-              </Link>
-              .
-            </AppCardState>
+            <EntityEmpty
+              filtered={false}
+              emptyTitle="Aún no hay empresas"
+              emptyHint="Crea la primera desde Nueva empresa."
+            />
           ) : (
             <CompaniesList
               rows={rows.map((r) => ({

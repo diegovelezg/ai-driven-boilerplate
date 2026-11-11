@@ -34,18 +34,18 @@ describe("advertiser categories", () => {
 
 describe("normalizeCompany category_iab", () => {
   it("acepta vacío (null) y código válido", () => {
-    const r = normalizeCompany({ name: "Acme", kind: "anunciante" });
+    const r = normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "anunciante", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE" });
     assert.equal(r.ok, true);
     if (r.ok) assert.equal(r.value.category_iab, null);
-    const ok = normalizeCompany({ name: "Acme", kind: "anunciante", category_iab: "IAB2" });
+    const ok = normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "anunciante", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", category_iab: "IAB2" });
     assert.equal(ok.ok, true);
     if (ok.ok) assert.equal(ok.value.category_iab, "IAB2");
   });
 
   it("normaliza minúsculas y rechaza código inválido", () => {
-    const r = normalizeCompany({ name: "Acme", kind: "anunciante", category_iab: "iab8" });
+    const r = normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "anunciante", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", category_iab: "iab8" });
     assert.equal(r.ok, true);
     if (r.ok) assert.equal(r.value.category_iab, "IAB8");
-    assert.equal(normalizeCompany({ name: "Acme", kind: "anunciante", category_iab: "IAB99" }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "anunciante", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", category_iab: "IAB99" }).ok, false);
   });
 });

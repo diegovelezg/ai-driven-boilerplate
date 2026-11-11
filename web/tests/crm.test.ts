@@ -66,35 +66,47 @@ describe("company kinds multiselect", () => {
   });
 });
 describe("normalizeCompany", () => {
-  it("exige nombre y normaliza dominio", () => {
-    assert.equal(normalizeCompany({ name: "  " }).ok, false);
-    const r = normalizeCompany({ name: " Acme S.A.C. ", kind: "anunciante", domain: "https://WWW.acme.pe/web" });
+  it("exige nombre comercial y razón social, y normaliza dominio", () => {
+    assert.equal(normalizeCompany({ name: "  ", legal_name: "Acme S.A.C." }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme" }).ok, false);
+    const r = normalizeCompany({ name: " Acme ", legal_name: " Acme S.A.C. ", kind: "anunciante", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", domain: "https://WWW.acme.pe/web" });
     assert.equal(r.ok, true);
     if (r.ok) {
-      assert.equal(r.value.name, "Acme S.A.C.");
+      assert.equal(r.value.name, "Acme");
+      assert.equal(r.value.legal_name, "Acme S.A.C.");
       assert.equal(r.value.domain, "acme.pe");
     }
   });
 
+  it("exige RUC, dirección, ciudad y país", () => {
+    const base = { name: "Acme", legal_name: "Acme S.A.C.", kind: "anunciante" as const, tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE" };
+    assert.equal(normalizeCompany({ ...base, tax_id: "  " }).ok, false);
+    assert.equal(normalizeCompany({ ...base, address: "" }).ok, false);
+    assert.equal(normalizeCompany({ ...base, city: null }).ok, false);
+    assert.equal(normalizeCompany({ ...base, country: "" }).ok, false);
+    assert.equal(normalizeCompany({ ...base, country: "AA" }).ok, false);
+    assert.equal(normalizeCompany(base).ok, true);
+  });
+
   it("rechaza email y dominio inválidos", () => {
-    assert.equal(normalizeCompany({ name: "Acme", kind: "agencia", email: "no-es-email" }).ok, false);
-    assert.equal(normalizeCompany({ name: "Acme", kind: "agencia", domain: "sin-punto" }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "agencia", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", email: "no-es-email" }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "agencia", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", domain: "sin-punto" }).ok, false);
   });
 
   it("conserva external_ref para idempotencia Sheet/CSV", () => {
-    const r = normalizeCompany({ name: "Acme", kind: "proveedor", external_ref: " acme-001 " });
+    const r = normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "proveedor", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", external_ref: " acme-001 " });
     assert.equal(r.ok, true);
     if (r.ok) assert.equal(r.value.external_ref, "acme-001");
-    assert.equal(normalizeCompany({ name: "Acme", kind: "proveedor", external_ref: "   " }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", kind: "proveedor", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", external_ref: "   " }).ok, false);
   });
 
   it("exige kind (la casa no es empresa del CRM)", () => {
-    assert.equal(normalizeCompany({ name: "Acme" }).ok, false);
-    assert.equal(normalizeCompany({ name: "Acme", kind: null }).ok, false);
-    const k = normalizeCompany({ name: "Acme", kind: "agencia" });
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE" }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", kind: null }).ok, false);
+    const k = normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", kind: "agencia" });
     assert.equal(k.ok, true);
     if (k.ok) assert.equal(k.value.kind, "agencia");
-    assert.equal(normalizeCompany({ name: "Acme", kind: "cliente" as never }).ok, false);
+    assert.equal(normalizeCompany({ name: "Acme", legal_name: "Acme S.A.C.", tax_id: "20123456789", address: "Av. Arequipa 123", city: "Lima", country: "PE", kind: "cliente" as never }).ok, false);
   });
 });
 

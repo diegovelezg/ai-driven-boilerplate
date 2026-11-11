@@ -1,11 +1,11 @@
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
-import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
 import { getScreenConflicts } from "@/lib/availability";
 import { addDays, isValidISODate, todayLima } from "@/lib/format";
-import { resolveActor } from "@/lib/actor";
+import { resolveSupplierDefault } from "@/lib/default-supplier";
 import { listScreens, listScreenFilterOptions } from "@/lib/screens-db";
 import { OccupancyTimeline } from "./occupancy-timeline";
 
@@ -81,78 +81,13 @@ export default async function OcupacionPage({
   let conflicts: Awaited<ReturnType<typeof getScreenConflicts>> = [];
 
   try {
-    const db = getSupabase();
-    // Empresa de la cuenta logueada: email de sesión → contacto → compañía.
-    // (Sin match: se degrada a casa → todos, nunca inventa.)
-    const actorEmail = (await resolveActor().catch(() => null))?.trim() || null;
-    let myCompany: { id: string; kind: string | null } | null = null;
-    if (actorEmail) {
-      const variants = [...new Set([actorEmail, actorEmail.toLowerCase()])];
-      const { data: contacts } = await db
-        .from("crm_contacts")
-        .select("company_id,email")
-        .eq("store_id", storeId)
-        .in("email", variants)
-        .limit(5);
-      const hit = ((contacts ?? []) as Array<Record<string, unknown>>).find(
-        (c) =>
-          typeof c.email === "string" &&
-          c.email.toLowerCase() === actorEmail.toLowerCase() &&
-          typeof c.company_id === "string" &&
-          c.company_id !== "",
-      );
-      if (hit) {
-        const { data: co } = await db
-          .from("crm_companies")
-          .select("id,kind")
-          .eq("store_id", storeId)
-          .eq("id", String(hit.company_id))
-          .maybeSingle();
-        const row = co as Record<string, unknown> | null;
-        if (row) myCompany = { id: String(row.id), kind: (row.kind as string | null) ?? null };
-      }
-    }
-    const { data: casa } = await db
-      .from("crm_companies")
-      .select("id,name")
-      .eq("store_id", storeId)
-      .is("kind", null)
-      .limit(1)
-      .maybeSingle();
-    casaName = typeof (casa as Record<string, unknown> | null)?.name === "string"
-      ? String((casa as Record<string, unknown>).name)
-      : null;
-    // Vínculo tienda→empresa propia: dato configurado (sys_stores.home_company_id),
-    // no heurística. Si la migración aún no corrió, el select falla y data es
-    // null → se degrada a casa → todos.
-    let homeCompany: { id: string; kind: string | null } | null = null;
-    {
-      const { data: storeRow } = await db
-        .from("sys_stores")
-        .select("home_company_id")
-        .eq("id", storeId)
-        .maybeSingle();
-      const homeId = (storeRow as Record<string, unknown> | null)?.home_company_id;
-      if (typeof homeId === "string" && homeId !== "") {
-        const { data: hc } = await db
-          .from("crm_companies")
-          .select("id,kind")
-          .eq("store_id", storeId)
-          .eq("id", homeId)
-          .maybeSingle();
-        const hrow = hc as Record<string, unknown> | null;
-        if (hrow) homeCompany = { id: String(hrow.id), kind: (hrow.kind as string | null) ?? null };
-      }
-    }
-    // Default: explícito > empresa de la cuenta (contacto) > empresa
-    // configurada de la tienda > casa (red propia) > todos. Solo aplican
-    // proveedor (su id) y casa (own); otros kinds no filtran.
-    const pick = (co: { id: string; kind: string | null } | null): string | null =>
-      !co ? null : co.kind === "proveedor" ? co.id : co.kind === null ? "own" : null;
-    supplierValue =
-      explicitProveedor ?? pick(myCompany) ?? pick(homeCompany) ?? (casaName ? "own" : "all");
-    const listSupplierId = supplierValue !== "own" && supplierValue !== "all" ? supplierValue : null;
-    const ownOnly = supplierValue === "own";
+    // Default de proveedor: SSOT en lib/default-supplier (misma regla que
+    // Inventario: explícito > empresa cuenta > home_company > casa > todos).
+    const def = await resolveSupplierDefault(storeId, explicitProveedor);
+    supplierValue = def.supplierValue;
+    casaName = def.casaName;
+    const listSupplierId = def.supplierId;
+    const ownOnly = def.ownOnly;
     const [first, opts] = await Promise.all([
       // ownOnly se filtra en la query (IS NULL + paginado), nunca en memoria
       // sobre la muestra (ver ScreensFilter.ownOnly).

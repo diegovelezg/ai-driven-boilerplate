@@ -36,6 +36,10 @@ const INSTANT = new Set([
   "mergeContactsAction",
   "setCompanyArchivedAction",
   "setContactArchivedAction",
+  "createCompanyLinkAction",
+  "deleteCompanyLinkAction",
+  "setContactAccountsAction",
+  "setAccountAttendantsAction",
   // Órdenes + flujo IO
   "createOrderRedirectAction",
   "updateOrderAction",

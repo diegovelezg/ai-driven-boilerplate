@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { AppCardState } from "@/components/app-card";
+import { EntityEmpty } from "@/components/entity-list";
 import { InsightsWall } from "@/components/insights-wall";
 import { PageHeader } from "@/components/page-header";
 import { loadPageData } from "@/lib/page-data";
@@ -36,7 +37,11 @@ export default async function InboxPage() {
       {error && <AppCardState>{error}</AppCardState>}
 
       {connected && dbReady && !error && wall.length === 0 && (
-        <AppCardState>Sin avisos. Cuando el brief diario genere posts, aparecen aquí.</AppCardState>
+        <EntityEmpty
+          filtered={false}
+          emptyTitle="Aún no hay avisos"
+          emptyHint="Cuando el brief diario genere posts, aparecen aquí."
+        />
       )}
       {wall.length > 0 && <InsightsWall initial={wall} />}
     </div>

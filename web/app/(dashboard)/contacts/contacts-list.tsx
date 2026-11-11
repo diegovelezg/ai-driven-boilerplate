@@ -15,13 +15,23 @@ import {
   DataTableTh,
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
+import { FilterMultiSelect } from "@/components/filter-multi-select";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
 import { CrmStatusFilterSelect } from "@/components/crm-status-filter";
 import { EntityCount, EntityEmpty, useEntitySelection, useListNav } from "@/components/entity-list";
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { CompanyPrincipalBadge } from "@/components/company-badges";
 import { ArchivedBadge } from "@/components/badges";
-import { type CrmStatusFilter } from "@/lib/crm";
+import {
+  COMPANY_KINDS,
+  COMPANY_KIND_LABELS,
+  DEFAULT_COMPANY_KINDS,
+  companyKindsLabel,
+  isDefaultCompanyKinds,
+  serializeCompanyKinds,
+  type CompanyKind,
+  type CrmStatusFilter,
+} from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
 import { cn } from "cn";
 import type { CrmContactListItem } from "@/lib/crm-db";
@@ -36,6 +46,7 @@ export function ContactsList({
   rows,
   companies,
   q,
+  kinds,
   companyId,
   status,
   initialView,
@@ -47,6 +58,7 @@ export function ContactsList({
   rows: CrmContactListItem[];
   companies: Array<{ id: string; name: string }>;
   q: string;
+  kinds: readonly CompanyKind[];
   companyId: string | null;
   status: CrmStatusFilter;
   initialView: "table" | "grid";
@@ -65,10 +77,13 @@ export function ContactsList({
   const [view, setView] = useState<"table" | "grid">(initialView);
   const { go: goNav, isPending } = useListNav("/contacts");
 
-  const buildParams = (patch: { q?: string; company?: string | null; status?: string | null; view?: string }) => {
+  const buildParams = (patch: { q?: string; types?: readonly CompanyKind[] | null; company?: string | null; status?: string | null; view?: string }) => {
     const params = new URLSearchParams();
     const nextQ = patch.q ?? q;
     if (nextQ.trim()) params.set("q", nextQ.trim());
+    const nextKinds = patch.types !== undefined ? patch.types : kinds;
+    const serialized = nextKinds == null ? null : serializeCompanyKinds(nextKinds);
+    if (serialized) params.set("type", serialized);
     const nextCompany = patch.company !== undefined ? patch.company : companyId;
     if (nextCompany) params.set("company", nextCompany);
     const nextStatus = patch.status !== undefined ? patch.status : status;
@@ -77,7 +92,7 @@ export function ContactsList({
     return params.toString();
   };
 
-  const go = (patch: { q?: string; company?: string | null; status?: string | null }) => {
+  const go = (patch: { q?: string; types?: readonly CompanyKind[] | null; company?: string | null; status?: string | null }) => {
     goNav(buildParams(patch));
   };
 
@@ -93,9 +108,13 @@ export function ContactsList({
   }, [rows]);
 
   const selected = rows.find((r) => r.id === selectedId) ?? null;
-  const hasFilter = q.trim() !== "" || companyId !== null || status !== "active";
+  const hasFilter = q.trim() !== "" || !isDefaultCompanyKinds(kinds) || companyId !== null || status !== "active";
   const exportParams = new URLSearchParams({ entity: "contacts" });
   if (q.trim()) exportParams.set("q", q.trim());
+  // Explícito siempre (incluido el default): la exportación debe coincidir
+  // con lo visible. serializeCompanyKinds omite el default para URLs limpias.
+  if (kinds.length === 0) exportParams.set("type", "none");
+  else exportParams.set("type", [...kinds].join(","));
   if (companyId) exportParams.set("company", companyId);
 
   return (
@@ -130,6 +149,14 @@ export function ContactsList({
           ariaLabel="Buscar contactos"
           onSearch={(value) => go({ q: value })}
         />
+        <FilterMultiSelect<CompanyKind>
+          values={kinds}
+          options={COMPANY_KINDS.map((k) => ({ value: k, label: COMPANY_KIND_LABELS[k] }))}
+          onChange={(next) => go({ types: next })}
+          ariaLabel="Filtrar por tipo de empresa"
+          placeholder="Tipo"
+          display={(v) => companyKindsLabel(v)}
+        />
         <FilterSelect
           value={companyId ?? "all"}
           onChange={(v) => go({ company: v === "all" ? null : v })}
@@ -150,7 +177,7 @@ export function ContactsList({
         </FilterSelect>
         <CrmStatusFilterSelect status={status} onStatus={(s) => go({ status: s })} />
         {hasFilter && (
-          <ClearFiltersButton disabled={isPending} onClear={() => go({ q: "", company: null, status: null })} />
+          <ClearFiltersButton disabled={isPending} onClear={() => go({ q: "", types: [...DEFAULT_COMPANY_KINDS], company: null, status: null })} />
         )}
         <ViewToggle view={view} onChange={switchView} gridLabel="Vista tarjetas" />
         <ExportCsvButton href={`/api/export?${exportParams.toString()}`} label="Exportar contactos filtrados a CSV" />
@@ -244,7 +271,7 @@ export function ContactsList({
           filtered={hasFilter}
           emptyTitle="Aún no hay contactos"
           emptyHint="Crea el primero o agrégalo desde la ficha de su empresa."
-          onClear={hasFilter ? () => go({ q: "", company: null, status: null }) : undefined}
+          onClear={hasFilter ? () => go({ q: "", types: [...DEFAULT_COMPANY_KINDS], company: null, status: null }) : undefined}
         />
       )}
 

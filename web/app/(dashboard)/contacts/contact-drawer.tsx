@@ -24,6 +24,7 @@ import { CompanyIOBadge, CompanyPrincipalBadge } from "@/components/company-badg
 import { hasMinRole, type MemberRole } from "@/lib/roles";
 import { toTitleCase } from "@/lib/format";
 import type { CrmContactListItem } from "@/lib/crm-db";
+import { ContactAccountsForm } from "@/components/contact-accounts-form";
 import { ContactEditForm } from "./contact-edit-form";
 
 // Carga diferida: el chat solo se descarga al usarse (mismo patrón que
@@ -80,6 +81,10 @@ export function ContactDrawer({
   const [ios, setIos] = useState<CompanyIO[] | null>(null);
   const [iosError, setIosError] = useState<string | null>(null);
   const [editingFicha, setEditingFicha] = useState(false);
+  const [companyKind, setCompanyKind] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<Array<{ contact_id: string; advertiser_company_id: string }>>([]);
+  const [advertisers, setAdvertisers] = useState<Array<{ id: string; name: string }>>([]);
+  const [editingAccounts, setEditingAccounts] = useState(false);
   // Sin auth (dev: myRole null) se permite editar; viewer = solo lectura.
   const canEdit = myRole === null || hasMinRole(myRole, "seller");
 
@@ -95,14 +100,26 @@ export function ContactDrawer({
     fetch(`/api/companies/${contact.company_id}`, { cache: "no-store", signal })
       .then(async (res) => {
         if (!res.ok) throw new Error("No se pudieron cargar los pedidos.");
-        const j = (await res.json()) as { ios?: CompanyIO[] };
+        const j = (await res.json()) as {
+          ios?: CompanyIO[];
+          company?: Record<string, unknown>;
+          network?: { advertisers?: Array<{ id: string; name: string }> };
+          contact_accounts?: Array<{ contact_id: string; advertiser_company_id: string }>;
+        };
         setIos(j.ios ?? []);
+        setCompanyKind(typeof j.company?.kind === "string" ? j.company.kind : null);
+        setAdvertisers((j.network?.advertisers ?? []).map((a) => ({ id: String(a.id), name: String(a.name ?? "—") })));
+        setAccounts(
+          (j.contact_accounts ?? [])
+            .filter((a) => a.contact_id === contact.id)
+            .map((a) => ({ contact_id: String(a.contact_id), advertiser_company_id: String(a.advertiser_company_id) })),
+        );
       })
       .catch((e: unknown) => {
         if (signal?.aborted) return;
         setIosError(e instanceof Error ? e.message : "No se pudieron cargar.");
       });
-  }, [contact.company_id]);
+  }, [contact.company_id, contact.id]);
 
   // Carga diferida: setState solo en callbacks async (patrón permitido por el lint).
   useEffect(() => {
@@ -112,6 +129,10 @@ export function ContactDrawer({
       setIos(null);
       setIosError(null);
       setEditingFicha(false);
+      setCompanyKind(null);
+      setAccounts([]);
+      setAdvertisers([]);
+      setEditingAccounts(false);
       loadIos(ac.signal);
     }, 0);
     return () => {
@@ -297,6 +318,45 @@ export function ContactDrawer({
               )}
             </div>
           </AppCard>
+
+          {companyKind === "agencia" && (
+            <AppCard
+              title="Cuentas que atiende"
+              description="Anunciantes vinculados a su agencia que este contacto atiende."
+              tone="emerald"
+              aria-label="Cuentas que atiende"
+              action={
+                canEdit && !editingAccounts ? (
+                  <EditButton onEdit={() => setEditingAccounts(true)} />
+                ) : undefined
+              }
+            >
+              {editingAccounts ? (
+                <ContactAccountsForm
+                  contactId={contact.id}
+                  advertiserOptions={advertisers}
+                  initialAdvertiserIds={accounts.map((a) => a.advertiser_company_id)}
+                  contactLabel={displayName}
+                  onSaved={() => {
+                    setEditingAccounts(false);
+                    router.refresh();
+                    loadIos();
+                  }}
+                  onCancel={() => setEditingAccounts(false)}
+                />
+              ) : accounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sin cuentas asignadas.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {accounts.map((a) => (
+                    <span key={a.advertiser_company_id} className="rounded-full bg-muted px-2.5 py-1 text-xs">
+                      {toTitleCase(advertisers.find((x) => x.id === a.advertiser_company_id)?.name ?? "—")}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </AppCard>
+          )}
         </>
       )}
     </DrawerShell>

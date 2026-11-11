@@ -3,6 +3,7 @@ import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { loadPageData } from "@/lib/page-data";
 import { listCrmCompanies } from "@/lib/crm-db";
+import { DEFAULT_COMPANY_KINDS } from "@/lib/crm";
 import { normalizeCurrency } from "@/lib/currency";
 import { NuevaOrdenForm } from "./nueva-form";
 
@@ -15,7 +16,9 @@ export default async function NuevaOrdenPage() {
   await connection();
   const { data, connected, dbReady, error } = await loadPageData(
     async (storeId) => {
-      const res = await listCrmCompanies(storeId, { pageSize: 200 });
+      // Contratante = agencia o anunciante (nunca proveedor ni casa):
+      // el filtro vive en la query para no traer de más al picker.
+      const res = await listCrmCompanies(storeId, { pageSize: 200, kinds: [...DEFAULT_COMPANY_KINDS] });
       const companies = res.rows.map((c) => ({ id: c.id, name: c.name, kind: c.kind }));
       const { getSupabase } = await import("@/lib/supabase");
       const db = getSupabase();
@@ -55,7 +58,7 @@ export default async function NuevaOrdenPage() {
         const w = Number(s.width_px);
         const h = Number(s.height_px);
         const res = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? `${w}×${h}` : "";
-        const detail = [s.external_ref, venue, district, city, supplier, s.technology, res]
+        const detail = [venue, district, city, supplier, s.technology, res]
           .map((x) => String(x ?? "").trim())
           .filter(Boolean)
           .join(" · ");
@@ -63,6 +66,7 @@ export default async function NuevaOrdenPage() {
           id: String(s.id),
           name: String(s.name ?? ""),
           detail: detail || null,
+          code: String(s.external_ref ?? "").trim() || null,
           price_pen: s.price_pen === null || s.price_pen === undefined ? null : Number(s.price_pen),
         };
       });
@@ -74,7 +78,7 @@ export default async function NuevaOrdenPage() {
     },
     {
       companies: [] as Array<{ id: string; name: string; kind: string | null }>,
-      screens: [] as Array<{ id: string; name: string; detail: string | null; price_pen: number | null }>,
+      screens: [] as Array<{ id: string; name: string; detail: string | null; code: string | null; price_pen: number | null }>,
       brands: [] as string[],
       defaultCurrency: "PEN",
     },

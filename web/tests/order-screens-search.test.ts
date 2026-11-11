@@ -1,7 +1,8 @@
 // Picker de pantallas (nueva orden): mismo fuzzy que la vista principal de
 // screens — normalización ES + tokens AND + ranking. El haystack es
-// nombre + detalle (el detalle ya trae código, sede, distrito, ciudad,
-// proveedor, tecnología y resolución).
+// nombre + código + detalle (el detalle trae sede, distrito, ciudad,
+// proveedor, tecnología y resolución; el código no se muestra en la fila,
+// que muestra el precio, pero sigue recuperando por búsqueda).
 // Corre con: npm test (node:test stdlib vía tsx, sin dependencias nuevas).
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -11,9 +12,9 @@ import {
 } from "@/lib/screen-pick";
 
 const screens = [
-  { id: "1", name: "Pantalla LED — Av. Ejército", detail: "MI001 · Estadio Bonilla · Miraflores · Lima · SmartMedia · digital · 1920×1080", price_pen: 100 },
-  { id: "2", name: "Panel Norte", detail: "PN002 · Real Plaza · San Isidro · Lima · Prisma · digital · 1080×1920", price_pen: 200 },
-  { id: "3", name: "Valla Sur", detail: "VS003 · Óvalo · Cusco · Cusco · Andina · static · ", price_pen: 300 },
+  { id: "1", name: "Pantalla LED — Av. Ejército", code: "MI001", detail: "Estadio Bonilla · Miraflores · Lima · SmartMedia · digital · 1920×1080", price_pen: 100 },
+  { id: "2", name: "Panel Norte", code: "PN002", detail: "Real Plaza · San Isidro · Lima · Prisma · digital · 1080×1920", price_pen: 200 },
+  { id: "3", name: "Valla Sur", code: "VS003", detail: "Óvalo · Cusco · Cusco · Andina · static · ", price_pen: 300 },
 ];
 
 describe("picker de pantallas (nueva orden): fuzzy como screens", () => {
@@ -50,8 +51,8 @@ describe("picker de pantallas (nueva orden): fuzzy como screens", () => {
 
   it("con búsqueda: relevancia primero (prefijo del query completo)", () => {
     const rows = [
-      { id: "a", name: "Otra pantalla", detail: "XX · grupo lima norte", price_pen: 1 },
-      { id: "b", name: "Lima centro LED", detail: "YY · cercado", price_pen: 1 },
+      { id: "a", name: "Otra pantalla", code: "XX", detail: "grupo lima norte", price_pen: 1 },
+      { id: "b", name: "Lima centro LED", code: "YY", detail: "cercado", price_pen: 1 },
     ];
     assert.deepEqual(filterPickScreens(rows, "lima").map((s) => s.id), ["b", "a"]);
   });

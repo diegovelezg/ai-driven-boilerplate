@@ -120,6 +120,8 @@ export function isCrmStatusFilter(v: unknown): v is CrmStatusFilter {
 
 export interface CompanyInput {
   name: string;
+  /** Razón social / nombre legal registrado (name = nombre comercial). */
+  legal_name?: string | null;
   kind?: CompanyKind | null;
   tax_id?: string | null;
   domain?: string | null;
@@ -164,9 +166,13 @@ export function normalizeDomain(raw: unknown): string | null {
   return d;
 }
 
-export function normalizeCompany(input: CompanyInput): { ok: true; value: Required<Pick<CompanyInput, "name">> & Omit<CompanyInput, "name"> } | { ok: false; error: string } {
+export function normalizeCompany(input: CompanyInput): { ok: true; value: Required<Pick<CompanyInput, "name" | "legal_name" | "tax_id" | "address" | "city" | "country">> & Omit<CompanyInput, "name" | "legal_name" | "tax_id" | "address" | "city" | "country"> } | { ok: false; error: string } {
   const name = cleanStr(input.name, 200);
-  if (!name) return { ok: false, error: "Nombre de empresa requerido (máx 200)." };
+  if (!name) return { ok: false, error: "Nombre comercial requerido (máx 200)." };
+  const legal_name = cleanStr(input.legal_name, 200);
+  if (!legal_name) return { ok: false, error: "Razón social requerida (máx 200)." };
+  const tax_id = cleanStr(input.tax_id, 40);
+  if (!tax_id) return { ok: false, error: "ID fiscal requerido (máx 40)." };
   const domain = input.domain === undefined || input.domain === null || input.domain === "" ? null : normalizeDomain(input.domain);
   if (input.domain && domain === null) return { ok: false, error: "Web inválida (p. ej. acme.pe)." };
   const email = cleanStr(input.email, 320);
@@ -175,11 +181,20 @@ export function normalizeCompany(input: CompanyInput): { ok: true; value: Requir
   // País: ISO2 real (misma regla que el cliente company-validation:
   // `isCountryCode`). El servidor era más laxo (cualquier 2 letras) y dejaba
   // pasar "AA": ahora espejo exacto, el cliente nunca bloquea un valor válido.
+  // Obligatorio (igual que RUC, dirección y ciudad): legados con null lo
+  // completan en la próxima edición.
   const countryRaw = cleanStr(input.country, 2)?.toUpperCase() ?? null;
-  if (input.country && (!countryRaw || !isCountryCode(countryRaw))) {
+  if (!countryRaw) {
+    return { ok: false, error: "País requerido (ISO2, p. ej. PE)." };
+  }
+  if (!isCountryCode(countryRaw)) {
     return { ok: false, error: "País inválido (ISO2, p. ej. PE)." };
   }
   const country = countryRaw;
+  const address = cleanStr(input.address, 300);
+  if (!address) return { ok: false, error: "Dirección requerida (máx 300)." };
+  const city = cleanStr(input.city, 120);
+  if (!city) return { ok: false, error: "Ciudad requerida (máx 120)." };
   const external_ref = cleanStr(input.external_ref, 120);
   if (input.external_ref && !external_ref) return { ok: false, error: "external_ref inválido." };
   const kind = input.kind ?? null;
@@ -195,15 +210,16 @@ export function normalizeCompany(input: CompanyInput): { ok: true; value: Requir
     ok: true,
     value: {
       name,
+      legal_name,
       kind,
       category_iab,
       provider_type,
-      tax_id: cleanStr(input.tax_id, 40),
+      tax_id,
       domain,
       email,
       phone: cleanStr(input.phone, 40),
-      address: cleanStr(input.address, 300),
-      city: cleanStr(input.city, 120),
+      address,
+      city,
       country,
       notes: cleanStr(input.notes, 2000),
       external_ref,

@@ -36,6 +36,10 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
   const normalizedDefault = String(defaultCountry ?? "").trim().toUpperCase();
   const [country, setCountry] = useState<string>(/^[A-Z]{2}$/.test(normalizedDefault) ? normalizedDefault : "PE");
   const [nameOk, setNameOk] = useState(false);
+  const [legalOk, setLegalOk] = useState(false);
+  const [taxOk, setTaxOk] = useState(false);
+  const [addressOk, setAddressOk] = useState(false);
+  const [cityOk, setCityOk] = useState(false);
   const [categoryIab, setCategoryIab] = useState<string>("");
   const [providerType, setProviderType] = useState<string>("");
   const [invalid, setInvalid] = useState<Set<CompanyFieldKey>>(new Set());
@@ -43,13 +47,24 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
   const showCommission = canManageCommission && kind === "agencia";
   const needCategory = kind === "anunciante" && !categoryIab;
   const needProviderType = kind === "proveedor" && !providerType;
-  const missingClass = !nameOk
-    ? "Completa el nombre para continuar"
-    : needCategory
-      ? "Elige la categoría del anunciante para continuar"
-      : needProviderType
-        ? "Elige el tipo de proveedor para continuar"
-        : undefined;
+  const countryOk = country !== "" && country !== "__none";
+  const missingClass = needCategory
+    ? "Elige la categoría del anunciante para continuar"
+    : needProviderType
+      ? "Elige el tipo de proveedor para continuar"
+      : !nameOk
+        ? "Completa el nombre comercial para continuar"
+        : !legalOk
+          ? "Completa la razón social para continuar"
+          : !taxOk
+            ? "Completa el ID fiscal para continuar"
+            : !addressOk
+              ? "Completa la dirección para continuar"
+              : !cityOk
+                ? "Completa la ciudad para continuar"
+                : !countryOk
+                  ? "Elige el país para continuar"
+                  : undefined;
 
   const bad = (k: CompanyFieldKey) => (invalid.has(k) ? ` ${FIELD_ERR_CLS}` : "");
 
@@ -59,6 +74,8 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
     const first = keys[0];
     const name =
       first === "kind" ? "kind"
+      : first === "legalName" ? "legal_name"
+      : first === "taxId" ? "tax_id"
       : first === "commission" ? "agency_commission_pct"
       : first === "category" ? "category_iab"
       : first === "providerType" ? "provider_type"
@@ -70,7 +87,11 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
     const fd = new FormData(e.currentTarget);
     const errs = validateCompanyFields({
       name: String(fd.get("name") ?? ""),
+      legalName: String(fd.get("legal_name") ?? ""),
+      taxId: String(fd.get("tax_id") ?? ""),
       domain: String(fd.get("domain") ?? ""),
+      address: String(fd.get("address") ?? ""),
+      city: String(fd.get("city") ?? ""),
       country: String(fd.get("country") ?? ""),
       commission: showCommission ? String(fd.get("agency_commission_pct") ?? "") : "",
       kind,
@@ -86,10 +107,6 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
 
   return (
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
-      <label className="form-field">
-        Nombre *
-        <Input name="name" maxLength={200} placeholder="Acme S.A.C." aria-invalid={invalid.has("name")} onChange={(e) => { setNameOk(e.target.value.trim().length > 0); if (invalid.has("name")) setInvalid((p) => { const n = new Set(p); n.delete("name"); return n; }); }} className={`${bad("name")}`} />
-      </label>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="form-field">
           Tipo
@@ -126,7 +143,9 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
                 if (invalid.has("category")) setInvalid((p) => { const n = new Set(p); n.delete("category"); return n; });
               }}
               items={Object.fromEntries(
-                ADVERTISER_CATEGORIES.map((c) => [c.code, c.name_es]),
+                [...ADVERTISER_CATEGORIES]
+                  .sort((a, b) => a.name_es.localeCompare(b.name_es, "es"))
+                  .map((c) => [c.code, c.name_es]),
               )}
               disabled={pending}
             >
@@ -134,9 +153,11 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
                 <SelectValue placeholder="Elegir categoría…" />
               </SelectTrigger>
               <SelectContent>
-                {ADVERTISER_CATEGORIES.map((c) => (
-                  <SelectItem key={c.code} value={c.code}>{c.name_es}</SelectItem>
-                ))}
+                {[...ADVERTISER_CATEGORIES]
+                  .sort((a, b) => a.name_es.localeCompare(b.name_es, "es"))
+                  .map((c) => (
+                    <SelectItem key={c.code} value={c.code}>{c.name_es}</SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>
@@ -189,10 +210,18 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
           </label>
         )}
       </div>
+      <label className="form-field">
+        Nombre comercial *
+        <Input name="name" maxLength={200} placeholder="Acme" aria-invalid={invalid.has("name")} onChange={(e) => { setNameOk(e.target.value.trim().length > 0); if (invalid.has("name")) setInvalid((p) => { const n = new Set(p); n.delete("name"); return n; }); }} className={`${bad("name")}`} />
+      </label>
+      <label className="form-field">
+        Razón social *
+        <Input name="legal_name" maxLength={200} placeholder="Acme S.A.C." aria-invalid={invalid.has("legalName")} onChange={(e) => { setLegalOk(e.target.value.trim().length > 0); if (invalid.has("legalName")) setInvalid((p) => { const n = new Set(p); n.delete("legalName"); return n; }); }} className={`${bad("legalName")}`} />
+      </label>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="form-field">
-          {taxIdLabel(country)}
-          <Input name="tax_id" maxLength={40} placeholder="20123456789" />
+          {taxIdLabel(country)} *
+          <Input name="tax_id" maxLength={40} placeholder="20123456789" aria-invalid={invalid.has("taxId")} onChange={(e) => { setTaxOk(e.target.value.trim().length > 0); if (invalid.has("taxId")) setInvalid((p) => { const n = new Set(p); n.delete("taxId"); return n; }); }} className={`${bad("taxId")}`} />
         </label>
         <label className="form-field">
           Web
@@ -203,15 +232,15 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
           <Input name="phone" type="tel" maxLength={40} placeholder="+51…" />
         </label>
         <label className="form-field sm:col-span-2">
-          Dirección
-          <Input name="address" maxLength={300} placeholder="Av. …" />
+          Dirección *
+          <Input name="address" maxLength={300} placeholder="Av. …" aria-invalid={invalid.has("address")} onChange={(e) => { setAddressOk(e.target.value.trim().length > 0); if (invalid.has("address")) setInvalid((p) => { const n = new Set(p); n.delete("address"); return n; }); }} className={`${bad("address")}`} />
         </label>
         <label className="form-field">
-          Ciudad
-          <Input name="city" maxLength={120} placeholder="Lima" />
+          Ciudad *
+          <Input name="city" maxLength={120} placeholder="Lima" aria-invalid={invalid.has("city")} onChange={(e) => { setCityOk(e.target.value.trim().length > 0); if (invalid.has("city")) setInvalid((p) => { const n = new Set(p); n.delete("city"); return n; }); }} className={`${bad("city")}`} />
         </label>
         <div className="form-field">
-          País
+          País *
           <input type="hidden" name="country" value={country === "__none" ? "" : country} />
           <Select
             value={country === "" ? "__none" : country}
@@ -241,7 +270,7 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
         </div>
       </div>
       <div>
-        <SubmitButton pending={pending} disabled={!nameOk || needCategory || needProviderType} title={missingClass} pendingLabel="Creando…">
+        <SubmitButton pending={pending} disabled={!nameOk || !legalOk || !taxOk || !addressOk || !cityOk || !countryOk || needCategory || needProviderType} title={missingClass} pendingLabel="Creando…">
           <Plus aria-hidden />
           Crear empresa
         </SubmitButton>

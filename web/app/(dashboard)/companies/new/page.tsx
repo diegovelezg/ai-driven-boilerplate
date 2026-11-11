@@ -35,7 +35,7 @@ export default async function NuevaEmpresaPage() {
         description="Elige el tipo de empresa y completa sus datos. La marca se registra en la orden."
         backHref="/companies"
       />
-      <AppCard title="Datos" description="Solo el nombre y el tipo son obligatorios.">
+      <AppCard title="Datos">
         <NuevaEmpresaForm canManageCommission={canManageCommission} defaultCountry={defaultCountry} />
       </AppCard>
     </div>

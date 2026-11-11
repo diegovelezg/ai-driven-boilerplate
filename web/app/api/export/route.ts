@@ -54,8 +54,13 @@ export async function GET(req: Request) {
 
     if (entity === "contacts") {
       const companyId = (sp.get("company") ?? sp.get("empresa") ?? "").trim() || undefined;
+      // Multiselect igual que empresas (?type / ?tipo). Sin parámetro →
+      // todos (el default agencia+anunciante es solo de la vista); la UI
+      // siempre manda el tipo explícito para que coincida con lo visible.
+      const rawTypes = [...sp.getAll("type"), ...sp.getAll("tipo")];
+      const kinds = rawTypes.length > 0 ? parseCompanyKinds(rawTypes) : undefined;
       const { listCrmContacts } = await import("@/lib/crm-db");
-      const { rows: list, truncated } = await listCrmContacts(storeId, { q, companyId, limit: 200 });
+      const { rows: list, truncated } = await listCrmContacts(storeId, { q, companyId, kinds, limit: 200 });
       const rows = list.map((c) => [
         c.id,
         c.first_name ?? "",
@@ -141,7 +146,9 @@ export async function GET(req: Request) {
     // screens (inventario; price_pen ya va en soles mayor)
     {
       const { listScreens, parseScreensSort } = await import("@/lib/screens-db");
-      const supplierId = (sp.get("proveedor") ?? sp.get("supplier") ?? "").trim() || null;
+      const rawSupplier = (sp.get("proveedor") ?? sp.get("supplier") ?? "").trim().toLowerCase();
+      const supplierId = rawSupplier !== "" && rawSupplier !== "own" && rawSupplier !== "all" ? rawSupplier : null;
+      const ownOnly = rawSupplier === "own";
       const city = (sp.get("ciudad") ?? sp.get("city") ?? "").trim() || null;
       const estadoRaw = (sp.get("estado") ?? sp.get("active") ?? "").trim();
       const active = estadoRaw === "active" || estadoRaw === "activas" ? "active" : estadoRaw === "inactive" || estadoRaw === "inactivas" ? "inactive" : "all";
@@ -149,7 +156,7 @@ export async function GET(req: Request) {
       const rows: CsvCell[][] = [];
       const PAGE = 100;
       for (let page = 1; page <= 20; page += 1) {
-        const res = await listScreens(storeId, { q, supplierId, city, active: active as "all" | "active" | "inactive", sortKey: key, sortDir: dir, page, pageSize: PAGE });
+        const res = await listScreens(storeId, { q, supplierId, ownOnly, city, active: active as "all" | "active" | "inactive", sortKey: key, sortDir: dir, page, pageSize: PAGE });
         for (const s of res.rows) {
           rows.push([s.id, s.name, s.external_ref ?? "", s.supplier_name ?? "", s.venue_name ?? "", s.district ?? "", s.city ?? "", s.is_active, s.width_m ?? "", s.height_m ?? "", s.width_px ?? "", s.height_px ?? "", s.price_pen ?? "", s.impact_day ?? "", s.impressions_day ?? ""]);
         }

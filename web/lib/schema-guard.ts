@@ -12,6 +12,8 @@ const REQUIRED_TABLES = [
   "sys_stores",
   "crm_companies",
   "crm_contacts",
+  "crm_company_links",
+  "crm_contact_accounts",
   "inv_venues",
   "inv_screens",
   "inv_slots",

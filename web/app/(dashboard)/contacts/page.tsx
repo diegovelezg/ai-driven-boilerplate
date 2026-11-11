@@ -4,7 +4,7 @@ import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { listCrmCompanies, listCrmContacts } from "@/lib/crm-db";
-import { isCrmStatusFilter, type CrmStatusFilter } from "@/lib/crm";
+import { isCrmStatusFilter, parseCompanyKinds, type CrmStatusFilter } from "@/lib/crm";
 import { listContactDuplicateGroups } from "@/lib/contact-duplicates";
 import { loadPageData } from "@/lib/page-data";
 import { getMyStoreRole } from "@/lib/tenant";
@@ -31,11 +31,14 @@ const VIEW_ALIASES: Record<string, "table" | "grid"> = {
 export default async function ContactosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; company?: string; empresa?: string; contact?: string; contacto?: string; view?: string; vista?: string; status?: string; estado?: string }>;
+  searchParams: Promise<{ q?: string; type?: string | string[]; tipo?: string | string[]; company?: string; empresa?: string; contact?: string; contacto?: string; view?: string; vista?: string; status?: string; estado?: string }>;
 }) {
   await connection();
   const sp = await searchParams;
   const q = (sp.q ?? "").trim();
+  // Multiselect igual que empresas (?type / ?tipo): sin parámetro → default
+  // (agencia + anunciante, sin proveedor).
+  const kinds = parseCompanyKinds(sp.type ?? sp.tipo);
   const companyId = ((sp.company ?? sp.empresa) ?? "").trim() || null;
   const selectedId = ((sp.contact ?? sp.contacto) ?? "").trim() || null;
   const vista: "table" | "grid" = VIEW_ALIASES[sp.view ?? sp.vista ?? ""] ?? "table";
@@ -45,7 +48,7 @@ export default async function ContactosPage({
     async (storeId) => {
       const myRole = await getMyStoreRole(storeId).catch(() => null);
       const [contactsRes, companiesRes, dupesRes] = await Promise.all([
-        listCrmContacts(storeId, { q, companyId: companyId ?? undefined, status }),
+        listCrmContacts(storeId, { q, companyId: companyId ?? undefined, status, kinds }),
         listCrmCompanies(storeId, { pageSize: 200 }),
         listContactDuplicateGroups(storeId).catch(() => ({ groups: [] })),
       ]);
@@ -100,6 +103,7 @@ export default async function ContactosPage({
           rows={rows}
           companies={companies.map((c) => ({ id: c.id, name: c.name }))}
           q={q}
+          kinds={kinds}
           companyId={companyId}
           status={status}
           initialView={vista}

@@ -33,6 +33,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         .filter((x): x is string => typeof x === "string" && !!x),
     )];
     let orderContacts: ReturnType<typeof toContactRef>[] = [];
+    let contactAccounts: Array<{ contact_id: string; advertiser_company_id: string; advertiser_name: string }> = [];
     if (caseCompanyIds.length > 0) {
       const { data: contacts } = await db
         .from("crm_contacts")
@@ -43,9 +44,34 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         .order("created_at", { ascending: true })
         .limit(200);
       orderContacts = ((contacts ?? []) as Array<Record<string, unknown>>).map(toContactRef);
+      const contactIds = orderContacts.map((c) => c.id);
+      if (contactIds.length > 0) {
+        const { data: accs } = await db
+          .from("crm_contact_accounts")
+          .select("contact_id,advertiser_company_id")
+          .eq("store_id", storeId)
+          .in("contact_id", contactIds)
+          .limit(500);
+        const rows = ((accs ?? []) as Array<Record<string, unknown>>).filter(
+          (a) => typeof a.contact_id === "string" && typeof a.advertiser_company_id === "string",
+        );
+        const advIds = [...new Set(rows.map((a) => String(a.advertiser_company_id)))];
+        const nameBy = new Map<string, string>();
+        if (advIds.length > 0) {
+          const { data: advs } = await db.from("crm_companies").select("id,name").eq("store_id", storeId).in("id", advIds);
+          for (const c of ((advs ?? []) as Array<Record<string, unknown>>)) nameBy.set(String(c.id), String(c.name ?? "—"));
+        }
+        contactAccounts = rows.map((a) => ({
+          contact_id: String(a.contact_id),
+          advertiser_company_id: String(a.advertiser_company_id),
+          advertiser_name: nameBy.get(String(a.advertiser_company_id)) ?? "—",
+        }));
+      }
     }
     return Response.json({
+      advertiser_company_id: typeof o.advertiser_company_id === "string" ? o.advertiser_company_id : null,
       order_contacts: orderContacts,
+      contact_accounts: contactAccounts,
       agencies: ((agencies ?? []) as Array<Record<string, unknown>>).map((a) => ({
         id: String(a.id),
         name: String(a.name ?? ""),

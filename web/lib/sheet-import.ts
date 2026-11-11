@@ -88,6 +88,7 @@ function cell(row: string[], idx: Map<string, number>, ...names: string[]): stri
 
 export interface CompanyRow {
   name: string;
+  legal_name: string | null;
   tax_id: string | null;
   domain: string | null;
   email: string | null;
@@ -114,6 +115,7 @@ export function normalizeCompanyRow(
     ok: true,
     value: {
       name,
+      legal_name: cell(row, idx, "legal_name", "razon_social", "razón social", "razón_social", "nombre_legal", "nombre legal") || null,
       tax_id: cell(row, idx, "tax_id", "taxid", "tax id", "id_fiscal", "id fiscal", "id-fiscal") || null,
       domain: cell(row, idx, "domain", "dominio") || null,
       email: cell(row, idx, "email", "correo") || null,
@@ -295,7 +297,7 @@ export function normalizeScreenRow(
 /** Plantillas CSV de ejemplo por kind (header + 1 fila). */
 const IMPORT_TEMPLATES: Record<ImportKind, string> = {
   companies:
-    "name,tax_id,domain,email,phone,city,country,roles,external_ref\nAcme SAC,20123456789,acme.pe,contacto@acme.pe,+51999999999,Lima,PE,customer,acme-001",
+    "name,legal_name,tax_id,domain,email,phone,city,country,roles,external_ref\nAcme,Acme SAC,20123456789,acme.pe,contacto@acme.pe,+51999999999,Lima,PE,customer,acme-001",
   contacts:
     "company_ref,first_name,last_name,email,phone,job_title,is_primary\nacme-001,Ana,Quispe,ana@acme.pe,+51999999999,Marketing,true",
   venues:

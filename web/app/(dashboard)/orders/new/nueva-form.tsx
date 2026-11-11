@@ -4,27 +4,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { RowIconButton, SubmitButton } from "@/components/buttons";
-import { SelectionBadge } from "@/components/badges";
+import Link from "next/link";
+import { Plus } from "lucide-react";
+import { SubmitButton } from "@/components/buttons";
 import { Checkbox } from "@/components/ui/checkbox";
 import { AppSelect } from "@/components/ui/app-select";
 import { AppCard } from "@/components/app-card";
-import { Calendar } from "@/components/ui/calendar";
 import { ComboboxField } from "@/components/combobox-field";
-import {
-  Dialog,
-  DrawerDialogContent as DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -32,40 +18,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DataTable,
-  DataTableBody,
-  DataTableHeader,
-  DataTableRow,
-  DataTableTd,
-  DataTableTh,
-} from "@/components/data-table";
-import { SectionHeading } from "@/components/section-heading";
 import { cn } from "cn";
-import { es } from "react-day-picker/locale";
-import { addDays, diffDaysInclusive, formatDate, formatMoney, formatNumber, parseISODate, toISODateLocal, toTitleCase } from "@/lib/format";
-import { filterPickScreens } from "@/lib/screen-pick";
-import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction, checkAvailabilityAction, getScreenOccupancyAction } from "@/lib/order-actions";
+import { addDays, formatDate, formatMoney, formatNumber, parseISODate, toTitleCase } from "@/lib/format";
+import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction } from "@/lib/order-actions";
 import { PantallaDrawer } from "../../screens/pantalla-drawer";
-import type { ScreenConflict } from "@/lib/availability";
 import {
-  firstFreeDay,
-  nextFreeWindow,
-  todayLima,
-  unionRanges,
-  type OccupiedRange,
-} from "@/lib/availability-utils";
+  OrderScreensTable,
+  PeriodDatePicker,
+  ScreenCalendarDialog,
+  ScreenMultiSelect,
+  useScreenAvailability,
+  type ScreenPick,
+} from "../order-screens";
+import { plural } from "../order-screens/types";
 import type { CrmState } from "@/lib/crm-actions";
 import { FIELD_ERR_CLS, toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
 
-interface Screen {
-  id: string;
-  name: string;
-  detail: string | null;
-  price_pen: number | null;
-}
+type Screen = ScreenPick;
 
 interface CompanyContact {
   id: string;
@@ -76,377 +47,6 @@ interface CompanyContact {
   companyName: string;
 }
 
-function PeriodDatePicker({
-  label,
-  value,
-  onChange,
-  disabled,
-  disabledDays,
-  pickerLabel,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-  disabledDays?: (date: Date) => boolean;
-  pickerLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = parseISODate(value);
-
-  return (
-    <div className="form-field">
-      {label}
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              disabled={disabled}
-              aria-label={pickerLabel}
-              className={cn(
-                "h-9 w-full justify-start bg-background px-2.5 text-sm font-normal",
-                !selected && "text-muted-foreground",
-              )}
-            >
-              <CalendarIcon aria-hidden />
-              {selected ? formatDate(value) : "Elegir…"}
-            </Button>
-          }
-        />
-        <PopoverContent align="start" className="w-auto p-0">
-          <Calendar
-            mode="single"
-            locale={es}
-            selected={selected}
-            disabled={disabledDays}
-            onSelect={(d) => {
-              if (d) {
-                onChange(toISODateLocal(d));
-                setOpen(false);
-              }
-            }}
-          />
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-function ScreenMultiSelect({
-  screens,
-  selected,
-  onToggle,
-  onSetAll,
-  onClear,
-  occupiedOf,
-  untilOf,
-  onShowCalendar,
-  availableOnly,
-  onToggleAvailableOnly,
-  periodReady,
-  occupiedCount,
-  periodLabel,
-  nextWindowLabel,
-  onApplyWindow,
-  availError,
-  isChecking,
-  disabled,
-}: {
-  screens: Screen[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  onSetAll: (ids: string[]) => void;
-  onClear: () => void;
-  occupiedOf: (id: string) => ScreenConflict[];
-  untilOf: (id: string) => string | null;
-  onShowCalendar: (id: string) => void;
-  availableOnly: boolean;
-  onToggleAvailableOnly: () => void;
-  periodReady: boolean;
-  occupiedCount: number;
-  periodLabel: string | null;
-  nextWindowLabel: string | null;
-  onApplyWindow: (() => void) | null;
-  availError: string | null;
-  isChecking: boolean;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-
-  const filtered = useMemo(() => filterPickScreens(screens, q), [screens, q]);
-  const visible = useMemo(
-    () => (availableOnly && periodReady ? filtered.filter((s) => occupiedOf(s.id).length === 0) : filtered),
-    [filtered, availableOnly, periodReady, occupiedOf],
-  );
-
-  const set = useMemo(() => new Set(selected), [selected]);
-  const allFilteredIn = visible.length > 0 && visible.every((s) => set.has(s.id));
-
-  const label =
-    selected.length === 0
-      ? "Elegir pantallas…"
-      : `${formatNumber(selected.length)} seleccionada${selected.length === 1 ? "" : "s"}${
-          periodReady && occupiedCount > 0 ? ` · ${formatNumber(occupiedCount)} ocupada${plural(occupiedCount)}` : ""
-        }`;
-
-  return (
-    <div className="flex flex-col gap-2">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              disabled={disabled}
-              aria-label="Elegir pantallas"
-              className={cn(
-                "h-9 w-full justify-between bg-background px-2.5 text-sm font-normal",
-                selected.length === 0 && "text-muted-foreground",
-              )}
-            >
-              <span className="truncate">{label}</span>
-              <ChevronsUpDown aria-hidden className="shrink-0 opacity-50" />
-            </Button>
-          }
-        />
-        <PopoverContent align="start" className="w-[min(24rem,calc(100vw-3rem))] p-2">
-          <div className="relative">
-            <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar por nombre, código, ubicación…"
-              aria-label="Buscar pantallas"
-              autoComplete="off"
-              className="h-9 w-full rounded-lg border border-border bg-background pr-2.5 pl-8 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring"
-            />
-          </div>
-          <div className="flex items-center justify-between gap-2 px-1 pt-2 pb-1">
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {formatNumber(visible.length)} de {formatNumber(screens.length)}
-            </span>
-            <div className="flex items-center gap-1">
-              <label className="flex cursor-pointer items-center gap-1.5 pr-1 text-xs text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={availableOnly}
-                  onChange={onToggleAvailableOnly}
-                  disabled={!periodReady}
-                  aria-label="Solo disponibles en el periodo"
-                  className="size-3.5 cursor-pointer accent-primary disabled:cursor-not-allowed"
-                />
-                Solo disponibles
-              </label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                disabled={allFilteredIn}
-                onClick={() =>
-                  onSetAll([...selected, ...visible.map((s) => s.id).filter((id) => !set.has(id) && occupiedOf(id).length === 0)])
-                }
-              >
-                <Check aria-hidden />
-                Todas
-              </Button>
-              <Button type="button" variant="ghost" size="xs" disabled={selected.length === 0} onClick={onClear}>
-                <X aria-hidden />
-                Ninguna
-              </Button>
-            </div>
-          </div>
-          <div className="max-h-64 overflow-y-auto" role="group" aria-label="Pantallas disponibles">
-            {!periodReady && (
-              <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
-                Elige Inicio y Fin para ver disponibilidad.
-              </p>
-            )}
-            {visible.map((s) => {
-              const checked = set.has(s.id);
-              const occupied = periodReady ? occupiedOf(s.id) : [];
-              const blocked = occupied.length > 0 && !checked;
-              const until = untilOf(s.id);
-              const note = occupied.length > 0
-                ? `No disponible · ${[occupied[0].io_number, occupied[0].brand].filter(Boolean).join(" · ") || "ocupada"}${until ? ` · hasta ${formatDate(until)}` : ""}`
-                : null;
-              return (
-                <div
-                  key={s.id}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded-md px-2 py-1.5",
-                    blocked ? "opacity-60" : "hover:bg-muted/60",
-                  )}
-                >
-                  <label
-                    aria-disabled={blocked}
-                    className={cn(
-                      "flex min-w-0 flex-1 cursor-pointer items-center gap-2.5",
-                      blocked && "cursor-not-allowed",
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={blocked}
-                      onChange={() => onToggle(s.id)}
-                      aria-label={blocked ? `${s.name} (no disponible en ese periodo)` : s.name}
-                      className="size-4 shrink-0 cursor-pointer accent-primary disabled:cursor-not-allowed"
-                    />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-xs font-medium">{s.name}</span>
-                        {checked && <Check aria-hidden className="size-3.5 shrink-0 text-primary" />}
-                      </span>
-                      {note && <span className="truncate text-xs text-destructive">{note}</span>}
-                    </span>
-                    {s.detail && (
-                      <span className="max-w-[40%] truncate text-xs text-muted-foreground">{s.detail}</span>
-                    )}
-                  </label>
-                  <RowIconButton
-                    icon={CalendarDays}
-                    label={`Ver disponibilidad de ${s.name}`}
-                    onClick={() => onShowCalendar(s.id)}
-                    className="shrink-0"
-                  />
-                </div>
-              );
-            })}
-            {visible.length === 0 && (
-              <p className="px-2 py-6 text-center text-xs text-muted-foreground">
-                {availableOnly && periodReady
-                  ? "Todo lo filtrado está ocupado en ese periodo. Prueba otras fechas."
-                  : "Sin resultados para esa búsqueda."}
-              </p>
-            )}
-          </div>
-          {periodReady && !isChecking && !availError && occupiedCount === 0 && (
-            <p className="flex items-center gap-1 px-2 text-xs text-emerald-700 tabular-nums" role="status">
-              <Check aria-hidden className="size-3.5" />
-              Todo libre en {periodLabel}
-            </p>
-          )}
-          {periodReady && !isChecking && availError && (
-            <p className="px-2 text-xs text-amber-700" role="alert">
-              {availError} Se revalida al crear.
-            </p>
-          )}
-          {periodReady && occupiedCount > 0 && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-destructive/5 px-2.5 py-2">
-              <p className="text-xs text-destructive tabular-nums">
-                {formatNumber(occupiedCount)} ocupada{plural(occupiedCount)} en {periodLabel}
-              </p>
-              {nextWindowLabel && onApplyWindow && (
-                <Button type="button" size="xs" variant="outline" onClick={onApplyWindow}>
-                  <ArrowRight aria-hidden />
-                  {nextWindowLabel}
-                </Button>
-              )}
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
-
-      {selected.length > 0 && (
-        <div className="flex flex-wrap gap-1.5" aria-label="Pantallas elegidas">
-          {selected.map((id) => {
-            const s = screens.find((x) => x.id === id);
-            if (!s) return null;
-            return (
-              <SelectionBadge
-                key={id}
-                label={s.name}
-                removeLabel={`Quitar ${s.name}`}
-                onRemove={() => onToggle(id)}
-                disabled={disabled}
-              />
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Calendario de disponibilidad de una pantalla: ocupado tachado, periodo elegido en rango. */
-function ScreenCalendarDialog({
-  screen,
-  ranges,
-  loaded,
-  duration,
-  periodStarts,
-  periodEnds,
-  onApply,
-  onClose,
-}: {
-  screen: Screen | null;
-  ranges: OccupiedRange[] | undefined;
-  loaded: boolean;
-  duration: number;
-  periodStarts: string;
-  periodEnds: string;
-  onApply: (starts: string) => void;
-  onClose: () => void;
-}) {
-  const booked = (ranges ?? []).flatMap((r) => {
-    const from = parseISODate(r.starts);
-    const to = parseISODate(r.ends);
-    return from && to ? [{ from, to }] : [];
-  });
-  const periodFrom = parseISODate(periodStarts);
-  const periodTo = parseISODate(periodEnds);
-  const today = todayLima();
-  const free = screen && loaded && ranges ? firstFreeDay(ranges, today) : null;
-  const windowStart = screen && loaded && ranges && duration > 0
-    ? nextFreeWindow(ranges, today, duration)
-    : null;
-
-  return (
-    <Dialog open={screen !== null} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="w-auto max-w-[calc(100%-2rem)]">
-        <DialogHeader>
-          <DialogTitle>{screen?.name ?? "Disponibilidad"}</DialogTitle>
-          <DialogDescription>
-            {screen?.detail ?? ""}
-            {loaded && ranges && ranges.length === 0 && " · libre en todo lo visible."}
-          </DialogDescription>
-        </DialogHeader>
-        {!loaded || !ranges ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">Cargando disponibilidad…</p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <Calendar
-              mode="range"
-              locale={es}
-              selected={periodFrom ? { from: periodFrom, to: periodTo } : undefined}
-              modifiers={{ booked }}
-              modifiersClassNames={{ booked: "bg-destructive/10 text-destructive line-through" }}
-              disabled={booked}
-            />
-            <p className="text-xs text-muted-foreground tabular-nums">
-              <span className="mr-1 inline-block size-2.5 rounded-sm bg-destructive/20 align-middle" aria-hidden />
-              ocupado · libre desde {free ? formatDate(free) : "—"}
-              {windowStart && (
-                <> · hueco de {formatNumber(duration)} día{plural(duration)}: {formatDate(windowStart)}</>
-              )}
-            </p>
-            {windowStart && (
-              <div>
-                <Button type="button" size="sm" variant="outline" onClick={() => onApply(windowStart)}>
-                  <CalendarDays aria-hidden />
-                  Usar {formatDate(windowStart)} → {formatDate(addDays(windowStart, duration - 1))}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 export function NuevaOrdenForm({
   companies,
@@ -460,6 +60,7 @@ export function NuevaOrdenForm({
   defaultCurrency?: string;
 }) {
   const [state, action, pending] = useActionState(createOrderRedirectAction, initial);
+  const [advertiserId, setAdvertiserId] = useState<string>("");
   const [company, setCompany] = useState<string>("");
   const [brand, setBrand] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
@@ -476,6 +77,9 @@ export function NuevaOrdenForm({
   const [contratanteContacts, setContratanteContacts] = useState<CompanyContact[]>([]);
   const [agencyContacts, setAgencyContacts] = useState<CompanyContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  // Fallo de red/API al traer la ficha: se pinta error, nunca se confunde
+  // con "la empresa no tiene contactos" (ese es otro aviso, con enlace).
+  const [contactsError, setContactsError] = useState(false);
   // Intermediaria efectiva: el contratante (check) o la agencia definida.
   const agencyRealId = !agencySelf && agencyId !== "" ? agencyId : null;
   const [paymentTerms, setPaymentTerms] = useState<string>("");
@@ -484,20 +88,35 @@ export function NuevaOrdenForm({
   const [ends, setEnds] = useState<string>("");
   const [selected, setSelected] = useState<string[]>([]);
   const [prices, setPrices] = useState<Record<string, string>>({});
-  const [conflicts, setConflicts] = useState<ScreenConflict[]>([]);
-  const [checking, setChecking] = useState(false);
-  const [availError, setAvailError] = useState<string | null>(null);
-  const [occupancy, setOccupancy] = useState<Record<string, OccupiedRange[]>>({});
   const [calScreenId, setCalScreenId] = useState<string | null>(null);
   const [detailScreenId, setDetailScreenId] = useState<string | null>(null);
   const [availableOnly, setAvailableOnly] = useState(false);
-  const { invalid, mark, clear, focusFirst } = useInvalidFields<"company">();
+  const { invalid, mark, clear, focusFirst } = useInvalidFields<"company" | "advertiser">();
   const formRef = useRef<HTMLFormElement>(null);
 
-  const dias = diffDaysInclusive(starts, ends);
+  const {
+    dias,
+    checking,
+    availError,
+    occupancy,
+    occupiedOf,
+    untilOf,
+    occupiedCount,
+    periodLabel,
+    commonWindowFor,
+    nextWindowLabelFor,
+    ensureOccupancy,
+  } = useScreenAvailability({ screens, starts, ends });
 
   // Agencias del tenant para vincular intermediaria (o texto manual si no existe).
   const agencies = companies.filter((c) => c.kind === "agencia");
+  // Bloque 1: anunciantes (Coca-Cola…) + marca libre (Fanta…).
+  const advertisers = companies.filter((c) => c.kind === "anunciante");
+  // Bloque 2: el contratante es el propio anunciante (directo) o una agencia.
+  // Sin anunciante elegido, el picker se deshabilita: primero el bloque 1.
+  const self = advertiserId ? companies.find((c) => c.id === advertiserId) : undefined;
+  const contratanteOpts =
+    self && !agencies.some((c) => c.id === self.id) ? [self, ...agencies] : agencies;
   // Responsable: de la intermediaria (o del contratante si es él).
   const managerOpts = agencySelf ? contratanteContacts : agencyContacts;
 
@@ -512,14 +131,24 @@ export function NuevaOrdenForm({
     }
     let alive = true;
     setContactsLoading(true);
+    setContactsError(false);
     void Promise.all(
-      ids.map((id) => fetch(`/api/companies/${id}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)),
+      ids.map((id) =>
+        fetch(`/api/companies/${id}`, { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+          .then((detail) => ({ id, detail })),
+      ),
     )
-      .then((details) => {
+      .then((pairs) => {
         if (!alive) return;
         const byCompany = new Map<string, CompanyContact[]>();
-        for (const d of details) {
-          if (!d) continue;
+        let companyFailed = false;
+        for (const { id, detail: d } of pairs) {
+          if (!d) {
+            if (id === company) companyFailed = true;
+            continue;
+          }
           const co = d.company as Record<string, unknown> | undefined;
           const cid = typeof co?.id === "string" ? co.id : "";
           const cname = toTitleCase(typeof co?.name === "string" && co.name ? co.name : "");
@@ -543,6 +172,7 @@ export function NuevaOrdenForm({
         // Check ON (es el contratante): responsable sale del contratante.
         const ac = agencySelf ? cc : agencyRealId ? (byCompany.get(agencyRealId) ?? []) : [];
         setContratanteContacts(cc);
+        setContactsError(companyFailed);
         setAgencyContacts(agencySelf ? [] : ac);
         // Limpia selecciones huérfanas al cambiar de empresa.
         const keepIn = (opts: CompanyContact[]) => (prev: string) =>
@@ -563,9 +193,14 @@ export function NuevaOrdenForm({
   // Error del server: borde + toast + foco (el botón ya se deshabilita con `missing`).
   useEffect(() => {
     if (!state.message || state.ok) return;
+    // "El contratante debe ser el propio anunciante…" menciona ambos: manda
+    // el contratante (el anunciante va en su propia rama).
     if (/empresa|contratante|compa[ñn][íi]a|company/i.test(state.message)) {
       mark(["company"]);
       focusFirst(formRef, ["company_id"]);
+    } else if (/anunciante|advertiser/i.test(state.message)) {
+      mark(["advertiser"]);
+      focusFirst(formRef, ["advertiser_company_id"]);
     }
     toastFormError("No se pudo crear la orden", state.message);
   }, [state, mark, focusFirst]);
@@ -589,78 +224,11 @@ export function NuevaOrdenForm({
     });
   }, [selected, priceById]);
 
-  // Disponibilidad del periodo (debounce): ocupada = visible pero no seleccionable.
-  // Trae choques del periodo + ocupación de todas las pantallas (calendarios y
-  // próximo hueco). Todo setState vive en el callback del debounce (el repo
-  // prohíbe setState síncrono en el cuerpo del effect); el server action
-  // revalida al crear.
-  useEffect(() => {
-    const h = setTimeout(async () => {
-      if (dias === null) {
-        setConflicts([]);
-        setChecking(false);
-        setAvailError(null);
-        return;
-      }
-      setChecking(true);
-      try {
-        const anchor = todayLima();
-        const ids = screens.map((s) => s.id);
-        const [res, occ] = await Promise.all([
-          checkAvailabilityAction({ starts, ends }),
-          getScreenOccupancyAction({ screenIds: ids, from: anchor }),
-        ]);
-        if (res.ok) {
-          setConflicts(res.conflicts);
-          setAvailError(null);
-        } else {
-          setAvailError(res.message || "No se pudo verificar disponibilidad.");
-        }
-        if (occ.ok) {
-          setOccupancy((prev) => {
-            const next: Record<string, OccupiedRange[]> = { ...prev, ...occ.occupancy };
-            for (const id of ids) next[id] ??= [];
-            return next;
-          });
-        }
-      } catch {
-        setAvailError("No se pudo verificar disponibilidad.");
-      } finally {
-        setChecking(false);
-      }
-    }, 400);
-    return () => clearTimeout(h);
-  }, [starts, ends, dias, screens]);
-
-  const conflictBy = useMemo(() => {
-    const m = new Map<string, ScreenConflict[]>();
-    for (const c of conflicts) {
-      const list = m.get(c.screen_id) ?? [];
-      list.push(c);
-      m.set(c.screen_id, list);
-    }
-    return m;
-  }, [conflicts]);
-  const occupiedOf = (id: string): ScreenConflict[] => conflictBy.get(id) ?? [];
-  const untilOf = (id: string): string | null => {
-    const list = conflictBy.get(id);
-    if (!list || list.length === 0) return null;
-    return list.reduce((a, b) => (a > b ? a : b)).ends;
-  };
+  const periodReady = dias !== null;
 
   const openCalendar = (id: string) => {
     setCalScreenId(id);
-    if (!(id in occupancy)) {
-      void getScreenOccupancyAction({ screenIds: [id], from: todayLima() }).then((res) => {
-        if (res.ok) {
-          setOccupancy((prev) => {
-            const next: Record<string, OccupiedRange[]> = { ...prev, ...res.occupancy };
-            next[id] ??= [];
-            return next;
-          });
-        }
-      });
-    }
+    ensureOccupancy(id);
   };
 
   /** Mueve el periodo a un inicio dado, conservando la duración. */
@@ -691,18 +259,11 @@ export function NuevaOrdenForm({
   const blockedRows = rows.filter((r) => occupiedOf(r.id).length > 0);
 
   /** Próximo hueco común a todas las elegidas (misma duración). */
-  const commonWindow =
-    blockedRows.length > 0 && dias !== null && rows.every((r) => r.id in occupancy)
-      ? nextFreeWindow(unionRanges(rows.map((r) => occupancy[r.id])), starts, dias)
-      : null;
-  const occupiedCount = dias !== null ? screens.filter((s) => conflictBy.has(s.id)).length : 0;
-  const periodLabel = dias !== null ? `${formatDate(starts)}→${formatDate(ends)}` : null;
-  const nextWindowLabel =
-    commonWindow && dias !== null
-      ? `Mover al próximo hueco: ${formatDate(commonWindow)} → ${formatDate(addDays(commonWindow, dias - 1))}`
-      : null;
+  const commonWindow = commonWindowFor(selected);
+  const nextWindowLabel = nextWindowLabelFor(selected);
 
   const missing: string[] = [];
+  if (!advertiserId) missing.push("anunciante");
   if (!company) missing.push("quién firma");
   if (!brand.trim()) missing.push("marca");
   if (!paymentTerms) missing.push("condición de pago");
@@ -719,32 +280,42 @@ export function NuevaOrdenForm({
   // Defensa cliente: el botón ya se deshabilita con `missing`, pero un
   // submit directo (Enter) también marca borde + toast + foco.
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    if (company) return;
+    if (company && advertiserId) return;
     e.preventDefault();
-    mark(["company"]);
-    toastFormError("Revisa el campo marcado", "Elige quién firma la orden.");
-    focusFirst(formRef, ["company_id"]);
+    mark([...(!advertiserId ? ["advertiser" as const] : []), ...(!company ? ["company" as const] : [])]);
+    toastFormError(
+      "Revisa el campo marcado",
+      !advertiserId ? "Elige el anunciante de la orden." : "Elige quién firma la orden.",
+    );
+    focusFirst(formRef, ["advertiser_company_id", "company_id"]);
   }
 
   return (
     <>
     <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
-      <AppCard title="Contratante">
+      <AppCard title="Anunciante">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="form-field">
-            Contratante *
-            <input type="hidden" name="company_id" value={company} />
+            Anunciante *
+            <input type="hidden" name="advertiser_company_id" value={advertiserId} />
             <Select
-              value={company}
-              onValueChange={(v) => { if (v) { setCompany(v); clear("company"); } }}
-              items={Object.fromEntries(companies.map((c) => [c.id, toTitleCase(c.name)]))}
+              value={advertiserId}
+              onValueChange={(v) => {
+                if (!v) return;
+                setAdvertiserId(v);
+                clear("advertiser");
+                // Directo por default: si no había contratante o era el
+                // anunciante anterior, el contratante sigue al anunciante.
+                if (!company || company === advertiserId) setCompany(v);
+              }}
+              items={Object.fromEntries(advertisers.map((c) => [c.id, toTitleCase(c.name)]))}
               disabled={pending}
             >
-              <SelectTrigger aria-label="Contratante" aria-invalid={invalid.has("company")} data-field="company_id" className={cn("w-full", invalid.has("company") && FIELD_ERR_CLS)}>
-                <SelectValue placeholder="Agencia o anunciante…" />
+              <SelectTrigger aria-label="Anunciante" aria-invalid={invalid.has("advertiser")} data-field="advertiser_company_id" className={cn("w-full", invalid.has("advertiser") && FIELD_ERR_CLS)}>
+                <SelectValue placeholder="Coca-Cola…" />
               </SelectTrigger>
               <SelectContent>
-                {companies.map((c) => (
+                {advertisers.map((c) => (
                   <SelectItem key={c.id} value={c.id}>{toTitleCase(c.name)}</SelectItem>
                 ))}
               </SelectContent>
@@ -758,13 +329,38 @@ export function NuevaOrdenForm({
               items={brands}
               value={brand}
               onChange={setBrand}
-              placeholder="Tottus…"
+              placeholder="Fanta…"
               emptyText="Sin marcas registradas."
               displayItem={toTitleCase}
               ariaLabel="Marca"
               disabled={pending}
             />
           </div>
+        </div>
+      </AppCard>
+
+      <AppCard title="Contratante">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="form-field">
+            Contratante *
+            <input type="hidden" name="company_id" value={company} />
+            <Select
+              value={company}
+              onValueChange={(v) => { if (v) { setCompany(v); clear("company"); } }}
+              items={Object.fromEntries(contratanteOpts.map((c) => [c.id, toTitleCase(c.name)]))}
+              disabled={pending || !advertiserId}
+            >
+              <SelectTrigger aria-label="Contratante" aria-invalid={invalid.has("company")} data-field="company_id" className={cn("w-full", invalid.has("company") && FIELD_ERR_CLS)}>
+                <SelectValue placeholder={advertiserId ? "El anunciante (directo) o una agencia…" : "Elige primero el anunciante…"} />
+              </SelectTrigger>
+              <SelectContent>
+                {contratanteOpts.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{toTitleCase(c.name)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="form-field">
             Condición de pago *
               <input type="hidden" name="payment_terms_days" value={paymentTerms} />
@@ -837,9 +433,16 @@ export function NuevaOrdenForm({
         </div>
         {contactsLoading ? (
           <p className="mt-2 text-xs text-muted-foreground" role="status">Cargando contactos…</p>
+        ) : contactsError ? (
+          <p className="mt-2 text-xs text-destructive" role="alert">
+            No se pudieron cargar los contactos de esta empresa. Vuelve a elegirla o recarga la página.
+          </p>
         ) : company && contratanteContacts.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
-            El contratante no tiene contactos. Créalos en Empresas → Contactos.
+            Esta empresa aún no tiene contactos: crea el primero y vuelve a esta orden.{" "}
+            <Link href={`/contacts/new?company=${company}`} className="font-medium underline underline-offset-2">
+              Crear contacto
+            </Link>
           </p>
         ) : null}
       </AppCard>
@@ -1013,7 +616,7 @@ export function NuevaOrdenForm({
               onShowCalendar={openCalendar}
               availableOnly={availableOnly}
               onToggleAvailableOnly={() => setAvailableOnly((v) => !v)}
-              periodReady={dias !== null}
+              periodReady={periodReady}
               occupiedCount={occupiedCount}
               periodLabel={periodLabel}
               nextWindowLabel={nextWindowLabel}
@@ -1027,111 +630,33 @@ export function NuevaOrdenForm({
             <p className="text-xs text-muted-foreground" role="status">Verificando disponibilidad…</p>
           )}
           {rows.length > 0 && (
-            <section className="flex flex-col gap-2" aria-label="Detalle por pantalla">
-              <SectionHeading title="Detalle por pantalla" hint={`Precio por día × ${dias !== null ? `${formatNumber(dias)} días` : "días del periodo"}.`} />
-              {blockedRows.length > 0 && (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-destructive/5 px-2.5 py-2">
-                  <p className="text-xs text-destructive">
-                    {blockedRows.length} ocupada{plural(blockedRows.length)} en ese periodo.
-                  </p>
-                  {dias !== null && (commonWindow ? (
-                    <Button type="button" size="xs" variant="outline" onClick={() => applyWindow(commonWindow)}>
-                      <ArrowRight aria-hidden />
-                      Mover al próximo hueco: {formatDate(commonWindow)} → {formatDate(addDays(commonWindow, dias - 1))}
-                    </Button>
-                  ) : checking ? (
-                    <span className="text-xs text-muted-foreground">Buscando hueco común…</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">Sin hueco común libre en 12 meses.</span>
-                  ))}
-                </div>
-              )}
-              <DataTable>
-            <DataTableHeader>
-              <DataTableTh>Pantalla</DataTableTh>
-              <DataTableTh numeric>Precio/día * ({currency})</DataTableTh>
-              <DataTableTh numeric>Días</DataTableTh>
-              <DataTableTh numeric>Subtotal ({currency})</DataTableTh>
-              <DataTableTh aria-label="Acciones" />
-            </DataTableHeader>
-            <DataTableBody>
-              {rows.map((s) => {
-                const hits = occupiedOf(s.id);
-                return (
-                  <DataTableRow
-                    key={s.id}
-                    onClick={(e) => {
-                      if ((e.target as HTMLElement).closest("input,button")) return;
-                      setDetailScreenId(s.id);
-                    }}
-                    className={cn(hits.length > 0 && "bg-destructive/5", "cursor-pointer")}
-                  >
-                    <DataTableTd className="font-medium" title={s.detail ?? undefined}>
-                      {s.name}
-                      {hits.length > 0 && (
-                        <span className="block text-xs font-normal text-destructive">
-                          Ocupada · {[hits[0].io_number, hits[0].brand].filter(Boolean).join(" · ") || "otro periodo"} — quítala o cambia fechas
-                        </span>
-                      )}
-                    </DataTableTd>
-                  <DataTableTd numeric>
-                    <input type="hidden" name="screen_id" value={s.id} />
-                    <input type="hidden" name="line_starts_at" value={starts} />
-                    <input type="hidden" name="line_ends_at" value={ends} />
-                    <input type="hidden" name="line_cant_dias" value={dias ?? ""} />
-                    <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number)) : ""} />
-                    <Input
-                      value={prices[s.id] ?? ""}
-                      onChange={(e) => setPrices((p) => ({ ...p, [s.id]: e.target.value }))}
-                      disabled={pending || hits.length > 0}
-                      inputMode="decimal"
-                      placeholder={s.price_pen !== null && Number.isFinite(Number(s.price_pen)) ? String(s.price_pen) : "2000"}
-                      aria-label={`Precio por día ${s.name}`}
-                      className="w-28 text-right tabular-nums"
-                    />
-                  </DataTableTd>
-                  <DataTableTd numeric className="tabular-nums">
-                    {dias ?? "—"}
-                  </DataTableTd>
-                  <DataTableTd numeric className="tabular-nums">
-                    {dias !== null && priceOf(s.id) !== null
-                      ? formatMoney(Math.round((priceOf(s.id) as number) * (dias as number) * 100), currency)
-                      : "—"}
-                  </DataTableTd>
-                  <DataTableTd className="w-20">
-                    <div className="flex items-center justify-end gap-1">
-                      <RowIconButton
-                        icon={CalendarDays}
-                        label={`Ver disponibilidad de ${s.name}`}
-                        disabled={pending}
-                        pending={pending}
-                        onClick={() => openCalendar(s.id)}
-                      />
-                      <RowIconButton
-                        icon={X}
-                        label={`Quitar ${s.name}`}
-                        disabled={pending}
-                        pending={pending}
-                        onClick={() => toggleScreen(s.id)}
-                      />
-                    </div>
-                  </DataTableTd>
-                </DataTableRow>
-              );
-            })}
-              <DataTableRow className="bg-muted/30 font-medium">
-                <DataTableTd colSpan={3}>
-                  Total · {formatNumber(rows.length)} pantalla{plural(rows.length)}
-                  {dias !== null ? ` × ${formatNumber(dias)} días` : ""}
-                </DataTableTd>
-                <DataTableTd numeric className="tabular-nums whitespace-nowrap">
-                  {total > 0 ? formatMoney(Math.round(total * 100), currency) : "—"}
-                </DataTableTd>
-                <DataTableTd />
-              </DataTableRow>
-            </DataTableBody>
-          </DataTable>
-            </section>
+            <>
+              {rows.map((s) => (
+                <span key={s.id} hidden aria-hidden>
+                  <input type="hidden" name="screen_id" value={s.id} />
+                  <input type="hidden" name="line_starts_at" value={starts} />
+                  <input type="hidden" name="line_ends_at" value={ends} />
+                  <input type="hidden" name="line_cant_dias" value={dias ?? ""} />
+                  <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number)) : ""} />
+                </span>
+              ))}
+              <OrderScreensTable
+                rows={rows}
+                prices={prices}
+                dias={dias}
+                currency={currency}
+                occupiedOf={occupiedOf}
+                checking={checking}
+                commonWindow={commonWindow}
+                onApplyWindow={commonWindow ? () => applyWindow(commonWindow) : null}
+                onPriceChange={(id, v) => setPrices((p) => ({ ...p, [id]: v }))}
+                onRemove={toggleScreen}
+                onCalendar={openCalendar}
+                onDetail={setDetailScreenId}
+                disabled={pending}
+                pending={pending}
+              />
+            </>
           )}
         </div>
       </AppCard>
@@ -1167,10 +692,6 @@ export function NuevaOrdenForm({
     </form>
     </>
   );
-}
-
-function plural(n: number): string {
-  return n === 1 ? "" : "s";
 }
 
 function ContactPicker({

@@ -53,6 +53,41 @@ export function linkPairForOrder(input: {
   return null;
 }
 
+/**
+ * Reglas puras de contrapartes de la OI (nueva orden):
+ * - anunciante requerido y de tipo anunciante;
+ * - contratante (billing) requerido y de tipo agencia o anunciante;
+ * - el contratante es el propio anunciante (directo) o una agencia.
+ * La existencia, tienda y archivado los valida el servidor contra la BD.
+ */
+export function resolveOrderParties(input: {
+  billingId: unknown;
+  billingKind: unknown;
+  advertiserId: unknown;
+  advertiserKind: unknown;
+}):
+  | { ok: true; billingCompanyId: string; advertiserCompanyId: string; isDirect: boolean }
+  | { ok: false; error: string; field: "advertiser" | "company" } {
+  const billing = typeof input.billingId === "string" ? input.billingId.trim() : "";
+  const advertiser = typeof input.advertiserId === "string" ? input.advertiserId.trim() : "";
+  if (!advertiser) return { ok: false, error: "Anunciante requerido.", field: "advertiser" };
+  if (input.advertiserKind !== "anunciante") {
+    return { ok: false, error: "El anunciante debe ser una empresa anunciante de tu tienda.", field: "advertiser" };
+  }
+  if (!billing) return { ok: false, error: "Empresa requerida.", field: "company" };
+  if (input.billingKind !== "agencia" && input.billingKind !== "anunciante") {
+    return { ok: false, error: "El contratante debe ser una agencia o un anunciante de tu tienda.", field: "company" };
+  }
+  if (billing !== advertiser && input.billingKind !== "agencia") {
+    return {
+      ok: false,
+      error: "El contratante debe ser el propio anunciante (directo) o una agencia.",
+      field: "company",
+    };
+  }
+  return { ok: true, billingCompanyId: billing, advertiserCompanyId: advertiser, isDirect: billing === advertiser };
+}
+
 export interface MergedCounter extends DerivedCounter {
   explicit: boolean;
   origin: CompanyLinkOrigin | null;

@@ -1,45 +1,33 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-
-import { useRef, useState, useTransition } from "react";
-import { Plus, Save, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Plus } from "lucide-react";
 import { CancelButton, SubmitButton } from "@/components/buttons";
-import { AppSelect } from "@/components/ui/app-select";
+import { AppCard } from "@/components/app-card";
 import { updateOrderLinesAction } from "@/lib/order-actions";
-import { validateOrderLines } from "@/lib/order-lines";
-import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
-import { displayEndOfSafe, formatMoney, formatNumber, isoDayPart } from "@/lib/format";
+import { toastFormError } from "@/components/ui/form-feedback";
+import { addDays, diffDaysInclusive, displayEndOfSafe, formatMoney, formatNumber, isoDayPart, parseISODate } from "@/lib/format";
+import { PantallaDrawer } from "../screens/pantalla-drawer";
+import {
+  OrderScreensTable,
+  PeriodDatePicker,
+  ScreenCalendarDialog,
+  ScreenMultiSelect,
+  useScreenAvailability,
+  type ScreenPick,
+} from "./order-screens";
+import { plural } from "./order-screens/types";
 
-interface Row {
-  key: string;
-  screen_id: string;
-  screen_name: string | null;
-  starts: string;
-  ends: string;
-  total: string;
-  notes: string;
+function uniq<T>(xs: T[]): T[] {
+  return [...new Set(xs)];
 }
 
-function toRow(l: Record<string, unknown>, key: string, screensById?: Map<string, string>): Row {
-  const screenId = typeof l.screen_id === "string" ? l.screen_id : "";
-  const rateMinor = Number(l.rate_minor ?? NaN);
-  return {
-    key,
-    screen_id: screenId,
-    screen_name: typeof l.screen_name === "string" ? l.screen_name : (screensById?.get(screenId) ?? null),
-    starts: typeof l.starts_at === "string" ? (isoDayPart(l.starts_at) ?? "") : "",
-    ends: typeof l.ends_at === "string" ? (displayEndOfSafe(l.ends_at) ?? "") : "",
-    total: Number.isFinite(rateMinor) ? String(rateMinor / 100) : "",
-    notes: typeof l.notes === "string" ? l.notes : "",
-  };
-}
-
-/** Edición de pantallas de un borrador (drawer): periodos y totales por
- *  línea, quitar y agregar. Solo seller+ (el padre hace gating) y solo
- *  borradores sin facturas ni reservas (lo exige el servidor).
- *  El reemplazo es atómico vía `io_replace_lines` con anti-sobreventa. */
+/** Edición de pantallas de un borrador (drawer).
+ *  SSOT: mismo flujo que nueva orden — periodo global, combo estándar con
+ *  disponibilidad, tabla precio/día × días = subtotal, calendario por fila.
+ *  El reemplazo es atómico vía `io_replace_lines` con anti-sobreventa
+ *  (excluye la propia orden). Solo borradores sin facturas ni reservas
+ *  (lo exige el servidor). */
 export function OrderLinesForm({
   orderId,
   orderCurrency,
@@ -51,69 +39,180 @@ export function OrderLinesForm({
   orderId: string;
   orderCurrency: string;
   initialLines: Array<Record<string, unknown>>;
-  screens: Array<{ id: string; name: string; price_pen: number | null }>;
+  screens: ScreenPick[];
   onSaved?: () => void;
   onCancel?: () => void;
 }) {
-  const screensById = new Map(screens.map((s) => [s.id, s.name]));
-  const [rows, setRows] = useState<Row[]>(() =>
-    initialLines.map((l, i) => toRow(l, `l${i}`, screensById)),
+  const screensById = useMemo(() => new Map(screens.map((s) => [s.id, s])), [screens]);
+
+  // Meta de las líneas actuales (para pantallas fuera del top 200/inactivas
+  // y para preservar notas): nombre/detalle/notas + total original.
+  const initialMeta = useMemo(() => {
+    const m = new Map<string, { name: string | null; detail: string | null; notes: string | null; starts: string; ends: string; totalMajor: number | null }>();
+    for (const l of initialLines) {
+      const sid = typeof l.screen_id === "string" ? l.screen_id : "";
+      if (!sid || m.has(sid)) continue;
+      const starts = typeof l.starts_at === "string" ? (isoDayPart(l.starts_at) ?? "") : "";
+      const endsRaw = typeof l.ends_at === "string" ? l.ends_at : "";
+      const ends = displayEndOfSafe(endsRaw) ?? isoDayPart(endsRaw) ?? "";
+      const rateMinor = Number(l.rate_minor ?? NaN);
+      const totalMajor = Number.isFinite(rateMinor) ? rateMinor / 100 : null;
+      m.set(sid, {
+        name: typeof l.screen_name === "string" ? l.screen_name : null,
+        detail: typeof l.screen_detail === "string" ? l.screen_detail : null,
+        notes: typeof l.notes === "string" && l.notes.trim() ? l.notes : null,
+        starts,
+        ends,
+        totalMajor,
+      });
+    }
+    return m;
+  }, [initialLines]);
+
+  // Pantalla resoluble: del picker o fallback (línea existente fuera del top).
+  const resolveScreen = (id: string): ScreenPick | null => {
+    const s = screensById.get(id);
+    if (s) return s;
+    const meta = initialMeta.get(id);
+    if (!meta) return null;
+    return { id, name: meta.name ?? "—", detail: meta.detail, code: null, price_pen: null };
+  };
+
+  const initialSelected = useMemo(() => {
+    const ids: string[] = [];
+    for (const l of initialLines) {
+      const sid = typeof l.screen_id === "string" ? l.screen_id : "";
+      if (sid && !ids.includes(sid)) ids.push(sid);
+    }
+    return ids;
+  }, [initialLines]);
+
+  // Periodo global: si todas las líneas comparten el mismo, se hereda;
+  // si es heterogéneo o vacío, se pide explícito (no se unifica en silencio).
+  const initialPeriod = useMemo(() => {
+    const startsList = uniq([...initialMeta.values()].map((m) => m.starts).filter(Boolean));
+    const endsList = uniq([...initialMeta.values()].map((m) => m.ends).filter(Boolean));
+    if (startsList.length === 1 && endsList.length === 1) {
+      return { starts: startsList[0], ends: endsList[0] };
+    }
+    return { starts: "", ends: "" };
+  }, [initialMeta]);
+
+  const [starts, setStarts] = useState(initialPeriod.starts);
+  const [ends, setEnds] = useState(initialPeriod.ends);
+  const [selected, setSelected] = useState<string[]>(initialSelected);
+  const [prices, setPrices] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const id of initialSelected) {
+      const meta = initialMeta.get(id);
+      if (!meta || meta.totalMajor === null) continue;
+      const diasLine = diffDaysInclusive(meta.starts, meta.ends);
+      if (diasLine !== null && diasLine > 0 && meta.totalMajor > 0) {
+        const unit = meta.totalMajor / diasLine;
+        if (Number.isFinite(unit) && unit > 0) out[id] = String(Math.round(unit * 100) / 100);
+      }
+    }
+    return out;
+  });
+  const [notesById] = useState<Record<string, string | null>>(() =>
+    Object.fromEntries([...initialMeta.entries()].map(([id, m]) => [id, m.notes])),
   );
-  const [addId, setAddId] = useState("");
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const [calScreenId, setCalScreenId] = useState<string | null>(null);
+  const [detailScreenId, setDetailScreenId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const { invalid, mark, clear, bad, focusFirst } = useInvalidFields<string>();
   const formRef = useRef<HTMLFormElement>(null);
 
-  const setRow = (index: number, patch: Partial<Row>) => {
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
-    for (const f of Object.keys(patch)) clear(`line-${index}-${f}`);
-  };
+  const {
+    dias,
+    checking,
+    availError,
+    occupancy,
+    occupiedOf,
+    untilOf,
+    occupiedCount,
+    periodLabel,
+    commonWindowFor,
+    nextWindowLabelFor,
+    ensureOccupancy,
+  } = useScreenAvailability({ screens, starts, ends, excludeIoId: orderId });
 
-  const removeRow = (key: string) => {
-    setRows((prev) => prev.filter((r) => r.key !== key));
-  };
+  // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
+  // lo que el vendedor ya digitó o lo que viene de las líneas actuales.
+  const priceById = useMemo(() => new Map(screens.map((s) => [s.id, s.price_pen])), [screens]);
+  useEffect(() => {
+    setPrices((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of selected) {
+        if (next[id] !== undefined && String(next[id]).trim() !== "") continue;
+        const p = priceById.get(id);
+        if (p !== null && p !== undefined && Number.isFinite(Number(p)) && Number(p) > 0) {
+          next[id] = String(p);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [selected, priceById]);
 
-  const addRow = () => {
-    if (!addId) return;
-    setRows((prev) => [
-      ...prev,
-      {
-        key: `n${Date.now()}`,
-        screen_id: addId,
-        screen_name: screensById.get(addId) ?? null,
-        starts: "",
-        ends: "",
-        total: "",
-        notes: "",
-      },
-    ]);
-    setAddId("");
-  };
+  const periodReady = dias !== null;
+  const rows = useMemo(
+    () => selected.map(resolveScreen).filter((s): s is ScreenPick => s !== null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selected, screensById, initialMeta],
+  );
 
-  const grossMajor = rows.reduce((a, r) => {
-    const n = Number(String(r.total).trim().replace(",", "."));
-    return a + (Number.isFinite(n) && n > 0 ? n : 0);
+  const priceOf = (id: string) => {
+    const n = Number(String(prices[id] ?? "").replace(",", "."));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  const invalidRows = rows.filter((r) => priceOf(r.id) === null);
+  const blockedRows = rows.filter((r) => occupiedOf(r.id).length > 0);
+  const commonWindow = commonWindowFor(selected);
+  const nextWindowLabel = nextWindowLabelFor(selected);
+  const total = rows.reduce((a, r) => {
+    const unit = priceOf(r.id);
+    return a + (unit !== null && dias !== null ? unit * dias : 0);
   }, 0);
 
+  const heterogeneous = initialPeriod.starts === "" && initialLines.length > 0;
+
+  function applyWindow(windowStart: string) {
+    if (dias === null) return;
+    setStarts(windowStart);
+    setEnds(addDays(windowStart, dias - 1));
+  }
+
+  const openCalendar = (id: string) => {
+    setCalScreenId(id);
+    ensureOccupancy(id);
+  };
+
+  const toggleScreen = (id: string) =>
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const missing: string[] = [];
+  if (dias === null) missing.push("el periodo");
+  if (rows.length === 0) missing.push("al menos una pantalla");
+  else if (invalidRows.length > 0) missing.push(`precio de ${invalidRows.length} pantalla${plural(invalidRows.length)}`);
+  if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} ocupada${plural(blockedRows.length)} en ese periodo`);
+  const canSubmit = !pending && !checking && missing.length === 0;
+
   function save() {
-    const problems = validateOrderLines(
-      rows.map((r) => ({ screen_id: r.screen_id, starts: r.starts, ends: r.ends, total: r.total, notes: r.notes })),
-    );
-    if (problems.length > 0) {
-      mark(problems.map((p) => p.key));
-      toastFormError("Revisa las líneas marcadas", problems.map((p) => p.message).join(" "));
-      focusFirst(formRef, problems.map((p) => p.key));
+    if (dias === null || rows.length === 0 || invalidRows.length > 0 || blockedRows.length > 0) {
+      toastFormError("Revisa las pantallas", `Falta: ${missing.join(", ")}.`);
       return;
     }
     startTransition(async () => {
       const res = await updateOrderLinesAction({
         orderId,
         lines: rows.map((r) => ({
-          screen_id: r.screen_id,
-          starts: r.starts,
-          ends: r.ends,
-          total: r.total,
-          notes: r.notes.trim() || null,
+          screen_id: r.id,
+          starts,
+          ends,
+          total: String((priceOf(r.id) as number) * (dias as number)),
+          notes: notesById[r.id] ?? null,
         })),
       });
       if (!res.ok) {
@@ -125,109 +224,135 @@ export function OrderLinesForm({
   }
 
   return (
-    <form
-      ref={formRef}
-      noValidate
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        save();
-      }}
-    >
-      {rows.length === 0 && (
-        <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-          Sin pantallas: agrega al menos una para guardar.
-        </p>
-      )}
-      {rows.map((r, i) => (
-        <fieldset key={r.key} className="grid grid-cols-1 gap-4 rounded-lg bg-muted/40 px-3 py-3 sm:grid-cols-2">
-          <legend className="sr-only">Línea {i + 1}</legend>
-          <p className="break-words text-sm font-medium sm:col-span-2" title={r.screen_name ?? undefined}>
-            {i + 1}. {r.screen_name ?? "—"}
-          </p>
-          <label className="form-field">
-            Inicio *
-            <Input
-              type="date"
-              name={`line-${i}-starts`}
-              value={r.starts}
-              onChange={(e) => setRow(i, { starts: e.target.value })}
+    <>
+      <form
+        ref={formRef}
+        noValidate
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        <AppCard title="Periodo">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-[1fr_1fr_0.5fr]">
+            <PeriodDatePicker
+              label="Inicio *"
+              pickerLabel="Inicio del periodo"
+              value={starts}
               disabled={pending}
-              aria-invalid={invalid.has(`line-${i}-starts`)}
-              className={`${bad(`line-${i}-starts`)}`}
+              disabledDays={ends ? (d) => d > (parseISODate(ends) ?? d) : undefined}
+              onChange={setStarts}
             />
-          </label>
-          <label className="form-field">
-            Fin *
-            <Input
-              type="date"
-              name={`line-${i}-ends`}
-              value={r.ends}
-              onChange={(e) => setRow(i, { ends: e.target.value })}
+            <PeriodDatePicker
+              label="Fin *"
+              pickerLabel="Fin del periodo"
+              value={ends}
               disabled={pending}
-              aria-invalid={invalid.has(`line-${i}-ends`)}
-              className={`${bad(`line-${i}-ends`)}`}
+              disabledDays={starts ? (d) => d < (parseISODate(starts) ?? d) : undefined}
+              onChange={setEnds}
             />
-          </label>
-          <label className="form-field">
-            Total * ({orderCurrency})
-            <Input
-              name={`line-${i}-total`}
-              value={r.total}
-              onChange={(e) => setRow(i, { total: e.target.value })}
-              disabled={pending}
-              inputMode="decimal"
-              placeholder="2000"
-              aria-invalid={invalid.has(`line-${i}-total`)}
-              className={`text-right tabular-nums${bad(`line-${i}-total`)}`}
-            />
-          </label>
-          <div className="flex items-end">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => removeRow(r.key)}
-              disabled={pending}
-              aria-label={`Quitar línea ${i + 1}`}
-              title="Quitar (por error al registrar)"
-            >
-              <X aria-hidden />
-              Quitar
-            </Button>
+            <div className="form-field col-span-2 sm:col-span-1">
+              Días
+              <output
+                aria-label="Días del periodo"
+                aria-live="polite"
+                className="flex h-9 items-center rounded-lg border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground tabular-nums"
+              >
+                {dias ?? "—"}
+              </output>
+            </div>
           </div>
-        </fieldset>
-      ))}
+          {heterogeneous && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Las líneas traían periodos distintos: define el periodo único que aplicará a todas.
+            </p>
+          )}
+        </AppCard>
 
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="form-field w-full flex-1 sm:min-w-[220px]">
-          Agregar pantalla
-          <AppSelect
-            value={addId}
-            onChange={setAddId}
-            options={screens.map((s) => ({ value: s.id, label: s.name }))}
-            placeholder="Elegir pantalla…"
-            ariaLabel="Pantalla a agregar"
-            disabled={pending}
-            allowClear={false}
-          />
+        <AppCard title={`Pantallas *${rows.length > 0 ? ` (${formatNumber(rows.length)})` : ""}`}>
+          <div className="flex flex-col gap-4">
+            {screens.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Sin pantallas activas. Registra pantallas en Inventario antes de editar la orden.
+              </p>
+            ) : (
+              <ScreenMultiSelect
+                screens={screens}
+                selected={selected}
+                onToggle={toggleScreen}
+                onSetAll={setSelected}
+                onClear={() => setSelected([])}
+                occupiedOf={occupiedOf}
+                untilOf={untilOf}
+                onShowCalendar={openCalendar}
+                availableOnly={availableOnly}
+                onToggleAvailableOnly={() => setAvailableOnly((v) => !v)}
+                periodReady={periodReady}
+                occupiedCount={occupiedCount}
+                periodLabel={periodLabel}
+                nextWindowLabel={nextWindowLabel}
+                onApplyWindow={commonWindow ? () => applyWindow(commonWindow) : null}
+                availError={availError}
+                isChecking={checking}
+                disabled={pending}
+              />
+            )}
+            {checking && (
+              <p className="text-xs text-muted-foreground" role="status">Verificando disponibilidad…</p>
+            )}
+            {rows.length > 0 && (
+              <OrderScreensTable
+                rows={rows}
+                prices={prices}
+                dias={dias}
+                currency={orderCurrency}
+                occupiedOf={occupiedOf}
+                checking={checking}
+                commonWindow={commonWindow}
+                onApplyWindow={commonWindow ? () => applyWindow(commonWindow) : null}
+                onPriceChange={(id, v) => setPrices((p) => ({ ...p, [id]: v }))}
+                onRemove={toggleScreen}
+                onCalendar={openCalendar}
+                onDetail={setDetailScreenId}
+                disabled={pending}
+                pending={pending}
+              />
+            )}
+          </div>
+        </AppCard>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <SubmitButton pending={pending} disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined} pendingLabel="Guardando…">
+            <Plus aria-hidden />
+            {`Guardar${total > 0 ? ` · ${formatMoney(Math.round(total * 100), orderCurrency)}` : ""}`}
+          </SubmitButton>
+          <CancelButton onCancel={onCancel} disabled={pending} />
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {formatNumber(rows.length)} línea{plural(rows.length)}
+          </span>
         </div>
-        <Button type="button" variant="outline" size="sm" onClick={addRow} disabled={pending || !addId}>
-          <Plus aria-hidden />
-          Agregar
-        </Button>
-      </div>
+        {!canSubmit && !pending && (
+          <p className="text-xs text-muted-foreground">Falta: {missing.join(", ")}.</p>
+        )}
+      </form>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <SubmitButton pending={pending}>
-          <Save aria-hidden />
-          {`Guardar${grossMajor > 0 ? ` · ${formatMoney(Math.round(grossMajor * 100), orderCurrency)}` : ""}`}
-        </SubmitButton>
-        <CancelButton onCancel={onCancel} disabled={pending} />
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {formatNumber(rows.length)} línea{rows.length === 1 ? "" : "s"}
-        </span>
-      </div>
-    </form>
+      <ScreenCalendarDialog
+        screen={screensById.get(calScreenId ?? "") ?? resolveScreen(calScreenId ?? "")}
+        ranges={calScreenId ? occupancy[calScreenId] : undefined}
+        loaded={calScreenId ? calScreenId in occupancy : false}
+        duration={dias ?? 0}
+        periodStarts={starts}
+        periodEnds={ends}
+        onApply={(w) => {
+          applyWindow(w);
+          setCalScreenId(null);
+        }}
+        onClose={() => setCalScreenId(null)}
+      />
+      {detailScreenId && (
+        <PantallaDrawer screenId={detailScreenId} onClose={() => setDetailScreenId(null)} />
+      )}
+    </>
   );
 }

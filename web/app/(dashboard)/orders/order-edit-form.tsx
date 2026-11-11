@@ -33,7 +33,9 @@ const NP_TEXT_KEYS = Object.keys(NP_LIMITS) as NpTextKey[];
  *  El drawer abre SIN estos datos (perf 2026-11-09); se piden al montar. */
 type OrderMeta = {
   agencies: Array<{ id: string; name: string; commission_pct: number | null }>;
+  advertiser_company_id?: string | null;
   order_contacts: Array<{ id: string; company_name: string | null; name: string; role: string | null; email: string | null }>;
+  contact_accounts?: Array<{ contact_id: string; advertiser_company_id: string; advertiser_name: string }>;
 };
 
 /** Edición inline de la ficha (drawer): marca, pago, notas + datos NP
@@ -91,6 +93,13 @@ export function OrderEditForm({
   }, [orderId, metaNonce ]);
   const agencies = meta?.agencies ?? [];
   const orderContacts = meta?.order_contacts ?? [];
+  const orderAdvertiserId = meta?.advertiser_company_id ?? null;
+  const accountsByContact = new Map<string, string[]>();
+  for (const a of meta?.contact_accounts ?? []) {
+    const list = accountsByContact.get(a.contact_id) ?? [];
+    list.push(a.advertiser_company_id);
+    accountsByContact.set(a.contact_id, list);
+  }
   const [brand, setBrand] = useState(initial.brand);
   const [terms, setTerms] = useState(initial.payment_terms_days);
   const [notes, setNotes] = useState(initial.notes);
@@ -210,8 +219,15 @@ export function OrderEditForm({
     });
   }
 
-  const contactLabel = (c: { name: string; email: string | null }) =>
-    c.email ? `${c.name} (${c.email})` : c.name;
+  const contactLabel = (c: { id: string; name: string; email: string | null }) => {
+    const base = c.email ? `${c.name} (${c.email})` : c.name;
+    // Si el contacto de agencia atiende al anunciante de esta orden, se
+    // señala en el picker (display-only: no filtra la selección histórica).
+    if (orderAdvertiserId && (accountsByContact.get(c.id) ?? []).includes(orderAdvertiserId)) {
+      return `${base} · atiende esta cuenta`;
+    }
+    return base;
+  };
 
   const contactOptions = (value: string, missingLabel: string) => [
     ...orderContacts.map((c) => ({ value: c.id, label: contactLabel(c) })),

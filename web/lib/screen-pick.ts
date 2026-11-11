@@ -7,13 +7,16 @@ import { joinHaystack, matchScore, normalizeSearch, tokenizeSearch } from "./sea
 export interface ScreenPickInput {
   name?: unknown;
   detail?: unknown;
+  code?: unknown;
 }
 
-/** Haystack normalizado de una pantalla del picker (nombre + detalle, que ya
- *  trae código, sede, distrito, ciudad, proveedor, tecnología y resolución:
- *  mismos campos que indexa `screenHaystack` de la vista principal). */
+/** Haystack normalizado de una pantalla del picker (nombre + código +
+ *  detalle, que trae sede, distrito, ciudad, proveedor, tecnología y
+ *  resolución: mismos campos que indexa `screenHaystack` de la vista
+ *  principal). El código no se muestra en la fila (la fila muestra el
+ *  precio), pero sigue recuperando la pantalla por búsqueda. */
 export function pickScreenHaystack(s: ScreenPickInput): string {
-  return joinHaystack([s.name, s.detail]);
+  return joinHaystack([s.name, s.code, s.detail]);
 }
 
 /** Filtro fuzzy del picker: si no hay query devuelve todo en orden;

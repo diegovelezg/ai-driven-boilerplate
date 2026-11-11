@@ -41,6 +41,7 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
   }
   const parsed = normalizeCompany({
     name: String(form.get("name") ?? ""),
+    legal_name: String(form.get("legal_name") ?? "") || null,
     kind,
     tax_id: String(form.get("tax_id") ?? "") || null,
     domain: String(form.get("domain") ?? "") || null,
@@ -132,6 +133,7 @@ export async function updateCompanyAction(input: {
   companyId: string;
   patch: {
     name?: string | null;
+    legal_name?: string | null;
     tax_id?: string | null;
     domain?: string | null;
     email?: string | null;
@@ -154,7 +156,7 @@ export async function updateCompanyAction(input: {
     const db = getSupabase();
     const { data: existing, error: rerr } = await db
       .from("crm_companies")
-      .select("id,name,kind,tax_id,domain,email,phone,address,city,country,category_iab,provider_type,deleted_at")
+      .select("id,name,legal_name,kind,tax_id,domain,email,phone,address,city,country,category_iab,provider_type,deleted_at")
       .eq("store_id", t.storeId)
       .eq("id", companyId)
       .maybeSingle();
@@ -166,6 +168,7 @@ export async function updateCompanyAction(input: {
     const val = (k: string, fb: unknown) => (p[k] !== undefined ? p[k] : (fb as string | null));
     const parsed = normalizeCompany({
       name: String(val("name", row.name) ?? ""),
+      legal_name: val("legal_name", row.legal_name) as string | null,
       kind: row.kind,
       tax_id: val("tax_id", row.tax_id),
       domain: val("domain", row.domain),
@@ -183,6 +186,7 @@ export async function updateCompanyAction(input: {
       .from("crm_companies")
       .update({
         name: parsed.value.name,
+        legal_name: parsed.value.legal_name,
         tax_id: parsed.value.tax_id,
         domain: parsed.value.domain,
         email: parsed.value.email,
@@ -569,8 +573,254 @@ export async function deleteCompanyLinkAction(input: {
       .eq("agency_company_id", parsed.agencyCompanyId)
       .eq("advertiser_company_id", parsed.advertiserCompanyId);
     if (error) return { ok: false, message: `DB write: ${error.message}` };
+    // Las cuentas que colgaban del par pierden su requisito (vínculo previo):
+    // se borran para no dejar atendidos huérfanos.
+    const { error: accErr } = await db
+      .from("crm_contact_accounts")
+      .delete()
+      .eq("store_id", t.storeId)
+      .eq("agency_company_id", parsed.agencyCompanyId)
+      .eq("advertiser_company_id", parsed.advertiserCompanyId);
+    if (accErr) return { ok: false, message: `DB write: ${accErr.message}` };
     revalidatePath("/companies");
     return { ok: true, message: "Vínculo eliminado." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/**
+ * Cuentas que atiende un contacto de agencia (reemplazo del set).
+ * Reglas: el contacto pertenece a una agencia, cada destino es anunciante y
+ * el par (agencia, anunciante) ya existe en crm_company_links (primero se
+ * vinculan las empresas, luego se asignan sus contactos). Requiere seller+.
+ * Sin filas = sin asignación declarada. Idempotente.
+ */
+export async function setContactAccountsAction(input: {
+  contactId: string;
+  advertiserCompanyIds: string[];
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
+  const contactId = String(input.contactId ?? "").trim();
+  if (!contactId) return { ok: false, message: "Falta el contacto." };
+  const rawWanted = [...new Set((input.advertiserCompanyIds ?? []).map((id) => String(id ?? "").trim()).filter(Boolean))];
+  try {
+    const db = getSupabase();
+    const { data: contact, error: cerr } = await db
+      .from("crm_contacts")
+      .select("id,company_id,deleted_at")
+      .eq("store_id", t.storeId)
+      .eq("id", contactId)
+      .maybeSingle();
+    if (cerr || !contact) return { ok: false, message: "Contacto no encontrado en esta tienda." };
+    const crow = contact as Record<string, unknown>;
+    if (crow.deleted_at) return { ok: false, message: "Contacto archivado: restáuralo para asignarle cuentas." };
+    const agencyId = typeof crow.company_id === "string" ? crow.company_id : null;
+    if (!agencyId) return { ok: false, message: "El contacto no tiene empresa: solo contactos de agencia atienden cuentas." };
+    const { data: agency } = await db
+      .from("crm_companies")
+      .select("id,kind,deleted_at")
+      .eq("store_id", t.storeId)
+      .eq("id", agencyId)
+      .maybeSingle();
+    if (!agency) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    const arow = agency as Record<string, unknown>;
+    if (arow.deleted_at) return { ok: false, message: "Empresa archivada: restáurala para asignar cuentas." };
+    if (arow.kind !== "agencia") return { ok: false, message: "Solo los contactos de agencia atienden anunciantes." };
+    const { normalizeContactAccountSet } = await import("@/lib/contact-accounts");
+    const normalized = normalizeContactAccountSet({ contactId, agencyCompanyId: agencyId, advertiserCompanyIds: rawWanted });
+    if (!normalized.ok) return { ok: false, message: normalized.error };
+    const wanted = normalized.value.advertiserCompanyIds;
+    if (wanted.length === 0) {
+      const { error } = await db
+        .from("crm_contact_accounts")
+        .delete()
+        .eq("store_id", t.storeId)
+        .eq("contact_id", contactId);
+      if (error) return { ok: false, message: `DB write: ${error.message}` };
+      revalidatePath("/companies");
+      revalidatePath("/contacts");
+      return { ok: true, message: "Cuentas actualizadas." };
+    }
+    // Destinos: existen, activos y son anunciantes del mismo tenant.
+    const { data: targets, error: terr } = await db
+      .from("crm_companies")
+      .select("id,kind,deleted_at")
+      .eq("store_id", t.storeId)
+      .in("id", wanted);
+    if (terr) return { ok: false, message: `DB read: ${terr.message}` };
+    const byId = new Map(((targets ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
+    for (const id of wanted) {
+      const c = byId.get(id);
+      if (!c) return { ok: false, message: "Anunciante no encontrado en esta tienda." };
+      if (c.deleted_at != null) return { ok: false, message: "Empresa archivada: restáurala para asignarla." };
+      if (c.kind !== "anunciante") return { ok: false, message: "Las cuentas deben ser anunciantes." };
+      if (id === agencyId) return { ok: false, message: "Agencia y anunciante deben ser empresas distintas." };
+    }
+    // Vínculo previo agencia ↔ anunciante exigido (no se autocrea).
+    const { data: links, error: lerr } = await db
+      .from("crm_company_links")
+      .select("advertiser_company_id")
+      .eq("store_id", t.storeId)
+      .eq("agency_company_id", agencyId)
+      .in("advertiser_company_id", wanted);
+    if (lerr) return { ok: false, message: `DB read: ${lerr.message}` };
+    const linked = new Set(((links ?? []) as Array<Record<string, unknown>>).map((l) => String(l.advertiser_company_id)));
+    const missing = wanted.filter((id) => !linked.has(id));
+    if (missing.length > 0) {
+      return { ok: false, message: "Primero vincula la agencia con el anunciante y luego asigna sus contactos." };
+    }
+    const actor = await resolveActor();
+    const { error: derr } = await db
+      .from("crm_contact_accounts")
+      .delete()
+      .eq("store_id", t.storeId)
+      .eq("contact_id", contactId)
+      .not("advertiser_company_id", "in", `(${wanted.join(",")})`);
+    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (wanted.length > 0) {
+      const { error: uerr } = await db.from("crm_contact_accounts").upsert(
+        wanted.map((id) => ({
+          store_id: t.storeId,
+          contact_id: contactId,
+          agency_company_id: agencyId,
+          advertiser_company_id: id,
+          updated_by: actor,
+        })),
+        { onConflict: "store_id,contact_id,advertiser_company_id", ignoreDuplicates: false },
+      );
+      if (uerr) return { ok: false, message: `DB write: ${uerr.message}` };
+      // created_by solo en inserto: las filas existentes conservan el suyo.
+      await db
+        .from("crm_contact_accounts")
+        .update({ created_by: actor })
+        .eq("store_id", t.storeId)
+        .eq("contact_id", contactId)
+        .in("advertiser_company_id", wanted)
+        .is("created_by", null);
+    }
+    revalidatePath("/companies");
+    revalidatePath("/contacts");
+    return { ok: true, message: "Cuentas actualizadas." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/**
+ * Atendidos vista-anunciante: reemplaza qué contactos de UNA agencia
+ * atienden a UN anunciante. Exige el vínculo agencia ↔ anunciante salvo
+ * vaciado total (permite limpiar huérfanos cuyo vínculo ya se borró).
+ * Requiere seller+.
+ */
+export async function setAccountAttendantsAction(input: {
+  agencyCompanyId: string;
+  advertiserCompanyId: string;
+  contactIds: string[];
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
+  const { normalizeAgencyAttendantsSet } = await import("@/lib/contact-accounts");
+  const normalized = normalizeAgencyAttendantsSet({
+    agencyCompanyId: input.agencyCompanyId,
+    advertiserCompanyId: input.advertiserCompanyId,
+    contactIds: input.contactIds ?? [],
+  });
+  if (!normalized.ok) return { ok: false, message: normalized.error };
+  const { agencyCompanyId, advertiserCompanyId, contactIds } = normalized.value;
+  try {
+    const db = getSupabase();
+    const { data: cos, error: coerr } = await db
+      .from("crm_companies")
+      .select("id,kind,deleted_at")
+      .eq("store_id", t.storeId)
+      .in("id", [agencyCompanyId, advertiserCompanyId]);
+    if (coerr) return { ok: false, message: `DB read: ${coerr.message}` };
+    const byId = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
+    const agency = byId.get(agencyCompanyId);
+    const advertiser = byId.get(advertiserCompanyId);
+    if (!agency || !advertiser) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    if (agency.deleted_at != null || advertiser.deleted_at != null) {
+      return { ok: false, message: "Empresa archivada: restáurala para gestionarla." };
+    }
+    if (agency.kind !== "agencia") return { ok: false, message: "La agencia debe tener tipo agencia." };
+    if (advertiser.kind !== "anunciante") return { ok: false, message: "El anunciante debe tener tipo anunciante." };
+    if (contactIds.length > 0) {
+      // Los atendidos pertenecen a la agencia y están activos.
+      const { data: team, error: terr } = await db
+        .from("crm_contacts")
+        .select("id,company_id,deleted_at")
+        .eq("store_id", t.storeId)
+        .in("id", contactIds);
+      if (terr) return { ok: false, message: `DB read: ${terr.message}` };
+      const teamById = new Map(((team ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
+      for (const id of contactIds) {
+        const c = teamById.get(id);
+        if (!c) return { ok: false, message: "Contacto no encontrado en esta tienda." };
+        if (c.deleted_at != null) return { ok: false, message: "Contacto archivado: restáuralo para asignarlo." };
+        if (c.company_id !== agencyCompanyId) return { ok: false, message: "Solo contactos de la agencia pueden atenderla." };
+      }
+      // Vínculo previo exigido (no se autocrea).
+      const { data: link, error: lerr } = await db
+        .from("crm_company_links")
+        .select("id")
+        .eq("store_id", t.storeId)
+        .eq("agency_company_id", agencyCompanyId)
+        .eq("advertiser_company_id", advertiserCompanyId)
+        .maybeSingle();
+      if (lerr) return { ok: false, message: `DB read: ${lerr.message}` };
+      if (!link) {
+        return { ok: false, message: "Primero vincula la agencia con el anunciante y luego asigna sus contactos." };
+      }
+    }
+    const actor = await resolveActor();
+    if (contactIds.length === 0) {
+      const { error: derr } = await db
+        .from("crm_contact_accounts")
+        .delete()
+        .eq("store_id", t.storeId)
+        .eq("agency_company_id", agencyCompanyId)
+        .eq("advertiser_company_id", advertiserCompanyId);
+      if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    } else {
+      const { error: derr } = await db
+        .from("crm_contact_accounts")
+        .delete()
+        .eq("store_id", t.storeId)
+        .eq("agency_company_id", agencyCompanyId)
+        .eq("advertiser_company_id", advertiserCompanyId)
+        .not("contact_id", "in", `(${contactIds.join(",")})`);
+      if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+      const { error: uerr } = await db.from("crm_contact_accounts").upsert(
+        contactIds.map((id) => ({
+          store_id: t.storeId,
+          contact_id: id,
+          agency_company_id: agencyCompanyId,
+          advertiser_company_id: advertiserCompanyId,
+          updated_by: actor,
+        })),
+        { onConflict: "store_id,contact_id,advertiser_company_id", ignoreDuplicates: false },
+      );
+      if (uerr) return { ok: false, message: `DB write: ${uerr.message}` };
+      await db
+        .from("crm_contact_accounts")
+        .update({ created_by: actor })
+        .eq("store_id", t.storeId)
+        .eq("agency_company_id", agencyCompanyId)
+        .eq("advertiser_company_id", advertiserCompanyId)
+        .in("contact_id", contactIds)
+        .is("created_by", null);
+    }
+    revalidatePath("/companies");
+    revalidatePath("/contacts");
+    return { ok: true, message: "Atendidos actualizados." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }

@@ -7,7 +7,7 @@ import { Building2, Bot, FileText, Globe, Network, Plus, UserRound, X } from "lu
 import { ArchiveToggleButton, EditButton, RetryButton, RowIconButton } from "@/components/buttons";
 import { Button } from "@/components/ui/button";
 import { VinculoForm } from "./vinculo-form";
-import { ArchivedBadge } from "@/components/badges";
+import { ArchivedBadge, AttributeBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { AppCard, AppCardState } from "@/components/app-card";
 import {
@@ -23,6 +23,8 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { setCompanyArchivedAction, setContactArchivedAction, deleteCompanyLinkAction, type CrmState } from "@/lib/crm-actions";
+import { ContactAccountsForm } from "@/components/contact-accounts-form";
+import { AccountAttendantsForm } from "@/components/account-attendants-form";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
@@ -102,6 +104,9 @@ interface EmpresaDetail {
   campaigns: DrawerCampaign[];
   ios: DrawerIO[];
   network?: { brands: NetworkBrand[]; agencies: NetworkCompany[]; advertisers: NetworkCompany[] };
+  contact_accounts?: Array<{ contact_id: string; advertiser_company_id: string }>;
+  incoming_accounts?: Array<{ contact_id: string; agency_company_id: string }>;
+  agency_team?: Array<{ id: string; agency_company_id: string; first_name: string | null; last_name: string | null; email: string | null; phone: string | null; job_title: string | null; is_primary: boolean }>;
   myRole?: MemberRole | null;
 }
 
@@ -124,6 +129,9 @@ export function EmpresaDrawer({
   const [detail, setDetail] = useState<EmpresaDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingDatos, setEditingDatos] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [accountsFor, setAccountsFor] = useState<string | null>(null);
+  const [attendantsFor, setAttendantsFor] = useState<string | null>(null);
   const router = useRouter();
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -146,6 +154,8 @@ export function EmpresaDrawer({
       setDetail(null);
       setEditingDatos(false);
       setLinkOpen(false);
+      setAccountsFor(null);
+      setAttendantsFor(null);
       void load(ac.signal);
     }, 0);
     return () => {
@@ -157,6 +167,32 @@ export function EmpresaDrawer({
   // Estable por identidad de `detail`: evita que `?? []` cree un array
   // nuevo en cada render y rompa el useMemo de abajo.
   const contacts = useMemo(() => detail?.contacts ?? [], [detail]);
+  const accountsByContact = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const a of detail?.contact_accounts ?? []) {
+      const list = m.get(a.contact_id) ?? [];
+      m.set(a.contact_id, [...list, a.advertiser_company_id]);
+    }
+    return m;
+  }, [detail]);
+  const teamByAgency = useMemo(() => {
+    const m = new Map<string, Array<{ id: string; name: string; email: string | null; phone: string | null; jobTitle: string | null; isPrimary: boolean }>>();
+    for (const t of detail?.agency_team ?? []) {
+      const list = m.get(t.agency_company_id) ?? [];
+      const name = [t.first_name, t.last_name].filter(Boolean).join(" ") || "—";
+      m.set(t.agency_company_id, [...list, { id: t.id, name, email: t.email, phone: t.phone, jobTitle: t.job_title, isPrimary: t.is_primary }]);
+    }
+    for (const [k, v] of m) m.set(k, [...v].sort((a, b) => a.name.localeCompare(b.name, "es")));
+    return m;
+  }, [detail]);
+  const attendantsByAgency = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const a of detail?.incoming_accounts ?? []) {
+      const list = m.get(a.agency_company_id) ?? [];
+      m.set(a.agency_company_id, [...list, a.contact_id]);
+    }
+    return m;
+  }, [detail]);
   const ios = detail?.ios ?? [];
   const campaigns = detail?.campaigns ?? [];
   const company = detail?.company;
@@ -207,7 +243,8 @@ export function EmpresaDrawer({
   const counterEmpty = isAdvertiser
     ? "Sin agencias vinculadas: vincula una o crea la primera orden."
     : "Sin anunciantes vinculados: vincula uno o crea la primera orden.";
-  const [linkOpen, setLinkOpen] = useState(false);
+  // Agencia en gestión de atendidos (vista anunciante): panel sobre la tabla.
+  const managingAgency = isAdvertiser ? (counterparties.find((c) => c.id === attendantsFor) ?? null) : null;
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleting, startDeleting] = useTransition();
   const canLink = canEdit && !isArchived && (isAdvertiser || isAgency);
@@ -298,7 +335,7 @@ export function EmpresaDrawer({
         <>
           <AppCard
             title="Datos"
-            description="Nombre, identificación y datos de contacto."
+            description="Nombre comercial, razón social y datos de contacto."
             tone="sky"
             aria-label="Datos de la empresa"
             action={
@@ -328,6 +365,7 @@ export function EmpresaDrawer({
                 companyId={companyId}
                 initial={{
                   name: typeof company?.name === "string" ? company.name : "",
+                  legal_name: typeof company?.legal_name === "string" ? company.legal_name : "",
                   tax_id: typeof company?.tax_id === "string" ? company.tax_id : "",
                   domain: typeof company?.domain === "string" ? company.domain : "",
                   phone: typeof company?.phone === "string" ? company.phone : "",
@@ -344,6 +382,7 @@ export function EmpresaDrawer({
               />
             ) : (
             <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs text-muted-foreground">Razón social</dt><dd className="mt-1 text-sm">{typeof company?.legal_name === "string" && company.legal_name ? company.legal_name : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">{fiscalLabel}</dt><dd className="mt-1 text-sm">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Web</dt><dd className="mt-1 text-sm">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-1 text-sm tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
@@ -410,10 +449,30 @@ export function EmpresaDrawer({
       {detail && tab === "contactos" && (
         <AppCard
           title={`Contactos (${contacts.length})`}
-          description="Varios contactos por empresa. Solo uno puede ser principal."
+          description={
+            isAgency
+              ? "Varios contactos por agencia. Declara a qué anunciantes atiende cada uno (Cuentas)."
+              : "Varios contactos por empresa. Solo uno puede ser principal."
+          }
           tone="sky"
           aria-label="Contactos de la empresa"
         >
+          {accountsFor && isAgency && (
+            <div className="mb-3">
+              <ContactAccountsForm
+                contactId={accountsFor}
+                advertiserOptions={counterparties.map((c) => ({ id: c.id, name: c.name }))}
+                initialAdvertiserIds={accountsByContact.get(accountsFor) ?? []}
+                contactLabel={contactName(contacts.find((c) => c.id === accountsFor) ?? { first_name: null, last_name: null } as DrawerContact)}
+                onSaved={() => {
+                  setAccountsFor(null);
+                  router.refresh();
+                  void load();
+                }}
+                onCancel={() => setAccountsFor(null)}
+              />
+            </div>
+          )}
           {contacts.length === 0 ? (
             <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
               <p className="text-sm text-muted-foreground">
@@ -427,6 +486,7 @@ export function EmpresaDrawer({
                 <DrawerTableTh>Email</DrawerTableTh>
                 <DrawerTableTh>Teléfono</DrawerTableTh>
                 <DrawerTableTh>Cargo</DrawerTableTh>
+                {isAgency && <DrawerTableTh>Cuentas que atiende</DrawerTableTh>}
                 <DrawerTableTh>Principal</DrawerTableTh>
                 <DrawerTableTh>Agregado por</DrawerTableTh>
                 <DrawerTableTh>Acciones</DrawerTableTh>
@@ -434,6 +494,7 @@ export function EmpresaDrawer({
               <DrawerTableBody>
                 {contacts.map((c) => {
                   const archived = typeof c.deleted_at === "string" && !!c.deleted_at;
+                  const accountIds = accountsByContact.get(c.id) ?? [];
                   return (
                   <DrawerTableRow key={c.id}>
                     <DrawerTableTd className="font-medium">
@@ -443,9 +504,33 @@ export function EmpresaDrawer({
                     <DrawerTableTd className="text-xs">{c.email ?? c.phone ?? "—"}</DrawerTableTd>
                     <DrawerTableTd className="text-xs tabular-nums">{c.phone ?? "—"}</DrawerTableTd>
                     <DrawerTableTd className="text-xs">{c.job_title ?? "—"}</DrawerTableTd>
+                    {isAgency && (
+                      <DrawerTableTd className="text-xs">
+                        {accountIds.length === 0 ? (
+                          <span className="text-muted-foreground">Sin asignar</span>
+                        ) : (
+                          accountIds.map((id) => (
+                            <span key={id} className="mr-1 mb-1 inline-block rounded-full bg-muted px-2 py-0.5 text-xs">
+                              {toTitleCase(counterparties.find((x) => x.id === id)?.name ?? "—")}
+                            </span>
+                          ))
+                        )}
+                      </DrawerTableTd>
+                    )}
                     <DrawerTableTd><CompanyPrincipalBadge isPrimary={c.is_primary} /></DrawerTableTd>
                     <DrawerTableTd className="text-xs text-muted-foreground" title={typeof c.created_by === "string" && c.created_by ? `Agregado por ${c.created_by}` : undefined}>{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
                     <DrawerTableTd>
+                      <span className="flex flex-wrap items-center gap-2">
+                      {canEdit && isAgency && !archived && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setAccountsFor(accountsFor === c.id ? null : c.id)}
+                          disabled={archiving}
+                        >
+                          Cuentas
+                        </Button>
+                      )}
                       {canEdit ? (
                         <ArchiveToggleButton
                           archived={archived}
@@ -461,6 +546,7 @@ export function EmpresaDrawer({
                       ) : (
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
+                      </span>
                     </DrawerTableTd>
                   </DrawerTableRow>
                   );
@@ -540,11 +626,6 @@ export function EmpresaDrawer({
         <>
           <AppCard
             title={`Marcas (${network?.brands.length ?? 0})`}
-            description={
-              isAdvertiser
-                ? "Marcas publicitadas en sus órdenes (una empresa puede tener varias)."
-                : "Marcas que esta agencia ha gestionado en órdenes."
-            }
             tone="emerald"
             aria-label="Marcas vinculadas"
           >
@@ -573,11 +654,6 @@ export function EmpresaDrawer({
           </AppCard>
           <AppCard
             title={`${counterLabel} (${counterparties.length})`}
-            description={
-              isAdvertiser
-                ? "Agencias vinculadas a este anunciante (manual o por órdenes)."
-                : "Anunciantes vinculados a esta agencia (manual o por órdenes)."
-            }
             tone="emerald"
             aria-label={counterLabel}
             action={
@@ -604,16 +680,126 @@ export function EmpresaDrawer({
                 />
               </div>
             )}
+            {managingAgency && canEdit && (
+              <div className="mb-3">
+                <AccountAttendantsForm
+                  agencyCompanyId={managingAgency.id}
+                  agencyName={managingAgency.name}
+                  advertiserCompanyId={companyId}
+                  team={teamByAgency.get(managingAgency.id) ?? []}
+                  initialContactIds={attendantsByAgency.get(managingAgency.id) ?? []}
+                  onSaved={() => {
+                    setAttendantsFor(null);
+                    router.refresh();
+                    void load();
+                  }}
+                  onCancel={() => setAttendantsFor(null)}
+                />
+              </div>
+            )}
             {counterparties.length === 0 && !linkOpen ? (
               <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-sm text-muted-foreground">
                   {counterEmpty}
                 </p>
               </div>
-            ) : counterparties.length === 0 ? null : (
+            ) : counterparties.length === 0 ? null : isAdvertiser ? (
+              <div className="flex flex-col gap-3">
+                {counterparties.map((c) => {
+                  const team = teamByAgency.get(c.id) ?? [];
+                  const byId = new Map(team.map((t) => [t.id, t]));
+                  const attendantIds = [...(attendantsByAgency.get(c.id) ?? [])].sort((a, b) =>
+                    (byId.get(a)?.name ?? "—").localeCompare(byId.get(b)?.name ?? "—", "es"),
+                  );
+                  const managing = attendantsFor === c.id;
+                  const originLabel = c.explicit ? (c.origin === "oi" ? "De OI + manual" : "Manual") : c.ios > 0 ? "De OI" : null;
+                  return (
+                    <section key={c.id} aria-label={`Agencia ${c.name}`} className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="font-medium">{toTitleCase(c.name)}</span>
+                          {originLabel && <AttributeBadge title="Origen del vínculo">{originLabel}</AttributeBadge>}
+                          <span className="text-xs text-muted-foreground">
+                            {c.ios === 0 ? "Sin órdenes" : `${c.ios} ${c.ios === 1 ? "orden" : "órdenes"}`}
+                          </span>
+                        </div>
+                        {canLink && (
+                          <span className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setAttendantsFor(managing ? null : c.id)}
+                              disabled={archiving || deleting}
+                            >
+                              {managing ? "Cerrar" : "Gestionar"}
+                            </Button>
+                            {c.explicit && c.origin === "manual" ? (
+                              <RowIconButton
+                                icon={X}
+                                label={`Quitar vínculo con ${toTitleCase(c.name)}`}
+                                title="Quitar vínculo manual (las órdenes se conservan)"
+                                onClick={() => removeLink(c.id)}
+                                disabled={deleting}
+                                pending={deleting && deletingId === c.id}
+                                danger
+                              />
+                            ) : null}
+                          </span>
+                        )}
+                      </div>
+                      {managing && canEdit && (
+                        <AccountAttendantsForm
+                          agencyCompanyId={c.id}
+                          agencyName={c.name}
+                          advertiserCompanyId={companyId}
+                          team={team}
+                          initialContactIds={attendantIds}
+                          onSaved={() => {
+                            setAttendantsFor(null);
+                            router.refresh();
+                            void load();
+                          }}
+                          onCancel={() => setAttendantsFor(null)}
+                        />
+                      )}
+                      {attendantIds.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Sin ejecutivos asignados.</p>
+                      ) : (
+                        <DrawerTable flush>
+                          <DrawerTableHeader flush>
+                            <DrawerTableTh>Ejecutivo</DrawerTableTh>
+                            <DrawerTableTh>Cargo</DrawerTableTh>
+                            <DrawerTableTh>Email</DrawerTableTh>
+                            <DrawerTableTh>Teléfono</DrawerTableTh>
+                          </DrawerTableHeader>
+                          <DrawerTableBody>
+                            {attendantIds.map((id) => {
+                              const t = byId.get(id);
+                              return (
+                                <DrawerTableRow key={id}>
+                                  <DrawerTableTd className="font-medium">
+                                    <span className="flex flex-wrap items-center gap-2">
+                                      {toTitleCase(t?.name ?? "—")}
+                                      {t?.isPrimary && <CompanyPrincipalBadge isPrimary />}
+                                    </span>
+                                  </DrawerTableTd>
+                                  <DrawerTableTd className="text-xs">{t?.jobTitle ?? "—"}</DrawerTableTd>
+                                  <DrawerTableTd className="text-xs">{t?.email ?? "—"}</DrawerTableTd>
+                                  <DrawerTableTd className="text-xs tabular-nums">{t?.phone ?? "—"}</DrawerTableTd>
+                                </DrawerTableRow>
+                              );
+                            })}
+                          </DrawerTableBody>
+                        </DrawerTable>
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            ) : (
               <DrawerTable flush>
                 <DrawerTableHeader flush>
-                  <DrawerTableTh>{isAdvertiser ? "Agencia" : "Anunciante"}</DrawerTableTh>
+                  <DrawerTableTh>Anunciante</DrawerTableTh>
                   <DrawerTableTh>Origen</DrawerTableTh>
                   <DrawerTableTh numeric>Órdenes</DrawerTableTh>
                   {canLink && <DrawerTableTh aria-label="Acciones" />}
@@ -628,6 +814,7 @@ export function EmpresaDrawer({
                       <DrawerTableTd numeric>{c.ios === 0 ? "—" : c.ios}</DrawerTableTd>
                       {canLink && (
                         <DrawerTableTd>
+                          <span className="flex flex-wrap items-center gap-2">
                           {c.explicit && c.origin === "manual" ? (
                             <RowIconButton
                               icon={X}
@@ -639,6 +826,7 @@ export function EmpresaDrawer({
                               danger
                             />
                           ) : null}
+                          </span>
                         </DrawerTableTd>
                       )}
                     </DrawerTableRow>

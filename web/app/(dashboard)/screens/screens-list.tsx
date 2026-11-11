@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { SearchX } from "lucide-react";
 import { AppCard } from "@/components/app-card";
-import { Button } from "@/components/ui/button";
 import { ClearFiltersButton, ViewToggle } from "@/components/buttons";
 import { PantallaDrawer } from "./pantalla-drawer";
 import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useListNav } from "@/components/entity-list";
@@ -36,7 +34,9 @@ export function ScreensList({
   page,
   pageSize,
   q,
-  supplierId,
+  supplierValue,
+  defaultSupplierValue,
+  casaName,
   suppliers,
   city,
   cities,
@@ -52,7 +52,11 @@ export function ScreensList({
   page: number;
   pageSize: number;
   q: string;
-  supplierId: string | null;
+  /** Valor efectivo: uuid | "own" | "all" (default ya resuelto en server). */
+  supplierValue: string;
+  /** Default sin param (para URLs sleek y "limpiar" → default). */
+  defaultSupplierValue: string;
+  casaName: string | null;
   suppliers: Array<{ id: string; name: string }>;
   city: string | null;
   cities: string[];
@@ -80,8 +84,10 @@ export function ScreensList({
     void fetch(`/api/screens/${id}`).catch(() => {});
   }, []);
 
-  // URL sleek: solo salen los params no-default (q, filtros, página >1,
-  // vista no-tabla, sort/dir no-default). Menos ruido, share limpio.
+  // URL sleek: solo salen los params no-default (q, filtros no-default,
+  // página >1, vista no-tabla, sort/dir no-default). El proveedor default
+  // (empresa logueada) se omite; "all" explícito sí se persiste para poder
+  // ver todo sin rebotar al default (mismo patrón que ocupación).
   const DEFAULT_DIRS: Record<ScreensSortKey, ScreensSortDir> = {
     name: "asc",
     supplier: "asc",
@@ -103,8 +109,8 @@ export function ScreensList({
     const params = new URLSearchParams();
     const nextQ = overrides.q ?? q;
     if (nextQ.trim()) params.set("q", nextQ.trim());
-    const nextSup = overrides.supplier !== undefined ? overrides.supplier : supplierId;
-    if (nextSup) params.set("proveedor", nextSup);
+    const nextSup = overrides.supplier !== undefined ? overrides.supplier : supplierValue;
+    if (nextSup && nextSup !== defaultSupplierValue) params.set("proveedor", nextSup);
     const nextCity = overrides.city !== undefined ? overrides.city : city;
     if (nextCity) params.set("ciudad", nextCity);
     const nextActive = overrides.active ?? active;
@@ -131,11 +137,11 @@ export function ScreensList({
     go(buildParams({ page: 1, ...patch }));
   };
 
-  const filtersActive = q.trim() !== "" || supplierId !== null || city !== null || active !== "all";
+  const filtersActive = q.trim() !== "" || supplierValue !== defaultSupplierValue || city !== null || active !== "all";
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const exportParams = new URLSearchParams({ entity: "screens" });
   if (q.trim()) exportParams.set("q", q.trim());
-  if (supplierId) exportParams.set("proveedor", supplierId);
+  if (supplierValue !== "all") exportParams.set("proveedor", supplierValue);
   if (city) exportParams.set("ciudad", city);
   if (active !== "all") exportParams.set("estado", active);
   exportParams.set("sort", sortKey);
@@ -162,15 +168,20 @@ export function ScreensList({
           }}
         />
         <FilterSelect
-          value={supplierId ?? "all"}
-          onChange={(v) => setFilter({ supplier: v === "all" ? null : v })}
+          value={supplierValue}
+          onChange={(v) => setFilter({ supplier: v })}
           ariaLabel="Filtrar por proveedor"
           placeholder="Proveedor"
           display={(value) =>
-            value === "all" ? "Todo proveedor" : (suppliers.find((s) => s.id === value)?.name ?? "Proveedor")
+            value === "all"
+              ? "Todo proveedor"
+              : value === "own"
+                ? (casaName ? `Red propia · ${casaName}` : "Red propia")
+                : (suppliers.find((s) => s.id === value)?.name ?? "Proveedor")
           }
         >
           <SelectItem value="all">Todo proveedor</SelectItem>
+          {casaName && <SelectItem value="own">{`Red propia · ${casaName}`}</SelectItem>}
           {suppliers.map((s) => (
             <SelectItem key={s.id} value={s.id}>
               {s.name}
@@ -270,26 +281,17 @@ export function ScreensList({
               ))}
               {rows.length === 0 && (
                 <DataTableRow>
-                  <DataTableTd colSpan={7} className="px-3 py-10">
-                    <div className="mx-auto flex max-w-sm flex-col items-center gap-2 text-center">
-                      <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden>
-                        <SearchX className="size-5" />
-                      </span>
-                      <p className="text-sm font-medium">{filtersActive ? "Sin resultados para ese filtro" : "Aún no hay pantallas"}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {filtersActive ? "Prueba con otro nombre, proveedor o ciudad." : "Todavía no hay inventario cargado."}
-                      </p>
-                      {filtersActive && (
-                        <ClearFiltersButton
-                          label="Limpiar filtros"
-                          className="mt-1"
-                          disabled={isPending}
-                          onClear={() => {
-                            go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
-                          }}
-                        />
-                      )}
-                    </div>
+                  <DataTableTd colSpan={7} className="px-3 py-4">
+                    <EntityEmpty
+                      inline
+                      filtered={filtersActive}
+                      emptyTitle="Aún no hay pantallas"
+                      emptyHint="Todavía no hay inventario cargado."
+                      filteredHint="Prueba con otro nombre, proveedor o ciudad."
+                      onClear={() => {
+                        go(buildParams({ q: "", supplier: null, city: null, active: "all", page: 1 }));
+                      }}
+                    />
                   </DataTableTd>
                 </DataTableRow>
               )}

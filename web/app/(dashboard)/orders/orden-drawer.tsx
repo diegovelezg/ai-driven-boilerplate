@@ -197,7 +197,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const [cancelOpen, setCancelOpen] = useState(false);
   const [linesOpen, setLinesOpen] = useState(false);
   const [linesNonce, setLinesNonce] = useState(0);
-  const [screens, setScreens] = useState<Array<{ id: string; name: string; price_pen: number | null }> | null>(null);
+  const [screens, setScreens] = useState<Array<{ id: string; name: string; detail: string | null; code: string | null; price_pen: number | null }> | null>(null);
   const [screensError, setScreensError] = useState<string | null>(null);
   const [screensLoading, setScreensLoading] = useState(false);
   const [reactOpen, setReactOpen] = useState(false);
@@ -245,7 +245,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
     try {
       const res = await fetch("/api/screens?limit=200", { cache: "no-store" });
       if (!res.ok) throw new Error("No se pudieron cargar las pantallas.");
-      const data = (await res.json()) as { screens?: Array<{ id: string; name: string; price_pen: number | null }> };
+      const data = (await res.json()) as { screens?: Array<{ id: string; name: string; detail: string | null; code: string | null; price_pen: number | null }> };
       setScreens(Array.isArray(data.screens) ? data.screens : []);
     } catch (e) {
       setScreensError(e instanceof Error ? e.message : "No se pudieron cargar las pantallas.");
@@ -566,7 +566,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               </div>
             </section>
           )}
-          {editingFicha ? (
+          {editingFicha && canEdit && isDraft ? (
               <OrderEditForm
                 key={orderId}
                 orderId={orderId}
@@ -601,13 +601,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <h2 className="text-base font-semibold tracking-tight">Ficha</h2>
-                <p className="text-xs text-muted-foreground">Contratante, marca, periodo, facturación e intermediario.</p>
+                <p className="text-xs text-muted-foreground">Anunciante, contratante, marca, periodo, facturación e intermediario.</p>
               </div>
               <span className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" render={<Link href={`/orders/${orderId}/print`} target="_blank" rel="noreferrer" />} nativeButton={false} aria-label="Exportar borrador a PDF">
                   <FileDown className="size-3.5" aria-hidden /> PDF
                 </Button>
-                {canEdit && (
+                {canEdit && isDraft && (
                   <EditButton onEdit={() => setEditingFicha(true)} />
                 )}
               </span>
@@ -615,6 +615,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <AppCard title="Contratante" aria-label="Contratante de la orden" tone="sky">
             <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
               <div><dt className="text-xs text-muted-foreground">Contratante</dt><dd className="mt-1 text-sm font-medium">{contratante ? `${toTitleCase(contratante)}${contratanteKind ? ` · ${contratanteKind}` : ""}` : "—"}</dd></div>
+              {detail?.advertiser_name && (
+                <div><dt className="text-xs text-muted-foreground">Anunciante</dt><dd className="mt-1 text-sm font-medium">{toTitleCase(detail.advertiser_name)}</dd></div>
+              )}
               <div><dt className="text-xs text-muted-foreground">Marca</dt><dd className="mt-1 text-sm">{brand ? toTitleCase(brand) : "—"}</dd></div>
               <div>
                 <dt className="text-xs text-muted-foreground">Periodo</dt>
@@ -1102,7 +1105,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
       )}
 
       <Dialog open={linesOpen} onOpenChange={(v) => !v && setLinesOpen(false)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto p-6 sm:min-w-[620px]">
+        <DialogContent className="max-h-[85vh] overflow-y-auto p-6 sm:min-w-[720px] max-w-[calc(100vw-2rem)]">
           <DialogHeader>
             <DialogTitle>Editar pantallas</DialogTitle>
             <DialogDescription>
