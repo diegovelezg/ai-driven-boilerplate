@@ -82,7 +82,7 @@ export default async function NuevaOrdenPage() {
   const { companies, screens, brands, defaultCurrency } = data;
 
   return (
-    <div className="mx-auto flex w-full max-w-[860px] flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[860px]">
       <PageHeader
         eyebrow="DOOH"
         title="Nueva orden"

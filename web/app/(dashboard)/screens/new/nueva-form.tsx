@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
@@ -25,8 +27,6 @@ import {
 import { failSubmit, useServerFieldErrors } from "@/components/ui/form-feedback";
 
 const initial: ScreensState = { ok: false, message: "" };
-
-const baseInput = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
 
 const MAPBOX_TOKEN =
   process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
@@ -311,10 +311,10 @@ export function NuevaPantallaForm({
     impact.trim() !== "";
 
   return (
-    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
       <AppCard title="Ubicación" description="Dónde está la pantalla.">
         <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1 text-xs">
+      <div className="form-field">
         Punto en el mapa *
         <input type="hidden" name="venue_latitude" value={venueLat ?? ""} />
         <input type="hidden" name="venue_longitude" value={venueLng ?? ""} />
@@ -329,17 +329,17 @@ export function NuevaPantallaForm({
             setGeoNote(null);
           }}
         />
-        {geoLoading && <p className="text-[11px] text-muted-foreground">Detectando dirección…</p>}
+        {geoLoading && <p className="text-xs text-muted-foreground">Detectando dirección…</p>}
         {!geoLoading && geoNote !== null ? (
-          <p className="text-[11px] text-muted-foreground">{geoNote}</p>
+          <p className="text-xs text-muted-foreground">{geoNote}</p>
         ) : (
-          !geoLoading && <p className="text-[11px] text-muted-foreground">Marca dónde está la pantalla.</p>
+          !geoLoading && <p className="text-xs text-muted-foreground">Marca dónde está la pantalla.</p>
         )}
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <label className="form-field sm:col-span-2">
           Dirección *
-          <input
+          <Input
             name="venue_address"
             maxLength={300}
             placeholder="Av. Pardo 793"
@@ -350,33 +350,33 @@ export function NuevaPantallaForm({
               setAddressOk(e.target.value.trim().length > 0);
               clear("venue");
             }}
-            className={`${baseInput}${bad("venue")}`}
+            className={`${bad("venue")}`}
           />
         </label>
         <div className="grid grid-cols-1 gap-4 sm:col-span-2 sm:grid-cols-3">
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Distrito *
-            <input
+            <Input
               name="venue_district"
               maxLength={120}
               placeholder="Miraflores"
               value={venueDistrict}
               onChange={(e) => setVenueDistrict(e.target.value)}
-              className={baseInput}
+
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Ciudad *
-            <input
+            <Input
               name="venue_city"
               maxLength={120}
               placeholder="Lima"
               value={venueCity}
               onChange={(e) => setVenueCity(e.target.value)}
-              className={baseInput}
+
             />
           </label>
-          <div className="flex flex-col gap-1 text-xs">
+          <div className="form-field">
             País *
             <input type="hidden" name="venue_country" value={venueCountry === "__none" ? "" : venueCountry} />
             <Select
@@ -402,9 +402,9 @@ export function NuevaPantallaForm({
       </AppCard>
       <AppCard title="Pantalla" description="Nombre, formato y medidas.">
         <div className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-xs">
+      <label className="form-field">
         Nombre *
-        <input
+        <Input
           name="name"
           maxLength={200}
           placeholder="Pantalla LED — Av. Ejército"
@@ -416,12 +416,12 @@ export function NuevaPantallaForm({
             setNameOk(e.target.value.trim().length > 0);
             clear("name");
           }}
-          className={`${baseInput}${bad("name")}`}
+          className={`${bad("name")}`}
         />
       </label>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="form-field">
           Tipo *
           <input type="hidden" name="modality" value={modality} />
           <Select
@@ -440,7 +440,7 @@ export function NuevaPantallaForm({
           </Select>
         </div>
         {modality === "digital" && (
-          <div className="flex flex-col gap-1 text-xs">
+          <div className="form-field">
             Tecnología *
             <input type="hidden" name="technology" value={technology} />
             <Select
@@ -461,7 +461,7 @@ export function NuevaPantallaForm({
             </Select>
           </div>
         )}
-        <div className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <div className="form-field sm:col-span-2">
           Proveedor *
           <input type="hidden" name="supplier_id" value={supplierId} />
           <Select
@@ -487,9 +487,9 @@ export function NuevaPantallaForm({
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Ancho (m) *
-          <input
+          <Input
             name="width_m"
             inputMode="decimal"
             placeholder="12"
@@ -499,12 +499,12 @@ export function NuevaPantallaForm({
               setWidth(e.target.value.replace(/[^0-9,.]/g, "").slice(0, 8));
               clear("size");
             }}
-            className={`${baseInput} tabular-nums${bad("size")}`}
+            className={` tabular-nums${bad("size")}`}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Alto (m) *
-          <input
+          <Input
             name="height_m"
             inputMode="decimal"
             placeholder="6"
@@ -514,14 +514,14 @@ export function NuevaPantallaForm({
               setHeight(e.target.value.replace(/[^0-9,.]/g, "").slice(0, 8));
               clear("size");
             }}
-            className={`${baseInput} tabular-nums${bad("size")}`}
+            className={` tabular-nums${bad("size")}`}
           />
         </label>
         {modality === "digital" && (
           <>
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Ancho (px) *
-          <input
+          <Input
             name="width_px"
             inputMode="numeric"
             placeholder="1920"
@@ -531,12 +531,12 @@ export function NuevaPantallaForm({
               setWidthPx(e.target.value.replace(/\D/g, "").slice(0, 6));
               clear("size");
             }}
-            className={`${baseInput} tabular-nums${bad("size")}`}
+            className={` tabular-nums${bad("size")}`}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Alto (px) *
-          <input
+          <Input
             name="height_px"
             inputMode="numeric"
             placeholder="1080"
@@ -546,7 +546,7 @@ export function NuevaPantallaForm({
               setHeightPx(e.target.value.replace(/\D/g, "").slice(0, 6));
               clear("size");
             }}
-            className={`${baseInput} tabular-nums${bad("size")}`}
+            className={` tabular-nums${bad("size")}`}
           />
         </label>
           </>
@@ -560,9 +560,9 @@ export function NuevaPantallaForm({
 
       <AppCard title="Precio y pauta" description="Cuánto cuesta y cuántas veces se muestra por día.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Precio (PEN) *
-          <input
+          <Input
             name="price_pen"
             inputMode="numeric"
             placeholder="1500"
@@ -572,13 +572,13 @@ export function NuevaPantallaForm({
               setPrice(e.target.value.replace(/\D/g, "").slice(0, 9));
               clear("price");
             }}
-            className={`${baseInput} tabular-nums${bad("price")}`}
+            className={` tabular-nums${bad("price")}`}
           />
         </label>
         {modality === "digital" && (
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Duración del spot (s) *
-            <input
+            <Input
               name="duration_sec"
               inputMode="numeric"
               placeholder="10"
@@ -588,14 +588,14 @@ export function NuevaPantallaForm({
                 setDur(e.target.value.replace(/\D/g, "").slice(0, 4));
                 clear("playback");
               }}
-              className={`${baseInput} tabular-nums${bad("playback")}`}
+              className={` tabular-nums${bad("playback")}`}
             />
           </label>
         )}
         {modality === "digital" && (
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Reproducciones / día *
-          <input
+          <Input
             name="plays_per_day"
             inputMode="numeric"
             placeholder="900"
@@ -605,13 +605,13 @@ export function NuevaPantallaForm({
               setPlays(e.target.value.replace(/\D/g, "").slice(0, 7));
               clear("playback");
             }}
-            className={`${baseInput} tabular-nums${bad("playback")}`}
+            className={` tabular-nums${bad("playback")}`}
           />
         </label>
         )}
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Impactos / día *
-          <input
+          <Input
             name="impact_day"
             inputMode="numeric"
             placeholder="150000"
@@ -621,7 +621,7 @@ export function NuevaPantallaForm({
               setImpact(e.target.value.replace(/\D/g, "").slice(0, 9));
               clear("impact");
             }}
-            className={`${baseInput} tabular-nums${bad("impact")}`}
+            className={` tabular-nums${bad("impact")}`}
           />
         </label>
       </div>

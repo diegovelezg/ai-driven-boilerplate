@@ -47,8 +47,9 @@ export function LoginForm({ next }: { next: string }) {
   }, [state, mark, focusFirst]);
 
   return (
-    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="w-full max-w-sm">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="w-full">
       <AppCard
+        headerClassName="[&_[data-slot=card-title]]:text-xl"
         title={
           <span className="flex flex-col gap-2">
             <span className="mb-1 flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -65,7 +66,7 @@ export function LoginForm({ next }: { next: string }) {
           </SubmitButton>
         }
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4">
           <input type="hidden" name="next" value={next} />
           <div className="grid gap-1.5">
             <Label htmlFor="email">Email</Label>

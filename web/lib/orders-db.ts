@@ -2,8 +2,8 @@
 // con orderStage: volumen bajo (<200), sin paginación exacta que mentir.
 import { getSupabase } from "@/lib/supabase";
 import { joinHaystack, matchScore, matchTokens, normalizeSearch, tokenizeSearch } from "@/lib/search-text";
-import { orderStage, type OrderStageKey } from "@/lib/order-stage";
-import { billingStatus, type BillingStatusKey } from "@/lib/billing-status";
+import { orderStage, orderTiming, type OrderStageKey } from "@/lib/order-stage";
+import { billingStatus, toBillingInvoice, type BillingStatusKey } from "@/lib/billing-status";
 import { invoiceMatchesOrder, normalizeCurrency } from "@/lib/currency";
 
 export interface OrderRow {
@@ -29,14 +29,7 @@ export interface OrderRow {
   isPrepaid: boolean;
 }
 
-export const ORDER_STAGES: OrderStageKey[] = [
-  "firmada",
-  "materiales",
-  "al_aire",
-  "por_certificar",
-  "cerrada",
-  "cancelada",
-];
+export { ORDER_STAGES } from "@/lib/order-stage";
 
 const now = () => Date.now();
 
@@ -98,11 +91,11 @@ export async function listOrders(
   const ids = rows.map((r) => String(r.id));
 
   const [lines, oms, creas, photos, invs] = await Promise.all([
-    db.from("io_lines").select("io_id,rate_minor").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_lines").select("io_id,rate_minor,starts_at,ends_at").eq("store_id", storeId).in("io_id", ids),
     db.from("io_agency_orders").select("io_id").eq("store_id", storeId).in("io_id", ids),
     db.from("io_creatives").select("io_id,qc_status,legal_status").eq("store_id", storeId).in("io_id", ids),
     db.from("io_photo_checks").select("io_id").eq("store_id", storeId).in("io_id", ids),
-    db.from("io_invoices").select("io_id,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).in("io_id", ids),
+    db.from("io_invoices").select("io_id,amount_minor,currency,status,issue_date,due_date,payments:io_invoice_payments!io_invoice_payments_same_store_fk(*)").eq("store_id", storeId).in("io_id", ids),
   ]);
   // Hijas: fail-closed — cualquier hija caída lanza (nunca 0 silencioso).
   for (const [name, res] of [
@@ -145,14 +138,14 @@ export async function listOrders(
   const t = now();
   const out: OrderRow[] = rows.map((r) => {
     const id = String(r.id);
-    const endsAt = r.ends_at ? Date.parse(String(r.ends_at)) : NaN;
+    const timing = orderTiming(r, ((lines.data ?? []) as Array<Record<string, unknown>>).filter((l) => l.io_id === id), t);
     const crea = creaBy.get(id);
     const { index, stage } = orderStage({
       status: (r.status as string | null) ?? null,
       signed: r.status === "signed",
       hasOm: omBy.has(id),
       materialsOk: crea ? crea.any && !crea.pending : false,
-      ended: Number.isFinite(endsAt) ? endsAt <= t : false,
+      ...timing,
       certified: photoBy.has(id),
     });
     const agg = linesBy.get(id) ?? { n: 0, gross: 0 };
@@ -163,12 +156,7 @@ export async function listOrders(
     const invSameCurrency = invRows.filter((v) => invoiceMatchesOrder(v.currency, orderCurrency));
     const bill = billingStatus({
       gross_minor: agg.gross,
-      invoices: invSameCurrency.map((v) => ({
-        amount_minor: Number(v.amount_minor ?? 0),
-        status: String(v.status ?? ""),
-        issue_date: (v.issue_date as string | null) ?? null,
-        due_date: (v.due_date as string | null) ?? null,
-      })),
+      invoices: invSameCurrency.map(toBillingInvoice),
       starts_at: (r.starts_at as string | null) ?? null,
       payment_terms_days:
         typeof r.payment_terms_days === "number" ? (r.payment_terms_days as number) : null,
@@ -295,7 +283,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
     db.from("io_creatives").select("id,name,qc_status,legal_status,file_url,created_by,duration_s,width_px,height_px,aspect").eq("store_id", storeId).eq("io_id", id),
     db.from("inv_bookings").select("id", { count: "exact", head: true }).eq("store_id", storeId).eq("insertion_order_id", id),
     db.from("io_photo_checks").select("id,photo_url,video_url,taken_at,created_by").eq("store_id", storeId).eq("io_id", id).order("taken_at", { ascending: false }).limit(50),
-    db.from("io_invoices").select("id,number,amount_minor,currency,status,issue_date,due_date").eq("store_id", storeId).eq("io_id", id),
+    db.from("io_invoices").select("id,number,amount_minor,currency,status,issue_date,due_date,payments:io_invoice_payments!io_invoice_payments_same_store_fk(*)").eq("store_id", storeId).eq("io_id", id),
     refIds.length > 0
       ? db.from("crm_contacts").select("id,company_id,first_name,last_name,email,phone,job_title,is_primary,crm_companies!contacts_company_id_fkey(name)").eq("store_id", storeId).in("id", refIds)
       : Promise.resolve({ data: [], error: null }),

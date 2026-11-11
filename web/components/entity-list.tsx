@@ -148,7 +148,7 @@ export function EntityEmpty({
         <SearchX className="size-5" />
       </span>
       <p className="text-sm font-medium">{filtered ? filteredTitle : emptyTitle}</p>
-      <p className="text-xs text-muted-foreground">{filtered ? filteredHint : emptyHint}</p>
+      <p className="text-sm leading-relaxed text-muted-foreground">{filtered ? filteredHint : emptyHint}</p>
       {filtered && onClear && (
         <Button variant="outline" size="sm" className="mt-1" onClick={onClear}>
           <FilterX aria-hidden />
@@ -173,7 +173,7 @@ export function EntityPagination({
   onGo: (next: number) => void;
 }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <span className="text-xs text-muted-foreground tabular-nums">
         Página {formatNumber(page)} de {formatNumber(totalPages)}
       </span>

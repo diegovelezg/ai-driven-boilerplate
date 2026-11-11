@@ -23,10 +23,9 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { Steps } from "@/components/steps";
-import { SectionHeading } from "@/components/section-heading";
 import { DrawerTable, DrawerTableBody, DrawerTableHeader, DrawerTableRow, DrawerTableTd, DrawerTableTh } from "@/components/drawer-table";
-import { ORDER_STEPS, orderStage } from "@/lib/order-stage";
-import { BILLING_LABELS, billingStatus } from "@/lib/billing-status";
+import { ORDER_STEPS, orderStage, orderTiming } from "@/lib/order-stage";
+import { BILLING_LABELS, billingStatus, toBillingInvoice, invoicePaidMinor, aggregateCobranza } from "@/lib/billing-status";
 import dynamic from "next/dynamic";
 import { createAgencyOrderAction, signOrderAction, deleteAgencyOrderAction, attachCreativeAction, deleteCreativeAction, attachPhotoAction, deletePhotoAction, cancelOrderAction, reactivateOrderAction, deleteOrderAction, setInvoiceStatusAction } from "@/lib/order-flow-actions";
 
@@ -52,6 +51,10 @@ const OrderEditForm = dynamic(() => import("./order-edit-form").then((m) => m.Or
 const OrderLinesForm = dynamic(() => import("./order-lines-form").then((m) => m.OrderLinesForm), {
   ssr: false,
   loading: () => <FormLoading label="Cargando pantallas" />,
+});
+const InvoicePayments = dynamic(() => import("./invoice-payments").then((m) => m.InvoicePayments), {
+  ssr: false,
+  loading: () => <span className="text-xs text-muted-foreground">Cargando cobros…</span>,
 });
 const InvoiceForm = dynamic(() => import("./invoice-form").then((m) => m.InvoiceForm), {
   ssr: false,
@@ -198,9 +201,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const [reactOpen, setReactOpen] = useState(false);
   const [delOpen, setDelOpen] = useState(false);
 
-  // Reloj fijo al montar: el render debe ser puro (regla react-hooks/purity);
-  // congelar "ahora" evita que la etapa parpadee entre renders.
-  const [nowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setError(null);
@@ -366,19 +371,14 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
         signed: o.status === "signed",
         hasOm: oms.length > 0,
         materialsOk: creatives.length > 0 && !pendingCreative,
-        ended: o.ends_at ? Date.parse(String(o.ends_at)) <= nowMs : false,
+        ...orderTiming(o, lines, nowMs),
         certified: (detail?.photos_count ?? 0) > 0,
       })
     : null;
   const bill = o
     ? billingStatus({
         gross_minor: gross,
-        invoices: invoices.map((v) => ({
-          amount_minor: Number(v.amount_minor ?? 0),
-          status: String(v.status ?? ""),
-          issue_date: (v.issue_date as string | null) ?? null,
-          due_date: (v.due_date as string | null) ?? null,
-        })),
+        invoices: invoices.map(toBillingInvoice),
         starts_at: (o.starts_at as string | null) ?? null,
         payment_terms_days:
           typeof o.payment_terms_days === "number" ? (o.payment_terms_days as number) : null,
@@ -396,11 +396,15 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
   const isAgencySelf = !!detail?.agency_company_id && detail.agency_company_id === billingId;
   const contactManagerLine = isAgencySelf ? null : contactLine(detail?.contacts.manager);
   const contactPaymentLine = contactLine(detail?.contacts.payment);
-  const ended = o?.ends_at ? Date.parse(String(o.ends_at)) <= nowMs : false;
+  const ended = o ? orderTiming(o, lines, nowMs).ended : false;
   const nextAction: string | null = !st
     ? null
     : st.stage === "cancelada"
-      ? "Orden cancelada: sin acciones pendientes."
+      ? "Orden cancelada: revisa los saldos de cobranza que sigan pendientes."
+      : st.stage === "atrasada"
+        ? "La fecha de inicio ya llegó: falta autorización o material aprobado. Revisa la salida con el operador."
+        : st.stage === "programada"
+          ? "Preparada para el próximo período contratado. La emisión se indica según las fechas de pauta."
       : st.index === 0
         ? "Borrador: falta la firma del cliente para avanzar."
         : st.index === 1
@@ -408,7 +412,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           : st.stage === "materiales"
             ? "En Materiales: falta aprobar QC + legal de todas las piezas."
             : st.stage === "al_aire"
-              ? `En emisión${o?.ends_at ? ` hasta el ${formatDate(o.ends_at)}` : ""}: el cobro corre en paralelo.`
+              ? `En período de emisión previsto${o?.ends_at ? ` hasta el ${formatDate(o.ends_at)}` : ""}: el cobro corre en paralelo.`
               : st.stage === "por_certificar"
                 ? "Terminó la pauta: sube el foto check / PoP para cerrar."
                 : "Ciclo operativo completo. Revisa que el cobro esté en Pagado.";
@@ -544,7 +548,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           <>
           {isDraft && canEdit && (
             <section aria-label="Firmar orden" className="flex flex-col gap-2 rounded-xl bg-muted/40 px-4 py-3">
-              <p className="text-[13px] font-medium">Borrador: esperando la firma del cliente</p>
+              <p className="text-sm font-medium">Borrador: esperando la firma del cliente</p>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Cuando el cliente firme la orden, márcala aquí. Recién entonces podrás registrar el OM/OC.
               </p>
@@ -594,7 +598,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             <>
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
-                <h2 className="text-sm font-semibold">Ficha</h2>
+                <h2 className="text-base font-semibold tracking-tight">Ficha</h2>
                 <p className="text-xs text-muted-foreground">Contratante, marca, periodo, facturación e intermediario.</p>
               </div>
               <span className="flex flex-wrap items-center gap-2">
@@ -607,81 +611,81 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               </span>
             </div>
             <AppCard title="Contratante" aria-label="Contratante de la orden" tone="sky">
-            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">Contratante</dt><dd className="mt-0.5 text-[13px] font-medium">{contratante ? `${toTitleCase(contratante)}${contratanteKind ? ` · ${contratanteKind}` : ""}` : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Marca</dt><dd className="mt-0.5 text-[13px]">{brand ? toTitleCase(brand) : "—"}</dd></div>
+            <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs text-muted-foreground">Contratante</dt><dd className="mt-1 text-sm font-medium">{contratante ? `${toTitleCase(contratante)}${contratanteKind ? ` · ${contratanteKind}` : ""}` : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Marca</dt><dd className="mt-1 text-sm">{brand ? toTitleCase(brand) : "—"}</dd></div>
               <div>
                 <dt className="text-xs text-muted-foreground">Periodo</dt>
-                <dd className="mt-0.5 text-[13px] tabular-nums">
+                <dd className="mt-1 text-sm tabular-nums">
                   {o.starts_at && o.ends_at
                     ? `${formatDate(o.starts_at)} → ${formatDate(o.ends_at)}${diasOi ? ` · ${formatNumber(diasOi)} días` : ""}`
                     : "—"}
                 </dd>
               </div>
-              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-0.5 text-[13px] font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"} <span className="text-[11px] font-normal text-muted-foreground">{orderCurrency}</span></dd></div>
+              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-1 text-sm font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"} <span className="text-xs font-normal text-muted-foreground">{orderCurrency}</span></dd></div>
               {commissionSplit && (
                 <>
-                  <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(commissionSplit.commissionMinor, orderCurrency)}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">Neto</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(commissionSplit.netMinor, orderCurrency)} <span className="text-[11px] font-normal text-muted-foreground">informativo</span></dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(commissionSplit.commissionMinor, orderCurrency)}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Neto</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(commissionSplit.netMinor, orderCurrency)} <span className="text-xs font-normal text-muted-foreground">informativo</span></dd></div>
                 </>
               )}
-              <div><dt className="text-xs text-muted-foreground">Condición de pago</dt><dd className="mt-0.5 text-[13px]">{typeof o.payment_terms_days === "number" ? paymentTermsLabel(o.payment_terms_days) : str(o.payment_terms)}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Estado</dt><dd className="mt-0.5 text-[13px]">{STATUS_LABEL[String(o.status ?? "")] ?? str(o.status)}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Condición de pago</dt><dd className="mt-1 text-sm">{typeof o.payment_terms_days === "number" ? paymentTermsLabel(o.payment_terms_days) : str(o.payment_terms)}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Estado</dt><dd className="mt-1 text-sm">{STATUS_LABEL[String(o.status ?? "")] ?? str(o.status)}</dd></div>
               {contactBillingLine && (
-                <div><dt className="text-xs text-muted-foreground">Contacto</dt><dd className="mt-0.5 text-[13px]">{contactBillingLine}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Contacto</dt><dd className="mt-1 text-sm">{contactBillingLine}</dd></div>
               )}
               {contactSignerLine && (
-                <div><dt className="text-xs text-muted-foreground">Firmante</dt><dd className="mt-0.5 text-[13px]">{contactSignerLine}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Firmante</dt><dd className="mt-1 text-sm">{contactSignerLine}</dd></div>
               )}
               {typeof o.notes === "string" && o.notes.trim() && (
-                <div><dt className="text-xs text-muted-foreground">Notas</dt><dd className="mt-0.5 text-[13px]">{o.notes.trim()}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Notas</dt><dd className="mt-1 text-sm">{o.notes.trim()}</dd></div>
               )}
-              <div><dt className="text-xs text-muted-foreground">Firma</dt><dd className="mt-0.5 text-[13px] tabular-nums">{o.signed_at ? formatDateTime(o.signed_at) : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Firma</dt><dd className="mt-1 text-sm tabular-nums">{o.signed_at ? formatDateTime(o.signed_at) : "—"}</dd></div>
               <div>
                 <dt className="text-xs text-muted-foreground">Creada</dt>
-                <dd className="mt-0.5 text-[13px] tabular-nums">{o.created_at ? formatDateTime(o.created_at) : "—"}{o.created_by ? ` · ${str(o.created_by)}` : ""}</dd>
+                <dd className="mt-1 text-sm tabular-nums">{o.created_at ? formatDateTime(o.created_at) : "—"}{o.created_by ? ` · ${str(o.created_by)}` : ""}</dd>
               </div>
               {typeof o.updated_at === "string" && o.updated_at && o.updated_at !== o.created_at && (
                 <div>
                   <dt className="text-xs text-muted-foreground">Actualizada</dt>
-                  <dd className="mt-0.5 text-[13px] tabular-nums">{formatDateTime(o.updated_at)}{typeof o.updated_by === "string" && o.updated_by ? ` · ${o.updated_by}` : ""}</dd>
+                  <dd className="mt-1 text-sm tabular-nums">{formatDateTime(o.updated_at)}{typeof o.updated_by === "string" && o.updated_by ? ` · ${o.updated_by}` : ""}</dd>
                 </div>
               )}
             </dl>
             </AppCard>
             <AppCard title="Facturación" aria-label="Facturación de la orden" tone="violet">
-            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
+            <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
               {(o.doc_orden_medios === true || o.doc_orden_compra === true || o.doc_contrato === true) && (
-                <div><dt className="text-xs text-muted-foreground">Documento</dt><dd className="mt-0.5 text-[13px]">{[
+                <div><dt className="text-xs text-muted-foreground">Documento</dt><dd className="mt-1 text-sm">{[
                   o.doc_orden_medios === true ? "Orden de Medios" : null,
                   o.doc_orden_compra === true ? "Orden de Compra" : null,
                   o.doc_contrato === true ? "Contrato" : null,
                 ].filter(Boolean).join(" + ")}</dd></div>
               )}
               {contactPaymentLine && (
-                <div><dt className="text-xs text-muted-foreground">Contacto de pago</dt><dd className="mt-0.5 text-[13px]">{contactPaymentLine}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Contacto de pago</dt><dd className="mt-1 text-sm">{contactPaymentLine}</dd></div>
               )}
               {typeof o.billing_portal_email === "string" && o.billing_portal_email.trim() && (
-                <div><dt className="text-xs text-muted-foreground">Correo / Portal</dt><dd className="mt-0.5 text-[13px]">{o.billing_portal_email}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Correo / Portal</dt><dd className="mt-1 text-sm">{o.billing_portal_email}</dd></div>
               )}
               {typeof o.billing_detail === "string" && o.billing_detail.trim() && (
-                <div><dt className="text-xs text-muted-foreground">Indicaciones de facturación</dt><dd className="mt-0.5 text-[13px]">{o.billing_detail}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Indicaciones de facturación</dt><dd className="mt-1 text-sm">{o.billing_detail}</dd></div>
               )}
               {typeof o.invoice_registration === "string" && o.invoice_registration.trim() && (
-                <div><dt className="text-xs text-muted-foreground">Obs. registro de factura</dt><dd className="mt-0.5 text-[13px]">{o.invoice_registration}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Obs. registro de factura</dt><dd className="mt-1 text-sm">{o.invoice_registration}</dd></div>
               )}
               {detail?.billing_company_address && (
-                <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-0.5 text-[13px]">{detail.billing_company_address}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-1 text-sm">{detail.billing_company_address}</dd></div>
               )}
             </dl>
             </AppCard>
             <AppCard title="Intermediario" aria-label="Intermediario de la orden" tone="emerald">
-            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
+            <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
               {detail?.agency_name && (
-                <div><dt className="text-xs text-muted-foreground">Intermediario</dt><dd className="mt-0.5 text-[13px]">{[detail.agency_name, detail.agency_tax_id].filter(Boolean).join(" · ")}{detail.agency_commission_pct !== null && detail.agency_commission_pct !== undefined ? ` · ${detail.agency_commission_pct}%` : ""}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Intermediario</dt><dd className="mt-1 text-sm">{[detail.agency_name, detail.agency_tax_id].filter(Boolean).join(" · ")}{detail.agency_commission_pct !== null && detail.agency_commission_pct !== undefined ? ` · ${detail.agency_commission_pct}%` : ""}</dd></div>
               )}
               {contactManagerLine && (
-                <div><dt className="text-xs text-muted-foreground">Responsable</dt><dd className="mt-0.5 text-[13px]">{contactManagerLine}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Responsable</dt><dd className="mt-1 text-sm">{contactManagerLine}</dd></div>
               )}
             </dl>
             </AppCard>
@@ -695,13 +699,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </div>
           )}
           <AppCard
+            title={`Pantallas (${lines.length})`}
             tone="primary"
-            variant={lines.length === 0 ? "default" : "table"}
             aria-label="Pantallas de la orden"
           >
           {lines.length === 0 ? (
             <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-              <p className="text-[13px] text-muted-foreground">Sin pantallas en esta orden.</p>
+              <p className="text-sm text-muted-foreground">Sin pantallas en esta orden.</p>
               {isDraft && canEdit && (
                 <div>
                   <SubmitButton size="sm" type="button" onClick={() => void openLinesDialog()} disabled={isPending}>
@@ -711,8 +715,8 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
               )}
             </div>
           ) : (
-              <DrawerTable>
-                <DrawerTableHeader>
+              <DrawerTable flush>
+                <DrawerTableHeader flush>
                   <DrawerTableTh>Pantalla</DrawerTableTh>
                   <DrawerTableTh>Periodo</DrawerTableTh>
                   <DrawerTableTh numeric>Días</DrawerTableTh>
@@ -730,13 +734,13 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         <DrawerTableTd className="font-medium">
                           {str(l.screen_name)}
                           {typeof l.screen_detail === "string" && l.screen_detail && (
-                            <span className="block max-w-[280px] truncate text-[11px] font-normal text-muted-foreground">{l.screen_detail}</span>
+                            <span className="block max-w-[280px] truncate text-xs font-normal text-muted-foreground">{l.screen_detail}</span>
                           )}
                           {typeof l.notes === "string" && l.notes && (
-                            <span className="block text-[11px] font-normal text-muted-foreground">{l.notes}</span>
+                            <span className="block text-xs font-normal text-muted-foreground">{l.notes}</span>
                           )}
                           {Number.isFinite(regular) && regular > 0 && regular !== Number(l.rate_minor ?? 0) && (
-                            <span className="block text-[11px] font-normal text-muted-foreground tabular-nums">
+                            <span className="block text-xs font-normal text-muted-foreground tabular-nums">
                               Reg. {formatMoney(regular, orderCurrency)}
                             </span>
                           )}
@@ -800,7 +804,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           >
             {oms.length === 0 ? (
               <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                <p className="text-[13px] text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   {isDraft
                     ? "Primero marca la orden como firmada; luego adjunta la autorización."
                     : "Sin OM/OC registrado. La autorización es el hito que libera Materiales."}
@@ -820,7 +824,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   const href = doc ?? (codeIsUrl ? rawCode : null);
                   return (
                   <li key={String(m.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
-                    <span className="flex min-w-0 items-center gap-2 text-[13px]">
+                    <span className="flex min-w-0 items-center gap-2 text-sm">
                       <AttributeBadge label={str(m.kind)} title="Tipo de material" />
                       {!codeIsUrl && <span className="truncate font-medium">{rawCode}</span>}
                       {href && (
@@ -829,7 +833,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         </a>
                       )}
                       {by(m) && (
-                        <span className="shrink-0 truncate text-[11px] text-muted-foreground" title={`Agregado por ${by(m)}`}>{by(m)}</span>
+                        <span className="shrink-0 truncate text-xs text-muted-foreground" title={`Agregado por ${by(m)}`}>{by(m)}</span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
@@ -864,7 +868,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           >
             {creatives.length === 0 ? (
               <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                <p className="text-[13px] text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   Sin piezas cargadas. Adjunta el material para pasar a emisión.
                 </p>
                 {canEdit && (
@@ -889,7 +893,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   ].filter(Boolean).join(" · ");
                   return (
                   <li key={String(c.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
-                    <span className="min-w-0 truncate text-[13px] font-medium">
+                    <span className="min-w-0 truncate text-sm font-medium">
                       {str(c.name)}
                       {spec && (
                         <span className="ml-1.5 font-normal text-muted-foreground tabular-nums">{spec}</span>
@@ -902,7 +906,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     </span>
                     <span className="flex shrink-0 items-center gap-1.5">
                       {by(c) && (
-                        <span className="hidden truncate text-[11px] text-muted-foreground md:block" title={`Agregado por ${by(c)}`}>{by(c)}</span>
+                        <span className="hidden truncate text-xs text-muted-foreground md:block" title={`Agregado por ${by(c)}`}>{by(c)}</span>
                       )}
                       <OrderApprovalBadge approved={ok} />
                       {canEdit && (
@@ -936,7 +940,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
           >
             {photos.length === 0 && canEdit && (
               <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                <p className="text-[13px] text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   {ended
                     ? "La pauta terminó sin foto check: adjúntalo para cerrar el ciclo operativo."
                     : "Sin adjuntos. La certificación corre en paralelo a la cobranza."}
@@ -953,7 +957,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   const isVideo = typeof p.video_url === "string" && !!p.video_url;
                   return (
                   <li key={String(p.id)} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
-                    <span className="flex min-w-0 items-center gap-2 text-[13px]">
+                    <span className="flex min-w-0 items-center gap-2 text-sm">
                       <AttributeBadge label={isVideo ? "Video" : "Foto"} title="Tipo de adjunto" />
                       {url ? (
                         <a href={url} target="_blank" rel="noreferrer" className="truncate font-medium text-primary underline-offset-4 hover:underline">
@@ -964,7 +968,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       )}
                       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{formatDateTime(p.taken_at)}</span>
                       {by(p) && (
-                        <span className="shrink-0 truncate text-[11px] text-muted-foreground" title={`Agregado por ${by(p)}`}>{by(p)}</span>
+                        <span className="shrink-0 truncate text-xs text-muted-foreground" title={`Agregado por ${by(p)}`}>{by(p)}</span>
                       )}
                     </span>
                     {canEdit && (
@@ -988,22 +992,23 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
 
           {tab === "cobranza" && (
           <>
-          <section className="flex flex-col gap-2" aria-label="Cobranza">
-            <SectionHeading
-              title="Cobranza"
-              hint="Carril paralelo: admite upfront y abonos a mitad de pauta."
-              right={
-                <span className="flex items-center gap-2">
-                  {bill && <OrderBillingBadge status={bill.status} prepaid={bill.isPrepaid} prefixed />}
-                  {canEdit && (
-                    <Button size="xs" variant="outline" onClick={() => setInvOpen(true)} disabled={isPending}>
-                      <Receipt aria-hidden />
-                      Registrar factura
-                    </Button>
-                  )}
-                </span>
-              }
-            />
+          <AppCard
+            title="Cobranza"
+            description="Carril paralelo: admite upfront y abonos a mitad de pauta."
+            tone="violet"
+            aria-label="Cobranza"
+            action={
+              <span className="flex items-center gap-2">
+                {bill && <OrderBillingBadge status={bill.status} prepaid={bill.isPrepaid} prefixed />}
+                {canEdit && (
+                  <Button size="xs" variant="outline" onClick={() => setInvOpen(true)} disabled={isPending}>
+                    <Receipt aria-hidden />
+                    Registrar factura
+                  </Button>
+                )}
+              </span>
+            }
+          >
             {bill && gross > 0 && (
               <div className="flex flex-col gap-1.5" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Cobrado ${progress}% del bruto`}>
                 <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -1012,106 +1017,82 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     style={{ width: `${progress}%` }}
                   />
                 </div>
-                <p className="text-[11px] text-muted-foreground tabular-nums">
-                  {formatMoney(bill.paid_minor, orderCurrency)} cobrado de {formatMoney(gross, orderCurrency)} · {progress}%
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {formatMoney(bill.paid_minor, orderCurrency, 2)} cobrado de {formatMoney(gross, orderCurrency)} · {progress}%
                 </p>
               </div>
             )}
             {invoices.length === 0 ? (
-              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-                Sin facturas emitidas. Puedes facturar antes, durante o después de la pauta.
-              </p>
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  Sin facturas emitidas. Puedes facturar antes, durante o después de la pauta.
+                </p>
+              </div>
             ) : (
               <>
-                <DrawerTable>
-                  <DrawerTableHeader>
+                <DrawerTable flush>
+                  <DrawerTableHeader flush>
                     <DrawerTableTh>Número</DrawerTableTh>
                     <DrawerTableTh>Estado</DrawerTableTh>
                     <DrawerTableTh numeric>Monto</DrawerTableTh>
+                    <DrawerTableTh numeric>Cobrado</DrawerTableTh>
+                    <DrawerTableTh numeric>Saldo</DrawerTableTh>
                     <DrawerTableTh>Emisión</DrawerTableTh>
                     <DrawerTableTh>Vence</DrawerTableTh>
-                    {canEdit && <DrawerTableTh>Acciones</DrawerTableTh>}
+                    <DrawerTableTh>Acciones</DrawerTableTh>
                   </DrawerTableHeader>
                   <DrawerTableBody>
                     {invoices.map((v) => {
                       const amount = Number(v.amount_minor ?? NaN);
                       const st = String(v.status ?? "");
                       const terminal = st === "cancelled" || st === "draft";
+                      const invoiceBill = toBillingInvoice(v);
+                      const invoicePaid = invoicePaidMinor(invoiceBill, nowMs);
+                      const displayStatus = terminal ? st : aggregateCobranza([invoiceBill], nowMs).overdueMinor > 0
+                        ? "overdue" : invoicePaid > 0 && invoicePaid < amount ? "partial" : st;
                       return (
                         <DrawerTableRow key={String(v.id)}>
-                          <DrawerTableTd className="font-medium">{str(v.number)}</DrawerTableTd>
+                          <DrawerTableTd className="font-medium whitespace-nowrap">{str(v.number)}</DrawerTableTd>
                           <DrawerTableTd>
-                            <OrderInvoiceBadge status={st} />
+                            <OrderInvoiceBadge status={displayStatus} />
                           </DrawerTableTd>
-                          <DrawerTableTd numeric className="tabular-nums">
-                            {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency) : "—"}
+                          <DrawerTableTd numeric className="tabular-nums whitespace-nowrap">
+                            {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency, 2) : "—"}
                           </DrawerTableTd>
+                          <DrawerTableTd numeric className="whitespace-nowrap">{formatMoney(invoicePaid, String(v.currency), 2)}</DrawerTableTd>
+                          <DrawerTableTd numeric className="whitespace-nowrap">{terminal ? "—" : formatMoney(Math.max(0, amount - invoicePaid), String(v.currency), 2)}</DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
                             {typeof v.issue_date === "string" && v.issue_date ? formatDate(v.issue_date) : "—"}
                           </DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
                             {typeof v.due_date === "string" && v.due_date ? formatDate(v.due_date) : "—"}
                           </DrawerTableTd>
-                          {canEdit && (
-                            <DrawerTableTd>
-                              {terminal ? (
-                                <span className="text-[11px] text-muted-foreground">—</span>
-                              ) : (
-                                <span className="flex flex-wrap items-center gap-1">
-                                  {st !== "paid" && (
-                                    <Button
-                                      variant="outline"
-                                      size="xs"
-                                      aria-label={`Marcar factura ${str(v.number)} como pagada`}
-                                      title="Marcar como pagada"
-                                      onClick={() => void runFlow("Factura pagada", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "paid" }))}
-                                      disabled={isPending}
-                                    >
-                                      Pagada
-                                    </Button>
-                                  )}
-                                  {st === "paid" && (
-                                    <Button
-                                      variant="ghost"
-                                      size="xs"
-                                      aria-label={`Reabrir factura ${str(v.number)} como emitida`}
-                                      title="Reabrir como emitida (por error al marcar)"
-                                      onClick={() => void runFlow("Factura emitida", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "issued" }))}
-                                      disabled={isPending}
-                                    >
-                                      Reabrir
-                                    </Button>
-                                  )}
-                                  <Button
-                                    variant="ghost"
-                                    size="xs"
-                                    aria-label={`Anular factura ${str(v.number)}`}
-                                    title="Anular (terminal: no suma en cobro)"
-                                    onClick={() => void runFlow("Factura anulada", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "cancelled" }))}
-                                    disabled={isPending}
-                                  >
-                                    Anular
-                                  </Button>
-                                </span>
+                          <DrawerTableTd>
+                            <span className="flex flex-wrap items-center gap-1">
+                              <InvoicePayments invoice={v} currency={String(v.currency)} canEdit={canEditRole} onSaved={() => { void load(); router.refresh(); }} />
+                              {!terminal && canEditRole && invoicePaid === 0 && (
+                                <Button variant="ghost" size="xs" aria-label={`Anular factura ${str(v.number)}`} title="Anular factura sin cobros" disabled={isPending}
+                                  onClick={() => void runFlow("Factura anulada", () => setInvoiceStatusAction({ invoiceId: String(v.id), status: "cancelled" }))}>Anular</Button>
                               )}
+                            </span>
                             </DrawerTableTd>
-                          )}
                         </DrawerTableRow>
                       );
                     })}
                   </DrawerTableBody>
                 </DrawerTable>
                 {bill && (
-                  <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
-                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.invoiced_minor, orderCurrency)}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-0.5 text-[13px] tabular-nums">{formatMoney(bill.paid_minor, orderCurrency)}{bill.isPrepaid ? " · prepago" : ""}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Pendiente</dt><dd className={`mt-0.5 text-[13px] tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}>{formatMoney(bill.pending_minor, orderCurrency)}</dd></div>
+                  <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                    <div><dt className="text-xs text-muted-foreground">Por facturar</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.unbilled_minor, orderCurrency, 2)}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.invoiced_minor, orderCurrency, 2)}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.paid_minor, orderCurrency, 2)}{bill.isPrepaid ? " · prepago" : ""}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Por cobrar (facturado)</dt><dd className={`mt-1 text-sm tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}>{formatMoney(bill.pending_minor, orderCurrency, 2)}</dd></div>
                   </dl>
                 )}
               </>
             )}
-          </section>
-            </>
+          </AppCard>
+          </>
           )}
         </>
       )}

@@ -56,8 +56,12 @@ export function orderStageDisplay(stage: OrderStageKey, isDraft: boolean): Badge
       ? { variant: "secondary", label: "Borrador", title: "Borrador: aún no la firma el cliente" }
       : { variant: "success", label: "Firmada", title: "Firmada por el cliente" };
   }
+  if (stage === "programada")
+    return { variant: "info", label: "Programada", title: "Preparada; fuera del período de emisión actual" };
+  if (stage === "atrasada")
+    return { variant: "destructive", label: "Salida atrasada", title: "Inicio alcanzado con autorización o materiales pendientes" };
   if (stage === "al_aire")
-    return { variant: "default", label: "Al aire", title: "Etapa operativa: en emisión" };
+    return { variant: "default", label: "Al aire", title: "En período de emisión según fechas contratadas; no confirma reproducción" };
   return {
     variant: "warning",
     label: ORDER_STAGE_LABELS[stage],
@@ -78,6 +82,7 @@ export function orderBillingDisplay(status: BillingStatusKey): BadgeDisplay {
 /** Factura individual: misma gramática que el cobro. */
 export function invoiceBadgeDisplay(status: string | null | undefined): BadgeDisplay {
   const s = String(status ?? "").trim().toLowerCase();
+  if (s === "partial") return { variant: "default", label: "Parcial" };
   if (s === "paid") return { variant: "success", label: "Pagada" };
   if (s === "overdue") return { variant: "destructive", label: "Vencida" };
   if (s === "issued") return { variant: "info", label: "Emitida" };

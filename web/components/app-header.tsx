@@ -9,6 +9,8 @@ import { UsagePill } from "@/components/usage-pill";
 import type { MemberRole } from "@/lib/roles";
 
 const titles = [
+  { href: "/inbox", label: "Inbox" },
+  { href: "/occupancy", label: "Ocupación" },
   { href: "/orders", label: "Órdenes" },
   { href: "/screens", label: "Inventario" },
   { href: "/companies", label: "Empresas" },

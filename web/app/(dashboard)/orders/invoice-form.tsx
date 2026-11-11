@@ -8,13 +8,6 @@ import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { createInvoiceAction } from "@/lib/order-flow-actions";
 import { todayLima, addDays } from "@/lib/availability-utils";
 import { formatDate, parseISODate, toISODateLocal } from "@/lib/format";
@@ -31,7 +24,7 @@ import {
 
 /** Date picker shadcn (Popover + Calendar, mismo patrón que nueva-form):
  *  fecha válida o vacía (con X para limpiar), nunca texto libre. */
-function InvoiceDatePicker({
+export function InvoiceDatePicker({
   label,
   fieldKey,
   value,
@@ -42,7 +35,7 @@ function InvoiceDatePicker({
   pickerLabel,
 }: {
   label: string;
-  fieldKey: "issue" | "due";
+  fieldKey: "issue" | "due" | "date";
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
@@ -135,7 +128,7 @@ export function InvoiceForm({
   const [due, setDue] = useState(
     typeof paymentTermsDays === "number" && paymentTermsDays >= 0 ? addDays(issue0, paymentTermsDays) : "",
   );
-  const [status, setStatus] = useState("issued");
+  const status = "issued";
   const [pending, startTransition] = useTransition();
   const { invalid, mark, clear, bad, focusFirst } = useInvalidFields<InvoiceFieldKey>();
   const formRef = useRef<HTMLFormElement>(null);
@@ -206,14 +199,14 @@ export function InvoiceForm({
           <Building2 className="size-4" aria-hidden />
         </span>
         <span className="min-w-0">
-          <span className="block text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          <span className="block text-xs font-medium tracking-wide text-muted-foreground uppercase">
             Facturar a
           </span>
           {blocked ? (
             <span className="mt-1 block text-[13px] font-medium text-destructive">{blocked}</span>
           ) : (
             <>
-              <span className="mt-0.5 block truncate text-sm font-semibold">{billingName}</span>
+              <span className="mt-0.5 block break-words text-sm font-semibold">{billingName}</span>
               <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="rounded-md border border-border/60 bg-background px-1.5 py-0.5 font-medium tabular-nums">
                   RUC {billingTaxId}
@@ -240,11 +233,11 @@ export function InvoiceForm({
           aria-describedby="inv-number-hint"
           className={bad("number").trim() ? `font-medium tracking-wide${bad("number")}` : "font-medium tracking-wide"}
         />
-        <p id="inv-number-hint" className="text-[11px] text-muted-foreground">
+        <p id="inv-number-hint" className="text-xs text-muted-foreground">
           Serie y número del comprobante (ej F001-123).
         </p>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="grid content-start gap-1.5">
           <Label htmlFor="inv-amount">Monto ({orderCurrency}) *</Label>
           <Input
@@ -259,20 +252,9 @@ export function InvoiceForm({
             className={bad("amount").trim() ? `text-right text-base tabular-nums${bad("amount")}` : "text-right text-base tabular-nums"}
           />
         </div>
-        <div className="grid min-w-0 content-start gap-1.5">
-          <span className="text-xs">Estado inicial</span>
-          <Select value={status} onValueChange={(v) => { setStatus(v ?? "issued"); clear("status"); }} disabled={pending}>
-            <SelectTrigger name="status" aria-label="Estado inicial" aria-invalid={invalid.has("status")} className={bad("status").trim() || undefined}>
-              <SelectValue placeholder="Estado…" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="issued">Emitida</SelectItem>
-              <SelectItem value="paid">Pagada</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <InvoiceDatePicker
           label="Emisión"
           fieldKey="issue"

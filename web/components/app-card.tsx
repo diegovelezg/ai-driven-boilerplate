@@ -17,7 +17,7 @@ const TONE_BORDER: Record<Exclude<AppCardTone, "default">, string> = {
   primary: "border-l-2 border-l-primary/40",
   emerald: "border-l-2 border-l-emerald-500/40",
   amber: "border-l-2 border-l-amber-500/40",
-  sky: "border-l-2 border-l-sky-500/30",
+  sky: "border-l-2 border-l-sky-500/40",
   violet: "border-l-2 border-l-violet-500/40",
   rose: "border-l-2 border-l-rose-500/40",
 };

@@ -7,9 +7,10 @@
 // delta, cobranza con delta, ocupación, al aire con delta, relevo, huecos);
 // los bloqueos (alerts) y por_certificar viven solo en el Inbox vía
 // buildBriefFacts.
+import { orderStage, orderTiming } from "@/lib/order-stage";
 import { getSupabase } from "@/lib/supabase";
 import { normalizeCurrency } from "@/lib/currency";
-import { aggregateCobranza, type BillingInvoice, type CobranzaTotals } from "@/lib/billing-status";
+import { aggregateCobranza, toBillingInvoice, type BillingInvoice, type CobranzaTotals } from "@/lib/billing-status";
 import { DAY_MS, startOfDayUTC, startOfMonthUTC } from "@/lib/format";
 
 export type AlertKind = "sin_om" | "material" | "sin_evidencia" | "termina_sin_relevo";
@@ -92,7 +93,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const now = Date.now();
   const today00 = startOfDayUTC(now);
 
-  const [{ data: store, count: screensTotal }, { data: screens }, { data: ois, count: oisTotal }, { data: invoices }] = await Promise.all([
+  const [{ data: store, count: screensTotal }, { data: screens }, { data: ois, count: oisTotal }, { data: invoices, error: invoiceError }] = await Promise.all([
     db.from("sys_stores").select("shop_currency").eq("id", storeId).maybeSingle(),
     db.from("inv_screens").select("id,name", { count: "exact" }).eq("store_id", storeId).eq("is_active", true).limit(500),
     db
@@ -104,10 +105,11 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       .limit(500),
     db
       .from("io_invoices")
-      .select("amount_minor,currency,status,issue_date,due_date")
+      .select("amount_minor,currency,status,issue_date,due_date,payments:io_invoice_payments!io_invoice_payments_same_store_fk(*)")
       .eq("store_id", storeId)
       .limit(2000),
   ]);
+  if (invoiceError) throw new Error(`Cobranza: ${invoiceError.message}`);
   const truncated = (screensTotal ?? 0) > 500 || (oisTotal ?? 0) > 500;
 
   const currency = normalizeCurrency((store as Record<string, unknown> | null)?.shop_currency ?? "PEN");
@@ -133,6 +135,8 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     io_id: string;
     screen_id: string;
     rate_minor: number;
+    starts_at: string;
+    ends_at: string;
     starts_ms: number | null;
     ends_ms: number | null;
   }> = [];
@@ -162,6 +166,8 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       io_id: String(l.io_id),
       screen_id: String(l.screen_id),
       rate_minor: Number(l.rate_minor ?? 0),
+      starts_at: String(l.starts_at),
+      ends_at: String(l.ends_at),
       starts_ms: parseMs(l.starts_at),
       ends_ms: parseMs(l.ends_at),
     }));
@@ -257,12 +263,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     return Number.isFinite(t) ? t : null;
   };
   const invRows = ((invoices ?? []) as Array<Record<string, unknown>>).map((v) => ({
-    inv: {
-      amount_minor: v.amount_minor as number | null | undefined,
-      status: v.status as string | null | undefined,
-      issue_date: v.issue_date as string | null | undefined,
-      due_date: v.due_date as string | null | undefined,
-    } as BillingInvoice,
+    inv: toBillingInvoice(v),
     currency: normalizeCurrency(v.currency, currency),
   }));
   const curGroups = new Map<string, BillingInvoice[]>();
@@ -316,24 +317,19 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   const ocupacionRatio = diasDisponibles > 0 ? diasVendidos / diasDisponibles : null;
 
   // 3. Al aire hoy (y ayer, para el delta; misma data, corte distinto).
-  const alAireAt = (ref: number): typeof oiRows =>
-    oiRows.filter((o) => {
-      const s = parseMs(o.starts_at);
-      const e = parseMs(o.ends_at);
-      if (s === null || e === null) return false;
-      return s <= ref && ref <= e + DAY_MS; // ends_at es fecha: incluye el día
-    });
+  const stageAt = (o: (typeof oiRows)[number], ref: number) => orderStage({
+    status: o.status, signed: o.status === "signed", hasOm: omBy.has(o.id),
+    materialsOk: materialsOk(o.id), certified: photoBy.has(o.id),
+    ...orderTiming(o, lineRows.filter((l) => l.io_id === o.id), ref),
+  }).stage;
+  const alAireAt = (ref: number): typeof oiRows => oiRows.filter((o) => stageAt(o, ref) === "al_aire");
   const alAireOis = alAireAt(now);
   const prevAlAireOis = alAireAt(now - DAY_MS).length;
-  const alAireScreens = new Set(
-    lineRows.filter((l) => alAireOis.some((o) => o.id === l.io_id)).map((l) => l.screen_id),
-  );
-
-  // 4. Por certificar: terminó y sin foto.
-  const porCertificar = oiRows.filter((o) => {
-    const e = parseMs(o.ends_at);
-    return e !== null && e < today00 && !photoBy.has(o.id);
-  }).length;
+  const alAireScreens = new Set(lineRows.filter((l) =>
+    alAireOis.some((o) => o.id === l.io_id) && l.starts_ms !== null && l.ends_ms !== null
+    && l.starts_ms <= now && now < l.ends_ms,
+  ).map((l) => l.screen_id));
+  const porCertificar = oiRows.filter((o) => stageAt(o, now) === "por_certificar").length;
 
   // 5. Renovación 30d por anunciante (advertiser ?? billing).
   const in30 = oiRows.filter((o) => {
@@ -385,8 +381,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
         endsAt: o.ends_at,
       });
     }
-    const e = parseMs(o.ends_at);
-    const ended = e !== null && e < today00;
+    const ended = orderTiming(o, lineRows.filter((l) => l.io_id === o.id), now).ended;
     if (o.status === "signed" && !materialsOk(o.id) && !ended && du !== null && du <= 5) {
       alerts.push({
         kind: "material",
@@ -396,7 +391,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
         company: co,
         detail:
           du < 0
-            ? `Al aire con material sin aprobar (QC/legal).`
+            ? `Salida atrasada: material sin aprobar (QC/legal); revisa la emisión con el operador.`
             : `Empieza en ${du}d sin material aprobado.`,
         startsAt: o.starts_at,
         endsAt: o.ends_at,

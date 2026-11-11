@@ -15,16 +15,16 @@ export type MetricTone = "default" | "primary" | "success" | "warning" | "danger
 const TONE_VALUE: Record<MetricTone, string> = {
   default: "text-foreground",
   primary: "text-primary",
-  success: "text-emerald-600 dark:text-emerald-400",
-  warning: "text-amber-600 dark:text-amber-400",
+  success: "text-emerald-700 dark:text-emerald-400",
+  warning: "text-amber-700 dark:text-amber-400",
   danger: "text-destructive",
 };
 
 const TONE_ICON_BOX: Record<MetricTone, string> = {
   default: "bg-muted text-muted-foreground",
   primary: "bg-primary/10 text-primary",
-  success: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  warning: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  success: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  warning: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   danger: "bg-destructive/10 text-destructive",
 };
 
@@ -66,7 +66,7 @@ function MetricDelta({
     <span
       className={cn(
         "inline-flex items-center gap-1 text-xs font-medium tabular-nums",
-        good ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400",
+        good ? "text-emerald-700 dark:text-emerald-400" : "text-rose-700 dark:text-rose-400",
         className,
       )}
       aria-label={`${up ? "+" : "−"}${formatPercentPoints(Math.abs(pct))} ${typeof label === "string" ? label : ""}`.trim()}
@@ -104,11 +104,11 @@ export function Metric({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col gap-2 rounded-xl bg-muted/40 p-4 ring-1 ring-foreground/10",
+        "flex min-w-0 flex-col gap-3 rounded-xl bg-card p-4 ring-1 ring-border sm:p-5",
         className,
       )}
     >
-      <span className="flex items-center gap-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+      <span className="flex items-center gap-2 text-xs leading-snug font-medium text-muted-foreground">
         {Icon && (
           <span
             aria-hidden
@@ -120,7 +120,7 @@ export function Metric({
             <Icon className="size-4" />
           </span>
         )}
-        <span className="min-w-0 truncate">{label}</span>
+        <span className="min-w-0 break-words">{label}</span>
       </span>
       <span
         className={cn(
@@ -131,7 +131,7 @@ export function Metric({
         {value}
       </span>
       {showFoot && (
-        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs leading-relaxed text-muted-foreground tabular-nums">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-relaxed text-muted-foreground tabular-nums">
           {delta !== undefined && (
             <MetricDelta pct={delta} label={deltaLabel} invert={invertDelta} />
           )}

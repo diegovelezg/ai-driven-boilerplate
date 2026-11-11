@@ -5,10 +5,14 @@ import { cn } from "cn";
  * Variante compacta del estilo de tabla del catálogo, para drawers.
  * Misma estructura (header con fondo, hover en filas, bordes) pero
  * `text-[13px]` y `py-2` en vez de `text-sm` / `py-3`. Headers sin caps.
+ *
+ * `flush`: la tabla vive dentro de un AppCard con título (el card aporta
+ * el único marco). Sin borde/radio propios y sin fondo en el header:
+ * nada entre card y tabla, ni box-inside-box.
  */
-export function DrawerTable({ children, className }: { children: ReactNode; className?: string }) {
+export function DrawerTable({ children, className, flush }: { children: ReactNode; className?: string; flush?: boolean }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className={cn("overflow-x-auto", !flush && "rounded-lg border")}>
       <table className={cn("w-full text-[13px]", className)}>{children}</table>
     </div>
   );
@@ -18,10 +22,10 @@ export function DrawerTableBody({ children, className }: { children: ReactNode; 
   return <tbody className={cn("tabular-nums", className)}>{children}</tbody>;
 }
 
-export function DrawerTableHeader({ children }: { children: ReactNode }) {
+export function DrawerTableHeader({ children, flush }: { children: ReactNode; flush?: boolean }) {
   return (
     <thead>
-      <tr className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
+      <tr className={cn("border-b text-left text-xs text-muted-foreground", !flush && "bg-muted/50")}>
         {children}
       </tr>
     </thead>

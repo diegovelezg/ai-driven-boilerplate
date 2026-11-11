@@ -34,7 +34,7 @@ const SHORTCUTS = [
 
 export function HelpView() {
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-4xl">
       <PageHeader
         eyebrow="Ayuda"
         title="Cómo usar la plataforma"
@@ -42,7 +42,7 @@ export function HelpView() {
       />
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-sm font-semibold tracking-tight">Atajos</h2>
+        <h2 className="text-base font-semibold tracking-tight">Atajos</h2>
         <ul className="flex flex-col">
           {SHORTCUTS.map(({ href, label, hint, icon: Icon }, i) => (
             <li key={href}>
@@ -59,7 +59,7 @@ export function HelpView() {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium">{label}</span>
-                  <span className="block text-xs text-muted-foreground">{hint}</span>
+                  <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{hint}</span>
                 </span>
                 <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
               </Link>
@@ -71,7 +71,7 @@ export function HelpView() {
       <Separator />
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-sm font-semibold tracking-tight">Flujo de una orden</h2>
+        <h2 className="text-base font-semibold tracking-tight">Flujo de una orden</h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
           Se crea en borrador con sus pantallas y precios. Luego avanza por firma, materiales,
           salida al aire y cierre. El cobro se registra en paralelo y admite pagos parciales.

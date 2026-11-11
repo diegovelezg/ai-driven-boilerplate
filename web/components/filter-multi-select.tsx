@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /**
  * SSOT del filtro multiselect (checkboxes en popover).
- * Trigger con el mismo lenguaje visual que FilterSelect (borde h-9 text-xs).
+ * Trigger con el mismo lenguaje visual que FilterSelect (borde h-9 text-sm).
  * Cierra al aplicar; "Todos" / "Ninguno" como atajos.
  */
 export function FilterMultiSelect<T extends string>({
@@ -54,7 +54,7 @@ export function FilterMultiSelect<T extends string>({
             type="button"
             aria-label={ariaLabel}
             className={cn(
-              "flex h-9 w-fit max-w-64 items-center justify-between gap-1.5 rounded-md border border-input bg-input/20 px-2 py-1.5 text-xs/relaxed whitespace-nowrap transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+              "flex h-9 w-fit max-w-64 items-center justify-between gap-1.5 rounded-md border border-input bg-input/20 px-3 py-1.5 text-sm/relaxed whitespace-nowrap transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
               values.length === 0 && "text-muted-foreground",
             )}
           >
@@ -65,7 +65,7 @@ export function FilterMultiSelect<T extends string>({
       />
       <PopoverContent align="start" className="w-56 gap-1 p-1.5">
         <div className="flex items-center justify-between px-1 pt-0.5 pb-1">
-          <span className="text-[11px] text-muted-foreground tabular-nums">
+          <span className="text-xs text-muted-foreground tabular-nums">
             {values.length} de {options.length}
           </span>
           <div className="flex items-center gap-1">
@@ -73,7 +73,7 @@ export function FilterMultiSelect<T extends string>({
               type="button"
               onClick={() => onChange(options.map((o) => o.value))}
               disabled={values.length === options.length}
-              className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
             >
               Todos
             </button>
@@ -81,7 +81,7 @@ export function FilterMultiSelect<T extends string>({
               type="button"
               onClick={() => onChange([])}
               disabled={values.length === 0}
-              className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
             >
               Ninguno
             </button>
@@ -95,7 +95,7 @@ export function FilterMultiSelect<T extends string>({
               <label
                 key={o.value}
                 htmlFor={id}
-                className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-xs hover:bg-muted/60"
+                className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm hover:bg-muted/60"
               >
                 <Checkbox
                   id={id}

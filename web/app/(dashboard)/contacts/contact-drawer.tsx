@@ -12,6 +12,14 @@ import {
   DrawerShell,
   type DrawerTabDef,
 } from "@/components/drawer-shell";
+import {
+  DrawerTable,
+  DrawerTableBody,
+  DrawerTableHeader,
+  DrawerTableRow,
+  DrawerTableTd,
+  DrawerTableTh,
+} from "@/components/drawer-table";
 import { CompanyIOBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, type MemberRole } from "@/lib/roles";
 import { toTitleCase } from "@/lib/format";
@@ -158,41 +166,50 @@ export function ContactDrawer({
             <AppCard
               title={`Pedidos de ${contact.company_name ? toTitleCase(contact.company_name) : "su empresa"} (${ios.length})`}
               description="Órdenes donde su empresa es anunciante o responsable de facturación."
+              tone="primary"
               aria-label="Pedidos de su empresa"
             >
               {ios.length === 0 ? (
                 <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
-                  <p className="text-[13px] text-muted-foreground">
+                  <p className="text-sm text-muted-foreground">
                     {contact.company_id
                       ? "Su empresa aún no tiene pedidos."
                       : "Sin empresa asociada: no hay pedidos que mostrar."}
                   </p>
                 </div>
               ) : (
-                <ul className="flex flex-col gap-1.5">
-                  {ios.map((o) => (
-                    <li key={o.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/40 px-3 py-2">
-                      <span className="flex min-w-0 items-center gap-2 text-[13px]">
-                        <span className="truncate font-medium">{o.io_number}</span>
-                        <span className="shrink-0 text-xs text-muted-foreground">{o.brand ? toTitleCase(o.brand) : "—"}</span>
-                        <CompanyIOBadge status={o.status} />
-                      </span>
-                      <Link
-                        href={`/orders?order=${o.id}`}
-                        className="shrink-0 text-xs font-medium text-primary underline-offset-4 hover:underline"
-                      >
-                        Ver orden
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                <DrawerTable flush>
+                  <DrawerTableHeader flush>
+                    <DrawerTableTh>Orden</DrawerTableTh>
+                    <DrawerTableTh>Marca</DrawerTableTh>
+                    <DrawerTableTh>Estado</DrawerTableTh>
+                    <DrawerTableTh>Acciones</DrawerTableTh>
+                  </DrawerTableHeader>
+                  <DrawerTableBody>
+                    {ios.map((o) => (
+                      <DrawerTableRow key={o.id}>
+                        <DrawerTableTd className="font-medium">{o.io_number}</DrawerTableTd>
+                        <DrawerTableTd className="text-sm">{o.brand ? toTitleCase(o.brand) : "—"}</DrawerTableTd>
+                        <DrawerTableTd><CompanyIOBadge status={o.status} /></DrawerTableTd>
+                        <DrawerTableTd>
+                          <Link
+                            href={`/orders?order=${o.id}`}
+                            className="shrink-0 text-xs font-medium text-primary underline-offset-4 hover:underline"
+                          >
+                            Ver orden
+                          </Link>
+                        </DrawerTableTd>
+                      </DrawerTableRow>
+                    ))}
+                  </DrawerTableBody>
+                </DrawerTable>
               )}
             </AppCard>
           )}
         </>
       ) : (
         <>
-          <AppCard variant="hero" aria-label="Portada del contacto">
+          <AppCard variant="hero" tone="sky" title={displayName} aria-label="Portada del contacto">
             <div className="flex items-center gap-4">
               <span
                 aria-hidden
@@ -201,8 +218,7 @@ export function ContactDrawer({
                 {initialsOf(displayName) || "—"}
               </span>
               <div className="min-w-0">
-                <p className="truncate text-lg font-semibold tracking-tight">{displayName}</p>
-                <p className="truncate text-[13px] text-muted-foreground">
+                <p className="text-sm leading-relaxed break-words text-muted-foreground">
                   {[contact.job_title, contact.company_name ? toTitleCase(contact.company_name) : null].filter(Boolean).join(" · ") || "—"}
                 </p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -223,6 +239,7 @@ export function ContactDrawer({
 
           <AppCard
             title="Ficha"
+            tone="sky"
             aria-label="Ficha del contacto"
             action={
               canEdit && !editingFicha ? (
@@ -249,14 +266,14 @@ export function ContactDrawer({
                 onCancel={() => setEditingFicha(false)}
               />
             ) : (
-            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">Nombre</dt><dd className="mt-0.5 text-[13px] font-medium">{displayName}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Cargo</dt><dd className="mt-0.5 text-[13px]">{contact.job_title ?? "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="mt-0.5 text-[13px]">{contact.email ?? "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-0.5 text-[13px] tabular-nums">{contact.phone ?? "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Agregado por</dt><dd className="mt-0.5 text-[13px]">{typeof contact.created_by === "string" && contact.created_by ? contact.created_by : "—"}</dd></div>
+            <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs text-muted-foreground">Nombre</dt><dd className="mt-1 text-sm font-medium">{displayName}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Cargo</dt><dd className="mt-1 text-sm">{contact.job_title ?? "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Email</dt><dd className="mt-1 text-sm">{contact.email ?? "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-1 text-sm tabular-nums">{contact.phone ?? "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Agregado por</dt><dd className="mt-1 text-sm">{typeof contact.created_by === "string" && contact.created_by ? contact.created_by : "—"}</dd></div>
               {typeof contact.updated_by === "string" && contact.updated_by && contact.updated_by !== contact.created_by && (
-                <div><dt className="text-xs text-muted-foreground">Editado por</dt><dd className="mt-0.5 text-[13px]">{contact.updated_by}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Editado por</dt><dd className="mt-1 text-sm">{contact.updated_by}</dd></div>
               )}
             </dl>
             )}
@@ -265,10 +282,11 @@ export function ContactDrawer({
           <AppCard
             title="Empresa"
             description="Dónde trabaja esta persona."
+            tone="emerald"
             aria-label="Empresa del contacto"
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] font-medium">
+              <p className="text-sm font-medium">
                 {contact.company_name ? toTitleCase(contact.company_name) : "Sin empresa"}
               </p>
               {contact.company_id && (

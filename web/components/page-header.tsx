@@ -44,9 +44,9 @@ export function PageHeader({
           {backLabel}
         </Button>
       )}
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-col gap-1.5">
-          <span className="inline-flex w-fit items-center gap-1.5 text-[11px] font-semibold tracking-[0.16em] text-primary uppercase">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-1 basis-72 flex-col gap-2">
+          <span className="inline-flex w-fit items-center gap-2 text-xs font-medium tracking-[0.12em] text-primary uppercase">
             <span
               aria-hidden
               className={cn("size-1.5 rounded-full bg-primary", pulse && "animate-pulse")}
@@ -54,13 +54,13 @@ export function PageHeader({
             {eyebrow}
           </span>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="max-w-3xl text-2xl font-semibold tracking-tight text-balance md:text-3xl">
+            <h1 className="max-w-3xl text-2xl leading-tight font-semibold tracking-tight text-balance sm:text-3xl">
               {title}
             </h1>
             {badge}
           </div>
           {description && (
-            <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
               {description}
             </p>
           )}

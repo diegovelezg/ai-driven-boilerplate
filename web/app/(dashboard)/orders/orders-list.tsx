@@ -17,7 +17,7 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { FilterSelect, SelectItem } from "@/components/filter-select";
-import { ORDER_STAGE_LABELS } from "@/lib/order-stage";
+import { ORDER_STAGE_LABELS, ORDER_STAGES as STAGES } from "@/lib/order-stage";
 import type { OrderStageKey } from "@/lib/order-stage";
 import { BILLING_LABELS } from "@/lib/billing-status";
 import type { BillingStatusKey } from "@/lib/billing-status";
@@ -35,7 +35,6 @@ function fmtCorto(v: string | null): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
 }
 
-const STAGES: OrderStageKey[] = ["firmada", "materiales", "al_aire", "por_certificar", "cerrada", "cancelada"];
 const BILLINGS: BillingStatusKey[] = ["sin_facturar", "facturado", "parcial", "pagado", "vencido"];
 
 export function OrdersList({

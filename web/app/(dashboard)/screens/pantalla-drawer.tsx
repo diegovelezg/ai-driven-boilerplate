@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
@@ -68,8 +70,8 @@ function toBar(v: unknown): number | null {
 function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
     <div className={cn("min-w-0", className)}>
-      <dt className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
-      <dd className="mt-1 text-[13px] leading-relaxed text-foreground">{children}</dd>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 text-sm leading-relaxed break-words text-foreground">{children}</dd>
     </div>
   );
 }
@@ -78,7 +80,7 @@ function Field({ label, children, className }: { label: string; children: ReactN
 function Kpi({ label, value, hint }: { label: string; value: ReactNode; hint?: ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className="truncate text-xs text-muted-foreground">{label}</p>
       <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
       {hint && <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">{hint}</p>}
     </div>
@@ -90,11 +92,11 @@ function ScoreBar({ label, hint, value, bar }: { label: string; hint?: string; v
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="truncate text-[13px] font-medium">
+        <p className="truncate text-sm font-medium">
           {label}
           {hint && <span className="ml-1.5 font-normal text-muted-foreground">{hint}</span>}
         </p>
-        <span className="shrink-0 text-[13px] font-semibold tabular-nums">{value}</span>
+        <span className="shrink-0 text-sm font-semibold tabular-nums">{value}</span>
       </div>
       <div
         className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
@@ -116,7 +118,7 @@ function ScoreBar({ label, hint, value, bar }: { label: string; hint?: string; v
 /** Reparto vehicular / peatonal como barra dividida. */
 function SplitBar({ vehicular, peatonal }: { vehicular: number | null; peatonal: number | null }) {
   if (vehicular === null && peatonal === null) {
-    return <p className="text-[13px] text-muted-foreground">Sin datos de reparto.</p>;
+    return <p className="text-sm text-muted-foreground">Sin datos de reparto.</p>;
   }
   const v = vehicular ?? 0;
   const p = peatonal ?? 0;
@@ -216,37 +218,37 @@ function ScreenPlaybackForm({
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Duración spot (s)
-          <input
+          <Input
             value={durInput}
             onChange={(e) => setDurInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
             inputMode="numeric"
             placeholder="10"
             disabled={pending}
-            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+            className="tabular-nums"
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Reproducciones / día
-          <input
+          <Input
             value={playsInput}
             onChange={(e) => setPlaysInput(e.target.value.replace(/\D/g, "").slice(0, 7))}
             inputMode="numeric"
             placeholder="900"
             disabled={pending}
-            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+            className="tabular-nums"
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Impactos / día
-          <input
+          <Input
             value={impactInput}
             onChange={(e) => setImpactInput(e.target.value.replace(/\D/g, "").slice(0, 9))}
             inputMode="numeric"
             placeholder="150000"
             disabled={pending}
-            className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm tabular-nums"
+            className="tabular-nums"
           />
         </label>
       </div>
@@ -533,7 +535,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           <span className="flex flex-wrap items-center gap-1.5">
             <ScreenActiveBadge isActive={s.is_active === true} />
             {enriching && <GeneratingBadge />}
-            <span className="text-[11px] text-muted-foreground tabular-nums">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {formatNumber(detail?.bookings_count ?? 0)} reservas · {formatNumber(detail?.lines_count ?? 0)} líneas en órdenes
             </span>
             {canManage && (
@@ -600,7 +602,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
 
       {detail && s && tab === "ficha" && (
         <>
-          <AppCard title="Formato" description="Soporte, medidas y tecnología." aria-label="Formato de la pantalla">
+          <AppCard title="Formato" description="Soporte, medidas y tecnología." tone="sky" aria-label="Formato de la pantalla">
             {media.length > 0 && (
               <div className="relative mb-4 aspect-[16/9] w-full overflow-hidden rounded-lg ring-1 ring-border">
                 <Image
@@ -631,7 +633,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             </div>
           </AppCard>
 
-          <AppCard title="Ubicación" description="Dónde está y cómo llegar." aria-label="Ubicación de la pantalla">
+          <AppCard title="Ubicación" description="Dónde está y cómo llegar." tone="sky" aria-label="Ubicación de la pantalla">
             <ScreenMap
               lat={toNum(v?.latitude)}
               lng={toNum(v?.longitude)}
@@ -641,7 +643,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             <div className="mt-4">
               <p className="text-[15px] leading-snug font-medium tracking-tight">{address}</p>
               {(place || regionPostal) && (
-                <p className="mt-1 text-[13px] text-muted-foreground">
+                <p className="mt-1 text-sm text-muted-foreground">
                   {[place || null, regionPostal || null].filter(Boolean).join(" · ")}
                 </p>
               )}
@@ -678,7 +680,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               tone="amber"
               aria-label="Restricciones"
             >
-              <p className="text-[13px] leading-relaxed">{str(s.restrictions)}</p>
+              <p className="text-sm leading-relaxed">{str(s.restrictions)}</p>
             </AppCard>
           )}
         </>
@@ -686,7 +688,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
 
       {detail && s && tab === "comercial" && (
         <>
-          <AppCard variant="hero" title="Precio de catálogo" description="Base para cotizar esta pantalla.">
+          <AppCard variant="hero" title="Precio de catálogo" description="Base para cotizar esta pantalla." tone="violet">
             <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
               <Kpi
                 label="Precio"
@@ -702,7 +704,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             </div>
           </AppCard>
 
-          <AppCard title="Rendimiento" description="Qué entrega por día y su calificación global.">
+          <AppCard title="Rendimiento" description="Qué entrega por día y su calificación global." tone="violet">
             <div className="flex flex-col gap-4">
               <ScoreBar label="Score global" hint="0–10" value={scoreTxt} bar={scoreBar} />
               {!editingPlayback ? (
@@ -747,21 +749,21 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             </div>
           </AppCard>
 
-          <AppCard title="Argumento comercial" description="Cómo venderla: a quién le sirve y por qué.">
+          <AppCard title="Argumento comercial" description="Cómo venderla: a quién le sirve y por qué." tone="violet">
             <div className="flex flex-col gap-4">
               {str(s.audience_target) !== "—" && (
                 <div>
-                  <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Audiencia</p>
+                  <p className="text-xs text-muted-foreground">Audiencia</p>
                   <p className="mt-1 text-[15px] leading-snug font-medium tracking-tight">{str(s.audience_target)}</p>
                 </div>
               )}
               {str(s.sales_pitch) !== "—" && (
-                <blockquote className="border-l-2 border-primary/40 pl-3 text-[13px] leading-relaxed text-foreground/90 italic">
+                <blockquote className="border-l-2 border-primary/40 pl-3 text-sm leading-relaxed break-words text-foreground/90 italic">
                   {str(s.sales_pitch)}
                 </blockquote>
               )}
               {str(s.description) !== "—" && (
-                <p className="text-[13px] leading-relaxed text-muted-foreground">{str(s.description)}</p>
+                <p className="text-sm leading-relaxed text-muted-foreground">{str(s.description)}</p>
               )}
               {tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5" aria-label="Etiquetas">
@@ -779,7 +781,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
 
       {detail && s && tab === "geo" && (
         <>
-          <AppCard title="Perfil de la zona" description="Afinidades del entorno, de mayor a menor." aria-label="Perfil">
+          <AppCard title="Perfil de la zona" description="Afinidades del entorno, de mayor a menor." tone="sky" aria-label="Perfil">
             <div className="flex flex-col gap-4">
               {geoItems.map((g) => (
                 <ScoreBar key={g.key} label={g.label} hint={g.hint} value={g.text} bar={g.bar} />
@@ -787,7 +789,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             </div>
           </AppCard>
 
-          <AppCard title="Tránsito" description="Cómo se mueve la gente frente a la pantalla." aria-label="Tránsito">
+          <AppCard title="Tránsito" description="Cómo se mueve la gente frente a la pantalla." tone="sky" aria-label="Tránsito">
             <SplitBar vehicular={toNum(s.vehicular_pct)} peatonal={toNum(s.pedestrian_pct)} />
             {vialidad.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-1.5">
@@ -811,7 +813,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
               if (biz.length === 0) return null;
               return (
                 <div className="mt-4 border-t border-border/60 pt-4">
-                  <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  <p className="text-xs text-muted-foreground">
                     Negocios afines ({formatNumber(biz.length)})
                   </p>
                   <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Negocios afines">
@@ -827,13 +829,14 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
           <AppCard
             title={`Puntos de interés${toNum(s.pois_total_count) !== null ? ` (${formatNumber(toNum(s.pois_total_count))})` : ""}`}
             description="Anclas cercanas que explican el flujo."
+            tone="emerald"
             aria-label="Puntos de interés"
           >
             {pois.length > 0 ? (
               <ul className="flex flex-col divide-y divide-border/60">
                 {pois.map((p, i) => (
                   <li key={i} className="flex items-baseline justify-between gap-3 py-2">
-                    <span className="min-w-0 truncate text-[13px] font-medium">{p.name ?? "—"}</span>
+                    <span className="min-w-0 truncate text-sm font-medium">{p.name ?? "—"}</span>
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                       {[p.category, typeof p.distance_meters === "number" ? `${formatNumber(p.distance_meters)} m` : null]
                         .filter(Boolean)
@@ -843,7 +846,7 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
                 ))}
               </ul>
             ) : (
-              <p className="text-[13px] text-muted-foreground">Sin detalle de POIs.</p>
+              <p className="text-sm text-muted-foreground">Sin detalle de POIs.</p>
             )}
           </AppCard>
 

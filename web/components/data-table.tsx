@@ -5,7 +5,7 @@ import { cn } from "cn";
 /**
  * SSOT del estilo principal de tabla (referencia: catálogo).
  * Estructura: header con fondo, sin caps, hover en filas, bordes.
- * `text-sm` y `px-3 py-3`. Para drawers usar `drawer-table` (compacta).
+ * `text-sm` y `px-4 py-3`. Para drawers usar `drawer-table` (compacta).
  */
 export function DataTable({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -38,7 +38,7 @@ export function DataTableRow({
   className?: string;
 } & TableHTMLAttributes<HTMLTableRowElement>) {
   return (
-    <tr className={cn("border-b last:border-0 hover:bg-muted/30", className)} {...rest}>
+    <tr className={cn("border-b last:border-0 transition-colors hover:bg-muted/30", className)} {...rest}>
       {children}
     </tr>
   );
@@ -55,7 +55,7 @@ export function DataTableTh({
   className?: string;
 } & ThHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <th className={cn("px-3 py-3 font-medium", numeric && "text-right", className)} {...rest}>
+    <th className={cn("px-4 py-3 font-medium", numeric && "text-right", className)} {...rest}>
       {children}
     </th>
   );
@@ -72,7 +72,7 @@ export function DataTableTd({
   className?: string;
 } & TdHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <td className={cn("px-3 py-3", numeric && "text-right", className)} {...rest}>
+    <td className={cn("px-4 py-3 align-middle", numeric && "text-right tabular-nums", className)} {...rest}>
       {children}
     </td>
   );

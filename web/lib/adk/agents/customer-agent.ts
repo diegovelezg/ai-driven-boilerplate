@@ -10,8 +10,8 @@ import { getLlmConfig } from "@/lib/ai/llm-config";
 import { resolveModelInstance } from "@/lib/ai/model-resolver";
 import { bucketMonthly, computeFinanceKpis } from "@/lib/finance";
 import { getDashboardSnapshot } from "@/lib/dashboard";
-import { ORDER_STAGE_LABELS, orderStage } from "@/lib/order-stage";
-import { BILLING_LABELS, billingStatus } from "@/lib/billing-status";
+import { ORDER_STAGE_LABELS, orderStage, orderTiming } from "@/lib/order-stage";
+import { BILLING_LABELS, billingStatus, toBillingInvoice, aggregateCobranza } from "@/lib/billing-status";
 import { invoiceMatchesOrder, normalizeCurrency } from "@/lib/currency";
 
 export interface AgentContext {
@@ -113,7 +113,7 @@ function getOrderTool(ctx: AgentContext) {
   return new FunctionTool({
     name: "get_order",
     description:
-      "Estado real de una orden de inserción: etapa operativa (Firmada/Materiales/Al aire/Por certificar/Cerrada), OM, materiales/QC y cobro en paralelo. Busca por order_id, io_number o texto q.",
+      "Estado real de una orden de inserción: etapa operativa (Firmada/Materiales/Programada/Salida atrasada/Al aire/Por certificar/Cerrada), OM, materiales/QC y cobro en paralelo. Busca por order_id, io_number o texto q.",
     parameters: z.object({
       order_id: z.string().uuid().describe("ID exacto de la orden (io_orders.id).").optional(),
       io_number: z.string().min(3).max(40).describe("Número legible (p.ej. SM-2026-0005).").optional(),
@@ -160,15 +160,14 @@ function getOrderTool(ctx: AgentContext) {
           (c) => c.qc_status !== "approved" || c.legal_status !== "approved",
         ).length;
         const materialsOk = creaAny && creaPending === 0;
-        const endsAt = o.ends_at ? Date.parse(String(o.ends_at)) : NaN;
-        const ended = Number.isFinite(endsAt) ? endsAt <= Date.now() : false;
+
         const certified = detail.photos_count > 0;
         const { index, stage } = orderStage({
           status: status || null,
           signed: status === "signed",
           hasOm,
           materialsOk,
-          ended,
+          ...orderTiming(o, detail.lines, Date.now()),
           certified,
         });
         const gross = detail.lines.reduce((a, l) => a + Number(l.rate_minor ?? 0), 0);
@@ -176,12 +175,7 @@ function getOrderTool(ctx: AgentContext) {
         const invSame = detail.invoices.filter((v) => invoiceMatchesOrder(v.currency, orderCurrency));
         const bill = billingStatus({
           gross_minor: gross,
-          invoices: invSame.map((v) => ({
-            amount_minor: Number(v.amount_minor ?? 0),
-            status: String(v.status ?? ""),
-            issue_date: (v.issue_date as string | null) ?? null,
-            due_date: (v.due_date as string | null) ?? null,
-          })),
+          invoices: invSame.map(toBillingInvoice),
           starts_at: (o.starts_at as string | null) ?? null,
           payment_terms_days: typeof o.payment_terms_days === "number" ? (o.payment_terms_days as number) : null,
         });
@@ -209,6 +203,7 @@ function getOrderTool(ctx: AgentContext) {
             invoiced_minor: bill.invoiced_minor,
             paid_minor: bill.paid_minor,
             pending_minor: bill.pending_minor,
+            unbilled_minor: bill.unbilled_minor,
             overdue_minor: bill.overdue_minor,
             is_prepaid: bill.isPrepaid,
           },
@@ -417,7 +412,7 @@ async function fetchFinance(storeId: string, currency?: string) {
   }
   const { data: invData, error: invErr } = await db
     .from("io_invoices")
-    .select("amount_minor,currency,status")
+    .select("amount_minor,currency,status,issue_date,due_date,payments:io_invoice_payments!io_invoice_payments_same_store_fk(*)")
     .eq("store_id", storeId)
     .limit(2000);
   if (invErr) throw new Error(`facturas: ${invErr.message}`);
@@ -431,17 +426,8 @@ async function fetchFinance(storeId: string, currency?: string) {
     }));
   const buckets = bucketMonthly(finOrders, viewCurrency);
   const kpis = computeFinanceKpis(finOrders, viewCurrency);
-  let invoiced = 0;
-  let paid = 0;
-  for (const v of invRows) {
-    if (!invoiceMatchesOrder(v.currency, viewCurrency)) continue;
-    const amount = Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0));
-    const st = String(v.status ?? "");
-    if (st === "cancelled" || st === "draft" || amount <= 0) continue;
-    if (st === "paid" || st === "issued" || st === "overdue") invoiced += amount;
-    if (st === "paid") paid += amount;
-  }
-  return { currency: viewCurrency, base, buckets, kpis, invoiced_minor: invoiced, paid_minor: paid, pending_minor: Math.max(0, invoiced - paid) };
+  const totals = aggregateCobranza(invRows.filter((v) => invoiceMatchesOrder(v.currency, viewCurrency)).map(toBillingInvoice), Date.now());
+  return { currency: viewCurrency, base, buckets, kpis, invoiced_minor: totals.invoicedMinor, paid_minor: totals.paidMinor, pending_minor: totals.pendingMinor };
 }
 
 function getFinanceTool(ctx: AgentContext) {

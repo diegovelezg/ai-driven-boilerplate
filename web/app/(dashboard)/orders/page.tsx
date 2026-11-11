@@ -7,21 +7,14 @@ import { Button } from "@/components/ui/button";
 import { loadPageData } from "@/lib/page-data";
 import { getMyStoreRole } from "@/lib/tenant";
 import type { MemberRole } from "@/lib/roles";
-import type { OrderStageKey } from "@/lib/order-stage";
+import { ORDER_STAGES as STAGES, type OrderStageKey } from "@/lib/order-stage";
 import type { BillingStatusKey } from "@/lib/billing-status";
 import { listOrders } from "@/lib/orders-db";
 import { OrdersList } from "./orders-list";
 
 export const instant = false;
 
-const STAGES: OrderStageKey[] = [
-  "firmada",
-  "materiales",
-  "al_aire",
-  "por_certificar",
-  "cerrada",
-  "cancelada",
-];
+
 
 const BILLINGS: BillingStatusKey[] = [
   "sin_facturar",
@@ -58,7 +51,7 @@ export default async function OrdenesPage({
   const { rows, myRole } = data;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[1200px]">
       <PageHeader
         eyebrow="DOOH"
         title="Órdenes"

@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useRef, useState, useTransition } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -122,13 +124,11 @@ export function OrderLinesForm({
     });
   }
 
-  const inputCls = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
-
   return (
     <form
       ref={formRef}
       noValidate
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
         save();
@@ -140,38 +140,38 @@ export function OrderLinesForm({
         </p>
       )}
       {rows.map((r, i) => (
-        <fieldset key={r.key} className="grid grid-cols-2 gap-2 rounded-lg bg-muted/40 px-3 py-3 sm:grid-cols-4">
+        <fieldset key={r.key} className="grid grid-cols-1 gap-4 rounded-lg bg-muted/40 px-3 py-3 sm:grid-cols-2">
           <legend className="sr-only">Línea {i + 1}</legend>
-          <p className="col-span-2 truncate text-[13px] font-medium sm:col-span-4" title={r.screen_name ?? undefined}>
+          <p className="break-words text-sm font-medium sm:col-span-2" title={r.screen_name ?? undefined}>
             {i + 1}. {r.screen_name ?? "—"}
           </p>
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Inicio *
-            <input
+            <Input
               type="date"
               name={`line-${i}-starts`}
               value={r.starts}
               onChange={(e) => setRow(i, { starts: e.target.value })}
               disabled={pending}
               aria-invalid={invalid.has(`line-${i}-starts`)}
-              className={`${inputCls}${bad(`line-${i}-starts`)}`}
+              className={`${bad(`line-${i}-starts`)}`}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Fin *
-            <input
+            <Input
               type="date"
               name={`line-${i}-ends`}
               value={r.ends}
               onChange={(e) => setRow(i, { ends: e.target.value })}
               disabled={pending}
               aria-invalid={invalid.has(`line-${i}-ends`)}
-              className={`${inputCls}${bad(`line-${i}-ends`)}`}
+              className={`${bad(`line-${i}-ends`)}`}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             Total * ({orderCurrency})
-            <input
+            <Input
               name={`line-${i}-total`}
               value={r.total}
               onChange={(e) => setRow(i, { total: e.target.value })}
@@ -179,7 +179,7 @@ export function OrderLinesForm({
               inputMode="decimal"
               placeholder="2000"
               aria-invalid={invalid.has(`line-${i}-total`)}
-              className={`${inputCls} text-right tabular-nums${bad(`line-${i}-total`)}`}
+              className={`text-right tabular-nums${bad(`line-${i}-total`)}`}
             />
           </label>
           <div className="flex items-end">
@@ -200,7 +200,7 @@ export function OrderLinesForm({
       ))}
 
       <div className="flex flex-wrap items-end gap-2">
-        <div className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs">
+        <div className="form-field w-full flex-1 sm:min-w-[220px]">
           Agregar pantalla
           <AppSelect
             value={addId}
@@ -224,7 +224,7 @@ export function OrderLinesForm({
           {`Guardar${grossMajor > 0 ? ` · ${formatMoney(Math.round(grossMajor * 100), orderCurrency)}` : ""}`}
         </SubmitButton>
         <CancelButton onCancel={onCancel} disabled={pending} />
-        <span className="text-[11px] text-muted-foreground tabular-nums">
+        <span className="text-xs text-muted-foreground tabular-nums">
           {formatNumber(rows.length)} línea{rows.length === 1 ? "" : "s"}
         </span>
       </div>

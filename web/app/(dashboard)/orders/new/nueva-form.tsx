@@ -1,5 +1,8 @@
 "use client";
 
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, CalendarDays, CalendarIcon, Check, ChevronsUpDown, Plus, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -92,7 +95,7 @@ function PeriodDatePicker({
   const selected = parseISODate(value);
 
   return (
-    <div className="flex min-w-0 flex-col gap-1 text-xs">
+    <div className="form-field">
       {label}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
@@ -212,7 +215,7 @@ function ScreenMultiSelect({
         <PopoverContent align="start" className="w-[min(24rem,calc(100vw-3rem))] p-2">
           <div className="relative">
             <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
+            <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Buscar por nombre, código, ubicación…"
@@ -222,11 +225,11 @@ function ScreenMultiSelect({
             />
           </div>
           <div className="flex items-center justify-between gap-2 px-1 pt-2 pb-1">
-            <span className="text-[11px] text-muted-foreground tabular-nums">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {formatNumber(visible.length)} de {formatNumber(screens.length)}
             </span>
             <div className="flex items-center gap-1">
-              <label className="flex cursor-pointer items-center gap-1.5 pr-1 text-[11px] text-muted-foreground">
+              <label className="flex cursor-pointer items-center gap-1.5 pr-1 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={availableOnly}
@@ -257,7 +260,7 @@ function ScreenMultiSelect({
           </div>
           <div className="max-h-64 overflow-y-auto" role="group" aria-label="Pantallas disponibles">
             {!periodReady && (
-              <p className="px-2 pt-1 pb-2 text-[11px] text-muted-foreground">
+              <p className="px-2 pt-1 pb-2 text-xs text-muted-foreground">
                 Elige Inicio y Fin para ver disponibilidad.
               </p>
             )}
@@ -297,10 +300,10 @@ function ScreenMultiSelect({
                         <span className="truncate text-xs font-medium">{s.name}</span>
                         {checked && <Check aria-hidden className="size-3.5 shrink-0 text-primary" />}
                       </span>
-                      {note && <span className="truncate text-[11px] text-destructive">{note}</span>}
+                      {note && <span className="truncate text-xs text-destructive">{note}</span>}
                     </span>
                     {s.detail && (
-                      <span className="max-w-[40%] truncate text-[11px] text-muted-foreground">{s.detail}</span>
+                      <span className="max-w-[40%] truncate text-xs text-muted-foreground">{s.detail}</span>
                     )}
                   </label>
                   <RowIconButton
@@ -321,19 +324,19 @@ function ScreenMultiSelect({
             )}
           </div>
           {periodReady && !isChecking && !availError && occupiedCount === 0 && (
-            <p className="flex items-center gap-1 px-2 text-[11px] text-emerald-700 tabular-nums" role="status">
+            <p className="flex items-center gap-1 px-2 text-xs text-emerald-700 tabular-nums" role="status">
               <Check aria-hidden className="size-3.5" />
               Todo libre en {periodLabel}
             </p>
           )}
           {periodReady && !isChecking && availError && (
-            <p className="px-2 text-[11px] text-amber-700" role="alert">
+            <p className="px-2 text-xs text-amber-700" role="alert">
               {availError} Se revalida al crear.
             </p>
           )}
           {periodReady && occupiedCount > 0 && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-destructive/5 px-2.5 py-2">
-              <p className="text-[11px] text-destructive tabular-nums">
+              <p className="text-xs text-destructive tabular-nums">
                 {formatNumber(occupiedCount)} ocupada{plural(occupiedCount)} en {periodLabel}
               </p>
               {nextWindowLabel && onApplyWindow && (
@@ -423,7 +426,7 @@ function ScreenCalendarDialog({
               modifiersClassNames={{ booked: "bg-destructive/10 text-destructive line-through" }}
               disabled={booked}
             />
-            <p className="text-[11px] text-muted-foreground tabular-nums">
+            <p className="text-xs text-muted-foreground tabular-nums">
               <span className="mr-1 inline-block size-2.5 rounded-sm bg-destructive/20 align-middle" aria-hidden />
               ocupado · libre desde {free ? formatDate(free) : "—"}
               {windowStart && (
@@ -725,10 +728,10 @@ export function NuevaOrdenForm({
 
   return (
     <>
-    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
       <AppCard title="Contratante">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="flex min-w-0 flex-col gap-1 text-xs">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="form-field">
             Contratante *
             <input type="hidden" name="company_id" value={company} />
             <Select
@@ -748,7 +751,7 @@ export function NuevaOrdenForm({
             </Select>
           </div>
 
-          <div className="flex min-w-0 flex-col gap-1 text-xs">
+          <div className="form-field">
             Marca *
             <input type="hidden" name="brand" value={brand} />
             <ComboboxField
@@ -762,7 +765,7 @@ export function NuevaOrdenForm({
               disabled={pending}
             />
           </div>
-          <div className="flex min-w-0 flex-col gap-1 text-xs">
+          <div className="form-field">
             Condición de pago *
               <input type="hidden" name="payment_terms_days" value={paymentTerms} />
               <Select
@@ -782,7 +785,7 @@ export function NuevaOrdenForm({
                 </SelectContent>
               </Select>
           </div>
-          <div className="flex min-w-0 flex-col gap-1 text-xs">
+          <div className="form-field">
             Moneda de la orden *
               <input type="hidden" name="currency" value={currency} />
               <Select
@@ -818,32 +821,32 @@ export function NuevaOrdenForm({
             disabled={pending}
             required
           />
-          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
+          <label className="form-field sm:col-span-2">
             Notas
             <input type="hidden" name="notes" value={notes} />
-            <input
+            <Textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               maxLength={2000}
               disabled={pending}
               placeholder="Observaciones para la nota de pedido…"
               aria-label="Notas"
-              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+
             />
           </label>
         </div>
         {contactsLoading ? (
-          <p className="mt-2 text-[11px] text-muted-foreground" role="status">Cargando contactos…</p>
+          <p className="mt-2 text-xs text-muted-foreground" role="status">Cargando contactos…</p>
         ) : company && contratanteContacts.length === 0 ? (
-          <p className="mt-2 text-[11px] text-muted-foreground">
+          <p className="mt-2 text-xs text-muted-foreground">
             El contratante no tiene contactos. Créalos en Empresas → Contactos.
           </p>
         ) : null}
       </AppCard>
 
       <AppCard title="Facturación">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="flex min-w-0 flex-col gap-1 text-xs">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="form-field">
             Documento para facturación *
             <input type="hidden" name="billing_doc" value={billingDoc} />
             <AppSelect
@@ -860,30 +863,30 @@ export function NuevaOrdenForm({
               allowClear={false}
             />
           </div>
-          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-3">
+          <label className="form-field sm:col-span-2">
             Indicaciones para facturación
             <input type="hidden" name="billing_detail" value={billingDetail} />
-            <input
+            <Input
               value={billingDetail}
               onChange={(e) => setBillingDetail(e.target.value)}
               maxLength={500}
               disabled={pending}
               placeholder="HES, una factura por OC…"
               aria-label="Indicaciones para facturación"
-              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+
             />
           </label>
-          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2 lg:col-span-4">
+          <label className="form-field sm:col-span-2">
             Observaciones para registro de factura
             <input type="hidden" name="invoice_registration" value={invoiceRegistration} />
-            <input
+            <Input
               value={invoiceRegistration}
               onChange={(e) => setInvoiceRegistration(e.target.value)}
               maxLength={500}
               disabled={pending}
               placeholder="Envíe su factura a más tardar el día 3…"
               aria-label="Observaciones para registro de factura"
-              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+
             />
           </label>
           <ContactPicker
@@ -894,17 +897,17 @@ export function NuevaOrdenForm({
             options={contratanteContacts}
             disabled={pending}
           />
-          <label className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2">
+          <label className="form-field sm:col-span-2">
             Correo electrónico y/o portal
             <input type="hidden" name="billing_portal_email" value={billingPortal} />
-            <input
+            <Input
               value={billingPortal}
               onChange={(e) => setBillingPortal(e.target.value)}
               maxLength={320}
               disabled={pending}
               placeholder="Empresa | correo…"
               aria-label="Correo electrónico y/o portal"
-              className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm"
+
             />
           </label>
         </div>
@@ -912,7 +915,7 @@ export function NuevaOrdenForm({
 
       <AppCard title="Intermediario">
         <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
-          <label className="flex cursor-pointer flex-row items-center gap-2 text-xs">
+          <label className="flex cursor-pointer flex-row items-center gap-2 text-sm">
             <Checkbox
               checked={agencySelf}
               onCheckedChange={(v) => {
@@ -930,7 +933,7 @@ export function NuevaOrdenForm({
             <input type="hidden" name="agency_is_self" value={agencySelf ? "1" : ""} />
           </label>
           {!agencySelf && (
-            <div className="flex min-w-[220px] flex-1 flex-col gap-1 text-xs">
+            <div className="form-field w-full flex-1 sm:min-w-[220px]">
               Empresa intermediaria *
               <input type="hidden" name="agency_company_id" value={agencyId === "" ? "" : agencyId} />
               <AppSelect
@@ -961,7 +964,7 @@ export function NuevaOrdenForm({
 
       <AppCard title="Periodo">
         <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-[1fr_1fr_0.5fr]">
             <PeriodDatePicker
               label="Inicio *"
               pickerLabel="Inicio del periodo"
@@ -978,7 +981,7 @@ export function NuevaOrdenForm({
               disabledDays={starts ? (d) => d < (parseISODate(starts) ?? d) : undefined}
               onChange={setEnds}
             />
-            <div className="flex min-w-0 flex-col gap-1 text-xs">
+            <div className="form-field col-span-2 sm:col-span-1">
               Días
               <output
                 aria-label="Días del periodo"
@@ -1021,7 +1024,7 @@ export function NuevaOrdenForm({
             />
           )}
           {checking && (
-            <p className="text-[11px] text-muted-foreground" role="status">Verificando disponibilidad…</p>
+            <p className="text-xs text-muted-foreground" role="status">Verificando disponibilidad…</p>
           )}
           {rows.length > 0 && (
             <section className="flex flex-col gap-2" aria-label="Detalle por pantalla">
@@ -1037,9 +1040,9 @@ export function NuevaOrdenForm({
                       Mover al próximo hueco: {formatDate(commonWindow)} → {formatDate(addDays(commonWindow, dias - 1))}
                     </Button>
                   ) : checking ? (
-                    <span className="text-[11px] text-muted-foreground">Buscando hueco común…</span>
+                    <span className="text-xs text-muted-foreground">Buscando hueco común…</span>
                   ) : (
-                    <span className="text-[11px] text-muted-foreground">Sin hueco común libre en 12 meses.</span>
+                    <span className="text-xs text-muted-foreground">Sin hueco común libre en 12 meses.</span>
                   ))}
                 </div>
               )}
@@ -1066,7 +1069,7 @@ export function NuevaOrdenForm({
                     <DataTableTd className="font-medium" title={s.detail ?? undefined}>
                       {s.name}
                       {hits.length > 0 && (
-                        <span className="block text-[11px] font-normal text-destructive">
+                        <span className="block text-xs font-normal text-destructive">
                           Ocupada · {[hits[0].io_number, hits[0].brand].filter(Boolean).join(" · ") || "otro periodo"} — quítala o cambia fechas
                         </span>
                       )}
@@ -1077,14 +1080,14 @@ export function NuevaOrdenForm({
                     <input type="hidden" name="line_ends_at" value={ends} />
                     <input type="hidden" name="line_cant_dias" value={dias ?? ""} />
                     <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number)) : ""} />
-                    <input
+                    <Input
                       value={prices[s.id] ?? ""}
                       onChange={(e) => setPrices((p) => ({ ...p, [s.id]: e.target.value }))}
                       disabled={pending || hits.length > 0}
                       inputMode="decimal"
                       placeholder={s.price_pen !== null && Number.isFinite(Number(s.price_pen)) ? String(s.price_pen) : "2000"}
                       aria-label={`Precio por día ${s.name}`}
-                      className="h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-right text-sm tabular-nums"
+                      className="w-28 text-right tabular-nums"
                     />
                   </DataTableTd>
                   <DataTableTd numeric className="tabular-nums">
@@ -1141,7 +1144,7 @@ export function NuevaOrdenForm({
           </SubmitButton>
         </div>
         {!canSubmit && !pending && (
-          <p className="text-[11px] text-muted-foreground">Falta: {missing.join(", ")}.</p>
+          <p className="text-xs text-muted-foreground">Falta: {missing.join(", ")}.</p>
         )}
       </div>
 
@@ -1189,7 +1192,7 @@ function ContactPicker({
 }) {
   const optionLabel = (c: CompanyContact) => (c.email ? `${c.name} (${c.email})` : c.name);
   return (
-    <div className="flex min-w-0 flex-col gap-1 text-xs">
+    <div className="form-field">
       {label}{required ? " *" : ""}
       <input type="hidden" name={field} value={value} />
       <AppSelect

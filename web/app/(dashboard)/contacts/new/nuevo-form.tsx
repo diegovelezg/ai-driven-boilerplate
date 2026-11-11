@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useActionState, useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { SubmitButton } from "@/components/buttons";
@@ -83,13 +85,13 @@ export function NuevoContactoForm({
   }, [state, mark]);
 
   return (
-    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:items-end">
-        <div className="flex min-w-0 flex-col gap-1 text-xs">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="form-field">
           Empresa *
           <input type="hidden" name="company_id" value={company} />
           <Select value={company} onValueChange={(v) => { if (v) { setCompany(v); clear("company"); } }} disabled={pending}>
-            <SelectTrigger aria-label="Empresa" aria-invalid={invalid.has("company")} data-field="company_id" className={invalid.has("company") ? bad("company").trim() : undefined}>
+            <SelectTrigger aria-label="Empresa" aria-invalid={invalid.has("company")} data-field="company_id" className={`w-full${bad("company")}`}>
               {/* Nombre explícito: el valor resuelto por defecto muestra el UUID
                   cuando los ítems del portal aún no están montados. */}
               <SelectValue placeholder="Elegir empresa…">{companyName ? toTitleCase(companyName) : undefined}</SelectValue>
@@ -101,7 +103,7 @@ export function NuevoContactoForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex min-w-0 flex-col gap-1 text-xs">
+        <div className="form-field">
           Cargo
           <input type="hidden" name="job_title" value={jobTitle} />
           <ComboboxField
@@ -115,7 +117,7 @@ export function NuevoContactoForm({
             disabled={pending}
           />
         </div>
-        <div className="flex h-9 items-center gap-2">
+        <div className="flex min-h-9 items-center gap-2 sm:col-span-2">
           <input type="hidden" name="is_primary" value={isPrimary ? "on" : ""} />
           <Checkbox
             id="nuevo-contacto-is-primary"
@@ -124,27 +126,27 @@ export function NuevoContactoForm({
             disabled={pending}
             aria-label="Contacto principal"
           />
-          <Label htmlFor="nuevo-contacto-is-primary" className="text-xs font-normal">
+          <Label htmlFor="nuevo-contacto-is-primary" className="font-normal">
             Principal
           </Label>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Nombre
-          <input name="first_name" maxLength={120} placeholder="Ana" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          <Input name="first_name" maxLength={120} placeholder="Ana" />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Apellido
-          <input name="last_name" maxLength={120} placeholder="Pérez" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          <Input name="last_name" maxLength={120} placeholder="Pérez" />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Email *
-          <input name="email" maxLength={320} placeholder="ana@acme.pe" value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} aria-invalid={invalid.has("email")} className={`h-9 rounded-lg border border-border bg-background px-2.5 text-sm${bad("email")}`} />
+          <Input name="email" maxLength={320} placeholder="ana@acme.pe" value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} aria-invalid={invalid.has("email")} className={`${bad("email")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Teléfono *
-          <input name="phone" type="tel" maxLength={40} placeholder="+51…" value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} aria-invalid={invalid.has("phone")} className={`h-9 rounded-lg border border-border bg-background px-2.5 text-sm${bad("phone")}`} />
+          <Input name="phone" type="tel" maxLength={40} placeholder="+51…" value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} aria-invalid={invalid.has("phone")} className={`${bad("phone")}`} />
         </label>
       </div>
       <div>

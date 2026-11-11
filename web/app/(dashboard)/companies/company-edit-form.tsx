@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useState, useTransition } from "react";
 import { Save } from "lucide-react";
 import { CancelButton, SubmitButton } from "@/components/buttons";
@@ -95,36 +97,34 @@ export function CompanyEditForm({
     });
   }
 
-  const inputCls = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
-
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="form-field">
           Nombre *
-          <input value={name} onChange={(e) => { setName(e.target.value); clear("name"); }} maxLength={200} disabled={pending} aria-invalid={invalid.has("name")} className={`${inputCls}${bad("name")}`} />
+          <Input value={name} onChange={(e) => { setName(e.target.value); clear("name"); }} maxLength={200} disabled={pending} aria-invalid={invalid.has("name")} className={`${bad("name")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           ID fiscal
-          <input value={taxId} onChange={(e) => setTaxId(e.target.value)} maxLength={40} disabled={pending} className={inputCls} />
+          <Input value={taxId} onChange={(e) => setTaxId(e.target.value)} maxLength={40} disabled={pending} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Web
-          <input value={domain} onChange={(e) => { setDomain(e.target.value); clear("domain"); }} maxLength={253} placeholder="acme.pe" disabled={pending} aria-invalid={invalid.has("domain")} className={`${inputCls}${bad("domain")}`} />
+          <Input value={domain} onChange={(e) => { setDomain(e.target.value); clear("domain"); }} maxLength={253} placeholder="acme.pe" disabled={pending} aria-invalid={invalid.has("domain")} className={`${bad("domain")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Teléfono
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" maxLength={40} disabled={pending} className={inputCls} />
+          <Input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" maxLength={40} disabled={pending} />
         </label>
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <label className="form-field sm:col-span-2">
           Dirección
-          <input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={300} disabled={pending} className={inputCls} />
+          <Input value={address} onChange={(e) => setAddress(e.target.value)} maxLength={300} disabled={pending} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Ciudad
-          <input value={city} onChange={(e) => setCity(e.target.value)} maxLength={120} disabled={pending} className={inputCls} />
+          <Input value={city} onChange={(e) => setCity(e.target.value)} maxLength={120} disabled={pending} />
         </label>
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="form-field">
           País
           <Select
             value={country.trim().toUpperCase() || "__none"}

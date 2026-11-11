@@ -20,7 +20,7 @@ export interface InvoiceFieldValues {
   status: string;
 }
 
-const INVOICE_STATUS_OPTIONS = ["issued", "paid"] as const;
+const INVOICE_STATUS_OPTIONS = ["issued"] as const;
 
 /** "5,000.50" / "5000" → céntimos; null = inválido.
  *  La coma solo vale como separador de miles (1-3 dígitos + grupos de 3):
@@ -60,7 +60,7 @@ export function validateInvoiceFields(v: InvoiceFieldValues): Array<{ key: Invoi
     out.push({ key: "due", message: "Vence antes de la emisión." });
   }
   if (!(INVOICE_STATUS_OPTIONS as readonly string[]).includes(v.status)) {
-    out.push({ key: "status", message: "Estado inicial inválido (emitida o pagada)." });
+    out.push({ key: "status", message: "Registra la factura emitida y luego su cobro." });
   }
   return out;
 }

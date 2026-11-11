@@ -56,14 +56,14 @@ export function DrawerShell({
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         className={cn(
-          "w-full gap-0 overflow-hidden p-0",
+          "data-[side=right]:w-full gap-0 overflow-hidden p-0",
           size === "wide"
             ? "data-[side=right]:sm:max-w-[min(920px,94vw)]"
             : "data-[side=right]:sm:max-w-[min(640px,94vw)]",
           contentClassName,
         )}
       >
-        <div className="flex shrink-0 items-center gap-4 border-b border-border/60 bg-gradient-to-br from-primary/[0.05] via-background to-background px-8 pt-6 pb-4">
+        <div className="flex shrink-0 items-center gap-4 border-b border-border/60 bg-gradient-to-br from-primary/[0.05] via-background to-background px-4 py-6 sm:px-6">
           <div
             aria-hidden
             className="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15"
@@ -71,8 +71,8 @@ export function DrawerShell({
             {avatar}
           </div>
           <div className="min-w-0 pr-8">
-            <SheetTitle className="truncate text-xl font-semibold tracking-tight">{title}</SheetTitle>
-            <SheetDescription className="truncate">{description ?? "—"}</SheetDescription>
+            <SheetTitle className="break-words text-xl font-semibold tracking-tight">{title}</SheetTitle>
+            <SheetDescription className="mt-1 break-words text-sm leading-relaxed">{description ?? "—"}</SheetDescription>
             {badges && (
               <div className="mt-2 flex flex-wrap items-center gap-2">{badges}</div>
             )}
@@ -80,9 +80,9 @@ export function DrawerShell({
         </div>
 
         {tabs && tabs.length > 0 && (
-          <div className="shrink-0 px-8 pt-5 pb-5">
+          <div className="shrink-0 px-4 py-4 sm:px-6">
             <div
-              className="no-scrollbar flex w-fit max-w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
+              className="flex w-full gap-1 overflow-x-auto overflow-y-hidden rounded-xl bg-muted/60 p-1.5"
               role="tablist"
               aria-label={tabListLabel ?? "Detalle"}
             >
@@ -111,8 +111,8 @@ export function DrawerShell({
           </div>
         )}
 
-        <div className="scroll-fade-b scrollbar-thin scrollbar-gutter-stable flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-          {fill ? children : <div className="flex flex-col gap-7 px-8 pt-2 pb-8">{children}</div>}
+        <div className="scroll-fade-b [scrollbar-gutter:stable] flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+          {fill ? children : <div className="flex flex-col gap-6 px-4 pt-4 pb-6 sm:px-6">{children}</div>}
         </div>
       </SheetContent>
     </Sheet>

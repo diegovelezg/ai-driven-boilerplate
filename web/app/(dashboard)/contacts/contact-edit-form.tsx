@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useState, useTransition } from "react";
 import { Save } from "lucide-react";
 import { CancelButton, SubmitButton } from "@/components/buttons";
@@ -80,30 +82,28 @@ export function ContactEditForm({
     });
   }
 
-  const inputCls = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
-
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="form-field">
           Nombre
-          <input value={firstName} onChange={(e) => setFirstName(e.target.value)} maxLength={120} disabled={pending} className={inputCls} />
+          <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} maxLength={120} disabled={pending} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Apellido
-          <input value={lastName} onChange={(e) => setLastName(e.target.value)} maxLength={120} disabled={pending} className={inputCls} />
+          <Input value={lastName} onChange={(e) => setLastName(e.target.value)} maxLength={120} disabled={pending} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Email
-          <input value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} maxLength={320} disabled={pending} aria-invalid={invalid.has("email")} className={`${inputCls}${bad("email")}`} />
+          <Input value={email} onChange={(e) => { setEmail(e.target.value); clear("email"); }} maxLength={320} disabled={pending} aria-invalid={invalid.has("email")} className={`${bad("email")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Teléfono
-          <input value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} maxLength={40} disabled={pending} aria-invalid={invalid.has("phone")} className={`${inputCls}${bad("phone")}`} />
+          <Input value={phone} onChange={(e) => { setPhone(e.target.value); clear("phone"); }} maxLength={40} disabled={pending} aria-invalid={invalid.has("phone")} className={`${bad("phone")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <label className="form-field sm:col-span-2">
           Cargo
-          <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} maxLength={120} placeholder="Compras, Gerencia…" disabled={pending} className={inputCls} />
+          <Input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} maxLength={120} placeholder="Compras, Gerencia…" disabled={pending} />
         </label>
       </div>
       <div className="flex h-9 items-center gap-2">
@@ -114,7 +114,7 @@ export function ContactEditForm({
           disabled={pending}
           aria-label="Contacto principal"
         />
-        <Label htmlFor="contact-edit-is-primary" className="text-xs font-normal">
+        <Label htmlFor="contact-edit-is-primary" className="font-normal">
           Principal
         </Label>
       </div>

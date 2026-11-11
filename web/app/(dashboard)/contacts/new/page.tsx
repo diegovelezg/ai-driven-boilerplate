@@ -30,7 +30,7 @@ export default async function NuevoContactoPage({
   const { companies, jobTitles } = data;
 
   return (
-    <div className="mx-auto flex w-full max-w-[720px] flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[720px]">
       <PageHeader
         eyebrow="CRM"
         title="Nuevo contacto"

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { requireMyStoreAccess } from "@/lib/tenant";
 import { normalizeCurrency } from "@/lib/currency";
-import { isValidISODate } from "@/lib/format";
+import { isValidISODate, todayLima } from "@/lib/format";
 import { resolveActor } from "@/lib/actor";
 
 export interface OrderFlowState {
@@ -534,7 +534,7 @@ function realDate(v: string): boolean {
 
 /** Registra una factura emitida contra la orden (monto, número, fechas, estado inicial).
  *  La moneda es siempre la de la orden (el trigger io_invoice_currency_check
- *  aborta cualquier mezcla PEN/USD). Sin `draft` en v1: nace emitida o pagada. */
+ *  aborta cualquier mezcla PEN/USD). Sin `draft` en v1: nace emitida; el cobro se registra por separado. */
 export async function createInvoiceAction(input: {
   orderId: string;
   number: string;
@@ -558,8 +558,8 @@ export async function createInvoiceAction(input: {
   if (due && !realDate(due)) return { ok: false, message: "Vencimiento inválido (aaaa-mm-dd)." };
   if (issue && due && due < issue) return { ok: false, message: "Vence antes de la emisión." };
   const status = String(input.status ?? "issued").trim() || "issued";
-  if (status !== "issued" && status !== "paid") {
-    return { ok: false, message: "Estado inicial inválido (emitida o pagada)." };
+  if (status !== "issued") {
+    return { ok: false, message: "Registra la factura emitida y luego su cobro con fecha y referencia." };
   }
   try {
     const db = getSupabase();
@@ -608,72 +608,100 @@ export async function createInvoiceAction(input: {
       .eq("id", orderId);
     revalidatePath("/orders");
     revalidatePath("/");
-    return { ok: true, message: status === "paid" ? "Factura registrada como pagada." : "Factura emitida registrada." };
+    revalidatePath("/finance");
+    return { ok: true, message: "Factura emitida registrada. Registra sus cobros por separado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
 
-/** Cambia el estado de una factura: emitida ↔ pagada, cualquiera → anulada.
- *  `vencida` se deriva sola (emitida + vencimiento < hoy) y no necesita botón.
- *  Anulada es terminal (no suma en cobro): para corregir, registra una nueva.
- *  Sin `draft` en v1: un `draft` legacy nunca transiciona (fail-closed). */
-function isTerminalInvoiceStatus(s: string): boolean {
-  return s === "cancelled";
-}
-
-const INVOICE_TRANSITIONS: Record<string, readonly string[]> = {
-  issued: ["paid", "cancelled"],
-  paid: ["issued", "cancelled"],
-  cancelled: [],
-};
-
+/** Anular una factura no perdona ni elimina cobros: la RPC verifica saldo bajo lock.
+ * El estado pagada se deriva de los cobros, nunca se cambia con un botón. */
 export async function setInvoiceStatusAction(input: {
   invoiceId: string;
   status: string;
 }): Promise<OrderFlowState> {
-  const id = String(input.invoiceId ?? "").trim();
-  const status = String(input.status ?? "").trim();
-  if (!id) return { ok: false, message: "Falta la factura." };
-  if (status !== "issued" && status !== "paid" && status !== "cancelled") {
-    return { ok: false, message: "Estado inválido (emitida, pagada o anulada)." };
+  if (input.status !== "cancelled") return { ok: false, message: "Registra o revierte un cobro para actualizar el saldo." };
+  try {
+    const db = getSupabase();
+    const loaded = await loadOwnedRow(db, "io_invoices", String(input.invoiceId ?? ""), "id,store_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const denied = await denyViewer(loaded.storeId);
+    if (denied) return { ok: false, message: denied };
+    const { error } = await db.rpc("io_cancel_invoice", {
+      p_store: loaded.storeId, p_invoice: input.invoiceId, p_actor: await resolveActor(),
+    });
+    if (error) return { ok: false, message: error.message };
+    refreshBilling();
+    return { ok: true, message: "Factura anulada." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+function refreshBilling() {
+  revalidatePath("/orders");
+  revalidatePath("/finance");
+  revalidatePath("/");
+}
+
+export async function recordInvoicePaymentAction(input: {
+  invoiceId: string;
+  requestId: string;
+  amountMinor: number;
+  paidOn: string;
+  reference: string;
+}): Promise<OrderFlowState> {
+  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) {
+    return { ok: false, message: "Monto de cobro inválido." };
+  }
+  if (!isValidISODate(input.paidOn) || input.paidOn > todayLima()) {
+    return { ok: false, message: "Fecha de cobro inválida o futura." };
+  }
+  if (!input.reference?.trim() || input.reference.trim().length > 200) {
+    return { ok: false, message: "Indica una referencia de cobro (máx 200)." };
   }
   try {
     const db = getSupabase();
-    const loaded = await loadOwnedRow(db, "io_invoices", id, "id,store_id,io_id,status");
+    const loaded = await loadOwnedRow(db, "io_invoices", input.invoiceId, "id,store_id");
     if ("error" in loaded) return { ok: false, message: loaded.error };
-    const { row: r, storeId } = loaded;
-    const denied = await denyViewer(storeId);
+    const denied = await denyViewer(loaded.storeId);
     if (denied) return { ok: false, message: denied };
-    const current = String(r.status ?? "");
-    if (isTerminalInvoiceStatus(current)) return { ok: false, message: "Anulada es terminal: registra una nueva factura." };
-    if (current === status) return { ok: false, message: "La factura ya está en ese estado." };
-    const allowed = INVOICE_TRANSITIONS[current];
-    if (!allowed || !allowed.includes(status)) {
-      return { ok: false, message: "Transición inválida (emitida ↔ pagada, cualquiera → anulada)." };
-    }
-    // La orden padre manda: cancelada bloquea (create ya lo exige en :419).
-    const { data: parent } = await db
-      .from("io_orders")
-      .select("status")
-      .eq("store_id", storeId)
-      .eq("id", String(r.io_id ?? ""))
-      .maybeSingle();
-    if (String((parent as Record<string, unknown> | null)?.status ?? "") === "cancelled") {
-      return { ok: false, message: "La orden está cancelada." };
-    }
-    const actor = await resolveActor();
-    const { error: werr } = await db.from("io_invoices").update({ status }).eq("store_id", storeId).eq("id", id);
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
-    await db
-      .from("io_orders")
-      .update({ updated_at: new Date().toISOString(), updated_by: actor })
-      .eq("store_id", storeId)
-      .eq("id", String(r.io_id ?? ""));
-    revalidatePath("/orders");
-    revalidatePath("/");
-    const label = status === "paid" ? "pagada" : status === "cancelled" ? "anulada" : "emitida";
-    return { ok: true, message: `Factura marcada como ${label}.` };
+    // No bloquear por cancelación de la orden: una deuda puede seguir vigente.
+    const { error } = await db.rpc("io_record_invoice_payment", {
+      p_store: loaded.storeId, p_invoice: input.invoiceId, p_payment: input.requestId,
+      p_amount: input.amountMinor, p_paid_on: input.paidOn,
+      p_reference: input.reference.trim(), p_actor: await resolveActor(),
+    });
+    if (error) return { ok: false, message: error.message };
+    refreshBilling();
+    return { ok: true, message: "Cobro registrado." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+export async function voidInvoicePaymentAction(input: {
+  invoiceId: string;
+  paymentId: string;
+  reason: string;
+}): Promise<OrderFlowState> {
+  if (!input.reason?.trim() || input.reason.trim().length > 500) {
+    return { ok: false, message: "Indica el motivo de la reversión (máx 500)." };
+  }
+  try {
+    const db = getSupabase();
+    const loaded = await loadOwnedRow(db, "io_invoices", input.invoiceId, "id,store_id");
+    if ("error" in loaded) return { ok: false, message: loaded.error };
+    const denied = await denyViewer(loaded.storeId);
+    if (denied) return { ok: false, message: denied };
+    const { error } = await db.rpc("io_void_invoice_payment", {
+      p_store: loaded.storeId, p_invoice: input.invoiceId, p_payment: input.paymentId,
+      p_reason: input.reason.trim(), p_actor: await resolveActor(),
+    });
+    if (error) return { ok: false, message: error.message };
+    refreshBilling();
+    return { ok: true, message: "Registro de cobro revertido; se conserva su historial." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }

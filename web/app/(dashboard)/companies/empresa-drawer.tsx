@@ -8,7 +8,6 @@ import { ArchiveToggleButton, EditButton, RetryButton } from "@/components/butto
 import { ArchivedBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { AppCard, AppCardState } from "@/components/app-card";
-import { SectionHeading } from "@/components/section-heading";
 import {
   DrawerShell,
   type DrawerTabDef,
@@ -224,7 +223,7 @@ export function EmpresaDrawer({
           <span className="flex flex-wrap items-center gap-1.5" aria-label={`Empresa ${kindLabel(kind)}, ${contacts.length} contactos, ${ios.length} pedidos`}>
             <CompanyKindBadge kind={kind} />
             {isArchived && <ArchivedBadge fem />}
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {contacts.length} contacto{contacts.length === 1 ? "" : "s"} · {ios.length} pedido{ios.length === 1 ? "" : "s"}
             </span>
           </span>
@@ -262,6 +261,7 @@ export function EmpresaDrawer({
           <AppCard
             title="Datos"
             description="Nombre, identificación y datos de contacto."
+            tone="sky"
             aria-label="Datos de la empresa"
             action={
               <span className="flex flex-wrap items-center gap-2">
@@ -305,27 +305,28 @@ export function EmpresaDrawer({
                 onCancel={() => setEditingDatos(false)}
               />
             ) : (
-            <dl className="grid gap-x-6 gap-y-2.5 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">ID fiscal</dt><dd className="mt-0.5 text-[13px]">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Web</dt><dd className="mt-0.5 text-[13px]">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-0.5 text-[13px]">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="mt-0.5 text-[13px]">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
-              <div><dt className="text-xs text-muted-foreground">Creada</dt><dd className="mt-0.5 text-[13px] tabular-nums">{typeof company?.created_by === "string" && company.created_by ? company.created_by : "—"}</dd></div>
+            <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
+              <div><dt className="text-xs text-muted-foreground">ID fiscal</dt><dd className="mt-1 text-sm">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Web</dt><dd className="mt-1 text-sm">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-1 text-sm tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-1 text-sm">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Ciudad / País</dt><dd className="mt-1 text-sm">{[company?.city, company?.country].filter((v) => typeof v === "string" && v).join(" · ") || "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Creada</dt><dd className="mt-1 text-sm tabular-nums">{typeof company?.created_by === "string" && company.created_by ? company.created_by : "—"}</dd></div>
               {typeof company?.updated_by === "string" && company.updated_by && company.updated_by !== company.created_by && (
-                <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="mt-0.5 text-[13px]">{String(company.updated_by)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Editada por</dt><dd className="mt-1 text-sm">{String(company.updated_by)}</dd></div>
               )}
             </dl>
             )}
           </AppCard>
           <AppCard
             title="Tipo"
+            tone="sky"
             aria-label="Tipo de empresa"
           >
             {canEdit ? (
               <KindForm key={companyId} companyId={companyId} initial={typeof company?.kind === "string" ? company.kind : null} onSaved={() => { router.refresh(); void load(); }} />
             ) : (
-              <p className="text-[13px] font-medium">{kindLabel(typeof company?.kind === "string" ? company.kind : null)}</p>
+              <p className="text-sm font-medium">{kindLabel(typeof company?.kind === "string" ? company.kind : null)}</p>
             )}
           </AppCard>
           {isAgency && canViewCommission && (
@@ -337,6 +338,7 @@ export function EmpresaDrawer({
                 </span>
               }
               description="Acuerdo por defecto (% sobre bruto)."
+              tone="violet"
               aria-label="Comisión de agencia"
             >
               <AgencyCommissionForm companyId={companyId} initial={commissionInitial} onSaved={() => void load()} />
@@ -351,9 +353,10 @@ export function EmpresaDrawer({
                 </span>
               }
               description="Acuerdo por defecto (% sobre bruto)."
+              tone="violet"
               aria-label="Comisión de agencia (restringida)"
             >
-              <p className="text-[13px] text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 El acuerdo de comisión existe pero solo es visible para Propietario y Administrador.
                 Si necesitas revisarlo, pide a un admin que lo confirme.
               </p>
@@ -367,25 +370,28 @@ export function EmpresaDrawer({
       )}
 
       {detail && tab === "contactos" && (
-        <section className="flex flex-col gap-2" aria-label="Contactos de la empresa">
-          <SectionHeading
-            title={`Contactos (${contacts.length})`}
-            hint="Varios contactos por empresa. Solo uno puede ser principal."
-          />
+        <AppCard
+          title={`Contactos (${contacts.length})`}
+          description="Varios contactos por empresa. Solo uno puede ser principal."
+          tone="sky"
+          aria-label="Contactos de la empresa"
+        >
           {contacts.length === 0 ? (
-            <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-              Sin contactos.
-            </p>
+            <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+              <p className="text-sm text-muted-foreground">
+                Sin contactos.
+              </p>
+            </div>
           ) : (
-            <DrawerTable>
-              <DrawerTableHeader>
+            <DrawerTable flush>
+              <DrawerTableHeader flush>
                 <DrawerTableTh>Nombre</DrawerTableTh>
                 <DrawerTableTh>Email</DrawerTableTh>
                 <DrawerTableTh>Teléfono</DrawerTableTh>
                 <DrawerTableTh>Cargo</DrawerTableTh>
                 <DrawerTableTh>Principal</DrawerTableTh>
                 <DrawerTableTh>Agregado por</DrawerTableTh>
-                {canEdit && <DrawerTableTh>Acciones</DrawerTableTh>}
+                <DrawerTableTh>Acciones</DrawerTableTh>
               </DrawerTableHeader>
               <DrawerTableBody>
                 {contacts.map((c) => {
@@ -401,8 +407,8 @@ export function EmpresaDrawer({
                     <DrawerTableTd className="text-xs">{c.job_title ?? "—"}</DrawerTableTd>
                     <DrawerTableTd><CompanyPrincipalBadge isPrimary={c.is_primary} /></DrawerTableTd>
                     <DrawerTableTd className="text-xs text-muted-foreground" title={typeof c.created_by === "string" && c.created_by ? `Agregado por ${c.created_by}` : undefined}>{typeof c.created_by === "string" && c.created_by ? c.created_by : "—"}</DrawerTableTd>
-                    {canEdit && (
-                      <DrawerTableTd>
+                    <DrawerTableTd>
+                      {canEdit ? (
                         <ArchiveToggleButton
                           archived={archived}
                           noun="contacto"
@@ -414,31 +420,36 @@ export function EmpresaDrawer({
                             )
                           }
                         />
-                      </DrawerTableTd>
-                    )}
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </DrawerTableTd>
                   </DrawerTableRow>
                   );
                 })}
               </DrawerTableBody>
             </DrawerTable>
           )}
-        </section>
+        </AppCard>
       )}
 
       {detail && tab === "pedidos" && (
         <>
-          <section className="flex flex-col gap-2" aria-label="Pedidos de la empresa">
-            <SectionHeading
-              title={`Pedidos (${ios.length})`}
-              hint="Órdenes donde aparece como anunciante o responsable de facturación."
-            />
+          <AppCard
+            title={`Pedidos (${ios.length})`}
+            description="Órdenes donde aparece como anunciante o responsable de facturación."
+            tone="primary"
+            aria-label="Pedidos de la empresa"
+          >
             {ios.length === 0 ? (
-              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-                Sin pedidos: aún no es cliente.
-              </p>
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  Sin pedidos: aún no es cliente.
+                </p>
+              </div>
             ) : (
-              <DrawerTable>
-                <DrawerTableHeader>
+              <DrawerTable flush>
+                <DrawerTableHeader flush>
                   <DrawerTableTh>Orden</DrawerTableTh>
                   <DrawerTableTh>Marca</DrawerTableTh>
                   <DrawerTableTh>Estado</DrawerTableTh>
@@ -447,26 +458,29 @@ export function EmpresaDrawer({
                   {ios.map((o) => (
                     <DrawerTableRow key={o.id}>
                       <DrawerTableTd className="font-medium">{o.io_number}</DrawerTableTd>
-                      <DrawerTableTd className="text-[13px]">{toTitleCase(o.brand ?? "—")}</DrawerTableTd>
+                      <DrawerTableTd className="text-sm">{toTitleCase(o.brand ?? "—")}</DrawerTableTd>
                       <DrawerTableTd><CompanyIOBadge status={o.status} /></DrawerTableTd>
                     </DrawerTableRow>
                   ))}
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
-          <section className="flex flex-col gap-2" aria-label="Campañas de la empresa">
-            <SectionHeading
-              title={`Campañas (${campaigns.length})`}
-              hint="Pautas registradas en las que participa."
-            />
+          </AppCard>
+          <AppCard
+            title={`Campañas (${campaigns.length})`}
+            description="Pautas registradas en las que participa."
+            tone="primary"
+            aria-label="Campañas de la empresa"
+          >
             {campaigns.length === 0 ? (
-              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-                Sin campañas.
-              </p>
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  Sin campañas.
+                </p>
+              </div>
             ) : (
-              <DrawerTable>
-                <DrawerTableHeader>
+              <DrawerTable flush>
+                <DrawerTableHeader flush>
                   <DrawerTableTh>Campaña</DrawerTableTh>
                   <DrawerTableTh>Estado</DrawerTableTh>
                 </DrawerTableHeader>
@@ -480,28 +494,31 @@ export function EmpresaDrawer({
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
+          </AppCard>
         </>
       )}
 
       {detail && tab === "vinculos" && !isProvider && (
         <>
-          <section className="flex flex-col gap-2" aria-label="Marcas vinculadas">
-            <SectionHeading
-              title={`Marcas (${network?.brands.length ?? 0})`}
-              hint={
-                isAdvertiser
-                  ? "Marcas publicitadas en sus órdenes (una empresa puede tener varias)."
-                  : "Marcas que esta agencia ha gestionado en órdenes."
-              }
-            />
+          <AppCard
+            title={`Marcas (${network?.brands.length ?? 0})`}
+            description={
+              isAdvertiser
+                ? "Marcas publicitadas en sus órdenes (una empresa puede tener varias)."
+                : "Marcas que esta agencia ha gestionado en órdenes."
+            }
+            tone="emerald"
+            aria-label="Marcas vinculadas"
+          >
             {(network?.brands.length ?? 0) === 0 ? (
-              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-                Sin marcas vinculadas: aún no hay órdenes.
-              </p>
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  Sin marcas vinculadas: aún no hay órdenes.
+                </p>
+              </div>
             ) : (
-              <DrawerTable>
-                <DrawerTableHeader>
+              <DrawerTable flush>
+                <DrawerTableHeader flush>
                   <DrawerTableTh>Marca</DrawerTableTh>
                   <DrawerTableTh numeric>Órdenes</DrawerTableTh>
                 </DrawerTableHeader>
@@ -515,23 +532,26 @@ export function EmpresaDrawer({
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
-          <section className="flex flex-col gap-2" aria-label={counterLabel}>
-            <SectionHeading
-              title={`${counterLabel} (${counterparties.length})`}
-              hint={
-                isAdvertiser
-                  ? "Agencias que le han manejado campañas (derivado de órdenes)."
-                  : "Anunciantes que esta agencia ha gestionado (derivado de órdenes)."
-              }
-            />
+          </AppCard>
+          <AppCard
+            title={`${counterLabel} (${counterparties.length})`}
+            description={
+              isAdvertiser
+                ? "Agencias que le han manejado campañas (derivado de órdenes)."
+                : "Anunciantes que esta agencia ha gestionado (derivado de órdenes)."
+            }
+            tone="emerald"
+            aria-label={counterLabel}
+          >
             {counterparties.length === 0 ? (
-              <p className="rounded-lg bg-muted/40 px-3 py-3 text-[13px] text-muted-foreground">
-                {counterEmpty}
-              </p>
+              <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  {counterEmpty}
+                </p>
+              </div>
             ) : (
-              <DrawerTable>
-                <DrawerTableHeader>
+              <DrawerTable flush>
+                <DrawerTableHeader flush>
                   <DrawerTableTh>{isAdvertiser ? "Agencia" : "Anunciante"}</DrawerTableTh>
                   <DrawerTableTh>Tipo</DrawerTableTh>
                   <DrawerTableTh numeric>Órdenes</DrawerTableTh>
@@ -547,7 +567,7 @@ export function EmpresaDrawer({
                 </DrawerTableBody>
               </DrawerTable>
             )}
-          </section>
+          </AppCard>
         </>
       )}
         </>

@@ -42,7 +42,7 @@ export function KindForm({ companyId, initial, onSaved }: { companyId: string; i
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="form-field">
           Tipo
           <Select
             value={kind}

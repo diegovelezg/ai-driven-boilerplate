@@ -31,7 +31,7 @@ export default async function MarcasPage({
   const { rows } = data;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[1200px]">
       <PageHeader
         eyebrow="CRM"
         title="Marcas"

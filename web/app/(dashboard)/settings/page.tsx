@@ -48,7 +48,7 @@ export default async function SettingsPage({
     myUserId = null;
   }
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[1200px]">
       <PageHeader
         eyebrow="Configuración"
         title="Equipo"

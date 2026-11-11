@@ -54,6 +54,8 @@ const INSTANT = new Set([
   "deletePhotoAction",
   "createInvoiceAction",
   "setInvoiceStatusAction",
+  "recordInvoicePaymentAction",
+  "voidInvoicePaymentAction",
   // Importación Sheet/CSV (corre inline con useTransition)
   "previewSheetImportAction",
   "commitSheetUrlImportAction",

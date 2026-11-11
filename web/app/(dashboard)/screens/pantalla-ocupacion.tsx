@@ -136,10 +136,10 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <AppCard title="Próximos 30 días" description={`${formatDate(today)} → ${formatDate(horizonEnd)}`} aria-label="Ocupación próximos 30 días">
+      <AppCard title="Próximos 30 días" description={`${formatDate(today)} → ${formatDate(horizonEnd)}`} tone="sky" aria-label="Ocupación próximos 30 días">
         <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
           <div className="min-w-0">
-            <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Hoy</p>
+            <p className="truncate text-xs text-muted-foreground">Hoy</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
               {todayHit ? "Ocupada" : "Libre"}
             </p>
@@ -152,14 +152,14 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
             </p>
           </div>
           <div className="min-w-0">
-            <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Ocupación 30d</p>
+            <p className="truncate text-xs text-muted-foreground">Ocupación 30d</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{occPct}%</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
               {formatNumber(busy30)} de 30 días ocupados
             </p>
           </div>
           <div className="min-w-0">
-            <p className="truncate text-[11px] font-medium tracking-wide text-muted-foreground uppercase">Libre desde</p>
+            <p className="truncate text-xs text-muted-foreground">Libre desde</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{free ? formatDate(free) : "—"}</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
               {next30.length === 0 ? "Todo libre en 30 días" : `${formatNumber(next30.length)} pauta${next30.length === 1 ? "" : "s"} en 30 días`}
@@ -168,7 +168,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
         </div>
       </AppCard>
 
-      <AppCard title="Calendario" description="Ocupado tachado en rojo. Navega meses para ver el horizonte." aria-label="Calendario de ocupación">
+      <AppCard title="Calendario" description="Ocupado tachado en rojo. Navega meses para ver el horizonte." tone="sky" aria-label="Calendario de ocupación">
         <Calendar
           mode="single"
           locale={es}
@@ -185,6 +185,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
       <AppCard
         title={`Órdenes próximas${upcoming.length > 0 ? ` (${formatNumber(upcoming.length)})` : ""}`}
         description="Qué la ocupa hacia adelante (hasta 120 días)."
+        tone="primary"
         aria-label="Órdenes próximas"
       >
         {upcoming.length > 0 ? (
@@ -217,6 +218,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
       <AppCard
         title={`Historial${historyTotal > 0 ? ` (${formatNumber(historyTotal)})` : ""}`}
         description="Últimas pautas vencidas (90 días atrás)."
+        tone="primary"
         aria-label="Historial de ocupación"
       >
         {history.length > 0 ? (

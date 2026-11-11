@@ -1,5 +1,8 @@
 "use client";
 
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Save } from "lucide-react";
 import { CancelButton, RetryButton, SubmitButton } from "@/components/buttons";
@@ -207,8 +210,6 @@ export function OrderEditForm({
     });
   }
 
-  const inputCls = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
-
   const contactLabel = (c: { name: string; email: string | null }) =>
     c.email ? `${c.name} (${c.email})` : c.name;
 
@@ -225,7 +226,7 @@ export function OrderEditForm({
     value: string,
     onChange: (v: string) => void,
   ) => (
-    <div key={key} className="flex min-w-0 flex-col gap-1 text-xs">
+    <div key={key} className="form-field">
       {label}
       <AppSelect
         value={value}
@@ -245,9 +246,9 @@ export function OrderEditForm({
     label: string,
     opts?: { type?: string; inputMode?: "email" | "tel" | "text"; span?: boolean },
   ) => (
-    <label key={key} className={`flex flex-col gap-1 text-xs${opts?.span ? " sm:col-span-2" : ""}`}>
+    <label key={key} className={`form-field${opts?.span ? " sm:col-span-2" : ""}`}>
       {label}
-      <input
+      <Input
         name={key}
         type={opts?.type ?? "text"}
         inputMode={opts?.inputMode}
@@ -256,7 +257,7 @@ export function OrderEditForm({
         maxLength={NP_LIMITS[key]}
         disabled={pending}
         aria-invalid={invalid.has(key)}
-        className={`${inputCls}${bad(key)}`}
+        className={`${bad(key)}`}
       />
     </label>
   );
@@ -272,7 +273,7 @@ export function OrderEditForm({
 
   if (!meta) {
     return (
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <AppCardState>{metaError ?? "No se pudieron cargar los datos."}</AppCardState>
         <div className="flex flex-wrap gap-2">
           <RetryButton
@@ -291,27 +292,27 @@ export function OrderEditForm({
     <form
       ref={formRef}
       noValidate
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-6"
       onSubmit={(e) => {
         e.preventDefault();
         save();
       }}
     >
       <AppCard title="Contratante">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="form-field">
           Marca
-          <input
+          <Input
             name="brand"
             value={brand}
             onChange={(e) => { setBrand(e.target.value); clear("brand"); }}
             maxLength={200}
             disabled={pending}
             aria-invalid={invalid.has("brand")}
-            className={`${inputCls}${bad("brand")}`}
+            className={`${bad("brand")}`}
           />
         </label>
-        <div className="flex min-w-0 flex-col gap-1 text-xs">
+        <div className="form-field">
           Condición de pago
           <AppSelect
             value={terms}
@@ -329,16 +330,16 @@ export function OrderEditForm({
             invalid={invalid.has("terms")}
           />
         </div>
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <label className="form-field sm:col-span-2">
           Notas
-          <input
+          <Textarea
             name="notes"
             value={notes}
             onChange={(e) => { setNotes(e.target.value); clear("notes"); }}
             maxLength={2000}
             disabled={pending}
             aria-invalid={invalid.has("notes")}
-            className={`${inputCls}${bad("notes")}`}
+            className={`${bad("notes")}`}
           />
         </label>
         {contactSelect("billing_contact_id", "Contacto contratante", billingContact, setBillingContact)}
@@ -347,8 +348,8 @@ export function OrderEditForm({
       </AppCard>
 
       <AppCard title="Facturación">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="flex min-w-0 flex-col gap-1 text-xs">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="form-field">
           Documento para facturación
           <AppSelect
             value={doc}
@@ -368,7 +369,7 @@ export function OrderEditForm({
         {contactSelect("payment_contact_id", "Contacto de pago", paymentContact, setPaymentContact)}
         {field("billing_portal_email", "Correo electrónico y/o portal")}
         {orderContacts.length === 0 && (
-          <p className="text-[11px] text-muted-foreground sm:col-span-2">
+          <p className="text-xs text-muted-foreground sm:col-span-2">
             Sin contactos en las empresas del caso. Créalos en Empresas → Contactos.
           </p>
         )}
@@ -376,8 +377,8 @@ export function OrderEditForm({
       </AppCard>
 
       <AppCard title="Intermediario">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex cursor-pointer flex-row items-center gap-2 text-xs sm:col-span-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label className="flex cursor-pointer flex-row items-center gap-2 text-sm sm:col-span-2">
           <Checkbox
             checked={agencySelf}
             onCheckedChange={(v) => {
@@ -396,7 +397,7 @@ export function OrderEditForm({
           Es contratante
         </label>
         {!agencySelf && (
-          <div className="flex min-w-0 flex-col gap-1 text-xs sm:col-span-2">
+          <div className="form-field sm:col-span-2">
             Empresa intermediaria *
             <AppSelect
               value={agencyId}
@@ -420,10 +421,10 @@ export function OrderEditForm({
           </div>
         )}
         {!agencySelf && canEditCommission && (
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Comisión override %
           <span className="flex items-center gap-1">
-            <input
+            <Input
               name="commission_pct"
               value={commissionDisplay}
               onChange={(e) => { setCommission(e.target.value.replace(/[^0-9]/g, "").slice(0, 3)); clear("commission_pct"); }}
@@ -433,7 +434,7 @@ export function OrderEditForm({
               placeholder="Vacío = hereda"
               aria-label="Comisión de la orden en porcentaje"
               aria-invalid={invalid.has("commission_pct")}
-              className={`${inputCls} w-28 text-center tabular-nums${bad("commission_pct")}`}
+              className={` w-28 text-center tabular-nums${bad("commission_pct")}`}
             />
             <span className="text-muted-foreground">%</span>
           </span>

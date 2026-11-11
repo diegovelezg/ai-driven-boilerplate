@@ -8,7 +8,8 @@ import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
 import { bucketMonthly, computeFinanceKpis } from "@/lib/finance";
 import { invoiceMatchesOrder, isValidCurrency, normalizeCurrency } from "@/lib/currency";
-import { formatMoney, formatNumber, isoDayPart, startOfDayUTC, utcDayStart } from "@/lib/format";
+import { aggregateCobranza, toBillingInvoice } from "@/lib/billing-status";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { displayStoreName, getMyActiveStore, getMyStoreIds, type TenantStore } from "@/lib/tenant";
 import { connection } from "next/server";
@@ -38,7 +39,7 @@ export default async function FinanzasPage({
   await connection();
   if (!isSupabaseConfigured()) {
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <div className="page-shell max-w-[1200px]">
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
@@ -59,7 +60,7 @@ export default async function FinanzasPage({
     active = resolved.active;
   } catch (e) {
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <div className="page-shell max-w-[1200px]">
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
@@ -75,7 +76,7 @@ export default async function FinanzasPage({
     const myIds = await getMyStoreIds().catch(() => null);
     const noAccess = Array.isArray(myIds) && myIds.length === 0;
     return (
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+      <div className="page-shell max-w-[1200px]">
         <PageHeader
           eyebrow="Dinero y cobro"
           title="Finanzas"
@@ -165,7 +166,7 @@ export default async function FinanzasPage({
     for (let off = 0; ; off += 1000) {
       const { data: ipage, error: iErr } = await db
         .from("io_invoices")
-        .select("io_id,amount_minor,currency,status,issue_date,due_date")
+        .select("io_id,amount_minor,currency,status,issue_date,due_date,payments:io_invoice_payments!io_invoice_payments_same_store_fk(*)")
         .eq("store_id", active.id)
         .range(off, off + 999);
       if (iErr) throw new Error(`facturas: ${iErr.message}`);
@@ -195,7 +196,7 @@ export default async function FinanzasPage({
     // Base primero, resto alfabético.
     const currencies = [...curSet].sort((a, b) => (a === viewCurrency ? -1 : b === viewCurrency ? 1 : a.localeCompare(b)));
 
-    const today00 = startOfDayUTC(Date.now());
+    const nowMs = Date.now();
 
     const screenNameByAll = new Map<string, string>();
     const advNameByAll = new Map<string, string>();
@@ -240,39 +241,9 @@ export default async function FinanzasPage({
 
       // Cobro en esta moneda: la factura cuenta solo si su moneda
       // explícita coincide (invoiceMatchesOrder). Sin herencia silenciosa.
-      let invoicedMinor = 0;
-      let paidMinor = 0;
-      let overdueMinor = 0;
-      let overdueCount = 0;
-      for (const v of invRows) {
-        if (!invoiceMatchesOrder(v.currency, cur)) continue;
-        const amount = Math.max(0, Math.round(Number(v.amount_minor ?? 0) || 0));
-        const st = String(v.status ?? "");
-        if (st === "cancelled" || st === "draft" || amount <= 0) continue;
-        if (st === "paid") {
-          invoicedMinor += amount;
-          paidMinor += amount;
-          continue;
-        }
-        if (st === "overdue") {
-          invoicedMinor += amount;
-          overdueMinor += amount;
-          overdueCount += 1;
-          continue;
-        }
-        if (st === "issued") {
-          invoicedMinor += amount;
-          const dueDay = isoDayPart((v.due_date as string | null) ?? null);
-          if (dueDay) {
-            const due = Date.parse(utcDayStart(dueDay));
-            if (Number.isFinite(due) && due < today00) {
-              overdueMinor += amount;
-              overdueCount += 1;
-            }
-          }
-        }
-      }
-      const pendingMinor = Math.max(0, invoicedMinor - paidMinor);
+      const currencyInvoices = invRows.filter((v) => invoiceMatchesOrder(v.currency, cur)).map(toBillingInvoice);
+      const { invoicedMinor, paidMinor, pendingMinor, overdueMinor } = aggregateCobranza(currencyInvoices, nowMs);
+      const overdueCount = currencyInvoices.filter((v) => aggregateCobranza([v], nowMs).overdueMinor > 0).length;
 
       // Tops por contratado (solo esta moneda).
       const grossByBrand = new Map<string, { gross: number; ios: Set<string> }>();
@@ -336,7 +307,7 @@ export default async function FinanzasPage({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[1200px]">
       <AutoRefresh ms={60_000} />
       <PageHeader
         eyebrow="Dinero y cobro"

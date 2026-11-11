@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useState, useTransition } from "react";
 import { SubmitButton } from "@/components/buttons";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
@@ -44,9 +46,9 @@ export function AgencyCommissionForm({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           <span className="flex items-center gap-1">
-            <input
+            <Input
               value={value}
               onChange={(e) => {
                 setValue(e.target.value.replace(/[^0-9]/g, ""));
@@ -56,14 +58,14 @@ export function AgencyCommissionForm({
               placeholder="p. ej. 15"
               aria-label="Comisión agencia en porcentaje"
               aria-invalid={invalid.has("commission")}
-              className={`h-9 w-28 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums${bad("commission")}`}
+              className={`w-28 text-center tabular-nums${bad("commission")}`}
             />
             <span className="text-muted-foreground">%</span>
           </span>
         </label>
         <SubmitButton onClick={save} pending={pending}>Guardar</SubmitButton>
       </div>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Vacío = sin acuerdo (0% efectivo).
       </p>
     </div>

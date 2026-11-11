@@ -1,5 +1,7 @@
 "use client";
 
+import { Input } from "@/components/ui/input";
+
 import { useActionState, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { SubmitButton } from "@/components/buttons";
@@ -24,8 +26,6 @@ import {
 import { failSubmit, useServerFieldErrors } from "@/components/ui/form-feedback";
 
 const initial: CrmState = { ok: false, message: "" };
-
-const baseInput = "h-9 rounded-lg border border-border bg-background px-2.5 text-sm";
 
 export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = "PE" }: { canManageCommission?: boolean; defaultCountry?: string }) {
   const [state, action, pending] = useActionState(createCompanyRedirectAction, initial);
@@ -62,13 +62,13 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
   useServerFieldErrors(state, fieldsFromMessage, setInvalid, "No se pudo crear la empresa");
 
   return (
-    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-xs">
+    <form ref={formRef} action={action} onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
+      <label className="form-field">
         Nombre *
-        <input name="name" maxLength={200} placeholder="Acme S.A.C." aria-invalid={invalid.has("name")} onChange={(e) => { setNameOk(e.target.value.trim().length > 0); if (invalid.has("name")) setInvalid((p) => { const n = new Set(p); n.delete("name"); return n; }); }} className={`${baseInput}${bad("name")}`} />
+        <Input name="name" maxLength={200} placeholder="Acme S.A.C." aria-invalid={invalid.has("name")} onChange={(e) => { setNameOk(e.target.value.trim().length > 0); if (invalid.has("name")) setInvalid((p) => { const n = new Set(p); n.delete("name"); return n; }); }} className={`${bad("name")}`} />
       </label>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="form-field">
           Tipo
           <input type="hidden" name="kind" value={kind} />
           <Select
@@ -81,7 +81,7 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
             )}
             disabled={pending}
           >
-            <SelectTrigger aria-label="Tipo" aria-invalid={invalid.has("kind")} className={invalid.has("kind") ? FIELD_ERR_CLS : undefined}>
+            <SelectTrigger aria-label="Tipo" aria-invalid={invalid.has("kind")} className={`w-full${invalid.has("kind") ? ` ${FIELD_ERR_CLS}` : ""}`}>
               <SelectValue placeholder="Elegir tipo…" />
             </SelectTrigger>
             <SelectContent>
@@ -92,20 +92,20 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
           </Select>
         </div>
         {showCommission && (
-          <label className="flex flex-col gap-1 text-xs">
+          <label className="form-field">
             <span className="flex flex-wrap items-center gap-2">
               Comisión %
               <RestrictedVisibilityBadge minRole="admin" />
             </span>
             <span className="flex items-center gap-1">
-              <input
+              <Input
                 name="agency_commission_pct"
                 inputMode="numeric"
                 placeholder="p. ej. 15"
                 aria-label="Comisión agencia en porcentaje"
                 aria-invalid={invalid.has("commission")}
                 onChange={() => invalid.has("commission") && setInvalid((p) => { const n = new Set(p); n.delete("commission"); return n; })}
-                className={`h-9 w-32 rounded-lg border border-border bg-background px-2.5 text-center text-sm tabular-nums${bad("commission")}`}
+                className={`w-32 text-center tabular-nums${bad("commission")}`}
               />
               <span className="text-muted-foreground">%</span>
             </span>
@@ -113,27 +113,27 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
         )}
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           ID fiscal
-          <input name="tax_id" maxLength={40} placeholder="20123456789" className="h-9 rounded-lg border border-border bg-background px-2.5 text-sm" />
+          <Input name="tax_id" maxLength={40} placeholder="20123456789" />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Web
-          <input name="domain" maxLength={253} placeholder="acme.pe" inputMode="url" aria-invalid={invalid.has("domain")} onChange={() => invalid.has("domain") && setInvalid((p) => { const n = new Set(p); n.delete("domain"); return n; })} className={`${baseInput}${bad("domain")}`} />
+          <Input name="domain" maxLength={253} placeholder="acme.pe" inputMode="url" aria-invalid={invalid.has("domain")} onChange={() => invalid.has("domain") && setInvalid((p) => { const n = new Set(p); n.delete("domain"); return n; })} className={`${bad("domain")}`} />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Teléfono
-          <input name="phone" type="tel" maxLength={40} placeholder="+51…" className={baseInput} />
+          <Input name="phone" type="tel" maxLength={40} placeholder="+51…" />
         </label>
-        <label className="flex flex-col gap-1 text-xs sm:col-span-2">
+        <label className="form-field sm:col-span-2">
           Dirección
-          <input name="address" maxLength={300} placeholder="Av. …" className={baseInput} />
+          <Input name="address" maxLength={300} placeholder="Av. …" />
         </label>
-        <label className="flex flex-col gap-1 text-xs">
+        <label className="form-field">
           Ciudad
-          <input name="city" maxLength={120} placeholder="Lima" className={baseInput} />
+          <Input name="city" maxLength={120} placeholder="Lima" />
         </label>
-        <div className="flex flex-col gap-1 text-xs">
+        <div className="form-field">
           País
           <input type="hidden" name="country" value={country === "__none" ? "" : country} />
           <Select

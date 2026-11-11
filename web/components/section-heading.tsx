@@ -38,16 +38,16 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div className={cn("mb-3 flex flex-wrap items-start justify-between gap-2", className)}>
+    <div className={cn("mb-4 flex flex-wrap items-start justify-between gap-3", className)}>
       <div className="flex items-start gap-2.5">
         <span
           aria-hidden
-          className={cn("mt-1.5 h-4 w-1 shrink-0 rounded-full", TONES[tone])}
+          className={cn("mt-1 h-4 w-0.5 shrink-0 rounded-full", TONES[tone])}
         />
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          <h2 className="text-base leading-snug font-semibold tracking-tight">{title}</h2>
           {hint && (
-            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
               {hint}
             </p>
           )}

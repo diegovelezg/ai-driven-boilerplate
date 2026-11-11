@@ -47,7 +47,7 @@ export default async function OcupacionPage({
 
   if (!connected || !dbReady) {
     return (
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
+      <div className="page-shell max-w-[1200px]">
         <PageHeader
           eyebrow="Operación"
           title="Ocupación"
@@ -61,7 +61,7 @@ export default async function OcupacionPage({
   const storeId = activeStoreId!;
   if ((await requireMyStoreAccess(storeId).catch(() => null)) === false) {
     return (
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
+      <div className="page-shell max-w-[1200px]">
         <PageHeader eyebrow="Operación" title="Ocupación" description="Qué pantalla está ocupada cada día." />
         <AppCardState>Sin acceso a esta tienda.</AppCardState>
       </div>
@@ -193,7 +193,7 @@ export default async function OcupacionPage({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8 p-6 md:p-8">
+    <div className="page-shell max-w-[1200px]">
       <PageHeader
         eyebrow="Operación"
         title="Ocupación"
