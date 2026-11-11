@@ -51,8 +51,17 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
     country: String(form.get("country") ?? "") || null,
     notes: String(form.get("notes") ?? "") || null,
     external_ref: String(form.get("external_ref") ?? "") || null,
+    category_iab: String(form.get("category_iab") ?? "") || null,
+    provider_type: String(form.get("provider_type") ?? "") || null,
   });
   if (!parsed.ok) return { ok: false, message: parsed.error };
+  // Clasificaciones obligatorias al crear (legados con null siguen editables).
+  if (kind === "anunciante" && !parsed.value.category_iab) {
+    return { ok: false, message: "Categoría requerida para anunciantes." };
+  }
+  if (kind === "proveedor" && !parsed.value.provider_type) {
+    return { ok: false, message: "Tipo de proveedor requerido." };
+  }
   try {
     const db = getSupabase();
     const actor = await resolveActor();
@@ -96,7 +105,13 @@ export async function setCompanyKindAction(input: { companyId: string; kind: Com
     }
     const { error } = await db
       .from("crm_companies")
-      .update({ kind: input.kind, updated_by: await resolveActor(), updated_at: new Date().toISOString() })
+      .update({
+        kind: input.kind,
+        // Al salir de proveedor el subtipo no aplica (el CHECK lo exige).
+        ...(input.kind === "proveedor" ? {} : { provider_type: null }),
+        updated_by: await resolveActor(),
+        updated_at: new Date().toISOString(),
+      })
       .eq("store_id", t.storeId)
       .eq("id", input.companyId);
     if (error) return { ok: false, message: `DB write: ${error.message}` };
@@ -124,6 +139,8 @@ export async function updateCompanyAction(input: {
     city?: string | null;
     country?: string | null;
     address?: string | null;
+    category_iab?: string | null;
+    provider_type?: string | null;
   };
 }): Promise<CrmState> {
   const t = await resolveTenantStore();
@@ -137,7 +154,7 @@ export async function updateCompanyAction(input: {
     const db = getSupabase();
     const { data: existing, error: rerr } = await db
       .from("crm_companies")
-      .select("id,name,kind,tax_id,domain,email,phone,address,city,country,deleted_at")
+      .select("id,name,kind,tax_id,domain,email,phone,address,city,country,category_iab,provider_type,deleted_at")
       .eq("store_id", t.storeId)
       .eq("id", companyId)
       .maybeSingle();
@@ -157,6 +174,8 @@ export async function updateCompanyAction(input: {
       address: val("address", row.address),
       city: val("city", row.city),
       country: val("country", row.country),
+      category_iab: val("category_iab", row.category_iab),
+      provider_type: val("provider_type", row.provider_type),
     });
     if (!parsed.ok) return { ok: false, message: parsed.error };
     const actor = await resolveActor();
@@ -171,6 +190,8 @@ export async function updateCompanyAction(input: {
         address: parsed.value.address,
         city: parsed.value.city,
         country: parsed.value.country,
+        category_iab: parsed.value.category_iab,
+        provider_type: parsed.value.provider_type,
         updated_by: actor,
         updated_at: new Date().toISOString(),
       })
@@ -448,6 +469,108 @@ export async function createContactAction(form: FormData): Promise<CrmState> {
     revalidatePath("/companies");
     revalidatePath("/contacts");
     return { ok: true, message: "Contacto agregado." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/**
+ * Vínculos explícitos agencia ↔ anunciante (pre-OI).
+ * Crea el par (agency, advertiser); requiere vendedor o superior.
+ * Valida tenant, activas y roles (agencia + anunciante). Idempotente:
+ * si el par ya existe devuelve ok sin duplicar.
+ */
+export async function createCompanyLinkAction(input: {
+  agencyCompanyId: string;
+  advertiserCompanyId: string;
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
+  const { validateCompanyLinkPair } = await import("@/lib/company-links");
+  const parsed = validateCompanyLinkPair({
+    agencyCompanyId: input.agencyCompanyId,
+    advertiserCompanyId: input.advertiserCompanyId,
+  });
+  if (!parsed.ok) return { ok: false, message: parsed.error };
+  try {
+    const db = getSupabase();
+    const { data: cos, error: coerr } = await db
+      .from("crm_companies")
+      .select("id,kind,deleted_at")
+      .eq("store_id", t.storeId)
+      .in("id", [parsed.agencyCompanyId, parsed.advertiserCompanyId]);
+    if (coerr) return { ok: false, message: `DB read: ${coerr.message}` };
+    const byId = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
+    const agency = byId.get(parsed.agencyCompanyId);
+    const advertiser = byId.get(parsed.advertiserCompanyId);
+    if (!agency || !advertiser) return { ok: false, message: "Empresa no encontrada en esta tienda." };
+    if (agency.deleted_at != null || advertiser.deleted_at != null) {
+      return { ok: false, message: "Empresa archivada: restáurala para vincularla." };
+    }
+    if (agency.kind !== "agencia") return { ok: false, message: "La agencia debe tener tipo agencia." };
+    if (advertiser.kind !== "anunciante") return { ok: false, message: "El anunciante debe tener tipo anunciante." };
+    const actor = await resolveActor();
+    const { error } = await db.from("crm_company_links").insert({
+      store_id: t.storeId,
+      agency_company_id: parsed.agencyCompanyId,
+      advertiser_company_id: parsed.advertiserCompanyId,
+      origin: "manual",
+      created_by: actor,
+      updated_by: actor,
+    });
+    if (error) {
+      if (error.code === "23505") return { ok: true, message: "El vínculo ya existía." };
+      return { ok: false, message: `DB write: ${error.message}` };
+    }
+    revalidatePath("/companies");
+    return { ok: true, message: "Vínculo creado." };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+/**
+ * Elimina un vínculo explícito agencia ↔ anunciante.
+ * Solo borra la fila manual/explícita; el historial de OIs sigue
+ * mostrando la contraparte como derivada (ios>0).
+ */
+export async function deleteCompanyLinkAction(input: {
+  agencyCompanyId: string;
+  advertiserCompanyId: string;
+}): Promise<CrmState> {
+  const t = await resolveTenantStore();
+  if ("error" in t) return { ok: false, message: t.error };
+  const { denyRole } = await import("@/lib/tenant");
+  const denied = await denyRole(t.storeId, "seller");
+  if (denied) return { ok: false, message: denied };
+  const { validateCompanyLinkPair } = await import("@/lib/company-links");
+  const parsed = validateCompanyLinkPair({
+    agencyCompanyId: input.agencyCompanyId,
+    advertiserCompanyId: input.advertiserCompanyId,
+  });
+  if (!parsed.ok) return { ok: false, message: parsed.error };
+  try {
+    const db = getSupabase();
+    const { data: existing } = await db
+      .from("crm_company_links")
+      .select("id")
+      .eq("store_id", t.storeId)
+      .eq("agency_company_id", parsed.agencyCompanyId)
+      .eq("advertiser_company_id", parsed.advertiserCompanyId)
+      .maybeSingle();
+    if (!existing) return { ok: false, message: "El vínculo ya no existe." };
+    const { error } = await db
+      .from("crm_company_links")
+      .delete()
+      .eq("store_id", t.storeId)
+      .eq("agency_company_id", parsed.agencyCompanyId)
+      .eq("advertiser_company_id", parsed.advertiserCompanyId);
+    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    revalidatePath("/companies");
+    return { ok: true, message: "Vínculo eliminado." };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }

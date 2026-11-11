@@ -21,6 +21,7 @@ import { EntityCount, EntityEmpty, EntityPagination, useEntitySelection, useList
 import { ExportCsvButton } from "@/components/export-csv-button";
 import { COMPANY_KINDS, COMPANY_KIND_LABELS, companyKindsLabel, isDefaultCompanyKinds, serializeCompanyKinds, kindLabel, DEFAULT_COMPANY_KINDS, type CompanyKind, type CrmStatusFilter } from "@/lib/crm";
 import { formatNumber, toTitleCase } from "@/lib/format";
+import { taxIdLabel } from "@/lib/tax-id";
 import { cn } from "cn";
 import type { CompaniesSortDir, CompaniesSortKey } from "@/lib/crm-db";
 
@@ -29,6 +30,7 @@ export interface EmpresaRow {
   name: string;
   kind: CompanyKind | null;
   tax_id: string | null;
+  country: string | null;
   domain: string | null;
   email: string | null;
   city: string | null;
@@ -243,7 +245,7 @@ export function CompaniesList({
               </div>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {formatNumber(c.contacts_count)} contacto{c.contacts_count === 1 ? "" : "s"}
-                {c.tax_id ? ` · ID fiscal ${c.tax_id}` : ""}
+                {c.tax_id ? ` · ${taxIdLabel(c.country)} ${c.tax_id}` : ""}
               </p>
               {(c.domain || c.city) && (
                 <p className="mt-2 truncate text-xs text-muted-foreground">

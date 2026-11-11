@@ -11,6 +11,8 @@
 // Cliente/prospecto NO se guardan: se derivan (¿tiene IO firmada?).
 
 // SSOT email: el patrón vive en lib/validation.ts (issue #8 P2).
+import { isAdvertiserCategory, type AdvertiserCategoryCode } from "@/lib/advertiser-categories";
+import { isProviderType, type ProviderTypeCode } from "@/lib/provider-types";
 import { isCountryCode } from "@/lib/countries";
 import { isValidEmail } from "@/lib/validation";
 
@@ -128,6 +130,10 @@ export interface CompanyInput {
   country?: string | null;
   notes?: string | null;
   external_ref?: string | null;
+  /** Vertical IAB 2.0 (IAB1–IAB24). SSOT en lib/advertiser-categories. */
+  category_iab?: string | null;
+  /** Subtipo de proveedor. Solo con kind = 'proveedor'. */
+  provider_type?: string | null;
 }
 
 export interface ContactInput {
@@ -178,11 +184,20 @@ export function normalizeCompany(input: CompanyInput): { ok: true; value: Requir
   if (input.external_ref && !external_ref) return { ok: false, error: "external_ref inválido." };
   const kind = input.kind ?? null;
   if (!isCompanyKind(kind)) return { ok: false, error: "Tipo requerido: agencia, anunciante o proveedor." };
+  const categoryRaw = typeof input.category_iab === "string" ? input.category_iab.trim().toUpperCase() : null;
+  const category_iab: AdvertiserCategoryCode | null = !categoryRaw ? null : isAdvertiserCategory(categoryRaw) ? categoryRaw : null;
+  if (categoryRaw && !category_iab) return { ok: false, error: "Categoría IAB inválida (IAB1–IAB24)." };
+  const providerRaw = typeof input.provider_type === "string" ? input.provider_type.trim().toLowerCase() : null;
+  const provider_type: ProviderTypeCode | null = !providerRaw ? null : isProviderType(providerRaw) ? providerRaw : null;
+  if (providerRaw && !provider_type) return { ok: false, error: "Tipo de proveedor inválido." };
+  if (provider_type && kind !== "proveedor") return { ok: false, error: "Tipo de proveedor solo aplica a proveedores." };
   return {
     ok: true,
     value: {
       name,
       kind,
+      category_iab,
+      provider_type,
       tax_id: cleanStr(input.tax_id, 40),
       domain,
       email,

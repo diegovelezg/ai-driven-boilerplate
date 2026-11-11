@@ -83,7 +83,7 @@ Mapeo:
   autonumeración de IOs (`io_mint_number`), flujo orden→cobro, marcas.
 - **Dashboard Next.js 16 (App Router)**: Hoy, Órdenes, Finanzas, Inventario,
   Empresas, Contactos, Marcas, Settings, Ayuda. Chat DOOH en vivo
-  (`dooh_agent`, 6 tools read-only, SSE); worker no-op sin cron (`docs/coolify.md` §3b DESACTIVADO).
+  (`dooh_agent`, 6 tools read-only, SSE); worker no-op sin cron.
 - **Transversales vivos**: metering LLM por tenant (`ai_llm_usage`),
   perfiles de tienda, matriz de conflictos `operations.ts` (kind+scope),
   slot atómico `sys_run_start()`, schema-guard, i18n pendiente (issue #1).
@@ -127,4 +127,3 @@ convive con JSON), #21 vigilar/tenant/market, #22 autoadaptativo, #23 coherencia
 
 - Blueprint técnico y motores: [`docs/architecture.md`](docs/architecture.md).
 - Web (stack, quickstart, sync, worker): [`web/README.md`](web/README.md).
-- Deploy Coolify (Supabase lean + SearXNG + web + cron): [`docs/coolify.md`](docs/coolify.md).

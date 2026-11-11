@@ -204,11 +204,11 @@ primary_contact_id → crm_contacts`, `io_lines.screen_id → inv_screens`,
   `lib/` + ADK.
 - **UI:** shadcn/ui + TailwindCSS 4 (Hoy, Órdenes, Finanzas, Inventario, Empresas, Contactos, Marcas, Settings, Ayuda).
 - **DB/Auth:** Supabase (Postgres + Auth + Realtime). RLS por `is_store_member`.
-- **Scheduler/Worker:** Fase 2 sin pipeline: `web/worker.ts` no-op (sale 0);
-  cron Coolify DESACTIVADO (`docs/coolify.md` §3b). `sys_runs` es la cinta
+- **Scheduler/Worker:** Fase 2 sin pipeline: `web/worker.ts` no-op (sale 0),
+  sin cron. `sys_runs` es la cinta
   (import/perfil); slot vía `sys_run_start` (solo corridas vivas, no del
   motor extirpado).
-- **Scraping/búsqueda:** SearXNG (service Coolify) + Crawlee/cheerio (`procps` en runner).
+- **Scraping/búsqueda:** SearXNG + Crawlee/cheerio (`procps` en runner).
 - **AI:** `@google/adk@^2.3.0` (`LlmAgent` + Zod tools sobre Supabase). Dev/test vía
   `@google/adk-devtools`. Sin Vercel AI SDK. Modelos en `web/config/llm_models.json`.
 - **Outbound:** email/senders retirados con `sys_secrets` (20261129); sin

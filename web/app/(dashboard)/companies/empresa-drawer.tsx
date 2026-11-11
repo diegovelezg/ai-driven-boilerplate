@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { Building2, Bot, FileText, Globe, Network, UserRound } from "lucide-react";
-import { ArchiveToggleButton, EditButton, RetryButton } from "@/components/buttons";
+import { Building2, Bot, FileText, Globe, Network, Plus, UserRound, X } from "lucide-react";
+import { ArchiveToggleButton, EditButton, RetryButton, RowIconButton } from "@/components/buttons";
+import { Button } from "@/components/ui/button";
+import { VinculoForm } from "./vinculo-form";
 import { ArchivedBadge } from "@/components/badges";
 import { toast } from "@/components/ui/toast";
 import { AppCard, AppCardState } from "@/components/app-card";
@@ -20,13 +22,14 @@ import {
   DrawerTableTd,
   DrawerTableTh,
 } from "@/components/drawer-table";
-import { setCompanyArchivedAction, setContactArchivedAction, type CrmState } from "@/lib/crm-actions";
+import { setCompanyArchivedAction, setContactArchivedAction, deleteCompanyLinkAction, type CrmState } from "@/lib/crm-actions";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { toTitleCase } from "@/lib/format";
+import { taxIdLabel } from "@/lib/tax-id";
 import { KindForm } from "./kind-form";
 import { AgencyCommissionForm } from "./agency-commission-form";
 
@@ -89,6 +92,8 @@ interface NetworkCompany {
   name: string;
   kind: string | null;
   ios: number;
+  explicit?: boolean;
+  origin?: "manual" | "oi" | null;
 }
 
 interface EmpresaDetail {
@@ -140,6 +145,7 @@ export function EmpresaDrawer({
       setTab("ficha");
       setDetail(null);
       setEditingDatos(false);
+      setLinkOpen(false);
       void load(ac.signal);
     }, 0);
     return () => {
@@ -154,6 +160,11 @@ export function EmpresaDrawer({
   const ios = detail?.ios ?? [];
   const campaigns = detail?.campaigns ?? [];
   const company = detail?.company;
+  const fiscalLabel = taxIdLabel(
+    typeof company === "object" && company !== null && "country" in company
+      ? (company as { country?: unknown }).country
+      : null,
+  );
   const kind = (company?.kind as string | null) ?? null;
   const rawRole = detail?.myRole ?? null;
   const myRole: MemberRole | null = isMemberRole(rawRole) ? rawRole : null;
@@ -194,8 +205,35 @@ export function EmpresaDrawer({
   const counterparties = isAdvertiser ? (network?.agencies ?? []) : (network?.advertisers ?? []);
   const counterLabel = isAdvertiser ? "Agencias" : "Anunciantes";
   const counterEmpty = isAdvertiser
-    ? "Sin agencias vinculadas: aún no hay órdenes intermediadas."
-    : "Sin anunciantes gestionados: aún no hay órdenes intermediadas.";
+    ? "Sin agencias vinculadas: vincula una o crea la primera orden."
+    : "Sin anunciantes vinculados: vincula uno o crea la primera orden.";
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleting, startDeleting] = useTransition();
+  const canLink = canEdit && !isArchived && (isAdvertiser || isAgency);
+
+  const removeLink = (counterId: string) => {
+    setDeletingId(counterId);
+    startDeleting(() => {
+      void (async () => {
+        const res = await deleteCompanyLinkAction(
+          isAdvertiser
+            ? { agencyCompanyId: counterId, advertiserCompanyId: companyId }
+            : { agencyCompanyId: companyId, advertiserCompanyId: counterId },
+        );
+        setDeletingId(null);
+        toast.add({
+          title: res.ok ? "Vínculo eliminado" : "No se pudo eliminar",
+          description: res.message,
+          type: res.ok ? "success" : "error",
+        });
+        if (res.ok) {
+          router.refresh();
+          await load();
+        }
+      })();
+    });
+  };
 
   const tabs: DrawerTabDef[] = [
     { id: "ficha", label: "Ficha", icon: Building2 },
@@ -215,7 +253,7 @@ export function EmpresaDrawer({
       title={company ? toTitleCase(String(company.name ?? "Empresa")) : "Empresa"}
       description={
         company
-          ? [typeof company.domain === "string" && company.domain ? company.domain : null, typeof company.tax_id === "string" && company.tax_id ? `ID fiscal ${company.tax_id}` : null].filter(Boolean).join(" · ") || "—"
+          ? [typeof company.domain === "string" && company.domain ? company.domain : null, typeof company.tax_id === "string" && company.tax_id ? `${fiscalLabel} ${company.tax_id}` : null].filter(Boolean).join(" · ") || "—"
           : "Cargando…"
       }
       badges={
@@ -306,7 +344,7 @@ export function EmpresaDrawer({
               />
             ) : (
             <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
-              <div><dt className="text-xs text-muted-foreground">ID fiscal</dt><dd className="mt-1 text-sm">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">{fiscalLabel}</dt><dd className="mt-1 text-sm">{typeof company?.tax_id === "string" && company.tax_id ? company.tax_id : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Web</dt><dd className="mt-1 text-sm">{typeof company?.domain === "string" && company.domain ? company.domain : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Teléfono</dt><dd className="mt-1 text-sm tabular-nums">{typeof company?.phone === "string" && company.phone ? company.phone : "—"}</dd></div>
               <div><dt className="text-xs text-muted-foreground">Dirección</dt><dd className="mt-1 text-sm">{typeof company?.address === "string" && company.address ? company.address : "—"}</dd></div>
@@ -537,31 +575,72 @@ export function EmpresaDrawer({
             title={`${counterLabel} (${counterparties.length})`}
             description={
               isAdvertiser
-                ? "Agencias que le han manejado campañas (derivado de órdenes)."
-                : "Anunciantes que esta agencia ha gestionado (derivado de órdenes)."
+                ? "Agencias vinculadas a este anunciante (manual o por órdenes)."
+                : "Anunciantes vinculados a esta agencia (manual o por órdenes)."
             }
             tone="emerald"
             aria-label={counterLabel}
+            action={
+              canLink && !linkOpen ? (
+                <Button variant="outline" size="sm" onClick={() => setLinkOpen(true)}>
+                  <Plus aria-hidden />
+                  Vincular
+                </Button>
+              ) : undefined
+            }
           >
-            {counterparties.length === 0 ? (
+            {linkOpen && canLink && (
+              <div className="mb-3">
+                <VinculoForm
+                  companyId={companyId}
+                  kind={isAdvertiser ? "anunciante" : "agencia"}
+                  linkedIds={counterparties.map((c) => c.id)}
+                  onSaved={() => {
+                    setLinkOpen(false);
+                    router.refresh();
+                    void load();
+                  }}
+                  onCancel={() => setLinkOpen(false)}
+                />
+              </div>
+            )}
+            {counterparties.length === 0 && !linkOpen ? (
               <div className="flex flex-col gap-2 rounded-lg bg-muted/40 px-3 py-3">
                 <p className="text-sm text-muted-foreground">
                   {counterEmpty}
                 </p>
               </div>
-            ) : (
+            ) : counterparties.length === 0 ? null : (
               <DrawerTable flush>
                 <DrawerTableHeader flush>
                   <DrawerTableTh>{isAdvertiser ? "Agencia" : "Anunciante"}</DrawerTableTh>
-                  <DrawerTableTh>Tipo</DrawerTableTh>
+                  <DrawerTableTh>Origen</DrawerTableTh>
                   <DrawerTableTh numeric>Órdenes</DrawerTableTh>
+                  {canLink && <DrawerTableTh aria-label="Acciones" />}
                 </DrawerTableHeader>
                 <DrawerTableBody>
                   {counterparties.map((c) => (
                     <DrawerTableRow key={c.id}>
                       <DrawerTableTd className="font-medium">{toTitleCase(c.name)}</DrawerTableTd>
-                      <DrawerTableTd className="text-xs">{kindLabel(c.kind)}</DrawerTableTd>
-                      <DrawerTableTd numeric>{c.ios}</DrawerTableTd>
+                      <DrawerTableTd className="text-xs text-muted-foreground">
+                        {c.explicit ? (c.origin === "oi" ? "De OI + manual" : "Manual") : c.ios > 0 ? "De OI" : "—"}
+                      </DrawerTableTd>
+                      <DrawerTableTd numeric>{c.ios === 0 ? "—" : c.ios}</DrawerTableTd>
+                      {canLink && (
+                        <DrawerTableTd>
+                          {c.explicit && c.origin === "manual" ? (
+                            <RowIconButton
+                              icon={X}
+                              label={`Quitar vínculo con ${toTitleCase(c.name)}`}
+                              title="Quitar vínculo manual (las órdenes se conservan)"
+                              onClick={() => removeLink(c.id)}
+                              disabled={deleting}
+                              pending={deleting && deletingId === c.id}
+                              danger
+                            />
+                          ) : null}
+                        </DrawerTableTd>
+                      )}
                     </DrawerTableRow>
                   ))}
                 </DrawerTableBody>

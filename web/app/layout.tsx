@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/toast";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -30,8 +31,9 @@ export const metadata: Metadata = {
 // pintado usa el tema por defecto; el parpadeo posible se asume a cambio de
 // cero errores en consola.
 
-// Layout raíz mínimo: solo tema. El chrome del dashboard (sidebar/header)
-// vive en app/(dashboard)/layout.tsx; /login queda totalmente independiente.
+// Layout raíz: tema + toasts globales (`Toaster` único aquí: /login no hereda
+// el layout del dashboard, así que sin esto sus `toastFormError` no se ven).
+// El chrome del dashboard (sidebar/header) vive en app/(dashboard)/layout.tsx.
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
@@ -47,6 +49,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           disableTransitionOnChange
         >
           {children}
+          <Toaster limit={3} />
         </ThemeProvider>
       </body>
     </html>

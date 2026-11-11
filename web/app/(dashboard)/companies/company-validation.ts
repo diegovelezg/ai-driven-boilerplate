@@ -11,13 +11,16 @@ import { isCountryCode } from "@/lib/countries";
 // SSOT país: isCountryCode de lib/countries.ts (issue #8 P2). El server
 // (normalizeCompany) acepta ISO2 libre; el cliente valida contra la lista.
 
-export type CompanyFieldKey = "name" | "domain" | "country" | "commission" | "kind";
+export type CompanyFieldKey = "name" | "domain" | "country" | "commission" | "kind" | "category" | "providerType";
 
 export interface CompanyFieldValues {
   name: string;
   domain: string;
   country: string;
   commission?: string;
+  kind?: string;
+  categoryIab?: string;
+  providerType?: string;
 }
 
 function domainOk(raw: string): boolean {
@@ -44,6 +47,12 @@ export function validateCompanyFields(v: CompanyFieldValues): Array<{ key: Compa
       out.push({ key: "commission", message: "Comisión inválida (entero 0-100)." });
     }
   }
+  if (v.kind === "anunciante" && !(v.categoryIab ?? "").trim()) {
+    out.push({ key: "category", message: "Elige la categoría del anunciante." });
+  }
+  if (v.kind === "proveedor" && !(v.providerType ?? "").trim()) {
+    out.push({ key: "providerType", message: "Elige el tipo de proveedor." });
+  }
   return out;
 }
 
@@ -53,6 +62,8 @@ export function fieldsFromMessage(msg: string): CompanyFieldKey[] {
   if (/web|dominio/i.test(msg)) return ["domain"];
   if (/país|pais|iso/i.test(msg)) return ["country"];
   if (/comisión|comision/i.test(msg)) return ["commission"];
+  if (/tipo de proveedor/i.test(msg)) return ["providerType"];
+  if (/categor[ií]a|IAB/i.test(msg)) return ["category"];
   if (/tipo/i.test(msg)) return ["kind"];
   return [];
 }

@@ -83,6 +83,7 @@ export default async function EmpresasPage({
                 name: r.name,
                 kind: r.kind,
                 tax_id: r.tax_id,
+                country: r.country,
                 domain: r.domain,
                 email: r.email,
                 city: r.city,

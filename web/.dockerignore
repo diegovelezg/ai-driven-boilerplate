@@ -1,5 +1,5 @@
 # El contexto de build de web/ NO debe incluir esto: node_modules (~1GB)
-# re-leído en cada build revienta RAM/disco del VPS.
+# re-leído en cada build revienta RAM/disco.
 node_modules
 .next
 out

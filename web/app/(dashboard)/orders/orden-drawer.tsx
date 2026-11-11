@@ -72,11 +72,13 @@ interface Detail {
   billing_name: string | null;
   billing_kind: string | null;
   billing_tax_id: string | null;
+  billing_country: string | null;
   billing_commission_pct: number | null;
   billing_company_address: string | null;
   agency_company_id: string | null;
   agency_name: string | null;
   agency_tax_id: string | null;
+  agency_country: string | null;
   agency_commission_pct: number | null;
   lines: Array<Record<string, unknown>>;
   io_agency_orders: Array<Record<string, unknown>>;
@@ -1209,6 +1211,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             paymentTermsDays={typeof o?.payment_terms_days === "number" ? (o.payment_terms_days as number) : null}
             billingName={detail?.billing_name ?? null}
             billingTaxId={detail?.billing_tax_id ?? null}
+            billingCountry={detail?.billing_country ?? null}
             onSaved={() => {
               setInvOpen(false);
               toast.add({ title: "Factura registrada", description: "Ya figura en cobranza.", type: "success" });

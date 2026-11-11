@@ -6,6 +6,7 @@ import { requireMyStoreAccess } from "@/lib/tenant";
 import { normalizeCurrency } from "@/lib/currency";
 import { isValidISODate, todayLima } from "@/lib/format";
 import { resolveActor } from "@/lib/actor";
+import { taxIdLabel } from "@/lib/tax-id";
 
 export interface OrderFlowState {
   ok: boolean;
@@ -567,18 +568,19 @@ export async function createInvoiceAction(input: {
     if ("error" in loaded) return { ok: false, message: loaded.error };
     const { row, storeId } = loaded;
     if (String(row.status ?? "") === "cancelled") return { ok: false, message: "La orden está cancelada." };
-    // Factura electrónica: exige razón social con RUC (no se factura al aire).
+    // Factura electrónica: exige razón social con ID fiscal (no se factura al aire).
     const billingId = String(row.billing_company_id ?? "");
     if (!billingId) return { ok: false, message: "Sin empresa de facturación: fíjala en la ficha de la orden." };
     const { data: co, error: coErr } = await db
       .from("crm_companies")
-      .select("tax_id")
+      .select("tax_id,country")
       .eq("store_id", storeId)
       .eq("id", billingId)
       .maybeSingle();
     if (coErr || !co) return { ok: false, message: "Sin empresa de facturación: fíjala en la ficha de la orden." };
-    if (!String((co as Record<string, unknown>).tax_id ?? "").trim()) {
-      return { ok: false, message: "Sin RUC: complétalo en la ficha de la empresa antes de facturar." };
+    const coRec = co as Record<string, unknown>;
+    if (!String(coRec.tax_id ?? "").trim()) {
+      return { ok: false, message: `Sin ${taxIdLabel(coRec.country)}: complétalo en la ficha de la empresa antes de facturar.` };
     }
     const denied = await denyViewer(storeId);
     if (denied) return { ok: false, message: denied };

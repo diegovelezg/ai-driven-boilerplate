@@ -1,7 +1,6 @@
 // Worker Fase 2: sin morning pipeline. La gestión DOOH (órdenes, inventario,
 // empresas) es operativa y no necesita corrida diaria. Este worker queda como
-// no-op intencional para no romper el deploy de Coolify (cron existente):
-// sale 0 sin hacer nada. Si a futuro hay pipeline (vencimientos, alertas),
+// no-op intencional: sale 0 sin hacer nada. Si a futuro hay pipeline (vencimientos, alertas),
 // se reintroduce aquí por tienda.
 import { createLogger } from "@/lib/log";
 

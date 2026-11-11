@@ -15,6 +15,10 @@ export interface CrmCompany {
   city: string | null;
   country: string | null;
   external_ref: string | null;
+  /** Vertical IAB 2.0 (IAB1–IAB24). SSOT en lib/advertiser-categories. */
+  category_iab: string | null;
+  /** Subtipo de proveedor (solo kind = 'proveedor'). */
+  provider_type: string | null;
   contacts_count: number;
   /** Borrado lógico: null = activa. Listas y pickers muestran activas. */
   deleted_at: string | null;
@@ -93,6 +97,8 @@ export async function listCrmCompanies(
         city: (r.city as string | null) ?? null,
         country: (r.country as string | null) ?? null,
         external_ref: (r.external_ref as string | null) ?? null,
+        category_iab: (r.category_iab as string | null) ?? null,
+        provider_type: (r.provider_type as string | null) ?? null,
         contacts_count: Number(r.contacts_count ?? 0),
         deleted_at: (r.deleted_at as string | null) ?? null,
       })),
@@ -136,7 +142,7 @@ async function listCrmCompaniesLegacy(
   if (total === 0) return { rows: [], total };
   let query = db
     .from("crm_companies")
-    .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref,deleted_at")
+    .select("id,store_id,name,kind,tax_id,domain,email,phone,city,country,external_ref,category_iab,provider_type,deleted_at")
     .eq("store_id", storeId)
     .not("kind", "is", null);
   if (status !== "all") query = query.filter("deleted_at", status === "active" ? "is" : "not.is", null);
@@ -177,6 +183,8 @@ async function listCrmCompaniesLegacy(
     city: (r.city as string | null) ?? null,
     country: (r.country as string | null) ?? null,
     external_ref: (r.external_ref as string | null) ?? null,
+    category_iab: (r.category_iab as string | null) ?? null,
+    provider_type: (r.provider_type as string | null) ?? null,
     contacts_count: countBy.get(String(r.id)) ?? 0,
     deleted_at: (r.deleted_at as string | null) ?? null,
   }));
@@ -374,6 +382,9 @@ export interface CompanyNetworkCompany {
   name: string;
   kind: CompanyKind | null;
   ios: number;
+  /** true cuando existe vínculo explícito (pre-OI o sembrado desde OI). */
+  explicit: boolean;
+  origin: "manual" | "oi" | null;
 }
 
 export interface CompanyNetwork {
@@ -395,13 +406,15 @@ export async function getCrmCompany(
     .maybeSingle();
   if (error) throw new Error(`CRM read: ${error.message}`);
   if (!data) return null;
-  const [{ data: contacts }, { data: campaigns }, { data: iosAll }] = await Promise.all([
+  const [{ data: contacts }, { data: campaigns }, { data: iosAll }, { data: linksAll }] = await Promise.all([
     db.from("crm_contacts").select("id,store_id,company_id,first_name,last_name,email,phone,job_title,is_primary,created_by,updated_by,deleted_at").eq("store_id", storeId).eq("company_id", companyId).order("is_primary", { ascending: false }).order("created_at", { ascending: true }),
     db.from("io_campaigns").select("id,name,status,starts_at,ends_at,primary_contact_id").eq("store_id", storeId).eq("advertiser_company_id", companyId).order("created_at", { ascending: false }).limit(50),
     // Historial para la red comercial (drawer Vínculos): hasta 500 IOs donde
     // participa (como anunciante o facturación). La marca es metadato del
     // pedido (io_orders.brand), la contraparte se resuelve abajo.
     db.from("io_orders").select("id,io_number,brand,status,advertiser_company_id,billing_company_id").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(500),
+    // Vínculos explícitos pre-OI (una dirección por rol; se fusionan abajo).
+    db.from("crm_company_links").select("agency_company_id,advertiser_company_id,origin").eq("store_id", storeId).or(`agency_company_id.eq.${companyId},advertiser_company_id.eq.${companyId}`).limit(500),
   ]);
   const iosRows = ((iosAll ?? []) as Array<Record<string, unknown>>).map((o) => ({
     id: String(o.id),
@@ -434,6 +447,26 @@ export async function getCrmCompany(
     }
   }
   const counterpartIds = [...new Set([...agencyIds.keys(), ...advertiserIds.keys()])];
+  // Explícitos: el rol depende del lado que ocupa la empresa actual.
+  const explicitAgencyIds = new Map<string, "manual" | "oi">();
+  const explicitAdvertiserIds = new Map<string, "manual" | "oi">();
+  for (const l of ((linksAll ?? []) as Array<Record<string, unknown>>)) {
+    const ag = typeof l.agency_company_id === "string" ? l.agency_company_id : null;
+    const adv = typeof l.advertiser_company_id === "string" ? l.advertiser_company_id : null;
+    const origin = l.origin === "oi" ? "oi" : "manual";
+    if (!ag || !adv) continue;
+    if (adv === companyId && ag !== companyId) {
+      const prev = explicitAgencyIds.get(ag);
+      if (prev !== "manual") explicitAgencyIds.set(ag, origin);
+    }
+    if (ag === companyId && adv !== companyId) {
+      const prev = explicitAdvertiserIds.get(adv);
+      if (prev !== "manual") explicitAdvertiserIds.set(adv, origin);
+    }
+  }
+  for (const id of [...explicitAgencyIds.keys(), ...explicitAdvertiserIds.keys()]) {
+    if (!counterpartIds.includes(id)) counterpartIds.push(id);
+  }
   const nameBy = new Map<string, { name: string; kind: CompanyKind | null }>();
   if (counterpartIds.length > 0) {
     const { data: counterparties } = await db
@@ -449,19 +482,24 @@ export async function getCrmCompany(
       });
     }
   }
-  const toCompanies = (m: Map<string, number>): CompanyNetworkCompany[] =>
-    [...m.entries()]
-      .map(([id, ios]) => ({
+  const toCompanies = (
+    m: Map<string, number>,
+    explicit: Map<string, "manual" | "oi">,
+  ): CompanyNetworkCompany[] =>
+    [...new Set([...m.keys(), ...explicit.keys()])]
+      .map((id) => ({
         id,
         name: nameBy.get(id)?.name ?? "—",
         kind: nameBy.get(id)?.kind ?? null,
-        ios,
+        ios: m.get(id) ?? 0,
+        explicit: explicit.has(id),
+        origin: explicit.get(id) ?? null,
       }))
       .sort((a, b) => b.ios - a.ios || a.name.localeCompare(b.name, "es"));
   const network: CompanyNetwork = {
     brands: [...brandCount.values()].sort((a, b) => b.ios - a.ios || a.brand.localeCompare(b.brand, "es")),
-    agencies: toCompanies(agencyIds),
-    advertisers: toCompanies(advertiserIds),
+    agencies: toCompanies(agencyIds, explicitAgencyIds),
+    advertisers: toCompanies(advertiserIds, explicitAdvertiserIds),
   };
   // Ficha: solo las 50 recientes (comportamiento previo intacto).
   const ios = iosRows.slice(0, 50);

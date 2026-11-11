@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { createServerSupabase, isUserAuthConfigured } from "@/lib/supabase-server";
 import { LoginForm } from "./login-form";
 
@@ -9,6 +10,10 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ next?: string }>;
 }) {
+  // Login lee sesión (cookies) y redirige: todo a request-time.
+  // Sin esto, Next intenta prerenderizar y falla con
+  // `blocking-prerender-current-time` (el cliente Supabase usa timers/Date).
+  await connection();
   const sp = await searchParams;
   const next = sp.next ?? "";
   if (isUserAuthConfigured()) {

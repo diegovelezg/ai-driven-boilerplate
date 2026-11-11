@@ -10,5 +10,3 @@
 *.env
 !.env.example
 !*.env.example
-infra/coolify/*.env
-!infra/coolify/*.env.example

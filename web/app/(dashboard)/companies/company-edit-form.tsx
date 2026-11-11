@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { COUNTRIES } from "@/lib/countries";
+import { taxIdLabel } from "@/lib/tax-id";
 import { toast } from "@/components/ui/toast";
 import { updateCompanyAction, type CrmState } from "@/lib/crm-actions";
 import {
@@ -105,7 +106,7 @@ export function CompanyEditForm({
           <Input value={name} onChange={(e) => { setName(e.target.value); clear("name"); }} maxLength={200} disabled={pending} aria-invalid={invalid.has("name")} className={`${bad("name")}`} />
         </label>
         <label className="form-field">
-          ID fiscal
+          {taxIdLabel(country)}
           <Input value={taxId} onChange={(e) => setTaxId(e.target.value)} maxLength={40} disabled={pending} />
         </label>
         <label className="form-field">
@@ -133,9 +134,12 @@ export function CompanyEditForm({
               setCountry(v === "__none" ? "" : v);
               clear("country");
             }}
-            items={Object.fromEntries(
-              COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]),
-            )}
+            items={{
+              __none: "Sin especificar",
+              ...Object.fromEntries(
+                COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]),
+              ),
+            }}
             disabled={pending}
           >
             <SelectTrigger aria-label="País" aria-invalid={invalid.has("country")} className={`w-full${invalid.has("country") ? ` ${FIELD_ERR_CLS}` : ""}`}>

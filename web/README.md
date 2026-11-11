@@ -17,9 +17,7 @@ Las vistas leen desde BD.
 - ADK `@google/adk@^2.3.0` (chat DOOH en vivo: `dooh_agent` + 6 tools
   read-only + Runner SSE en `lib/api/chat-route.ts`), modelos en
   `config/llm_models.json`
-- Worker `worker.ts`: no-op intencional (sale 0 sin hacer nada); **sin cron**
-  (`docs/coolify.md` §3b DESACTIVADO — esta es la fuente vigente; cualquier
-  mención a cron `morning` en otro doc es histórica)
+- Worker `worker.ts`: no-op intencional (sale 0 sin hacer nada); **sin cron**.
 
 ## Quickstart
 
@@ -43,7 +41,7 @@ npm run dev               # :3000
 ## Ingesta DOOH
 
 - `/screens` → Importar desde Google Sheet URL o CSV (kinds: companies → contacts → venues → screens → slots).
-- Prod: **sin cron**. `docs/coolify.md` §3b está DESACTIVADO (worker no-op).
+- Prod: **sin cron** (worker no-op).
 
 ## Modelo de datos (Fase 2 vigente)
 

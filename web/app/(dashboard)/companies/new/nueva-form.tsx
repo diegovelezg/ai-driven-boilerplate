@@ -14,7 +14,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { COMPANY_KINDS, COMPANY_KIND_LABELS } from "@/lib/crm";
+import { ADVERTISER_CATEGORIES } from "@/lib/advertiser-categories";
+import { PROVIDER_TYPES } from "@/lib/provider-types";
 import { COUNTRIES } from "@/lib/countries";
+import { taxIdLabel } from "@/lib/tax-id";
 import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { createCompanyRedirectAction, type CrmState } from "@/lib/crm-actions";
 import {
@@ -33,9 +36,20 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
   const normalizedDefault = String(defaultCountry ?? "").trim().toUpperCase();
   const [country, setCountry] = useState<string>(/^[A-Z]{2}$/.test(normalizedDefault) ? normalizedDefault : "PE");
   const [nameOk, setNameOk] = useState(false);
+  const [categoryIab, setCategoryIab] = useState<string>("");
+  const [providerType, setProviderType] = useState<string>("");
   const [invalid, setInvalid] = useState<Set<CompanyFieldKey>>(new Set());
   const formRef = useRef<HTMLFormElement>(null);
   const showCommission = canManageCommission && kind === "agencia";
+  const needCategory = kind === "anunciante" && !categoryIab;
+  const needProviderType = kind === "proveedor" && !providerType;
+  const missingClass = !nameOk
+    ? "Completa el nombre para continuar"
+    : needCategory
+      ? "Elige la categoría del anunciante para continuar"
+      : needProviderType
+        ? "Elige el tipo de proveedor para continuar"
+        : undefined;
 
   const bad = (k: CompanyFieldKey) => (invalid.has(k) ? ` ${FIELD_ERR_CLS}` : "");
 
@@ -43,7 +57,13 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
     setInvalid(new Set(keys));
     toast.add({ title, description, type: "error" });
     const first = keys[0];
-    formRef.current?.querySelector<HTMLElement>(`[name="${first === "kind" ? "kind" : first === "commission" ? "agency_commission_pct" : first}"]`)?.focus();
+    const name =
+      first === "kind" ? "kind"
+      : first === "commission" ? "agency_commission_pct"
+      : first === "category" ? "category_iab"
+      : first === "providerType" ? "provider_type"
+      : first;
+    formRef.current?.querySelector<HTMLElement>(`[name="${name}"]`)?.focus();
   }
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -53,6 +73,9 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
       domain: String(fd.get("domain") ?? ""),
       country: String(fd.get("country") ?? ""),
       commission: showCommission ? String(fd.get("agency_commission_pct") ?? "") : "",
+      kind,
+      categoryIab: String(fd.get("category_iab") ?? ""),
+      providerType: String(fd.get("provider_type") ?? ""),
     });
     failSubmit(e, errs, fail);
   }
@@ -91,6 +114,60 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
             </SelectContent>
           </Select>
         </div>
+        {kind === "anunciante" && (
+          <div className="form-field">
+            Categoría *
+            <input type="hidden" name="category_iab" value={categoryIab} />
+            <Select
+              value={categoryIab || null}
+              onValueChange={(v) => {
+                if (!v) return;
+                setCategoryIab(v);
+                if (invalid.has("category")) setInvalid((p) => { const n = new Set(p); n.delete("category"); return n; });
+              }}
+              items={Object.fromEntries(
+                ADVERTISER_CATEGORIES.map((c) => [c.code, c.name_es]),
+              )}
+              disabled={pending}
+            >
+              <SelectTrigger aria-label="Categoría" aria-invalid={invalid.has("category")} className={`w-full${invalid.has("category") ? ` ${FIELD_ERR_CLS}` : ""}`}>
+                <SelectValue placeholder="Elegir categoría…" />
+              </SelectTrigger>
+              <SelectContent>
+                {ADVERTISER_CATEGORIES.map((c) => (
+                  <SelectItem key={c.code} value={c.code}>{c.name_es}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {kind === "proveedor" && (
+          <div className="form-field">
+            Tipo de proveedor *
+            <input type="hidden" name="provider_type" value={providerType} />
+            <Select
+              value={providerType || null}
+              onValueChange={(v) => {
+                if (!v) return;
+                setProviderType(v);
+                if (invalid.has("providerType")) setInvalid((p) => { const n = new Set(p); n.delete("providerType"); return n; });
+              }}
+              items={Object.fromEntries(
+                PROVIDER_TYPES.map((t) => [t.code, t.name_es]),
+              )}
+              disabled={pending}
+            >
+              <SelectTrigger aria-label="Tipo de proveedor" aria-invalid={invalid.has("providerType")} className={`w-full${invalid.has("providerType") ? ` ${FIELD_ERR_CLS}` : ""}`}>
+                <SelectValue placeholder="Elegir tipo…" />
+              </SelectTrigger>
+              <SelectContent>
+                {PROVIDER_TYPES.map((t) => (
+                  <SelectItem key={t.code} value={t.code}>{t.name_es}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         {showCommission && (
           <label className="form-field">
             <span className="flex flex-wrap items-center gap-2">
@@ -114,7 +191,7 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="form-field">
-          ID fiscal
+          {taxIdLabel(country)}
           <Input name="tax_id" maxLength={40} placeholder="20123456789" />
         </label>
         <label className="form-field">
@@ -143,9 +220,12 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
               setCountry(v);
               if (invalid.has("country")) setInvalid((p) => { const n = new Set(p); n.delete("country"); return n; });
             }}
-            items={Object.fromEntries(
-              COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]),
-            )}
+            items={{
+              __none: "Sin especificar",
+              ...Object.fromEntries(
+                COUNTRIES.map((c) => [c.code, `${c.code} — ${c.name}`]),
+              ),
+            }}
             disabled={pending}
           >
             <SelectTrigger aria-label="País" aria-invalid={invalid.has("country")} className={`w-full${invalid.has("country") ? ` ${FIELD_ERR_CLS}` : ""}`}>
@@ -161,7 +241,7 @@ export function NuevaEmpresaForm({ canManageCommission = true, defaultCountry = 
         </div>
       </div>
       <div>
-        <SubmitButton pending={pending} disabled={!nameOk} title={!nameOk ? "Completa el nombre para continuar" : undefined} pendingLabel="Creando…">
+        <SubmitButton pending={pending} disabled={!nameOk || needCategory || needProviderType} title={missingClass} pendingLabel="Creando…">
           <Plus aria-hidden />
           Crear empresa
         </SubmitButton>

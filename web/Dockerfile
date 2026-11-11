@@ -1,11 +1,10 @@
-# web — Dockerfile prod para Coolify (deploy único con compose raíz).
+# web — Dockerfile prod (build multi-stage).
 # Node 22 exigido por supabase-js/better-sqlite3/mikro-orm/kysely (>=22);
 # @google/adk no pinea engines y es compatible.
 #
-# Reglas de este archivo (2026-11-03: un build frío tardó ~55min y colgó el
-# VPS con la swap llena):
+# Reglas de este archivo:
 # - UN solo `apt-get` (stage `base`): 3 apt-get en paralelo + 2 `npm ci`
-#   contra red saturaban un VPS sin RAM.
+#   contra red saturaban máquinas chicas sin RAM.
 # - UN solo `npm ci` con red (stage `deps`). `prod-deps` deriva por COPY +
 #   `npm prune` local, sin descargar nada.
 # - Sin devDeps inútiles en el lock: la CLI `supabase` (146MB) y `shadcn`
@@ -29,7 +28,7 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 
 # Deps solo-prod para el runner: deriva de `deps` por COPY + prune local
-# (sin red). NO otro `npm ci`: dos installs en paralelo colgaron el VPS.
+# (sin red). NO otro `npm ci` en paralelo.
 FROM base AS prod-deps
 COPY package.json package-lock.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -38,8 +37,8 @@ RUN npm prune --omit=dev
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# NEXT_PUBLIC_* se inlinan en el build → Coolify debe pasarlas como Build Args
-# (mismo valor que las runtime). Ver docs/coolify.md.
+# NEXT_PUBLIC_* se inlinan en el build → pasarlas como Build Args
+# (mismo valor que las runtime).
 ARG NEXT_PUBLIC_SUPABASE_URL=""
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=""
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL

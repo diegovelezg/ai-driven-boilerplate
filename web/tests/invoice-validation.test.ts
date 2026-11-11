@@ -29,13 +29,17 @@ describe("parseAmountToMinor", () => {
 
 describe("billingBlocker", () => {
   it("lista con nombre + RUC", () => {
-    assert.equal(billingBlocker({ name: "Tottus", taxId: "20508565934" }), null);
+    assert.equal(billingBlocker({ name: "Tottus", taxId: "20508565934", country: "PE" }), null);
   });
   it("sin empresa bloquea", () => {
     assert.match(billingBlocker({ name: null, taxId: null }) ?? "", /empresa de facturación/);
   });
-  it("sin RUC bloquea", () => {
-    assert.match(billingBlocker({ name: "Tottus", taxId: " " }) ?? "", /RUC/);
+  it("sin RUC bloquea (etiqueta según país)", () => {
+    assert.match(billingBlocker({ name: "Tottus", taxId: " ", country: "PE" }) ?? "", /RUC/);
+  });
+  it("etiqueta el TIN del país (MX → RFC, sin país → genérico)", () => {
+    assert.match(billingBlocker({ name: "Acme", taxId: null, country: "MX" }) ?? "", /RFC/);
+    assert.match(billingBlocker({ name: "Acme", taxId: null }) ?? "", /ID fiscal/);
   });
 });
 

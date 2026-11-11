@@ -12,6 +12,7 @@ import { createInvoiceAction } from "@/lib/order-flow-actions";
 import { todayLima, addDays } from "@/lib/availability-utils";
 import { formatDate, parseISODate, toISODateLocal } from "@/lib/format";
 import { cn } from "cn";
+import { taxIdLabel } from "@/lib/tax-id";
 import { es } from "react-day-picker/locale";
 import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback";
 import {
@@ -112,12 +113,14 @@ export function InvoiceForm({
   onCancel,
   billingName,
   billingTaxId,
+  billingCountry,
 }: {
   orderId: string;
   orderCurrency: string;
   paymentTermsDays: number | null;
   billingName: string | null;
   billingTaxId: string | null;
+  billingCountry?: string | null;
   onSaved?: () => void;
   onCancel?: () => void;
 }) {
@@ -137,7 +140,7 @@ export function InvoiceForm({
   if (!number.trim()) missing.push("número");
   if (!amount.trim()) missing.push("monto");
 
-  const blocked = billingBlocker({ name: billingName, taxId: billingTaxId });
+  const blocked = billingBlocker({ name: billingName, taxId: billingTaxId, country: billingCountry });
 
   function save() {
     if (blocked) {
@@ -209,7 +212,7 @@ export function InvoiceForm({
               <span className="mt-0.5 block break-words text-sm font-semibold">{billingName}</span>
               <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="rounded-md border border-border/60 bg-background px-1.5 py-0.5 font-medium tabular-nums">
-                  RUC {billingTaxId}
+                  {taxIdLabel(billingCountry)} {billingTaxId}
                 </span>
                 <span className="rounded-md border border-border/60 bg-background px-1.5 py-0.5 font-medium">
                   {orderCurrency}

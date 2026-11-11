@@ -20,6 +20,7 @@ import {
   toTitleCase,
 } from "@/lib/format";
 import { parseOrderSnapshot } from "@/lib/order-snapshot";
+import { taxIdLabel } from "@/lib/tax-id";
 import { PrintButton } from "./print-button";
 
 export const instant = false;
@@ -116,6 +117,8 @@ export default async function OrderPrintPage({
   const advertiser = toTitleCase(snap ? snap.advertiser.name : detail.advertiser_name);
   const billing = toTitleCase(snap ? snap.billing.name : detail.billing_name);
   const billingTax = snap ? snap.billing.tax_id : detail.billing_tax_id;
+  const billingCountry = snap ? snap.billing.country : detail.billing_country;
+  const fiscalLabel = taxIdLabel(billingCountry);
   const cityLine = [
     snap ? snap.billing.city : detail.billing_city,
     snap ? snap.billing.country : detail.billing_country,
@@ -256,7 +259,7 @@ export default async function OrderPrintPage({
         <NpGrid
           rows={[
             ["Razón social", billing],
-            ["RUC", billingTax ?? "—"],
+            [fiscalLabel, billingTax ?? "—"],
             ["Ciudad", cityLine || "—"],
             ["Dirección", billingAddress ?? "—"],
             ...(hasContact
@@ -313,7 +316,7 @@ export default async function OrderPrintPage({
             ...(hasIntermediary
               ? ([
                   ["Razón social", toTitleCase(linkedAgencyName)],
-                  ["RUC", linkedAgencyTax ?? "—"],
+                  [taxIdLabel(detail.agency_country ?? billingCountry), linkedAgencyTax ?? "—"],
                 ] as Array<[string, React.ReactNode]>)
               : []),
           ]}

@@ -49,7 +49,7 @@ function getCompanyTool(ctx: AgentContext) {
       "Ficha de una empresa del tenant (anunciante/agencia/proveedor) con contactos y OIs. Busca por company_id exacto o por texto q (nombre/tax_id/dominio).",
     parameters: z.object({
       company_id: z.string().uuid().describe("ID exacto de la empresa (crm_companies.id).").optional(),
-      q: z.string().min(2).max(120).describe("Texto a buscar (nombre, RUC, dominio o email).").optional(),
+      q: z.string().min(2).max(120).describe("Texto a buscar (nombre, ID fiscal, dominio o email).").optional(),
     }),
     execute: async ({ company_id, q }: { company_id?: string; q?: string }) => {
       const storeId = needStore(ctx);

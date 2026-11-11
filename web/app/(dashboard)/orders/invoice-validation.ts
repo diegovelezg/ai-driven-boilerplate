@@ -6,6 +6,7 @@
 // form-feedback en el form, no desde aquí.
 // Fechas: SSOT en lib/format.ts.
 import { isValidISODate } from "@/lib/format";
+import { taxIdLabel } from "@/lib/tax-id";
 
 export type InvoiceFieldKey = "number" | "amount" | "issue" | "due" | "status";
 
@@ -80,12 +81,14 @@ export function invoiceFieldsFromMessage(msg: string): InvoiceFieldKey[] {
 export interface InvoiceBilling {
   name: string | null;
   taxId: string | null;
+  country?: string | null;
 }
 
-/** Bloqueante de facturación: sin razón social o sin RUC no se puede emitir.
+/** Bloqueante de facturación: sin razón social o sin ID fiscal no se puede
+ *  emitir (etiqueta del TIN según país, p. ej. RUC/CUIT/RFC).
  *  Devuelve el motivo (para mostrar y titular el submit) o null si está lista. */
 export function billingBlocker(b: InvoiceBilling): string | null {
   if (!b.name?.trim()) return "Sin empresa de facturación: fíjala en la ficha de la orden.";
-  if (!b.taxId?.trim()) return "Sin RUC: complétalo en la ficha de la empresa.";
+  if (!b.taxId?.trim()) return `Sin ${taxIdLabel(b.country)}: complétalo en la ficha de la empresa.`;
   return null;
 }

@@ -62,14 +62,14 @@ begin
       from import_runs;
     end if;
     -- DROP con guarda: import_runs ya traspasada arriba; si quedó algo, aborta.
-    do $$
+    do $inner$
     declare n int;
     begin
       select count(*) into n from public.import_runs;
       if n > 0 then
         raise exception 'DROP bloqueado: public.import_runs tiene % filas sin traspasar', n;
       end if;
-    end $$;
+    end $inner$;
     drop table if exists import_runs cascade;
   end if;
 end $$;

@@ -230,7 +230,7 @@ export interface OrderDetail {
     manager: OrderContactRef | null;
   };  billing_name: string | null;
   billing_kind: string | null;
-  /** RUC de la razón social a facturar (crm_companies.tax_id). */
+  /** ID fiscal (TIN) de la razón social a facturar (crm_companies.tax_id). */
   billing_tax_id: string | null;
   /** % de comisión del facturador cuando es agencia (default del caso agencia cliente). */
   billing_commission_pct: number | null;
@@ -238,6 +238,7 @@ export interface OrderDetail {
   agency_company_id: string | null;
   agency_name: string | null;
   agency_tax_id: string | null;
+  agency_country: string | null;
   agency_commission_pct: number | null;
   /** Ciudad/país/dirección del facturador (crm_companies, solo lectura). */
   advertiser_city: string | null;
@@ -406,6 +407,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
     agency_company_id: agencyId,
     agency_name: agencyId ? (nameBy.get(agencyId) ?? null) : null,
     agency_tax_id: agencyId ? (taxBy.get(agencyId) ?? null) : null,
+    agency_country: agencyId ? (countryBy.get(agencyId) ?? null) : null,
     agency_commission_pct: agencyId ? (commissionBy.get(agencyId) ?? null) : null,
     advertiser_city: advertiserId ? (cityBy.get(advertiserId) ?? null) : null,
     advertiser_country: advertiserId ? (countryBy.get(advertiserId) ?? null) : null,

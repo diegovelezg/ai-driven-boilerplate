@@ -3,7 +3,6 @@ import { Suspense } from "react";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
 import { BackgroundStatus } from "@/components/background-status";
-import { Toaster } from "@/components/ui/toast";
 import { ChatDockProvider, DashboardShell } from "@/components/chat/chat-dock";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AppTooltipProvider } from "@/components/ui/app-tooltip";
@@ -71,7 +70,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
                 <DrawerHost myRole={myRole} />
               </Suspense>
             </SidebarInset>
-            <Toaster limit={3} />
           </AppTooltipProvider>
         </ChatDockProvider>
       </SidebarProvider>

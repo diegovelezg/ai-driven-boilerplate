@@ -33,9 +33,7 @@ function schemaGapMessage(gaps: SchemaGap[]): string {
   const names = gaps.map((g) => g.relation).join(", ");
   return (
     `DB detrás del código: falta ${names}. ` +
-    `Aplicar supabase/migrations en el contenedor supabase-db-* ` +
-    `(aplicar supabase/migrations en el contenedor supabase-db-*` +
-    ` y reiniciar la sub-app rest ` +
-    `(schema-cache de PostgREST). Ver docs/coolify.md §4.`
+    `Aplicar supabase/migrations en la base de datos ` +
+    `(y reiniciar PostgREST para recargar el schema-cache).`
   );
 }

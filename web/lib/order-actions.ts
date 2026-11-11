@@ -306,6 +306,30 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
         await db.from("io_orders").delete().eq("store_id", t.storeId).eq("id", ioId);
         return { ok: false, message: `DB write líneas: ${lerr.message}` };
       }
+      // Vínculo explícito agencia ↔ anunciante (origin='oi', best-effort):
+      // la OI asegura el par para que Vínculos lo muestre aunque sea la
+      // primera operación conjunta. Nunca bloquea la creación.
+      try {
+        const { linkPairForOrder } = await import("@/lib/company-links");
+        const pair = linkPairForOrder({
+          advertiserCompanyId: advertiser,
+          billingCompanyId: billing,
+          agencyCompanyId: agency_company_id,
+        });
+        if (pair) {
+          const { error: linkErr } = await db.from("crm_company_links").insert({
+            store_id: t.storeId,
+            agency_company_id: pair.agencyCompanyId,
+            advertiser_company_id: pair.advertiserCompanyId,
+            origin: "oi",
+            created_by: actor,
+            updated_by: actor,
+          });
+          if (linkErr && linkErr.code !== "23505") throw linkErr;
+        }
+      } catch {
+        // Best-effort: la red derivada de OIs sigue mostrando la contraparte.
+      }
       revalidatePath("/orders");
       return { ok: true, message: "Orden creada." };
     }
@@ -499,6 +523,37 @@ export async function updateOrderAction(input: {
       .eq("store_id", t.storeId)
       .eq("id", orderId);
     if (error) return { ok: false, message: `DB write: ${error.message}` };
+    // Si cambió la intermediaria, asegura el vínculo explícito (origin='oi').
+    if (p.agency_company_id !== undefined) {
+      try {
+        const { data: after } = await db
+          .from("io_orders")
+          .select("advertiser_company_id,billing_company_id,agency_company_id")
+          .eq("store_id", t.storeId)
+          .eq("id", orderId)
+          .maybeSingle();
+        const r = (after ?? {}) as Record<string, unknown>;
+        const { linkPairForOrder } = await import("@/lib/company-links");
+        const pair = linkPairForOrder({
+          advertiserCompanyId: typeof r.advertiser_company_id === "string" ? r.advertiser_company_id : null,
+          billingCompanyId: typeof r.billing_company_id === "string" ? r.billing_company_id : null,
+          agencyCompanyId: typeof r.agency_company_id === "string" ? r.agency_company_id : null,
+        });
+        if (pair) {
+          const { error: linkErr } = await db.from("crm_company_links").insert({
+            store_id: t.storeId,
+            agency_company_id: pair.agencyCompanyId,
+            advertiser_company_id: pair.advertiserCompanyId,
+            origin: "oi",
+            created_by: actor,
+            updated_by: actor,
+          });
+          if (linkErr && linkErr.code !== "23505") throw linkErr;
+        }
+      } catch {
+        // Best-effort: no bloquea la edición de la ficha.
+      }
+    }
     revalidatePath("/orders");
     return { ok: true, message: "Orden actualizada." };
   } catch (e) {
