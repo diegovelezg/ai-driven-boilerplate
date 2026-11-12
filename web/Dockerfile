@@ -7,6 +7,10 @@
 #   contra red saturaban máquinas chicas sin RAM.
 # - UN solo `npm ci` con red (stage `deps`). `prod-deps` deriva por COPY +
 #   `npm prune` local, sin descargar nada.
+# - Runner SIN toolchain: `runner-base` solo trae procps (Crawlee spawnea
+#   `ps` en runtime) + usuario no-root. python3/make/g++ se quedan en `base`
+#   (solo build). ~-280MB en la imagen final; los binarios nativos
+#   (better-sqlite3) se compilan en `deps` y viajan ya compilados.
 # - Sin devDeps inútiles en el lock: la CLI `supabase` (146MB) y `shadcn`
 #   salieron de package.json (local: `npm i -g supabase`, `npx shadcn`).
 #   `adk-devtools` se queda: `.bin/adk` apunta ahí (`npm run adk` local).
@@ -34,6 +38,15 @@ COPY package.json package-lock.json ./
 COPY --from=deps /app/node_modules ./node_modules
 RUN npm prune --omit=dev
 
+# Base limpia de runtime: sin toolchain de compilación (python3/make/g++ se
+# quedan en `base`, solo build). Solo procps (Crawlee spawnea `ps`) +
+# usuario no-root. Misma distro y Node que `base` para que los binarios
+# nativos compilados en `deps` sigan valiendo.
+FROM node:22-bookworm-slim AS runner-base
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+  && rm -rf /var/lib/apt/lists/ \
+  && addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -46,7 +59,7 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM base AS runner
+FROM runner-base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
