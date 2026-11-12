@@ -27,6 +27,7 @@ import { ContactAccountsForm } from "@/components/contact-accounts-form";
 import { AccountAttendantsForm } from "@/components/account-attendants-form";
 import { kindLabel } from "@/lib/crm";
 import { CompanyCampaignBadge, CompanyIOBadge, CompanyKindBadge, CompanyPrincipalBadge } from "@/components/company-badges";
+import { Money } from "@/components/money";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { RestrictedVisibilityBadge } from "@/components/role-badges";
 import { normalizeCommissionPct } from "@/lib/agency-commission";
@@ -76,6 +77,8 @@ interface DrawerIO {
   io_number: string;
   brand: string | null;
   status: string;
+  gross_minor: number;
+  currency: string;
 }
 
 interface DrawerCampaign {
@@ -577,6 +580,7 @@ export function EmpresaDrawer({
                   <DrawerTableTh>Orden</DrawerTableTh>
                   <DrawerTableTh>Marca</DrawerTableTh>
                   <DrawerTableTh>Estado</DrawerTableTh>
+                  <DrawerTableTh numeric>Monto</DrawerTableTh>
                 </DrawerTableHeader>
                 <DrawerTableBody>
                   {ios.map((o) => (
@@ -584,6 +588,7 @@ export function EmpresaDrawer({
                       <DrawerTableTd className="font-medium">{o.io_number}</DrawerTableTd>
                       <DrawerTableTd className="text-sm">{toTitleCase(o.brand ?? "—")}</DrawerTableTd>
                       <DrawerTableTd><CompanyIOBadge status={o.status} /></DrawerTableTd>
+                      <DrawerTableTd numeric className="whitespace-nowrap"><Money amountMinor={o.gross_minor} currency={o.currency} /></DrawerTableTd>
                     </DrawerTableRow>
                   ))}
                 </DrawerTableBody>

@@ -16,7 +16,8 @@ import {
 } from "@/components/data-table";
 import { FilterSearch } from "@/components/filter-search";
 import { BrandPautaBadge } from "@/components/badges";
-import { formatMoney, formatNumber } from "@/lib/format";
+import { Money } from "@/components/money";
+import { formatNumber } from "@/lib/format";
 import type { BrandsSortDir, BrandsSortKey, BrandRow } from "@/lib/brand-db";
 import { MarcaDrawer } from "./marca-drawer";
 import { EntityCount, EntityEmpty, useEntitySelection } from "@/components/entity-list";
@@ -171,7 +172,7 @@ export function BrandsList({
                   {formatNumber(r.ios)}
                 </DataTableTd>
                 <DataTableTd numeric className="px-3 py-4 tabular-nums">
-                  {formatMoney(r.total_minor, "PEN")}
+                  <Money amountMinor={r.total_minor} currency="PEN" />
                 </DataTableTd>
                 <DataTableTd className="px-3 py-4 text-[13px] text-muted-foreground tabular-nums">
                   {r.last_end ?? <span className="text-muted-foreground/60">—</span>}

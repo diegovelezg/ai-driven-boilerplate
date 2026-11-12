@@ -19,7 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "cn";
-import { addDays, formatDate, formatMoney, formatNumber, parseISODate, toTitleCase } from "@/lib/format";
+import { addDays, formatDate, formatNumber, parseISODate, toTitleCase } from "@/lib/format";
+import { Money } from "@/components/money";
 import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction } from "@/lib/order-actions";
 import { PantallaDrawer } from "../../screens/pantalla-drawer";
 import {
@@ -665,7 +666,7 @@ export function NuevaOrdenForm({
         <div>
           <SubmitButton pending={pending} disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined} pendingLabel="Creando…">
             <Plus aria-hidden />
-            {`Crear orden${total > 0 ? ` · ${formatMoney(Math.round(total * 100), currency)}` : ""}`}
+            <>Crear orden{total > 0 ? <> · <Money amountMinor={Math.round(total * 100)} currency={currency} /></> : null}</>
           </SubmitButton>
         </div>
         {!canSubmit && !pending && (

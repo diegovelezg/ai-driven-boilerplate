@@ -3,6 +3,7 @@ import { AlertTriangle, BadgeCheck, FileText, Hourglass, Settings2, TriangleAler
 import { Button } from "@/components/ui/button";
 import { AppCard, AppCardState } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
+import { Money } from "@/components/money";
 import { PageHeader } from "@/components/page-header";
 import { AutoRefresh } from "@/components/auto-refresh";
 import { SectionHeading } from "@/components/section-heading";
@@ -372,27 +373,27 @@ export default async function FinanzasPage({
                   <Metric
                     label="Facturado"
                     icon={FileText}
-                    value={formatMoney(fin.invoicedMinor, fin.currency)}
+                    value={<Money amountMinor={fin.invoicedMinor} currency={fin.currency} />}
                     hint="Total emitido"
                   />
                   <Metric
                     label="Cobrado"
                     icon={BadgeCheck}
-                    value={formatMoney(fin.paidMinor, fin.currency)}
+                    value={<Money amountMinor={fin.paidMinor} currency={fin.currency} />}
                     hint="Pagos confirmados"
                     tone="success"
                   />
                   <Metric
                     label="Pendiente"
                     icon={Hourglass}
-                    value={formatMoney(fin.pendingMinor, fin.currency)}
+                    value={<Money amountMinor={fin.pendingMinor} currency={fin.currency} />}
                     hint="Facturado por cobrar"
                     tone={fin.pendingMinor > 0 ? "warning" : "default"}
                   />
                   <Metric
                     label="Vencido"
                     icon={TriangleAlert}
-                    value={formatMoney(fin.overdueMinor, fin.currency)}
+                    value={<Money amountMinor={fin.overdueMinor} currency={fin.currency} />}
                     hint={`${formatNumber(fin.overdueCount)} ${fin.overdueCount === 1 ? "factura" : "facturas"}`}
                     tone={fin.overdueMinor > 0 ? "danger" : "default"}
                   />
@@ -420,7 +421,7 @@ export default async function FinanzasPage({
                           <DataTableRow key={r.name}>
                             <DataTableTd>{r.name}</DataTableTd>
                             <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
-                            <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                            <DataTableTd numeric><Money amountMinor={r.gross} currency={fin.currency} /></DataTableTd>
                           </DataTableRow>
                         ))}
                       </DataTableBody>
@@ -438,7 +439,7 @@ export default async function FinanzasPage({
                           <DataTableRow key={r.name}>
                             <DataTableTd>{r.name}</DataTableTd>
                             <DataTableTd numeric>{formatNumber(r.lines)}</DataTableTd>
-                            <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                            <DataTableTd numeric><Money amountMinor={r.gross} currency={fin.currency} /></DataTableTd>
                           </DataTableRow>
                         ))}
                       </DataTableBody>
@@ -484,11 +485,11 @@ export default async function FinanzasPage({
                               </span>
                             )}
                           </DataTableTd>
-                          <DataTableTd numeric>{formatMoney(b.salesMinor, fin.currency)}</DataTableTd>
+                          <DataTableTd numeric><Money amountMinor={b.salesMinor} currency={fin.currency} /></DataTableTd>
                           <DataTableTd numeric>{formatNumber(b.orders)}</DataTableTd>
                           <DataTableTd numeric>
                             {b.orders > 0
-                              ? formatMoney(Math.round(b.salesMinor / b.orders), fin.currency)
+                              ? <Money amountMinor={Math.round(b.salesMinor / b.orders)} currency={fin.currency} />
                               : "—"}
                           </DataTableTd>
                         </DataTableRow>
@@ -518,7 +519,7 @@ export default async function FinanzasPage({
                         <DataTableRow key={r.brand}>
                           <DataTableTd>{r.brand}</DataTableTd>
                           <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
-                          <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                          <DataTableTd numeric><Money amountMinor={r.gross} currency={fin.currency} /></DataTableTd>
                         </DataTableRow>
                       ))}
                     </DataTableBody>
@@ -546,7 +547,7 @@ export default async function FinanzasPage({
                         <DataTableRow key={r.name}>
                           <DataTableTd>{r.name}</DataTableTd>
                           <DataTableTd numeric>{formatNumber(r.ios)}</DataTableTd>
-                          <DataTableTd numeric>{formatMoney(r.gross, fin.currency)}</DataTableTd>
+                          <DataTableTd numeric><Money amountMinor={r.gross} currency={fin.currency} /></DataTableTd>
                         </DataTableRow>
                       ))}
                     </DataTableBody>

@@ -83,27 +83,51 @@ export function formatPercentPoints(
 }
 
 /**
+ * Minor units → partes de moneda legible, siempre en código ISO (PEN, USD…).
+ * Ej.: formatMoneyParts(36461777, "PEN") → { code: "PEN", body: "364.618",
+ * text: "PEN 364.618" }.
+ * Ej. con céntimos: formatMoneyParts(1999, "PEN", 2) → body "19,99".
+ * Monto no-finito/null → body/text "—". Moneda null/vacía → PEN (default
+ * histórico de la tienda); desconocida → código ISO tal cual.
+ *
+ * SSOT visual: el render con estilo (ISO sutil) vive en `<Money/>`
+ * (`components/money.tsx`), que consume estas partes. `formatMoney` queda
+ * para contextos solo-texto: aria-labels, tooltips en string, CSV, print
+ * y concatenaciones multi-moneda ("PEN … + USD …").
+ */
+export function formatMoneyParts(
+  amountMinor: number | string | null | undefined,
+  currency: string | null | undefined,
+  decimals = 0,
+): { code: string; body: string; text: string } {
+  if (amountMinor === null || amountMinor === undefined)
+    return { code: "PEN", body: "—", text: "—" };
+  const minor = Number(amountMinor);
+  if (!Number.isFinite(minor)) return { code: "PEN", body: "—", text: "—" };
+  const code = normalizeCurrency(currency, "PEN");
+  const d = Math.max(0, Math.floor(decimals));
+  const major = minor / 100;
+  const body =
+    d === 0 ? formatNumber(Math.round(major)) : formatDecimal(major, d);
+  if (body === "—") return { code, body: "—", text: "—" };
+  return { code, body, text: `${code} ${body}` };
+}
+
+/**
  * Minor units → moneda legible, siempre en código ISO (PEN, USD…).
  * Ej.: formatMoney(36461777, "PEN") → "PEN 364.618".
  * Ej. con céntimos: formatMoney(1999, "PEN", 2) → "PEN 19,99".
  * Monto no-finito/null → "—". Moneda null/vacía → PEN (default histórico
  * de la tienda); desconocida → código ISO tal cual.
+ *
+ * Solo-texto (ver `formatMoneyParts`). Para UI visible usar `<Money/>`.
  */
 export function formatMoney(
   amountMinor: number | string | null | undefined,
   currency: string | null | undefined,
   decimals = 0,
 ): string {
-  if (amountMinor === null || amountMinor === undefined) return "—";
-  const minor = Number(amountMinor);
-  if (!Number.isFinite(minor)) return "—";
-  const code = normalizeCurrency(currency, "PEN");
-  const d = Math.max(0, Math.floor(decimals));
-  const major = minor / 100;
-  const body =
-    d === 0 ? formatNumber(Math.round(major)) : formatDecimal(major, d);
-  if (body === "—") return "—";
-  return `${code} ${body}`;
+  return formatMoneyParts(amountMinor, currency, decimals).text;
 }
 
 /** Etiqueta de condición de pago desde días (fuente numérica).

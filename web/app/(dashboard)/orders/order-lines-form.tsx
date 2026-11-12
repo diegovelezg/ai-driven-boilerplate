@@ -6,7 +6,8 @@ import { CancelButton, SubmitButton } from "@/components/buttons";
 import { AppCard } from "@/components/app-card";
 import { updateOrderLinesAction } from "@/lib/order-actions";
 import { toastFormError } from "@/components/ui/form-feedback";
-import { addDays, diffDaysInclusive, displayEndOfSafe, formatMoney, formatNumber, isoDayPart, parseISODate } from "@/lib/format";
+import { addDays, diffDaysInclusive, displayEndOfSafe, formatNumber, isoDayPart, parseISODate } from "@/lib/format";
+import { Money } from "@/components/money";
 import { PantallaDrawer } from "../screens/pantalla-drawer";
 import {
   OrderScreensTable,
@@ -325,7 +326,7 @@ export function OrderLinesForm({
         <div className="flex flex-wrap items-center gap-2">
           <SubmitButton pending={pending} disabled={!canSubmit} title={!canSubmit ? `Falta: ${missing.join(", ")}` : undefined} pendingLabel="Guardando…">
             <Plus aria-hidden />
-            {`Guardar${total > 0 ? ` · ${formatMoney(Math.round(total * 100), orderCurrency)}` : ""}`}
+            <>Guardar{total > 0 ? <> · <Money amountMinor={Math.round(total * 100)} currency={orderCurrency} /></> : null}</>
           </SubmitButton>
           <CancelButton onCancel={onCancel} disabled={pending} />
           <span className="text-xs text-muted-foreground tabular-nums">

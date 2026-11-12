@@ -18,6 +18,7 @@ import {
   DrawerTableTh,
 } from "@/components/drawer-table";
 import { CompanyIOBadge } from "@/components/company-badges";
+import { Money } from "@/components/money";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { formatDate, formatMoney, formatNumber, toTitleCase } from "@/lib/format";
 import type { BrandDetail } from "@/lib/brand-db";
@@ -173,7 +174,7 @@ export function MarcaDrawer({
         >
           <dl className="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
             <div><dt className="text-xs text-muted-foreground">Pedidos</dt><dd className="mt-1 text-sm tabular-nums">{formatNumber(ios.length)}</dd></div>
-            <div><dt className="text-xs text-muted-foreground">Inversión</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(detail.total_minor, "PEN")}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">Inversión</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={detail.total_minor} currency="PEN" /></dd></div>
             <div><dt className="text-xs text-muted-foreground">Pantallas</dt><dd className="mt-1 text-sm">{screens.length > 0 ? screens.join(" · ") : "—"}</dd></div>
             <div><dt className="text-xs text-muted-foreground">Vigencia</dt><dd className="mt-1 text-sm tabular-nums">{[detail.first_start, detail.last_end].filter(Boolean).join(" → ") || "—"}</dd></div>
             <div className="sm:col-span-2"><dt className="text-xs text-muted-foreground">Empresas</dt><dd className="mt-1 text-sm">{companies.length > 0 ? companies.map((c) => `${toTitleCase(c.name)} (${roleLabel(c.roles)})`).join(" · ") : "—"}</dd></div>
@@ -212,7 +213,7 @@ export function MarcaDrawer({
                     <DrawerTableTd className="text-xs tabular-nums">{formatDate(o.starts_at)}</DrawerTableTd>
                     <DrawerTableTd className="text-xs tabular-nums">{formatDate(o.ends_at)}</DrawerTableTd>
                     <DrawerTableTd><CompanyIOBadge status={o.status} /></DrawerTableTd>
-                    <DrawerTableTd numeric className="tabular-nums">{formatMoney(o.total_minor, "PEN")}</DrawerTableTd>
+                    <DrawerTableTd numeric className="tabular-nums"><Money amountMinor={o.total_minor} currency="PEN" /></DrawerTableTd>
                   </DrawerTableRow>
                 ))}
               </DrawerTableBody>

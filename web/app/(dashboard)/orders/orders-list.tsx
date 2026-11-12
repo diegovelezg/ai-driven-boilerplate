@@ -22,6 +22,7 @@ import type { OrderStageKey } from "@/lib/order-stage";
 import { BILLING_LABELS } from "@/lib/billing-status";
 import type { BillingStatusKey } from "@/lib/billing-status";
 import { OrderAutorizadaBadge, OrderBillingBadge, OrderStageBadge } from "@/components/order-badges";
+import { Money } from "@/components/money";
 import { normalizeCurrency } from "@/lib/currency";
 import { formatMoney, formatNumber } from "@/lib/format";
 import type { OrderRow } from "@/lib/orders-db";
@@ -221,7 +222,7 @@ export function OrdersList({
                   {o.starts_at && o.ends_at ? `${fmtCorto(o.starts_at)} → ${fmtCorto(o.ends_at)}` : "—"}
                 </DataTableTd>
                 <DataTableTd numeric className="font-medium tabular-nums">
-                  {o.gross_minor > 0 ? formatMoney(o.gross_minor, o.currency) : "—"}
+                  {o.gross_minor > 0 ? <Money amountMinor={o.gross_minor} currency={o.currency} /> : "—"}
                 </DataTableTd>
                 <DataTableTd>
                   <span className="flex flex-col items-start gap-1">
@@ -234,12 +235,12 @@ export function OrdersList({
                     <OrderBillingBadge status={o.billing} />
                     {o.billing === "parcial" && o.pending_minor > 0 && (
                       <span className="text-[11px] text-muted-foreground tabular-nums">
-                        {formatMoney(o.pending_minor, o.currency)} pend.
+                        <Money amountMinor={o.pending_minor} currency={o.currency} /> pend.
                       </span>
                     )}
                     {o.billing === "vencido" && o.pending_minor > 0 && (
                       <span className="text-[11px] font-medium text-destructive tabular-nums">
-                        {formatMoney(o.pending_minor, o.currency)} pend.
+                        <Money amountMinor={o.pending_minor} currency={o.currency} /> pend.
                       </span>
                     )}
                     {o.billing === "pagado" && o.isPrepaid && (

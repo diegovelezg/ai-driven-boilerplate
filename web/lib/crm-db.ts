@@ -1,5 +1,6 @@
 // Lecturas CRM (service_role, como customers-db). Escrituras en crm-actions.ts.
 import { getSupabase, isSupabaseMissingFunction } from "@/lib/supabase";
+import { normalizeCurrency } from "@/lib/currency";
 import { COMPANIES_SORT_ALIASES } from "@/lib/sort";
 import type { CompanyKind, CrmStatusFilter } from "@/lib/crm";
 
@@ -470,7 +471,7 @@ export interface AgencyTeamContact {
 export async function getCrmCompany(
   storeId: string,
   companyId: string,
-): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string; advertiser_company_id: string | null; billing_company_id: string | null }>; network: CompanyNetwork; contact_accounts: ContactAccount[]; incoming_accounts: IncomingAccount[]; agency_team: AgencyTeamContact[] } | null> {
+): Promise<{ company: Record<string, unknown>; contacts: CrmContact[]; campaigns: CrmCampaign[]; ios: Array<{ id: string; io_number: string; brand: string | null; status: string; advertiser_company_id: string | null; billing_company_id: string | null; gross_minor: number; currency: string }>; network: CompanyNetwork; contact_accounts: ContactAccount[]; incoming_accounts: IncomingAccount[]; agency_team: AgencyTeamContact[] } | null> {
   const db = getSupabase();
   const { data, error } = await db
     .from("crm_companies")
@@ -486,7 +487,7 @@ export async function getCrmCompany(
     // Historial para la red comercial (drawer Vínculos): hasta 500 IOs donde
     // participa (como anunciante o facturación). La marca es metadato del
     // pedido (io_orders.brand), la contraparte se resuelve abajo.
-    db.from("io_orders").select("id,io_number,brand,status,advertiser_company_id,billing_company_id").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(500),
+    db.from("io_orders").select("id,io_number,brand,status,advertiser_company_id,billing_company_id,currency").eq("store_id", storeId).or(`advertiser_company_id.eq.${companyId},billing_company_id.eq.${companyId}`).order("created_at", { ascending: false }).limit(500),
     // Vínculos explícitos pre-OI (una dirección por rol; se fusionan abajo).
     db.from("crm_company_links").select("agency_company_id,advertiser_company_id,origin").eq("store_id", storeId).or(`agency_company_id.eq.${companyId},advertiser_company_id.eq.${companyId}`).limit(500),
     // Cuentas que atiende cada contacto de esta empresa (solo agencias declaran).
@@ -501,6 +502,25 @@ export async function getCrmCompany(
     status: String(o.status ?? ""),
     advertiser_company_id: (o.advertiser_company_id as string | null) ?? null,
     billing_company_id: (o.billing_company_id as string | null) ?? null,
+    currency: normalizeCurrency(o.currency as string | null, "PEN"),
+  }));
+  // Total de cada orden = suma de líneas (misma fuente que orders-db):
+  // una sola query para todos los IOs del historial.
+  const grossByIo = new Map<string, number>();
+  if (iosRows.length > 0) {
+    const { data: linesAll } = await db
+      .from("io_lines")
+      .select("io_id,rate_minor")
+      .eq("store_id", storeId)
+      .in("io_id", iosRows.map((o) => o.id));
+    for (const l of ((linesAll ?? []) as Array<Record<string, unknown>>)) {
+      if (typeof l.io_id !== "string") continue;
+      grossByIo.set(l.io_id, (grossByIo.get(l.io_id) ?? 0) + Number(l.rate_minor ?? 0));
+    }
+  }
+  const iosWithTotals = iosRows.map((o) => ({
+    ...o,
+    gross_minor: grossByIo.get(o.id) ?? 0,
   }));
   // Red derivada: marcas (distinct normalizado) + contrapartes por rol.
   // Directa (advertiser=billing) no cuenta como agencia ni anunciante.
@@ -580,7 +600,7 @@ export async function getCrmCompany(
     advertisers: toCompanies(advertiserIds, explicitAdvertiserIds),
   };
   // Ficha: solo las 50 recientes (comportamiento previo intacto).
-  const ios = iosRows.slice(0, 50);
+  const ios = iosWithTotals.slice(0, 50);
   const contact_accounts: ContactAccount[] = ((accountsAll ?? []) as Array<Record<string, unknown>>)
     .filter((a) => typeof a.contact_id === "string" && typeof a.advertiser_company_id === "string")
     .map((a) => ({ contact_id: String(a.contact_id), advertiser_company_id: String(a.advertiser_company_id) }));

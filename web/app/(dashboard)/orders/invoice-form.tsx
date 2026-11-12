@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { createInvoiceAction } from "@/lib/order-flow-actions";
 import { todayLima, addDays } from "@/lib/availability-utils";
 import { formatDate, formatMoney, parseISODate, toISODateLocal } from "@/lib/format";
+import { Money } from "@/components/money";
 import { cn } from "cn";
 import { taxIdLabel } from "@/lib/tax-id";
 import { es } from "react-day-picker/locale";
@@ -285,13 +286,13 @@ export function InvoiceForm({
         <div className="grid grid-cols-[1fr_auto] items-center gap-4 text-sm">
           <span className="text-muted-foreground">{suggestion.taxName} ({Math.round(suggestion.rate * 100)}%)</span>
           <output aria-label={`${suggestion.taxName} calculado`} className="w-44 px-3 py-1 text-right tabular-nums">
-            {taxShownMinor !== null ? formatMoney(taxShownMinor, orderCurrency) : "—"}
+            {taxShownMinor !== null ? <Money amountMinor={taxShownMinor} currency={orderCurrency} /> : "—"}
           </output>
         </div>
         <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-t border-border/60 pt-2 text-sm font-semibold">
           <span>Total a registrar</span>
           <output aria-label="Total a registrar" aria-live="polite" className="w-44 px-3 py-1 text-right tabular-nums">
-            {totalMinor !== null ? formatMoney(totalMinor, orderCurrency) : "—"}
+            {totalMinor !== null ? <Money amountMinor={totalMinor} currency={orderCurrency} /> : "—"}
           </output>
         </div>
         <p id="inv-amount-hint" className="text-xs text-muted-foreground tabular-nums">
@@ -343,7 +344,7 @@ export function InvoiceForm({
           pendingLabel="Registrando…"
         >
           <Receipt aria-hidden />
-          {`Registrar factura${totalMinor ? ` · ${formatMoney(totalMinor, orderCurrency)}` : ""}`}
+          <>Registrar factura{totalMinor ? <> · <Money amountMinor={totalMinor} currency={orderCurrency} /></> : null}</>
         </SubmitButton>
       </div>
     </form>

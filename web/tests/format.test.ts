@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { formatDecimal, formatDayMonth, formatMoney, formatNumber, formatPercent, formatPercentPoints, formatTimeAgo, splitIgv, toTitleCase } from "@/lib/format";
+import { formatDecimal, formatDayMonth, formatMoney, formatMoneyParts, formatNumber, formatPercent, formatPercentPoints, formatTimeAgo, splitIgv, toTitleCase } from "@/lib/format";
 
 describe("formato numérico único (es: miles '.' y decimales ',')", () => {
   it("formatNumber agrupa miles con punto y 0 decimales por defecto", () => {
@@ -60,6 +60,21 @@ describe("formato numérico único (es: miles '.' y decimales ',')", () => {
   it("formatMoney redondea al entero en modo sin decimales", () => {
     assert.equal(formatMoney(590050, "PEN"), "PEN 5.901");
     assert.equal(formatMoney(590000, "USD"), "USD 5.900");
+  });
+
+  it("formatMoneyParts expone código y cuerpo para <Money/> sin cambiar el texto", () => {
+    assert.deepEqual(formatMoneyParts(36461777, "PEN"), {
+      code: "PEN",
+      body: "364.618",
+      text: "PEN 364.618",
+    });
+    assert.deepEqual(formatMoneyParts(1999, "usd", 2), {
+      code: "USD",
+      body: "19,99",
+      text: "USD 19,99",
+    });
+    assert.deepEqual(formatMoneyParts(null, "PEN"), { code: "PEN", body: "—", text: "—" });
+    assert.deepEqual(formatMoneyParts(Number.NaN, "PEN"), { code: "PEN", body: "—", text: "—" });
   });
 });
 

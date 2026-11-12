@@ -1,6 +1,7 @@
 import { Receipt, ShoppingCart, TrendingUp } from "lucide-react";
 import { AppCard } from "@/components/app-card";
 import { Metric, MetricRow } from "@/components/metric";
+import { Money } from "@/components/money";
 import { AppTooltip } from "@/components/ui/app-tooltip";
 import type { FinanceKpis, MonthBucket } from "@/lib/finance";
 import { formatMoney, formatNumber } from "@/lib/format";
@@ -156,7 +157,7 @@ export function FinanceStrip({
         <Metric
           label="Ventas mes"
           icon={TrendingUp}
-          value={formatMoney(kpis.salesMesMinor, currency)}
+          value={<Money amountMinor={kpis.salesMesMinor} currency={currency} />}
           delta={kpis.salesDeltaPct}
           deltaLabel="vs mismo tramo mes ant."
         />
@@ -170,7 +171,7 @@ export function FinanceStrip({
         <Metric
           label="Ticket medio"
           icon={Receipt}
-          value={formatMoney(kpis.ticketMesMinor, currency)}
+          value={<Money amountMinor={kpis.ticketMesMinor} currency={currency} />}
           hint="Por orden, mes en curso"
         />
       </MetricRow>

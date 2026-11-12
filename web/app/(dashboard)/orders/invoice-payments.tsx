@@ -10,7 +10,8 @@ import { useInvalidFields, toastFormError } from "@/components/ui/form-feedback"
 import { toast } from "@/components/ui/toast";
 import { recordInvoicePaymentAction, voidInvoicePaymentAction } from "@/lib/order-flow-actions";
 import { invoicePaidMinor, toBillingInvoice } from "@/lib/billing-status";
-import { formatDate, formatDateTime, isValidISODate, formatMoney, todayLima, toISODateLocal } from "@/lib/format";
+import { Money } from "@/components/money";
+import { formatDate, formatDateTime, isValidISODate, todayLima, toISODateLocal } from "@/lib/format";
 import { InvoiceDatePicker } from "./invoice-form";
 import { parseAmountToMinor } from "./invoice-validation";
 
@@ -84,16 +85,16 @@ export function InvoicePayments({ invoice, currency, canEdit, onSaved }: {
           <DialogDescription>Registra abonos aplicados a esta factura. Revertir corrige el registro; no ejecuta una devolución bancaria.</DialogDescription>
         </DialogHeader>
         <dl className="grid grid-cols-3 gap-4 text-sm tabular-nums">
-          <div><dt className="text-muted-foreground">Facturado</dt><dd>{formatMoney(inv.amount_minor, currency, 2)}</dd></div>
-          <div><dt className="text-muted-foreground">Cobrado</dt><dd>{formatMoney(paid, currency, 2)}</dd></div>
-          <div><dt className="text-muted-foreground">Saldo</dt><dd>{formatMoney(balance, currency, 2)}</dd></div>
+          <div><dt className="text-muted-foreground">Facturado</dt><dd><Money amountMinor={inv.amount_minor} currency={currency} decimals={2} /></dd></div>
+          <div><dt className="text-muted-foreground">Cobrado</dt><dd><Money amountMinor={paid} currency={currency} decimals={2} /></dd></div>
+          <div><dt className="text-muted-foreground">Saldo</dt><dd><Money amountMinor={balance} currency={currency} decimals={2} /></dd></div>
         </dl>
         <ul className="flex flex-col gap-3" aria-label="Historial de cobros">
           {payments.length === 0 && <li className="text-sm text-muted-foreground">Todavía no hay cobros registrados.</li>}
           {payments.map((p) => (
             <li key={String(p.id)} className="flex flex-col gap-1 rounded-lg border p-3 text-sm">
               <div className="flex items-start justify-between gap-3">
-                <span className="font-medium tabular-nums">{formatMoney(Number(p.amount_minor), currency, 2)}{p.voided_at ? " · Revertido" : ""}</span>
+                <span className="font-medium tabular-nums"><Money amountMinor={Number(p.amount_minor)} currency={currency} decimals={2} />{p.voided_at ? " · Revertido" : ""}</span>
                 {editable && !p.voided_at && <Button size="xs" variant="ghost" disabled={pending} onClick={() => { setReversing(String(p.id)); setReason(""); }}>Revertir registro</Button>}
               </div>
               <p className="text-muted-foreground">{p.source === "legacy_balance" ? "Saldo histórico declarado · fecha de cobro desconocida" : `${formatDate(p.paid_on)} · ${String(p.reference)}`}</p>

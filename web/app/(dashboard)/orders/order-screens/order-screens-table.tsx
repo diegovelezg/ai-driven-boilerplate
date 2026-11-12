@@ -13,8 +13,9 @@ import {
   DataTableTh,
 } from "@/components/data-table";
 import { SectionHeading } from "@/components/section-heading";
+import { Money } from "@/components/money";
 import { cn } from "cn";
-import { addDays, formatDate, formatMoney, formatNumber } from "@/lib/format";
+import { addDays, formatDate, formatNumber } from "@/lib/format";
 import type { ScreenConflict } from "@/lib/availability";
 import type { ScreenPick } from "./types";
 import { plural } from "./types";
@@ -127,7 +128,7 @@ export function OrderScreensTable({
                 </DataTableTd>
                 <DataTableTd numeric className="tabular-nums">
                   {dias !== null && priceOf(s.id) !== null
-                    ? formatMoney(Math.round((priceOf(s.id) as number) * (dias as number) * 100), currency)
+                    ? <Money amountMinor={Math.round((priceOf(s.id) as number) * (dias as number) * 100)} currency={currency} />
                     : "—"}
                 </DataTableTd>
                 <DataTableTd className="w-20">
@@ -157,7 +158,7 @@ export function OrderScreensTable({
               {dias !== null ? ` × ${formatNumber(dias)} días` : ""}
             </DataTableTd>
             <DataTableTd numeric className="tabular-nums whitespace-nowrap">
-              {total > 0 ? formatMoney(Math.round(total * 100), currency) : "—"}
+              {total > 0 ? <Money amountMinor={Math.round(total * 100)} currency={currency} /> : "—"}
             </DataTableTd>
             <DataTableTd />
           </DataTableRow>

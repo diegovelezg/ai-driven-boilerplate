@@ -15,6 +15,11 @@ vertical y los márgenes mediante `page-shell`.
 - Separación entre bloques de página: 32 px. Gutter: 16 / 24 / 32 px.
 - Tarjetas: padding de 16 px en móvil y 20 px desde `sm`; compactas de 16 px.
 - Tablas principales: celdas de 16 × 12 px, cifras alineadas con `tabular-nums`.
+- Moneda: todo monto visible usa `<Money/>` (`components/money.tsx`): el
+  código ISO va sutil (`0.62em`, piso 10 px, peso normal, `text-muted-foreground`,
+  mayúsculas) y el monto hereda color/peso del contexto. `formatMoney` solo
+  para strings no visuales (aria-labels, tooltips en texto, CSV, print,
+  multi-moneda).
   `DrawerTable` mantiene su densidad compacta para fichas.
 - Acento principal para acciones y selección; verde, ámbar, rojo y azul para
   estados según `lib/ui-badges.tsx`. Los atributos neutros usan outline.

@@ -10,6 +10,7 @@ import { DrawerShell, type DrawerTabDef } from "@/components/drawer-shell";
 import { Button } from "@/components/ui/button";
 import { AttachButton, DangerButton, DialogVolverButton, EditButton, RetryButton, RowIconButton, SubmitButton, CancelButton } from "@/components/buttons";
 import { AttributeBadge } from "@/components/badges";
+import { Money } from "@/components/money";
 import { OrderApprovalBadge, OrderAutorizadaBadge, OrderBillingBadge, OrderInvoiceBadge, OrderStageBadge } from "@/components/order-badges";
 import { orderStageDisplay } from "@/lib/ui-badges";
 import { Input } from "@/components/ui/input";
@@ -64,7 +65,7 @@ import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
 import { normalizeCurrency } from "@/lib/currency";
 import { effectiveOrderCommissionPct, splitAgencyAmounts } from "@/lib/agency-commission";
 import type { OrderContactRef } from "@/lib/orders-db";
-import { diffDaysInclusive, displayEndOfSafe, formatDate, formatDateTime, formatMoney, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
+import { diffDaysInclusive, displayEndOfSafe, formatDate, formatDateTime, formatNumber, paymentTermsLabel, toTitleCase } from "@/lib/format";
 
 interface Detail {
   order: Record<string, unknown>;
@@ -629,11 +630,11 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     : "—"}
                 </dd>
               </div>
-              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-1 text-sm font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-1 text-sm font-semibold tabular-nums">{gross > 0 ? <Money amountMinor={gross} currency={orderCurrency} /> : "—"}</dd></div>
               {commissionSplit && (
                 <>
-                  <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(commissionSplit.commissionMinor, orderCurrency)}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">Neto</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(commissionSplit.netMinor, orderCurrency)} <span className="text-xs font-normal text-muted-foreground">informativo</span></dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={commissionSplit.commissionMinor} currency={orderCurrency} /></dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Neto</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={commissionSplit.netMinor} currency={orderCurrency} /> <span className="text-xs font-normal text-muted-foreground">informativo</span></dd></div>
                 </>
               )}
               <div><dt className="text-xs text-muted-foreground">Condición de pago</dt><dd className="mt-1 text-sm">{typeof o.payment_terms_days === "number" ? paymentTermsLabel(o.payment_terms_days) : str(o.payment_terms)}</dd></div>
@@ -748,7 +749,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           )}
                           {Number.isFinite(regular) && regular > 0 && regular !== Number(l.rate_minor ?? 0) && (
                             <span className="block text-xs font-normal text-muted-foreground tabular-nums">
-                              Reg. {formatMoney(regular, orderCurrency)}
+                              Reg. <Money amountMinor={regular} currency={orderCurrency} />
                             </span>
                           )}
                         </DrawerTableTd>
@@ -759,7 +760,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                           {dias ?? "—"}
                         </DrawerTableTd>
                         <DrawerTableTd numeric className="tabular-nums">
-                          {formatMoney(l.rate_minor as number, orderCurrency)}
+                          <Money amountMinor={l.rate_minor as number} currency={orderCurrency} />
                         </DrawerTableTd>
                       </DrawerTableRow>
                     );
@@ -769,7 +770,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                       Total · {formatNumber(lines.length)} pantalla{lines.length === 1 ? "" : "s"}
                     </DrawerTableTd>
                     <DrawerTableTd numeric className="tabular-nums">
-                      {gross > 0 ? formatMoney(gross, orderCurrency) : "—"}
+                      {gross > 0 ? <Money amountMinor={gross} currency={orderCurrency} /> : "—"}
                     </DrawerTableTd>
                   </DrawerTableRow>
                 </DrawerTableBody>
@@ -1028,7 +1029,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   />
                 </div>
                 <p className="text-xs text-muted-foreground tabular-nums">
-                  {formatMoney(bill.paid_minor, orderCurrency, 2)} cobrado de {formatMoney(gross, orderCurrency)} · {progress}%
+                  <Money amountMinor={bill.paid_minor} currency={orderCurrency} decimals={2} /> cobrado de <Money amountMinor={gross} currency={orderCurrency} /> · {progress}%
                 </p>
               </div>
             )}
@@ -1067,10 +1068,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                             <OrderInvoiceBadge status={displayStatus} />
                           </DrawerTableTd>
                           <DrawerTableTd numeric className="tabular-nums whitespace-nowrap">
-                            {Number.isFinite(amount) ? formatMoney(amount, typeof v.currency === "string" && v.currency ? v.currency : orderCurrency, 2) : "—"}
+                            {Number.isFinite(amount) ? <Money amountMinor={amount} currency={typeof v.currency === "string" && v.currency ? v.currency : orderCurrency} decimals={2} /> : "—"}
                           </DrawerTableTd>
-                          <DrawerTableTd numeric className="whitespace-nowrap">{formatMoney(invoicePaid, String(v.currency), 2)}</DrawerTableTd>
-                          <DrawerTableTd numeric className="whitespace-nowrap">{terminal ? "—" : formatMoney(Math.max(0, amount - invoicePaid), String(v.currency), 2)}</DrawerTableTd>
+                          <DrawerTableTd numeric className="whitespace-nowrap"><Money amountMinor={invoicePaid} currency={String(v.currency)} decimals={2} /></DrawerTableTd>
+                          <DrawerTableTd numeric className="whitespace-nowrap">{terminal ? "—" : <Money amountMinor={Math.max(0, amount - invoicePaid)} currency={String(v.currency)} decimals={2} />}</DrawerTableTd>
                           <DrawerTableTd className="text-xs whitespace-nowrap tabular-nums">
                             {typeof v.issue_date === "string" && v.issue_date ? formatDate(v.issue_date) : "—"}
                           </DrawerTableTd>
@@ -1093,10 +1094,10 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </DrawerTable>
                 {bill && (
                   <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-                    <div><dt className="text-xs text-muted-foreground">Por facturar</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.unbilled_minor, orderCurrency, 2)}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.invoiced_minor, orderCurrency, 2)}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(bill.paid_minor, orderCurrency, 2)}{bill.isPrepaid ? " · prepago" : ""}</dd></div>
-                    <div><dt className="text-xs text-muted-foreground">Por cobrar (facturado)</dt><dd className={`mt-1 text-sm tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}>{formatMoney(bill.pending_minor, orderCurrency, 2)}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Por facturar</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={bill.unbilled_minor} currency={orderCurrency} decimals={2} /></dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Facturado</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={bill.invoiced_minor} currency={orderCurrency} decimals={2} /></dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Cobrado</dt><dd className="mt-1 text-sm tabular-nums"><Money amountMinor={bill.paid_minor} currency={orderCurrency} decimals={2} />{bill.isPrepaid ? " · prepago" : ""}</dd></div>
+                    <div><dt className="text-xs text-muted-foreground">Por cobrar (facturado)</dt><dd className={`mt-1 text-sm tabular-nums ${bill.status === "vencido" ? "font-semibold text-destructive" : ""}`}><Money amountMinor={bill.pending_minor} currency={orderCurrency} decimals={2} /></dd></div>
                   </dl>
                 )}
               </>
