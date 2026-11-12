@@ -692,13 +692,13 @@ export function PantallaDrawer({ screenId, onClose }: { screenId: string; onClos
             <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
               <Kpi
                 label="Precio"
-                value={price !== null ? `S/ ${formatNumber(price)}` : "—"}
+                value={price !== null ? `PEN ${formatNumber(price)}` : "—"}
                 hint={typeof s.currency === "string" && s.currency ? `${s.currency} · catálogo` : "Catálogo"}
               />
               <Kpi label="Impactos / día" value={impact !== null ? formatNumber(impact) : "—"} hint="Alcance diario" />
               <Kpi
                 label="CPM estimado"
-                value={cpm !== null ? `S/ ${formatNumber(Math.round(cpm))}` : "—"}
+                value={cpm !== null ? `PEN ${formatNumber(Math.round(cpm))}` : "—"}
                 hint="Costo por mil impactos"
               />
             </div>

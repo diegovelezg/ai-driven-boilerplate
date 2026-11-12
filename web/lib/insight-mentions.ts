@@ -239,7 +239,7 @@ export function insightHaystack(i: InsightSearchInput): string {
   ]);
 }
 
-/** Contexto legible de un aviso ("Cliente: Alicorp · Monto: S/ 4.200").
+/** Contexto legible de un aviso ("Cliente: Alicorp · Monto: PEN 4.200").
  *  Solo presenta cifras exactas que ya trae el hecho; nunca estima. */
 export function describeContextShort(c: {
   company?: string | null;

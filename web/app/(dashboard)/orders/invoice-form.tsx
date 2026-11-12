@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { Building2, CalendarIcon, Receipt, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CancelButton, RowIconButton, SubmitButton } from "@/components/buttons";
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createInvoiceAction } from "@/lib/order-flow-actions";
 import { todayLima, addDays } from "@/lib/availability-utils";
-import { formatDate, parseISODate, toISODateLocal } from "@/lib/format";
+import { formatDate, formatMoney, parseISODate, toISODateLocal } from "@/lib/format";
 import { cn } from "cn";
 import { taxIdLabel } from "@/lib/tax-id";
 import { es } from "react-day-picker/locale";
@@ -18,10 +18,13 @@ import { toastFormError, useInvalidFields } from "@/components/ui/form-feedback"
 import {
   billingBlocker,
   invoiceFieldsFromMessage,
-  parseAmountToMinor,
+  minorToAmountInput,
+  parseWholeAmountToMinor,
+  suggestedInvoiceAmount,
   validateInvoiceFields,
   type InvoiceFieldKey,
 } from "./invoice-validation";
+import { splitTax } from "@/lib/tax-rate";
 
 /** Date picker shadcn (Popover + Calendar, mismo patrón que nueva-form):
  *  fecha válida o vacía (con X para limpiar), nunca texto libre. */
@@ -104,7 +107,9 @@ export function InvoiceDatePicker({
 
 /** Registra una factura emitida (dialog del drawer, tab Cobranza).
  *  Moneda = la de la orden (solo lectura): el servidor la hereda y el
- *  trigger de paridad aborta cualquier mezcla. */
+ *  trigger de paridad aborta cualquier mezcla. El bruto nace sugerido
+ *  (bruto o remanente); el IGV/IVA se calcula y el total es lo que se
+ *  registra. */
 export function InvoiceForm({
   orderId,
   orderCurrency,
@@ -114,6 +119,9 @@ export function InvoiceForm({
   billingName,
   billingTaxId,
   billingCountry,
+  grossMinor,
+  invoicedMinor,
+  taxCountry,
 }: {
   orderId: string;
   orderCurrency: string;
@@ -121,12 +129,23 @@ export function InvoiceForm({
   billingName: string | null;
   billingTaxId: string | null;
   billingCountry?: string | null;
+  /** Bruto de la orden en minor SIN impuesto (suma de líneas). */
+  grossMinor?: number;
+  /** Ya facturado activo en minor (issued/paid/overdue, sin canceladas). */
+  invoicedMinor?: number;
+  /** País del tenant para la tasa (SSOT `lib/tax-rate.ts`). */
+  taxCountry?: string | null;
   onSaved?: () => void;
   onCancel?: () => void;
 }) {
   const issue0 = todayLima();
+  const suggestion = useMemo(
+    () => suggestedInvoiceAmount(grossMinor ?? 0, invoicedMinor ?? 0, taxCountry ?? null),
+    [grossMinor, invoicedMinor, taxCountry],
+  );
+  const suggestedInput = suggestion.suggestedMinor !== null ? minorToAmountInput(suggestion.netMinor) : "";
   const [number, setNumber] = useState("");
-  const [amount, setAmount] = useState("");
+  const [bruto, setBruto] = useState(suggestedInput);
   const [issue, setIssue] = useState(issue0);
   const [due, setDue] = useState(
     typeof paymentTermsDays === "number" && paymentTermsDays >= 0 ? addDays(issue0, paymentTermsDays) : "",
@@ -138,7 +157,15 @@ export function InvoiceForm({
 
   const missing: string[] = [];
   if (!number.trim()) missing.push("número");
-  if (!amount.trim()) missing.push("monto");
+  if (!bruto.trim()) missing.push("bruto");
+
+  // Desglose vivo sin decimales: bruto entero + impuesto calculado =
+  // total redondeado a registrar. El impuesto mostrado cuadra exacto
+  // (total − bruto) para que las filas siempre sumen.
+  const brutoMinor = parseWholeAmountToMinor(bruto);
+  const split = splitTax(brutoMinor ?? 0, taxCountry ?? null);
+  const totalMinor = brutoMinor !== null ? Math.round(split.total / 100) * 100 : null;
+  const taxShownMinor = totalMinor !== null && brutoMinor !== null ? totalMinor - brutoMinor : null;
 
   const blocked = billingBlocker({ name: billingName, taxId: billingTaxId, country: billingCountry });
 
@@ -147,7 +174,7 @@ export function InvoiceForm({
       toastFormError("No se puede facturar", blocked);
       return;
     }
-    const problems = validateInvoiceFields({ number, amount, issue, due, status });
+    const problems = validateInvoiceFields({ number, amount: bruto, issue, due, status });
     if (problems.length > 0) {
       const keys = [...new Set(problems.map((p) => p.key))];
       mark(keys);
@@ -155,10 +182,9 @@ export function InvoiceForm({
       focusFirst(formRef, keys);
       return;
     }
-    const minor = parseAmountToMinor(amount);
-    if (minor === null) {
+    if (totalMinor === null) {
       mark(["amount"]);
-      toastFormError("Revisa los campos marcados", "Monto inválido: número > 0, máx 2 decimales.");
+      toastFormError("Revisa los campos marcados", "Monto inválido: número entero > 0, sin decimales.");
       focusFirst(formRef, ["amount"]);
       return;
     }
@@ -166,7 +192,7 @@ export function InvoiceForm({
       const res = await createInvoiceAction({
         orderId,
         number: number.trim(),
-        amountMinor: minor,
+        amountMinor: totalMinor,
         issueDate: issue.trim() || null,
         dueDate: due.trim() || null,
         status,
@@ -240,22 +266,50 @@ export function InvoiceForm({
           Serie y número del comprobante (ej F001-123).
         </p>
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div className="grid content-start gap-1.5">
-          <Label htmlFor="inv-amount">Monto ({orderCurrency}) *</Label>
+      <div className="grid gap-1.5" aria-label="Desglose del comprobante">
+        <div className="grid grid-cols-[1fr_auto] items-center gap-4">
+          <Label htmlFor="inv-amount">Bruto ({orderCurrency}) *</Label>
           <Input
             id="inv-amount"
             name="amount"
-            value={amount}
-            onChange={(e) => { setAmount(e.target.value); clear("amount"); }}
-            placeholder="5,000.00"
-            inputMode="decimal"
+            value={bruto}
+            onChange={(e) => { setBruto(e.target.value); clear("amount"); }}
+            placeholder="5,000"
+            inputMode="numeric"
             disabled={pending}
             aria-invalid={invalid.has("amount")}
-            className={bad("amount").trim() ? `text-right text-base tabular-nums${bad("amount")}` : "text-right text-base tabular-nums"}
+            aria-describedby="inv-amount-hint"
+            className={bad("amount").trim() ? `w-44 text-right text-base tabular-nums${bad("amount")}` : "w-44 text-right text-base tabular-nums"}
           />
         </div>
-
+        <div className="grid grid-cols-[1fr_auto] items-center gap-4 text-sm">
+          <span className="text-muted-foreground">{suggestion.taxName} ({Math.round(suggestion.rate * 100)}%)</span>
+          <output aria-label={`${suggestion.taxName} calculado`} className="w-44 px-3 py-1 text-right tabular-nums">
+            {taxShownMinor !== null ? formatMoney(taxShownMinor, orderCurrency) : "—"}
+          </output>
+        </div>
+        <div className="grid grid-cols-[1fr_auto] items-center gap-4 border-t border-border/60 pt-2 text-sm font-semibold">
+          <span>Total a registrar</span>
+          <output aria-label="Total a registrar" aria-live="polite" className="w-44 px-3 py-1 text-right tabular-nums">
+            {totalMinor !== null ? formatMoney(totalMinor, orderCurrency) : "—"}
+          </output>
+        </div>
+        <p id="inv-amount-hint" className="text-xs text-muted-foreground tabular-nums">
+          {suggestion.suggestedMinor !== null ? (
+            <>Sugerido: bruto {formatMoney(suggestion.netMinor, orderCurrency)}{(invoicedMinor ?? 0) > 0 ? ` (remanente: bruto ${formatMoney(grossMinor ?? 0, orderCurrency)} − ya facturado ${formatMoney(invoicedMinor ?? 0, orderCurrency)})` : ""}. Total con impuesto: {formatMoney(Math.round(suggestion.suggestedMinor / 100) * 100, orderCurrency)}.</>
+          ) : (grossMinor ?? 0) > 0 ? (
+            <>Orden ya facturada en su totalidad.</>
+          ) : (
+            <>Bruto sin decimales; el impuesto se suma al total.</>
+          )}
+        </p>
+        {suggestedInput && bruto !== suggestedInput && (
+          <div>
+            <Button type="button" variant="ghost" size="xs" disabled={pending} onClick={() => { setBruto(suggestedInput); clear("amount"); }}>
+              Usar sugerido {suggestedInput}
+            </Button>
+          </div>
+        )}
       </div>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <InvoiceDatePicker
@@ -289,7 +343,7 @@ export function InvoiceForm({
           pendingLabel="Registrando…"
         >
           <Receipt aria-hidden />
-          Registrar factura
+          {`Registrar factura${totalMinor ? ` · ${formatMoney(totalMinor, orderCurrency)}` : ""}`}
         </SubmitButton>
       </div>
     </form>

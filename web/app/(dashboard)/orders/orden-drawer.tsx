@@ -75,6 +75,8 @@ interface Detail {
   billing_country: string | null;
   billing_commission_pct: number | null;
   billing_company_address: string | null;
+  /** País del tenant (tasa IGV/IVA, SSOT `lib/tax-rate.ts`). */
+  shop_country: string | null;
   agency_company_id: string | null;
   agency_name: string | null;
   agency_tax_id: string | null;
@@ -627,7 +629,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     : "—"}
                 </dd>
               </div>
-              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-1 text-sm font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"} <span className="text-xs font-normal text-muted-foreground">{orderCurrency}</span></dd></div>
+              <div><dt className="text-xs text-muted-foreground">Bruto</dt><dd className="mt-1 text-sm font-semibold tabular-nums">{gross > 0 ? formatMoney(gross, orderCurrency) : "—"}</dd></div>
               {commissionSplit && (
                 <>
                   <div><dt className="text-xs text-muted-foreground">Comisión agencia ({commissionPct}%)</dt><dd className="mt-1 text-sm tabular-nums">{formatMoney(commissionSplit.commissionMinor, orderCurrency)}</dd></div>
@@ -773,6 +775,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                 </DrawerTableBody>
               </DrawerTable>
             )}
+            <p className="text-xs text-muted-foreground">
+              Una vez firmada, las pantallas ya no se pueden modificar: solo queda cancelar la orden y generar otra.
+            </p>
           </AppCard>
           </>
             {isCancelled && canEditRole && (
@@ -1209,12 +1214,16 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
             </DialogDescription>
           </DialogHeader>
           <InvoiceForm
+            key={`${orderId}-${invoices.length}`}
             orderId={orderId}
             orderCurrency={orderCurrency}
             paymentTermsDays={typeof o?.payment_terms_days === "number" ? (o.payment_terms_days as number) : null}
             billingName={detail?.billing_name ?? null}
             billingTaxId={detail?.billing_tax_id ?? null}
             billingCountry={detail?.billing_country ?? null}
+            grossMinor={gross}
+            invoicedMinor={bill?.invoiced_minor ?? 0}
+            taxCountry={detail?.shop_country ?? null}
             onSaved={() => {
               setInvOpen(false);
               toast.add({ title: "Factura registrada", description: "Ya figura en cobranza.", type: "success" });

@@ -14,10 +14,11 @@
 // recibe 0–100. No intercambiar.
 
 import { normalizeCurrency } from "@/lib/currency";
+import { vatRateForCountry } from "@/lib/tax-rate";
 
 /** Locale de formateo. `es-ES` ≡ `es-PE` en agrupación/decimal ("."/","); se
- *  fija `es-ES` por disponibilidad garantizada en ICU de Node. Los símbolos de
- *  moneda son manuales (ver CURRENCY_SYMBOLS), no `Intl.Currency`. */
+ *  fija `es-ES` por disponibilidad garantizada en ICU de Node. La moneda se
+ *  muestra siempre en código ISO (PEN, USD…), nunca con símbolo. */
 const FORMAT_LOCALE = "es-ES";
 
 type NumberFormatOptions = {
@@ -81,25 +82,12 @@ export function formatPercentPoints(
   return out === "—" ? "—" : `${out}%`;
 }
 
-/** Símbolos de moneda habituales; el resto cae al código ISO. */
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  PEN: "S/",
-  USD: "US$",
-  MXN: "MX$",
-  EUR: "€",
-  GBP: "£",
-  BRL: "R$",
-  COP: "COP$",
-  CLP: "CLP$",
-  ARS: "ARS$",
-};
-
 /**
- * Minor units → moneda legible. Conserva el símbolo y aplica el formato único.
- * Ej.: formatMoney(36461777, "PEN") → "S/ 364.618".
- * Ej. con céntimos: formatMoney(1999, "PEN", 2) → "S/ 19,99".
- * Monto no-finito/null → "—" (sin símbolo). Moneda null/vacía → PEN (default
- * histórico de la tienda); desconocida → código ISO.
+ * Minor units → moneda legible, siempre en código ISO (PEN, USD…).
+ * Ej.: formatMoney(36461777, "PEN") → "PEN 364.618".
+ * Ej. con céntimos: formatMoney(1999, "PEN", 2) → "PEN 19,99".
+ * Monto no-finito/null → "—". Moneda null/vacía → PEN (default histórico
+ * de la tienda); desconocida → código ISO tal cual.
  */
 export function formatMoney(
   amountMinor: number | string | null | undefined,
@@ -110,13 +98,12 @@ export function formatMoney(
   const minor = Number(amountMinor);
   if (!Number.isFinite(minor)) return "—";
   const code = normalizeCurrency(currency, "PEN");
-  const symbol = CURRENCY_SYMBOLS[code] ?? code;
   const d = Math.max(0, Math.floor(decimals));
   const major = minor / 100;
   const body =
     d === 0 ? formatNumber(Math.round(major)) : formatDecimal(major, d);
   if (body === "—") return "—";
-  return `${symbol} ${body}`;
+  return `${code} ${body}`;
 }
 
 /** Etiqueta de condición de pago desde días (fuente numérica).
@@ -127,15 +114,14 @@ export function paymentTermsLabel(days: number | null | undefined): string {
   return days === 0 ? "Contado" : `${formatNumber(days)} días`;
 }
 
-/** Tasa del IGV aplicable a los contratos (montos guardados SIN IGV). */
-const IGV_RATE = 0.18;
-
-/** Desglose IGV de un bruto SIN IGV en minor units: redondeo half-up al
- *  céntimo en el impuesto (`Math.round`), total = neto + impuesto exacto.
- *  Ej.: splitIgv(500000) → { net: 500000, igv: 90000, total: 590000 }. */
-export function splitIgv(grossMinor: number): { net: number; igv: number; total: number } {
+/** Tasa del impuesto del tenant (SSOT en `lib/tax-rate.ts`, por `shop_country`).
+ *  Los montos se guardan SIN impuesto. */
+export function splitIgv(
+  grossMinor: number,
+  country?: unknown,
+): { net: number; igv: number; total: number } {
   const net = Number.isFinite(grossMinor) ? Math.max(0, Math.round(grossMinor)) : 0;
-  const igv = Math.round((net * 18) / 100);
+  const igv = Math.round(net * vatRateForCountry(country));
   return { net, igv, total: net + igv };
 }
 

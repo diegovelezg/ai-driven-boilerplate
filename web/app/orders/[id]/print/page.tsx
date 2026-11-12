@@ -21,6 +21,7 @@ import {
 } from "@/lib/format";
 import { parseOrderSnapshot } from "@/lib/order-snapshot";
 import { taxIdLabel } from "@/lib/tax-id";
+import { taxNameForCountry, vatRateForCountry } from "@/lib/tax-rate";
 import { PrintButton } from "./print-button";
 
 export const instant = false;
@@ -108,7 +109,10 @@ export default async function OrderPrintPage({
   const lines = detail.lines;
   const liveGross = lines.reduce((a, l) => a + Number(l.rate_minor ?? 0), 0);
   const gross = snap?.gross_minor ?? liveGross;
-  const { net, igv, total } = splitIgv(gross);
+  const tenantCountry = active?.shop_country ?? null;
+  const { net, igv, total } = splitIgv(gross, tenantCountry);
+  const taxName = taxNameForCountry(tenantCountry);
+  const taxPct = Math.round(vatRateForCountry(tenantCountry) * 100);
   const status = String(o.status ?? "");
   const isDraft = status === "draft";
   const ioNumber = String(o.io_number ?? "Orden");
@@ -286,7 +290,7 @@ export default async function OrderPrintPage({
               </>,
             ],
             [
-              "Valor total del contrato (sin IGV)",
+              `Valor total del contrato (sin ${taxName})`,
               gross > 0 ? `${money(net, currency)} ${currency}` : "—",
             ],
             ["Condición de pago", terms],
@@ -415,11 +419,11 @@ export default async function OrderPrintPage({
               }}
             >
               <NpTotal
-                label="Total sin IGV"
+                label={`Total sin ${taxName}`}
                 value={`${money(net, currency)} ${currency}`}
               />
               <NpTotal
-                label="IGV (18 %)"
+                label={`${taxName} (${taxPct} %)`}
                 value={`${money(igv, currency)} ${currency}`}
               />
               <NpTotal
@@ -488,7 +492,7 @@ export default async function OrderPrintPage({
           fontSize: "11px",
         }}
       >
-        Generado el {now} · Moneda {currency} · Montos sin IGV salvo
+        Generado el {now} · Moneda {currency} · Montos sin {taxName} salvo
         indicación.
       </footer>
 

@@ -116,7 +116,7 @@ describe("muro de insights (issue #11)", () => {
   it("contexto humano: solo cifras exactas, nunca estimadas", () => {
     assert.equal(
       describeContextShort({ company: "Alicorp", brand: "Tottus", screens: 3, amountMinor: 420000, currency: "PEN", startsAt: "2026-11-12", endsAt: "2026-11-30" }),
-      "Cliente: Alicorp · Tottus · Pantallas: 3 · Monto: S/ 4.200 · Vigencia: 12/11 → 30/11",
+      "Cliente: Alicorp · Tottus · Pantallas: 3 · Monto: PEN 4.200 · Vigencia: 12/11 → 30/11",
     );
     assert.equal(describeContextShort({ company: null, brand: null, screens: 1, amountMinor: null, currency: null, startsAt: null, endsAt: null }), "Pantallas: 1");
     assert.equal(describeContextShort(null), null);

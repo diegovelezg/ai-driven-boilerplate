@@ -36,25 +36,30 @@ describe("formato numérico único (es: miles '.' y decimales ',')", () => {
     assert.equal(formatPercentPoints(Number.NaN), "—");
   });
 
-  it("formatMoney conserva el símbolo y aplica el formato único", () => {
-    assert.equal(formatMoney(36461777, "PEN"), "S/ 364.618");
-    assert.equal(formatMoney(123456, "USD"), "US$ 1.235");
-    assert.equal(formatMoney(123456, null), "S/ 1.235");
+  it("formatMoney usa código ISO y aplica el formato único", () => {
+    assert.equal(formatMoney(36461777, "PEN"), "PEN 364.618");
+    assert.equal(formatMoney(123456, "USD"), "USD 1.235");
+    assert.equal(formatMoney(123456, null), "PEN 1.235");
   });
 
   it("formatMoney soporta céntimos explícitos sin doble redondeo", () => {
-    assert.equal(formatMoney(1999, "PEN", 2), "S/ 19,99");
-    assert.equal(formatMoney(1999, "PEN"), "S/ 20");
-    assert.equal(formatMoney(100, "PEN", 2), "S/ 1,00");
+    assert.equal(formatMoney(1999, "PEN", 2), "PEN 19,99");
+    assert.equal(formatMoney(1999, "PEN"), "PEN 20");
+    assert.equal(formatMoney(100, "PEN", 2), "PEN 1,00");
   });
 
   it("formatMoney degrada a '—' con monto inválido y normaliza moneda vacía", () => {
     assert.equal(formatMoney(null, "PEN"), "—");
     assert.equal(formatMoney(Number.NaN, "PEN"), "—");
     assert.equal(formatMoney(undefined, "PEN"), "—");
-    assert.equal(formatMoney(123456, ""), "S/ 1.235");
-    assert.equal(formatMoney(123456, "  pen  "), "S/ 1.235");
+    assert.equal(formatMoney(123456, ""), "PEN 1.235");
+    assert.equal(formatMoney(123456, "  pen  "), "PEN 1.235");
     assert.equal(formatMoney(123456, "XYZ"), "XYZ 1.235");
+  });
+
+  it("formatMoney redondea al entero en modo sin decimales", () => {
+    assert.equal(formatMoney(590050, "PEN"), "PEN 5.901");
+    assert.equal(formatMoney(590000, "USD"), "USD 5.900");
   });
 });
 
@@ -91,7 +96,7 @@ describe("formatTimeAgo", () => {
 });
 
 describe("splitIgv (NP: bruto sin IGV → neto + IGV 18 % + total)", () => {
-  it("caso referencia S/ 5.000 + S/ 900 = S/ 5.900", () => {
+  it("caso referencia PEN 5.000 + PEN 900 = PEN 5.900", () => {
     assert.deepEqual(splitIgv(500000), { net: 500000, igv: 90000, total: 590000 });
   });
 

@@ -272,7 +272,7 @@ export function ScreensList({
                     {s.impact_day !== null ? formatNumber(s.impact_day) : "—"}
                   </DataTableTd>
                   <DataTableTd numeric className="px-3 py-4 tabular-nums">
-                    {s.price_pen !== null ? `S/ ${formatNumber(s.price_pen)}` : "—"}
+                    {s.price_pen !== null ? `PEN ${formatNumber(s.price_pen)}` : "—"}
                   </DataTableTd>
                   <DataTableTd className="px-3 py-4">
                     <ScreenActiveBadge isActive={s.is_active} />
@@ -317,7 +317,7 @@ export function ScreensList({
               <p className="mt-2 truncate text-xs text-muted-foreground tabular-nums">
                 {fmtMedidas(s)}
                 {s.impact_day !== null ? ` · ${formatNumber(s.impact_day)} impactos/día` : ""}
-                {s.price_pen !== null ? ` · S/ ${formatNumber(s.price_pen)}` : ""}
+                {s.price_pen !== null ? ` · PEN ${formatNumber(s.price_pen)}` : ""}
               </p>
             </article>
           ))}

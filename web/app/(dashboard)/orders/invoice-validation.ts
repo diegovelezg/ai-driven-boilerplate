@@ -7,6 +7,7 @@
 // Fechas: SSOT en lib/format.ts.
 import { isValidISODate } from "@/lib/format";
 import { taxIdLabel } from "@/lib/tax-id";
+import { splitTax } from "@/lib/tax-rate";
 
 export type InvoiceFieldKey = "number" | "amount" | "issue" | "due" | "status";
 
@@ -23,9 +24,25 @@ export interface InvoiceFieldValues {
 
 const INVOICE_STATUS_OPTIONS = ["issued"] as const;
 
+/** "5,900" / "5900" → céntimos (entero mayor × 100); null = inválido.
+ *  Facturas sin decimales: rechaza "5,900.50". La coma solo vale como
+ *  separador de miles estricto (1-3 dígitos + grupos de 3). */
+export function parseWholeAmountToMinor(raw: string): number | null {
+  const t = String(raw ?? "").trim().replace(/\s/g, "");
+  if (!t) return null;
+  if (t.includes(",")) {
+    if (!/^\d{1,3}(,\d{3})+$/.test(t)) return null;
+  }
+  const flat = t.replace(/,/g, "");
+  if (!/^\d+$/.test(flat)) return null;
+  const n = Number(flat);
+  if (!Number.isFinite(n) || n <= 0 || n > 999_999_999) return null;
+  return n * 100;
+}
+
 /** "5,000.50" / "5000" → céntimos; null = inválido.
  *  La coma solo vale como separador de miles (1-3 dígitos + grupos de 3):
- *  "5,00,0" se rechaza en vez de colapsar a 5000. */
+ *  "5,00,0" se rechaza en vez de colapsar a 5000. (Cobros: aceptan céntimos.) */
 export function parseAmountToMinor(raw: string): number | null {
   const t = String(raw ?? "").trim().replace(/\s/g, "");
   if (!t) return null;
@@ -91,4 +108,34 @@ export function billingBlocker(b: InvoiceBilling): string | null {
   if (!b.name?.trim()) return "Sin empresa de facturación: fíjala en la ficha de la orden.";
   if (!b.taxId?.trim()) return `Sin ${taxIdLabel(b.country)}: complétalo en la ficha de la empresa.`;
   return null;
+}
+
+/** Monto sugerido del form "Registrar factura" (puro, testeable).
+ *  Todo en minor units SIN impuesto (SSOT `lib/format.ts` + `lib/tax-rate.ts`):
+ *  - sin otras facturas: `splitTax(bruto).total` (bruto + IGV/IVA);
+ *  - con facturas activas: `splitTax(bruto − yaFacturado).total` (remanente + impuesto).
+ *  `yaFacturado` = suma de facturas activas (issued/paid/overdue), nunca
+ *  canceladas/draft. Si no hay remanente (<= 0), `suggestedMinor` es null:
+ *  la orden ya está facturada en su totalidad. */
+export function suggestedInvoiceAmount(
+  grossMinor: number,
+  invoicedMinor: number,
+  country: unknown,
+): { suggestedMinor: number | null; netMinor: number; taxMinor: number; taxName: string; rate: number } {
+  const gross = Number.isFinite(grossMinor) ? Math.max(0, Math.round(grossMinor)) : 0;
+  const invoiced = Number.isFinite(invoicedMinor) ? Math.max(0, Math.round(invoicedMinor)) : 0;
+  const remainderNet = Math.max(0, gross - invoiced);
+  const { tax, total, rate, name } = splitTax(remainderNet, country);
+  if (gross <= 0 || remainderNet <= 0) {
+    return { suggestedMinor: null, netMinor: 0, taxMinor: 0, taxName: name, rate };
+  }
+  return { suggestedMinor: total, netMinor: remainderNet, taxMinor: tax, taxName: name, rate };
+}
+
+/** "590000" minor → "5,900" (entero, sin decimales): redondea al entero
+ *  más cercano. Round-trip con `parseWholeAmountToMinor`.
+ *  Agrupado manual (sin `toLocaleString`: SSOT de formato en `lib/format.ts`). */
+export function minorToAmountInput(minor: number): string {
+  const n = Number.isFinite(minor) ? Math.max(0, Math.round(minor / 100)) : 0;
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }

@@ -189,7 +189,7 @@ export function ScreenMultiSelect({
                       )}
                     </span>
                     <span className="shrink-0 text-xs font-medium tabular-nums">
-                      {s.price_pen !== null ? `S/ ${formatNumber(s.price_pen)}` : "—"}
+                      {s.price_pen !== null ? `PEN ${formatNumber(s.price_pen)}` : "—"}
                     </span>
                   </label>
                   <RowIconButton
