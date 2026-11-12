@@ -5,6 +5,11 @@ const nextConfig: NextConfig = {
   output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
+  // Deploy veloz: tsc NO corre en el VPS (verifica en local vía
+  // .githooks/pre-push, bloqueante). Mismo código + mismo lock = mismo
+  // resultado; repetirlo en build solo gasta minutos y RAM. (Next 16 ya
+  // no corre ESLint en builds; el lint vive solo en el hook.)
+  typescript: { ignoreBuildErrors: true },
   images: {
     // Fotos del catálogo (S3). Sin esto next/image rechaza los hosts remotos.
     remotePatterns: [

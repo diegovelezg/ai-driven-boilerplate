@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-push (bloqueante): verifica en local lo que el VPS ya no verifica.
+# next.config.ts lleva typescript.ignoreBuildErrors + eslint.ignoreDuringBuilds
+# para deploys veloces; este hook es el control que lo hace seguro.
+# Mismo código + mismo lock = mismo resultado, así que validar aquí basta.
+# Trabaja sobre el árbol actual: si hay WIP roto sin commitear, bloquea
+# (terminalo o `git stash -u` antes de pushear).
+set -e
+cd "$(git rev-parse --show-toplevel)/web"
+echo "pre-push: tsc --noEmit..."
+./node_modules/.bin/tsc --noEmit
+echo "pre-push: tests..."
+npm test
+echo "pre-push: eslint (informativo, no bloquea: hay deuda previa)..."
+npm run lint || echo "pre-push: lint con hallazgos (ver arriba)"
+echo "pre-push: OK"
