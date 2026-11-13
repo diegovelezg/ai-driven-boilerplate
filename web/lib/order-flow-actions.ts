@@ -7,6 +7,9 @@ import { normalizeCurrency } from "@/lib/currency";
 import { isValidISODate, todayLima } from "@/lib/format";
 import { resolveActor } from "@/lib/actor";
 import { taxIdLabel } from "@/lib/tax-id";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("order-flow");
 
 export interface OrderFlowState {
   ok: boolean;
@@ -174,10 +177,11 @@ export async function signOrderAction(input: {
       })
       .eq("store_id", storeId)
       .eq("id", orderId);
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    if (werr) { log.warn("signOrderAction", { fail: `DB write: ${werr.message}` }); return { ok: false, message: `DB write: ${werr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: "Orden marcada como firmada." };
   } catch (e) {
+    log.error("signOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -221,6 +225,7 @@ export async function createAgencyOrderAction(input: {
     });
     if (werr) {
       if (werr.code === "23505") return { ok: false, message: "Ese documento ya está registrado." };
+      log.warn("createAgencyOrderAction", { fail: `DB write: ${werr.message}` });
       return { ok: false, message: `DB write: ${werr.message}` };
     }
     await db
@@ -231,6 +236,7 @@ export async function createAgencyOrderAction(input: {
     revalidatePath("/orders");
     return { ok: true, message: "Documento registrado: la orden está autorizada." };
   } catch (e) {
+    log.error("createAgencyOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -265,7 +271,7 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
     if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
     const { error: derr } = await db.from("io_agency_orders").delete().eq("store_id", childStore).eq("id", id);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("deleteAgencyOrderAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
@@ -274,6 +280,7 @@ export async function deleteAgencyOrderAction(input: { agencyOrderId: string }):
     revalidatePath("/orders");
     return { ok: true, message: "OM/OC eliminado." };
   } catch (e) {
+    log.error("deleteAgencyOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -341,7 +348,7 @@ export async function attachCreativeAction(input: {
       qc_status: "approved",
       legal_status: "approved",
     });
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    if (werr) { log.warn("attachCreativeAction", { fail: `DB write: ${werr.message}` }); return { ok: false, message: `DB write: ${werr.message}` }; }
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
@@ -350,6 +357,7 @@ export async function attachCreativeAction(input: {
     revalidatePath("/orders");
     return { ok: true, message: "Material adjuntado." };
   } catch (e) {
+    log.error("attachCreativeAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -367,7 +375,7 @@ export async function deleteCreativeAction(input: { creativeId: string }): Promi
     if (denied) return { ok: false, message: denied };
     const actor = await resolveActor();
     const { error: derr } = await db.from("io_creatives").delete().eq("store_id", childStore).eq("id", id);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("deleteCreativeAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     await db
       .from("io_orders")
       .update({ updated_at: new Date().toISOString(), updated_by: actor })
@@ -376,6 +384,7 @@ export async function deleteCreativeAction(input: { creativeId: string }): Promi
     revalidatePath("/orders");
     return { ok: true, message: "Material eliminado." };
   } catch (e) {
+    log.error("deleteCreativeAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -405,10 +414,11 @@ export async function attachPhotoAction(input: { orderId: string; url: string })
       .update({ updated_at: new Date().toISOString(), updated_by: actor ?? null })
       .eq("store_id", chk.storeId)
       .eq("id", orderId);
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    if (werr) { log.warn("attachPhotoAction", { fail: `DB write: ${werr.message}` }); return { ok: false, message: `DB write: ${werr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: isVideo ? "Video adjuntado." : "Foto adjuntada." };
   } catch (e) {
+    log.error("attachPhotoAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -425,10 +435,11 @@ export async function deletePhotoAction(input: { photoId: string }): Promise<Ord
     const denied = await denyViewer(String(r.store_id ?? ""));
     if (denied) return { ok: false, message: denied };
     const { error: derr } = await db.from("io_photo_checks").delete().eq("store_id", String(r.store_id ?? "")).eq("id", id);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("deletePhotoAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: "Adjunto eliminado." };
   } catch (e) {
+    log.error("deletePhotoAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -449,10 +460,11 @@ export async function cancelOrderAction(input: { orderId: string }): Promise<Ord
       .update({ status: "cancelled", updated_at: now, updated_by: actor })
       .eq("store_id", chk.storeId)
       .eq("id", orderId);
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    if (werr) { log.warn("cancelOrderAction", { fail: `DB write: ${werr.message}` }); return { ok: false, message: `DB write: ${werr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: "Orden cancelada." };
   } catch (e) {
+    log.error("cancelOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -475,10 +487,11 @@ export async function reactivateOrderAction(input: { orderId: string }): Promise
       .update({ status: "draft", updated_at: now, updated_by: actor })
       .eq("store_id", chk.storeId)
       .eq("id", orderId);
-    if (werr) return { ok: false, message: `DB write: ${werr.message}` };
+    if (werr) { log.warn("reactivateOrderAction", { fail: `DB write: ${werr.message}` }); return { ok: false, message: `DB write: ${werr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: "Orden reactivada como borrador." };
   } catch (e) {
+    log.error("reactivateOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -521,10 +534,11 @@ export async function deleteOrderAction(input: { orderId: string }): Promise<Ord
       return { ok: false, message: `No se puede eliminar: tiene ${plays.count} registro(s) de emisión.` };
     }
     const { error: derr } = await db.from("io_orders").delete().eq("store_id", storeId).eq("id", orderId);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("deleteOrderAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     revalidatePath("/orders");
     return { ok: true, message: "Orden eliminada." };
   } catch (e) {
+    log.error("deleteOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -601,6 +615,7 @@ export async function createInvoiceAction(input: {
       if (/io_invoice_currency_check/i.test(werr.message)) {
         return { ok: false, message: "La moneda no coincide con la de la orden." };
       }
+      log.warn("createInvoiceAction", { fail: `DB write: ${werr.message}` });
       return { ok: false, message: `DB write: ${werr.message}` };
     }
     await db
@@ -613,6 +628,7 @@ export async function createInvoiceAction(input: {
     revalidatePath("/finance");
     return { ok: true, message: "Factura emitida registrada. Registra sus cobros por separado." };
   } catch (e) {
+    log.error("createInvoiceAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -637,6 +653,7 @@ export async function setInvoiceStatusAction(input: {
     refreshBilling();
     return { ok: true, message: "Factura anulada." };
   } catch (e) {
+    log.error("setInvoiceStatusAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -679,6 +696,7 @@ export async function recordInvoicePaymentAction(input: {
     refreshBilling();
     return { ok: true, message: "Cobro registrado." };
   } catch (e) {
+    log.error("recordInvoicePaymentAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -705,6 +723,7 @@ export async function voidInvoicePaymentAction(input: {
     refreshBilling();
     return { ok: true, message: "Registro de cobro revertido; se conserva su historial." };
   } catch (e) {
+    log.error("voidInvoicePaymentAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }

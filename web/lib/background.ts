@@ -13,12 +13,15 @@
 // analyst son del motor de retención extirpado en 20261122 y ya no se emiten.)
 // El `failed` va en su columna, no en el texto. `current` nunca lleva PII.
 import { getSupabase } from "@/lib/supabase";
+import { createLogger } from "@/lib/log";
 import {
   findConflict,
   type ActiveOp,
   type ErrorCode,
   type ScopeKind,
 } from "@/lib/operations";
+
+const log = createLogger("background");
 
 export type RunStatus = "running" | "done" | "error";
 
@@ -206,6 +209,7 @@ async function reapStaleRuns(storeId: string): Promise<number> {
       .map((r) => String(r.id ?? ""))
       .filter(Boolean);
     if (dead.length === 0) return 0;
+    log.warn("reapStaleRuns", { count: dead.length, storeId });
     await db
       .from("sys_runs")
       .update({
@@ -239,13 +243,17 @@ export async function startRun(
     .insert({ store_id: storeId, kind, label, total, status: "running", scope_kind: scopeKind, scope_id: scopeId })
     .select("id")
     .single();
-  if (!error && data) return String(data.id);
+  if (!error && data) {
+    log.info("startRun", { storeId, kind, runId: String(data.id) });
+    return String(data.id);
+  }
   const legacy = await db
     .from("sys_runs")
     .insert({ store_id: storeId, kind, label, total, status: "running" })
     .select("id")
     .single();
   if (legacy.error || !legacy.data) throw new Error(`Run insert: ${legacy.error?.message ?? error?.message}`);
+  log.info("startRun", { storeId, kind, runId: String(legacy.data.id), legacy: true });
   return String(legacy.data.id);
 }
 
@@ -329,6 +337,7 @@ export async function finishRun(
     errorCode?: ErrorCode | null;
   },
 ): Promise<void> {
+  const t0 = Date.now();
   const db = getSupabase();
   const base = {
     status: p.status,
@@ -350,7 +359,13 @@ export async function finishRun(
         ...(p.errorCode ? { error_code: p.errorCode } : null),
       })
       .eq("id", runId);
-    if (!error) return;
+    if (!error) {
+      log.info("finishRun", { runId, status: p.status, processed: p.processed, failed: p.failed, ms: Date.now() - t0 });
+      return;
+    }
+    log.warn("finishRun degraded", { runId, error: error.message });
   }
   await db.from("sys_runs").update(base).eq("id", runId);
+  if (p.status === "error") log.error("finishRun", { runId, status: p.status, error: p.error ?? undefined });
+  else log.info("finishRun", { runId, status: p.status, processed: p.processed, failed: p.failed, ms: Date.now() - t0 });
 }

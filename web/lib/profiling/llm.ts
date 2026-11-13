@@ -66,7 +66,7 @@ async function once(
     });
   }
   if (typeof c !== "string" || !c.trim()) {
-    log(`${proc} respuesta vacía: finish=${choice?.finish_reason ?? "?"} keys=${Object.keys(choice?.message ?? {}).join(",")} refusal=${JSON.stringify(choice?.message?.refusal ?? null).slice(0, 120)} usage=${JSON.stringify(data?.usage?.completion_tokens_details ?? null)}`);
+    log.child({ storeId: opts.storeId ?? null, process: proc })(`${proc} respuesta vacía: finish=${choice?.finish_reason ?? "?"} keys=${Object.keys(choice?.message ?? {}).join(",")} refusal=${JSON.stringify(choice?.message?.refusal ?? null).slice(0, 120)} usage=${JSON.stringify(data?.usage?.completion_tokens_details ?? null)}`);
     throw new Error(`${ref.provider}: respuesta vacía`);
   }
   return c;
@@ -83,7 +83,7 @@ export async function completeProcessJson(
   try {
     return await once(cfg.primary, proc, system, user, opts);
   } catch (e) {
-    log(`${proc} primario ${cfg.primary.provider}/${cfg.primary.model} falló (${e instanceof Error ? e.message : e})`);
+    log.child({ storeId: opts.storeId ?? null, process: proc })(`${proc} primario ${cfg.primary.provider}/${cfg.primary.model} falló (${e instanceof Error ? e.message : e})`);
     if (!cfg.fallback) throw e;
     return await once(cfg.fallback, proc, system, user, { ...opts, usedFallback: true });
   }

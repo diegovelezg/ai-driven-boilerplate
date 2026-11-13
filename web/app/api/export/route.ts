@@ -5,6 +5,7 @@ import { parseCompaniesSort } from "@/lib/crm-db";
 import { parseBrandsSort } from "@/lib/brand-db";
 import { minorToMajor, toCsv, type CsvCell } from "@/lib/csv";
 import { toISODateUTC } from "@/lib/format";
+import { apiLog } from "@/lib/log";
 
 // GET /api/export?entity=companies|contacts|brands|orders|screens + mismos filtros
 // de cada vista (q, tipo, company, stage, billing, proveedor, ciudad, estado,
@@ -169,7 +170,7 @@ export async function GET(req: Request) {
       );
     }
   } catch (e) {
-    console.error("[export]", e instanceof Error ? e.message : e);
+    apiLog("export", "export fail", { error: e instanceof Error ? e.message : String(e) });
     return new Response("No se pudo generar el CSV.", { status: 500 });
   }
 }

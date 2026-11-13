@@ -1,6 +1,7 @@
 import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { isCompanyKind } from "@/lib/crm";
+import { apiLog } from "@/lib/log";
 
 // GET /api/companies/search?q=&kind=&kinds=a,b&exclude=id1,id2&limit=
 // Picker de empresas activas con fuzzy en servidor (mismo RPC que el
@@ -60,6 +61,7 @@ export async function GET(req: Request) {
       }));
     return Response.json({ companies: out }, { headers: { "cache-control": "no-store" } });
   } catch (e) {
+    apiLog("companies-search", "companies-search fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "No se pudieron buscar empresas." }, { status: 500 });
   }
 }

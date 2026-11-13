@@ -10,7 +10,8 @@ function maxLen(): number {
 
 function verbose(): boolean {
   // Por defecto verboso: el objetivo es ver todo lo que sucede.
-  // ADK_LOG_VERBOSE=0 para recortar a errores + resumen.
+  // ADK_LOG_VERBOSE=0 recorta a warn+ (lo aplica el SSOT lib/log).
+  // Los tramos verbosos emiten en debug: LOG_LEVEL=debug los muestra.
   return process.env.ADK_LOG_VERBOSE !== "0";
 }
 
@@ -114,14 +115,14 @@ export class AdkLoggingPlugin extends BasePlugin {
       const partial = (e.partial as boolean | undefined) ? " parcial" : "";
       // Los eventos parciales spamean: una línea corta basta.
       if (e.partial) {
-        log(`${runTag(params.invocationContext)} etapa=event autor=${author}${partial}`);
+        log.debug(`${runTag(params.invocationContext)} etapa=event autor=${author}${partial}`);
         return undefined;
       }
-      log(
+      log.debug(
         `${runTag(params.invocationContext)} etapa=event autor=${author}${partial} ${contentPreview(e.content)}`,
       );
     } catch {
-      log(`${runTag(params.invocationContext)} etapa=event (ilegible)`);
+      log.debug(`${runTag(params.invocationContext)} etapa=event (ilegible)`);
     }
     return undefined;
   }
@@ -156,11 +157,11 @@ export class AdkLoggingPlugin extends BasePlugin {
       const model = String(r.model ?? "?");
       const contents = Array.isArray(r.contents) ? r.contents.length : "?";
       const tools = r.toolsDict ? Object.keys(r.toolsDict as object).length : 0;
-      log(
+      log.debug(
         `${runTag(params.callbackContext)} etapa=model_req modelo=${model} contenidos=${String(contents)} tools=${tools}`,
       );
     } catch {
-      log(`${runTag(params.callbackContext)} etapa=model_req (ilegible)`);
+      log.debug(`${runTag(params.callbackContext)} etapa=model_req (ilegible)`);
     }
     return undefined;
   }
@@ -172,11 +173,11 @@ export class AdkLoggingPlugin extends BasePlugin {
     if (!verbose()) return undefined;
     try {
       const r = params.llmResponse as Record<string, unknown>;
-      log(
+      log.debug(
         `${runTag(params.callbackContext)} etapa=model_res finish=${String(r.finishReason ?? "?")} ${contentPreview(r.content)}`,
       );
     } catch {
-      log(`${runTag(params.callbackContext)} etapa=model_res (ilegible)`);
+      log.debug(`${runTag(params.callbackContext)} etapa=model_res (ilegible)`);
     }
     return undefined;
   }
@@ -193,7 +194,7 @@ export class AdkLoggingPlugin extends BasePlugin {
     } catch {
       // modelo desconocido: igual se loguea el error
     }
-    log(`${runTag(params.callbackContext)} etapa=model_ERROR modelo=${model} error=${trunc(msg)}`);
+    log.error(`${runTag(params.callbackContext)} etapa=model_ERROR modelo=${model} error=${trunc(msg)}`);
     return undefined;
   }
 
@@ -232,7 +233,7 @@ export class AdkLoggingPlugin extends BasePlugin {
     const name =
       (params.tool as { name?: unknown } | undefined)?.name ?? "?";
     const msg = params.error instanceof Error ? params.error.message : safe(params.error);
-    log(
+    log.error(
       `${runTag(params.toolContext)} etapa=tool_ERROR tool=${String(name)} args=${safe(params.toolArgs)} error=${trunc(msg)}`,
     );
     return undefined;

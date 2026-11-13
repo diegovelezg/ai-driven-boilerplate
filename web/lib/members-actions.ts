@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { hasMinRole, isMemberRole, type MemberRole } from "@/lib/roles";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("members");
 
 export interface MembersState {
   ok: boolean;
@@ -64,10 +67,11 @@ export async function updateMemberRoleAction(input: {
       .update({ role: input.role })
       .eq("store_id", input.storeId)
       .eq("user_id", input.userId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("updateMemberRoleAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/settings");
     return { ok: true, message: "Rol actualizado." };
   } catch (e) {
+    log.error("updateMemberRoleAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }

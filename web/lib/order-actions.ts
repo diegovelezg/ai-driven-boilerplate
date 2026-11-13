@@ -10,6 +10,9 @@ import { resolveActor } from "@/lib/actor";
 import { isValidCurrency, normalizeCurrency } from "@/lib/currency";
 import { addDays, formatDate, isoDayPart, isISODateShape, limaDayStart } from "@/lib/format";
 import type { CrmState } from "@/lib/crm-actions";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("orders");
 
 // SSOT: resolveTenantStore = resolveTenantStoreAction (ver lib/tenant.ts).
 
@@ -154,7 +157,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       .eq("store_id", t.storeId)
       .eq("id", company)
       .maybeSingle();
-    if (coerr) return { ok: false, message: `DB read: ${coerr.message}` };
+    if (coerr) { log.warn("createOrderAction", { fail: `DB read: ${coerr.message}` }); return { ok: false, message: `DB read: ${coerr.message}` }; }
     if (!cos) return { ok: false, message: "Empresa fuera de tu tienda." };
     {
       const { archivedBlockerMessage } = await import("@/lib/order-guards");
@@ -258,7 +261,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
         .select("id,company_id,deleted_at,first_name,last_name,email")
         .eq("store_id", t.storeId)
         .in("id", [...new Set(wanted)]);
-      if (cterr) return { ok: false, message: `DB read: ${cterr.message}` };
+      if (cterr) { log.warn("createOrderAction", { fail: `DB read: ${cterr.message}` }); return { ok: false, message: `DB read: ${cterr.message}` }; }
       const allowedCompanies = new Set([company, agency_company_id].filter((x): x is string => !!x));
       const byId = new Map(
         ((found ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]),
@@ -319,7 +322,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       .select("id")
       .eq("store_id", t.storeId)
       .in("id", [...new Set(parsedLines.map((l) => l.screen))]);
-    if (scerr) return { ok: false, message: `DB read: ${scerr.message}` };
+    if (scerr) { log.warn("createOrderAction", { fail: `DB read: ${scerr.message}` }); return { ok: false, message: `DB read: ${scerr.message}` }; }
     if ((scs ?? []).length !== new Set(parsedLines.map((l) => l.screen)).size) {
       return { ok: false, message: "Pantalla fuera de tu inventario." };
     }
@@ -332,6 +335,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
         .maybeSingle();
       if (error) {
         if (error.code !== "23505" || attempt === 1) {
+          log.warn("createOrderAction", { fail: `DB write: ${error.message}` });
           return { ok: false, message: `DB write: ${error.message}` };
         }
         continue;
@@ -356,6 +360,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       );
       if (lerr) {
         await db.from("io_orders").delete().eq("store_id", t.storeId).eq("id", ioId);
+        log.warn("createOrderAction", { fail: `DB write líneas: ${lerr.message}` });
         return { ok: false, message: `DB write líneas: ${lerr.message}` };
       }
       // Vínculo explícito agencia ↔ anunciante (origin='oi', best-effort):
@@ -387,6 +392,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     }
     return { ok: false, message: "Colisión de numeración, reintenta." };
   } catch (e) {
+    log.error("createOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -563,6 +569,7 @@ export async function updateOrderAction(input: {
       if (payment_contact_id !== undefined) np.payment_contact_id = payment_contact_id;
       if (manager_contact_id !== undefined) np.manager_contact_id = manager_contact_id;
     } catch (e) {
+      log.error("updateOrderAction", { error: e instanceof Error ? e.message : String(e) });
       return { ok: false, message: e instanceof Error ? e.message : "Campo inválido." };
     }
     const patch: Record<string, unknown> = {};
@@ -579,7 +586,7 @@ export async function updateOrderAction(input: {
       .update({ ...patch, updated_at: new Date().toISOString(), updated_by: actor })
       .eq("store_id", t.storeId)
       .eq("id", orderId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("updateOrderAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     // Si cambió la intermediaria, asegura el vínculo explícito (origin='oi').
     if (p.agency_company_id !== undefined) {
       try {
@@ -614,6 +621,7 @@ export async function updateOrderAction(input: {
     revalidatePath("/orders");
     return { ok: true, message: "Orden actualizada." };
   } catch (e) {
+    log.error("updateOrderAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -685,7 +693,7 @@ export async function updateOrderLinesAction(input: {
       .select("id")
       .eq("store_id", t.storeId)
       .in("id", screenIds);
-    if (scerr) return { ok: false, message: `DB read: ${scerr.message}` };
+    if (scerr) { log.warn("updateOrderLinesAction", { fail: `DB read: ${scerr.message}` }); return { ok: false, message: `DB read: ${scerr.message}` }; }
     if ((scs ?? []).length !== screenIds.length) {
       return { ok: false, message: "Pantalla fuera de tu inventario." };
     }
@@ -729,6 +737,7 @@ export async function updateOrderLinesAction(input: {
     revalidatePath("/orders");
     return { ok: true, message: "Pantallas actualizadas." };
   } catch (e) {
+    log.error("updateOrderLinesAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -759,6 +768,7 @@ export async function checkAvailabilityAction(input: {
     });
     return { ok: true, conflicts: res.conflicts, remaining: res.remaining, capacities: res.capacities, message: "" };
   } catch (e) {
+    log.error("checkAvailabilityAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, conflicts: [], remaining: {}, capacities: {}, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -793,6 +803,7 @@ export async function getScreenOccupancyAction(input: {
     ]);
     return { ok: true, occupancy, capacities: Object.fromEntries(caps.entries()), message: "" };
   } catch (e) {
+    log.error("getScreenOccupancyAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, occupancy: {}, capacities: {}, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -914,6 +925,7 @@ export async function getScreenDayDetailAction(input: {
       message: "",
     };
   } catch (e) {
+    log.error("getScreenDayDetailAction", { error: e instanceof Error ? e.message : String(e) });
     return fail(e instanceof Error ? e.message : "Error.");
   }
 }

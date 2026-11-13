@@ -116,7 +116,7 @@ export async function extractFirmographics(
     content = await complete(cfg.primary, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode, { storeId: opts.storeId, process: "enrichment" });
   } catch (e) {
     if (!cfg.fallback) throw e;
-    log(`capa=extract primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
+    log.child({ storeId: opts.storeId ?? null })(`capa=extract primario ${cfg.primary.model} falló (${e instanceof Error ? e.message : e}); fallback a ${cfg.fallback.model}`);
     used = cfg.fallback;
     usedFallback = true;
     content = await complete(cfg.fallback, messages, cfg.temperature, cfg.maxTokens, cfg.reasoningEffort, cfg.jsonMode, { storeId: opts.storeId, process: "enrichment", usedFallback });

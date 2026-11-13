@@ -9,6 +9,7 @@
 // store del lado servidor (la entidad manda, no el body), sin streaming
 // de secrets. Escrituras: ninguna (tools read-only).
 import "server-only";
+import { createLogger } from "@/lib/log";
 import { getCustomerAgent, type AgentContext } from "@/lib/adk/agents/customer-agent";
 import { createAdkRunner } from "@/lib/adk/runner";
 import { getChatSessionService } from "@/lib/adk/sessions";
@@ -198,6 +199,9 @@ export function createChatRoute(opts?: { scope?: ChatScope }) {
 
     // 5. Streaming SSE con el protocolo que `sse.ts` ya parsea.
     const { text } = buildChatPrompt(messages);
+    const chatLog = createLogger("chat", { storeId, scope, sessionId });
+    chatLog.info("chat start", { msgs: messages.length, focus: entityLabel ?? entityKey });
+    const t0 = Date.now();
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -235,6 +239,7 @@ export function createChatRoute(opts?: { scope?: ChatScope }) {
             }
           }
         } catch (e) {
+          chatLog.error(e instanceof Error ? e : String(e), { ms: Date.now() - t0 });
           const honest =
             e instanceof Error && /abort/i.test(e.message)
               ? "Se canceló la respuesta."
@@ -250,6 +255,8 @@ export function createChatRoute(opts?: { scope?: ChatScope }) {
           } catch {
             // doble cierre inofensivo
           }
+          if (!req.signal.aborted) chatLog.info("chat done", { ms: Date.now() - t0 });
+          else chatLog.warn("chat aborted", { ms: Date.now() - t0 });
         }
       },
       cancel() {

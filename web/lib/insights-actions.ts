@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { listWallInsights, type WallInsight } from "@/lib/insights";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("insights");
 
 /** Inbox del tenant para Hoy (server action: storeId siempre del servidor).
  *  Acepta `storeId` explícito para no resolver la tienda 2 veces (la página
@@ -84,11 +87,12 @@ export async function getUnreadWallCountAction(): Promise<number> {
     const { error } = await db
       .from("sys_insight_reads")
       .upsert({ insight_id: insightId, user_id: data.user.id }, { onConflict: "insight_id,user_id" });
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("getUnreadWallCountAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/");
     revalidatePath("/inbox");
     return { ok: true, message: "Descartado." };
   } catch (e) {
+    log.error("getUnreadWallCountAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -113,6 +117,7 @@ async function guardInsight(
     }
     return { storeId, userId: data.user.id, email: data.user.email ?? null };
   } catch (e) {
+    log.error("getUnreadWallCountAction", { error: e instanceof Error ? e.message : String(e) });
     return { error: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -128,6 +133,7 @@ export async function restoreInsightAction(insightId: string): Promise<{ ok: boo
     revalidatePath("/inbox");
     return { ok: true, message: "Restaurado." };
   } catch (e) {
+    log.error("restoreInsightAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }

@@ -55,6 +55,8 @@ export async function runProfilerAction(
   } catch {
     runId = null;
   }
+  const log = chatLog.child({ storeId, runId });
+  log.info("runProfilerAction start", { description: description.slice(0, 80) });
   const stage = (step: { done: number; label: string }) => {
     if (!runId) return;
     advanceRun(runId, { processed: step.done, failed: 0, current: step.label }).catch(() => {});
@@ -69,6 +71,7 @@ export async function runProfilerAction(
         summary: `Perfil ${synthesis.archetype} (critic: ${critic.verdict}).`,
       }).catch(() => undefined);
     }
+    log.info("runProfilerAction ok", { archetype: synthesis.archetype, verdict: critic.verdict });
     return {
       ok: true,
       message: `Perfil profundo listo (critic: ${critic.verdict}).`,
@@ -78,6 +81,7 @@ export async function runProfilerAction(
       run: runId ? await getLatestRun(storeId).catch(() => null) : null,
     };
   } catch (e) {
+    log.error(e instanceof Error ? e : "runProfilerAction fail");
     if (runId) {
       await finishRun(runId, {
         status: "error",
@@ -154,6 +158,7 @@ export async function chatProfileStepAction(
     return { ok: false, reply: tc.error, done: false, missing: [...REQUIRED_SLOTS] };
   }
   const storeId = tc.storeId;
+  const clog = chatLog.child({ storeId });
   if (clientStoreId && clientStoreId !== storeId) {
     const { requireMyStoreAccess: checkChatAccess } = await import("@/lib/tenant");
     if ((await checkChatAccess(clientStoreId).catch(() => false)) === false) {
@@ -179,7 +184,7 @@ export async function chatProfileStepAction(
   if (storeId) {
     try {
       const s = await getProfileSignals(storeId);
-      chatLog(`chat turn=${userTurns} signals=${s ? `${s.customers}c` : "none"}`);
+      clog(`chat turn=${userTurns} signals=${s ? `${s.customers}c` : "none"}`);
       if (s && s.customers >= 5) {
         const partial = (s as { truncated?: boolean }).truncated ? " (muestra parcial)" : "";
         signalsCtx = `Datos de tu tienda (${s.customers} customers)${partial}: ${Math.round(s.companyRate * 100)}% con empresa, ${Math.round(s.customDomainRate * 100)}% con dominio propio, ${Math.round(s.repeatRate * 100)}% con 2+ compras.`;
@@ -215,7 +220,7 @@ export async function chatProfileStepAction(
   // Ni confianza alta ni nº de turnos abren la puerta.
   const missing = missingRequired(r);
   const done = missing.length === 0;
-  chatLog(`chat result missing=[${missing.join(",")}] conf=${r.confidence} done=${done}`);
+  clog(`chat result missing=[${missing.join(",")}] conf=${r.confidence} done=${done}`);
   if (done) {
     return {
       ok: true,

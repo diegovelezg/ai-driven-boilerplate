@@ -2,6 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { createServerSupabase } from "@/lib/supabase-server";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("auth");
 
 export interface AuthState {
   ok: boolean;
@@ -28,7 +31,7 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     // Mensaje genérico (no expone detalle del proveedor: evita enumeración).
-    console.error("[login] signInWithPassword:", error.status, error.message);
+    log.warn("signIn fail", { status: error.status });
     return { ok: false, message: "Credenciales inválidas." };
   }
   const { data, error: membersError } = await supabase
@@ -36,7 +39,7 @@ export async function signInAction(_prev: AuthState | null, formData: FormData):
     .select("store_id")
     .order("created_at", { ascending: true });
   if (membersError) {
-    console.error("[login] sys_memberships:", membersError.message);
+    log.warn("signIn memberships fail", { error: membersError.message });
     redirect(safeNext(next) ?? "/");
   }
   const memberIds = ((data ?? []) as Array<{ store_id: unknown }>)

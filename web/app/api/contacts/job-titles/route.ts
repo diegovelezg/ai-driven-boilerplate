@@ -1,5 +1,6 @@
 import { listDistinctJobTitles } from "@/lib/crm-db";
 import { requireActiveStoreAccess } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/contacts/job-titles — cargos distintos ya usados (autocomplete).
@@ -13,6 +14,7 @@ export async function GET() {
     const job_titles = await listDistinctJobTitles(storeId);
     return Response.json({ job_titles });
   } catch (e) {
+    apiLog("contacts-job-titles", "contacts-job-titles fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

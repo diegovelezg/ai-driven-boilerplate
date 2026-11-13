@@ -1,5 +1,6 @@
 import { getScreenDetail } from "@/lib/screens-db";
 import { requireRouteEntity, resolveMyRole } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/screens/:id — ficha para el drawer (Ficha + Comercial + Geo).
@@ -17,6 +18,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const myRole = await resolveMyRole(auth, storeId);
     return Response.json({ store_id: storeId, ...detail, myRole });
   } catch (e) {
+    apiLog("screens-id", "screens-id fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

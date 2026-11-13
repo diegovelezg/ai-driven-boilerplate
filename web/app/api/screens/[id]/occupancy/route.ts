@@ -4,6 +4,7 @@ import { displayEndOf, isHoldFresh } from "@/lib/availability";
 import { addDays, isoDayPart, limaDayStart, todayLima } from "@/lib/format";
 import { type OccupiedRange } from "@/lib/availability-utils";
 import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
+import { apiLog } from "@/lib/log";
 
 interface OccupancyItem {
   starts: string;
@@ -131,6 +132,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (rs !== null && rp !== null) ranges.push({ starts: rs, ends: rp });
     return Response.json({ from, to, today, ranges, items, capacity, remainingByDay });
   } catch (e) {
+    apiLog("screens-occupancy", "screens-occupancy fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

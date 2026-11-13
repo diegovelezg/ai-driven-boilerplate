@@ -1,5 +1,6 @@
 import { getCrmCompany } from "@/lib/crm-db";
 import { requireRouteEntity, resolveMyRole } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/companies/:id — ficha para el drawer (Ficha + Contactos + Pedidos).
@@ -26,6 +27,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     if (!canViewCommission) delete company.agency_commission_pct;
     return Response.json({ store_id: storeId, ...detail, company, myRole });
   } catch (e) {
+    apiLog("companies-id", "companies-id fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

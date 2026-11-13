@@ -1,6 +1,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { requireRouteEntity } from "@/lib/api/guard";
 import { normalizeDomain } from "@/lib/company-domains";
+import { apiLog } from "@/lib/log";
 import {
   describeCompanyCandidates,
   discoverDomainFromWeb,
@@ -54,6 +55,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const { candidates, profiles, discoveredFromWeb } = await describeCompanyCandidates(ctx);
     return Response.json({ candidates, profiles, discoveredFromWeb });
   } catch (e) {
+    apiLog("companies-research", "companies-research fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }
@@ -105,6 +107,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const profiles = [...(await getDomainProfiles([...seen])).values()];
     return Response.json({ results, profiles, candidates });
   } catch (e) {
+    apiLog("companies-research", "companies-research fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "Research failed." }, { status: 500 });
   }
 }

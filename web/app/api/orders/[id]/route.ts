@@ -1,6 +1,7 @@
 import { getOrderDetail } from "@/lib/orders-db";
 import { getSupabase } from "@/lib/supabase";
 import { requireRouteEntity, resolveMyRole } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /** GET /api/orders/:id — detalle para el drawer (ficha + líneas + documentos).
  *  Liviano a propósito (perf 2026-11-09): agencias + contactos viven en
@@ -29,6 +30,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       myRole,
     });
   } catch (e) {
+    apiLog("orders-id", "orders-id fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

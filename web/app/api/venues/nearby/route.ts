@@ -1,5 +1,6 @@
 import { getSupabase } from "@/lib/supabase";
 import { requireActiveStoreAccess } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /** Distancia en metros (Haversine). */
 function distanceM(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -63,6 +64,7 @@ export async function GET(req: Request) {
       },
     });
   } catch (e) {
+    apiLog("venues-nearby", "venues-nearby fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

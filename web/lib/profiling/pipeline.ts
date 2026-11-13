@@ -9,7 +9,7 @@ import { tenantStats } from "./analyst";
 import { synthesize, type Synthesis } from "./synthesizer";
 import { critique, type Critique } from "./critic";
 
-const log = createProfilerLogger();
+const baseLog = createProfilerLogger();
 
 export interface ProfilerResult {
   synthesis: Synthesis;
@@ -64,6 +64,7 @@ export async function runProfiler(
   description: string,
   onStage?: (step: { done: number; label: string }) => void,
 ): Promise<ProfilerResult> {
+  const log = baseLog.child({ storeId });
   const t0 = Date.now();
   const investigator = await investigateBusiness(description, undefined, { storeId });
   log(`pipeline investigator vertical=${investigator.vertical} model=${investigator.businessModel} conf=${investigator.confidence}`);

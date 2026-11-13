@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { getSupabase } from "@/lib/supabase";
 import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("screens");
 
 export interface ScreensState {
   ok: boolean;
@@ -177,7 +180,7 @@ export async function createScreenAction(form: FormData): Promise<ScreensState> 
         })
         .select("id")
         .maybeSingle();
-      if (verr || !v) return { ok: false, message: `DB write: ${verr?.message ?? "ubicación sin id"}` };
+      if (verr || !v) { log.warn("createScreenAction", { fail: `DB write: ${verr?.message ?? "ubicación sin id"}` }); return { ok: false, message: `DB write: ${verr?.message ?? "ubicación sin id"}` }; }
       venueId = (v as { id: string }).id;
     }
 
@@ -206,7 +209,7 @@ export async function createScreenAction(form: FormData): Promise<ScreensState> 
       })
       .select("id")
       .maybeSingle();
-    if (error || !created) return { ok: false, message: `DB write: ${error?.message ?? "pantalla sin id"}` };
+    if (error || !created) { log.warn("createScreenAction", { fail: `DB write: ${error?.message ?? "pantalla sin id"}` }); return { ok: false, message: `DB write: ${error?.message ?? "pantalla sin id"}` }; }
     const screenId = (created as { id: string }).id;
     // Enriquecimiento geoespacial + comercial best-effort (no bloquea la
     // creación): Mapbox → métricas → tags/narrativa/embedding.
@@ -224,6 +227,7 @@ export async function createScreenAction(form: FormData): Promise<ScreensState> 
     revalidatePath("/screens");
     return { ok: true, message: "Generando información inteligente en segundo plano (zona, tráfico y narrativa)." };
   } catch (e) {
+    log.error("createScreenAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -275,10 +279,11 @@ export async function updateScreenPlaybackAction(input: {
       })
       .eq("store_id", t.storeId)
       .eq("id", screenId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("updateScreenPlaybackAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/screens");
     return { ok: true, message: "Pauta actualizada." };
   } catch (e) {
+    log.error("updateScreenPlaybackAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -334,7 +339,7 @@ export async function deleteScreenAction(input: { screenId: string }): Promise<S
       .delete()
       .eq("store_id", t.storeId)
       .eq("id", screenId);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("deleteScreenAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     if (venueId) {
       const { count: siblings } = await db
         .from("inv_screens")
@@ -348,6 +353,7 @@ export async function deleteScreenAction(input: { screenId: string }): Promise<S
     revalidatePath("/screens");
     return { ok: true, message: "Pantalla eliminada." };
   } catch (e) {
+    log.error("deleteScreenAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -382,10 +388,11 @@ export async function setScreenActiveAction(input: {
       .update({ is_active: input.isActive, updated_at: new Date().toISOString() })
       .eq("store_id", t.storeId)
       .eq("id", screenId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("setScreenActiveAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/screens");
     return { ok: true, message: input.isActive ? "Pantalla habilitada." : "Pantalla deshabilitada." };
   } catch (e) {
+    log.error("setScreenActiveAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }

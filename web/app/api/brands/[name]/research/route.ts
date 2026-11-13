@@ -1,5 +1,6 @@
 import { requireActiveStoreAccess } from "@/lib/api/guard";
 import { normalizeDomain } from "@/lib/company-domains";
+import { apiLog } from "@/lib/log";
 import {
   describeCompanyCandidates,
   discoverDomainFromWeb,
@@ -36,6 +37,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ name: s
     });
     return Response.json({ brand, candidates, profiles, discoveredFromWeb });
   } catch (e) {
+    apiLog("brands-research", "brands-research fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }
@@ -80,6 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ name: s
     const profiles = [...(await getDomainProfiles(targets)).values()];
     return Response.json({ brand, results, profiles, candidates });
   } catch (e) {
+    apiLog("brands-research", "brands-research fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "Research failed." }, { status: 500 });
   }
 }

@@ -1,6 +1,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { requireApiUser, requireStoreMember } from "@/lib/api/guard";
 import { isISODateShape, utcDayStart } from "@/lib/format";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/usage?store=<uuid>[&from=YYYY-MM-DD] — consumo LLM del tenant.
@@ -30,6 +31,7 @@ export async function GET(req: Request) {
     const total = rows.reduce((acc, r) => acc + (Number(r.total_tokens ?? 0) || 0), 0);
     return Response.json({ total_tokens: total, calls: rows.length });
   } catch (e) {
+    apiLog("usage", "usage fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

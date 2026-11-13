@@ -9,6 +9,9 @@ import {
   type DomainCandidate,
 } from "@/lib/company-domains";
 import { fetchHomepageText } from "@/lib/fetch-text";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("company-research");
 
 export interface DomainProfile {
   domain: string;
@@ -105,6 +108,7 @@ export async function researchDomain(
   try {
     firm = await extractFirmographics(d, page.text, opts.storeId ? { storeId: opts.storeId } : {});
   } catch (e) {
+    log.error(e instanceof Error ? e : String(e), { storeId: opts.storeId ?? null, domain: d });
     return { status: "error", profile: null, error: e instanceof Error ? e.message : "LLM falló." };
   }
   const { error } = await db.from("ai_domain_cache").upsert(

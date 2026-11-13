@@ -1,5 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { getMyActiveStore } from "@/lib/tenant";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/health?store=<uuid>
@@ -16,6 +17,7 @@ export async function GET(req: Request) {
     const resolved = await getMyActiveStore(sp.get("store"));
     active = resolved.active;
   } catch (e) {
+    apiLog("health", "health fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json(
       { error: e instanceof Error ? e.message : "DB read failed" },
       { status: 500 },
@@ -58,6 +60,7 @@ export async function GET(req: Request) {
       schemaGaps: schema.gaps,
     });
   } catch (e) {
+    apiLog("health", "health fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json(
       { error: e instanceof Error ? e.message : "DB read failed" },
       { status: 500 },

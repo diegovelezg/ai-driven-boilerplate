@@ -5,7 +5,10 @@
 // Exit 0 si al menos una tienda terminó ok (incluye "ya corrió"/"sin cambios");
 // exit 1 si no hay tiendas o todas fallaron.
 import { getSupabase } from "@/lib/supabase";
+import { createLogger } from "@/lib/log";
 import { fail } from "./lib/run-once";
+
+const log = createLogger("brief");
 
 const args = process.argv.slice(2);
 const opt = (name: string): string | null => {
@@ -35,7 +38,7 @@ async function main(): Promise<void> {
   const limit = Math.max(1, Number.parseInt(opt("limit") ?? "50", 10) || 50);
   const ids = only ? [only] : await listStoreIds(limit);
   if (ids.length === 0) throw new Error("Sin tiendas en Supabase.");
-  console.log(`[brief] tiendas=${ids.length} force=${force ? 1 : 0} dry=${dry ? 1 : 0} actor=${actor}`);
+  log.info("brief start", { tiendas: ids.length, force: force ? 1 : 0, dry: dry ? 1 : 0, actor });
 
   if (dry) {
     const { getDashboardSnapshot } = await import("@/lib/dashboard");
@@ -53,7 +56,7 @@ async function main(): Promise<void> {
       const fresh = buildBriefFacts(snap, MAX_POSTS_PER_DAY)
         .filter((f) => !existing.has(dedupeKey(f.kind, f.scopeId)))
         .slice(0, Math.max(0, MAX_POSTS_PER_DAY - existing.size));
-      console.log(`[brief:dry] store=${storeId} hechos=${fresh.length} ${fresh.map((f) => `${f.kind}:${f.scopeId ?? "global"}`).join(" ")}`);
+      log.debug("brief dry", { storeId, hechos: fresh.length });
     }
     return;
   }
@@ -63,19 +66,19 @@ async function main(): Promise<void> {
   for (const storeId of ids) {
     try {
       if (!force && (await briefAlreadyRanToday(storeId))) {
-        console.log(`[brief] store=${storeId} skip: ya corrió hoy.`);
+        log.info("brief skip", { storeId, reason: "ya-corrio-hoy" });
         ok += 1;
         continue;
       }
       const r = await runBriefJob(storeId, { force, actor });
-      console.log(`[brief] store=${storeId} inserted=${r.inserted} ${r.summary}`);
+      log.info("brief store ok", { storeId, inserted: r.inserted, summary: r.summary });
       ok += 1;
     } catch (e) {
       failed += 1;
-      console.error(`[brief] store=${storeId} ERROR:`, e instanceof Error ? e.message : e);
+      log.error(e instanceof Error ? e : String(e), { storeId });
     }
   }
-  console.log(`[brief] fin: ok=${ok} failed=${failed}`);
+  log.info("brief fin", { ok, failed });
   if (ok === 0) throw new Error("Ninguna tienda terminó ok.");
 }
 

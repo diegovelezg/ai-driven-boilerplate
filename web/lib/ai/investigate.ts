@@ -137,6 +137,7 @@ export async function investigateBusiness(
 ): Promise<InvestigateResult> {
   const desc = (description ?? "").trim();
   if (desc.length < 10) throw new Error("Describe tu negocio en al menos una frase (10 caracteres).");
+  const log = createProfilerLogger({ storeId: opts.storeId ?? null });
 
   // Solo dominios exactos. Sin guess, sin normalizaciones, sin reglas de
   // preferencia: si no hay dominio pegado, no hay fetch y se pregunta.

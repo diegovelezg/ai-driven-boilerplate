@@ -1,7 +1,10 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("llm-usage");
 
 function warn(line: string): void {
-  console.warn(`[llm-usage] ${line}`);
+  log.warn(line);
 }
 
 export interface ParsedUsage {

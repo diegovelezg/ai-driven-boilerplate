@@ -1,5 +1,6 @@
 import { getBrandDetail } from "@/lib/brand-db";
 import { requireActiveStoreAccess, resolveMyRole } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /**
  * GET /api/brands/:name — ficha para el drawer (Ficha + Pedidos + Empresas).
@@ -21,6 +22,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ name: s
     const myRole = await resolveMyRole(auth, storeId);
     return Response.json({ store_id: storeId, ...detail, myRole });
   } catch (e) {
+    apiLog("brands-id", "brands-id fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

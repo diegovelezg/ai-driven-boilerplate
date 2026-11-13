@@ -1,5 +1,6 @@
 import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { apiLog } from "@/lib/log";
 
 // GET /api/screens?store= — picker de pantallas activas para editar líneas
 // de borradores. Misma forma que `ScreenPick` de nueva orden (SSOT:
@@ -62,7 +63,7 @@ export async function GET(req: Request) {
       { headers: { "cache-control": "no-store" } },
     );
   } catch (e) {
-    console.error("[screens]", e instanceof Error ? e.message : e);
+    apiLog("screens", "screens fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: "No se pudieron cargar las pantallas." }, { status: 500 });
   }
 }

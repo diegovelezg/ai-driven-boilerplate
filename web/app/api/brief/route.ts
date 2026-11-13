@@ -1,5 +1,6 @@
 import { getMyActiveStore, requireMyStoreAccess } from "@/lib/tenant";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { apiLog } from "@/lib/log";
 
 /** POST /api/brief — corre el muro diario (sys_runs kind='brief').
  *  Throttle: 1x día salvo force (el slot + dedupe evitan duplicados).
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
     const r = await runBriefJob(active.id, { force, actor });
     return Response.json({ ok: true, ...r });
   } catch (e) {
-    console.error("[brief]", e instanceof Error ? e.message : e);
+    apiLog("brief", "brief fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: "No se pudo correr el muro." }, { status: 500 });
   }
 }

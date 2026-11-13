@@ -1,6 +1,7 @@
 import { getSupabase } from "@/lib/supabase";
 import { toContactRef } from "@/lib/orders-db";
 import { requireRouteEntity } from "@/lib/api/guard";
+import { apiLog } from "@/lib/log";
 
 /** GET /api/orders/:id/meta — agencias + contactos para el editor de ficha.
  *  Separado del detalle (perf 2026-11-09): el drawer abre sin estos datos
@@ -80,6 +81,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       })),
     });
   } catch (e) {
+    apiLog("orders-meta", "orders-meta fail", { error: e instanceof Error ? e.message : String(e) });
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }
 }

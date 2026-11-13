@@ -7,6 +7,9 @@ import { isCompanyKind, normalizeCompany, normalizeContact, type CompanyKind } f
 import { normalizeCommissionPct } from "@/lib/agency-commission";
 import { resolveActor } from "@/lib/actor";
 import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("crm");
 
 export interface CrmState {
   ok: boolean;
@@ -77,10 +80,11 @@ export async function createCompanyAction(form: FormData): Promise<CrmState> {
       })
       .select("id")
       .maybeSingle();
-    if (error || !data) return { ok: false, message: `DB write: ${error?.message ?? "sin id"}` };
+    if (error || !data) { log.warn("createCompanyAction", { fail: `DB write: ${error?.message ?? "sin id"}` }); return { ok: false, message: `DB write: ${error?.message ?? "sin id"}` }; }
     revalidatePath("/companies");
     return { ok: true, message: "Empresa creada." };
   } catch (e) {
+    log.error("createCompanyAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -115,11 +119,12 @@ export async function setCompanyKindAction(input: { companyId: string; kind: Com
       })
       .eq("store_id", t.storeId)
       .eq("id", input.companyId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("setCompanyKindAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/companies");
     revalidatePath(`/companies/${input.companyId}`);
     return { ok: true, message: "Tipo actualizado." };
   } catch (e) {
+    log.error("setCompanyKindAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -201,11 +206,12 @@ export async function updateCompanyAction(input: {
       })
       .eq("store_id", t.storeId)
       .eq("id", companyId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("updateCompanyAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/companies");
     revalidatePath(`/companies/${companyId}`);
     return { ok: true, message: "Empresa actualizada." };
   } catch (e) {
+    log.error("updateCompanyAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -271,11 +277,12 @@ export async function updateContactAction(input: {
       .update({ ...parsed.value, updated_by: actor, updated_at: now })
       .eq("store_id", t.storeId)
       .eq("id", contactId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("updateContactAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/contacts");
     revalidatePath("/companies");
     return { ok: true, message: "Contacto actualizado." };
   } catch (e) {
+    log.error("updateContactAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -319,11 +326,12 @@ export async function setAgencyCommissionAction(input: {
       .update({ agency_commission_pct: pct, updated_by: await resolveActor(), updated_at: new Date().toISOString() })
       .eq("store_id", t.storeId)
       .eq("id", input.companyId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("setAgencyCommissionAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/companies");
     revalidatePath(`/companies/${input.companyId}`);
     return { ok: true, message: pct === null ? "Comisión eliminada." : "Comisión actualizada." };
   } catch (e) {
+    log.error("setAgencyCommissionAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -363,13 +371,14 @@ export async function setCompanyArchivedAction(input: {
       })
       .eq("store_id", t.storeId)
       .eq("id", companyId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("setCompanyArchivedAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/companies");
     revalidatePath(`/companies/${companyId}`);
     revalidatePath("/orders");
     revalidatePath("/orders/new");
     return { ok: true, message: input.archived ? "Empresa archivada." : "Empresa restaurada." };
   } catch (e) {
+    log.error("setCompanyArchivedAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -407,13 +416,14 @@ export async function setContactArchivedAction(input: {
       })
       .eq("store_id", t.storeId)
       .eq("id", contactId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("setContactArchivedAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath("/companies");
     revalidatePath("/contacts");
     revalidatePath("/orders");
     revalidatePath("/orders/new");
     return { ok: true, message: input.archived ? "Contacto archivado." : "Contacto restaurado." };
   } catch (e) {
+    log.error("setContactArchivedAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -468,12 +478,13 @@ export async function createContactAction(form: FormData): Promise<CrmState> {
       await db.from("crm_contacts").update({ is_primary: false, updated_by: actor, updated_at: new Date().toISOString() }).eq("company_id", companyId).eq("is_primary", true);
     }
     const { error } = await db.from("crm_contacts").insert({ store_id: t.storeId, ...parsed.value, created_by: actor, updated_by: actor });
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("createContactAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     revalidatePath(`/companies/${companyId}`);
     revalidatePath("/companies");
     revalidatePath("/contacts");
     return { ok: true, message: "Contacto agregado." };
   } catch (e) {
+    log.error("createContactAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -506,7 +517,7 @@ export async function createCompanyLinkAction(input: {
       .select("id,kind,deleted_at")
       .eq("store_id", t.storeId)
       .in("id", [parsed.agencyCompanyId, parsed.advertiserCompanyId]);
-    if (coerr) return { ok: false, message: `DB read: ${coerr.message}` };
+    if (coerr) { log.warn("createCompanyLinkAction", { fail: `DB read: ${coerr.message}` }); return { ok: false, message: `DB read: ${coerr.message}` }; }
     const byId = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
     const agency = byId.get(parsed.agencyCompanyId);
     const advertiser = byId.get(parsed.advertiserCompanyId);
@@ -527,11 +538,13 @@ export async function createCompanyLinkAction(input: {
     });
     if (error) {
       if (error.code === "23505") return { ok: true, message: "El vínculo ya existía." };
+      log.warn("createCompanyLinkAction", { fail: `DB write: ${error.message}` });
       return { ok: false, message: `DB write: ${error.message}` };
     }
     revalidatePath("/companies");
     return { ok: true, message: "Vínculo creado." };
   } catch (e) {
+    log.error("createCompanyLinkAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -572,7 +585,7 @@ export async function deleteCompanyLinkAction(input: {
       .eq("store_id", t.storeId)
       .eq("agency_company_id", parsed.agencyCompanyId)
       .eq("advertiser_company_id", parsed.advertiserCompanyId);
-    if (error) return { ok: false, message: `DB write: ${error.message}` };
+    if (error) { log.warn("deleteCompanyLinkAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
     // Las cuentas que colgaban del par pierden su requisito (vínculo previo):
     // se borran para no dejar atendidos huérfanos.
     const { error: accErr } = await db
@@ -581,10 +594,11 @@ export async function deleteCompanyLinkAction(input: {
       .eq("store_id", t.storeId)
       .eq("agency_company_id", parsed.agencyCompanyId)
       .eq("advertiser_company_id", parsed.advertiserCompanyId);
-    if (accErr) return { ok: false, message: `DB write: ${accErr.message}` };
+    if (accErr) { log.warn("deleteCompanyLinkAction", { fail: `DB write: ${accErr.message}` }); return { ok: false, message: `DB write: ${accErr.message}` }; }
     revalidatePath("/companies");
     return { ok: true, message: "Vínculo eliminado." };
   } catch (e) {
+    log.error("deleteCompanyLinkAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -641,7 +655,7 @@ export async function setContactAccountsAction(input: {
         .delete()
         .eq("store_id", t.storeId)
         .eq("contact_id", contactId);
-      if (error) return { ok: false, message: `DB write: ${error.message}` };
+      if (error) { log.warn("setContactAccountsAction", { fail: `DB write: ${error.message}` }); return { ok: false, message: `DB write: ${error.message}` }; }
       revalidatePath("/companies");
       revalidatePath("/contacts");
       return { ok: true, message: "Cuentas actualizadas." };
@@ -652,7 +666,7 @@ export async function setContactAccountsAction(input: {
       .select("id,kind,deleted_at")
       .eq("store_id", t.storeId)
       .in("id", wanted);
-    if (terr) return { ok: false, message: `DB read: ${terr.message}` };
+    if (terr) { log.warn("setContactAccountsAction", { fail: `DB read: ${terr.message}` }); return { ok: false, message: `DB read: ${terr.message}` }; }
     const byId = new Map(((targets ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
     for (const id of wanted) {
       const c = byId.get(id);
@@ -668,7 +682,7 @@ export async function setContactAccountsAction(input: {
       .eq("store_id", t.storeId)
       .eq("agency_company_id", agencyId)
       .in("advertiser_company_id", wanted);
-    if (lerr) return { ok: false, message: `DB read: ${lerr.message}` };
+    if (lerr) { log.warn("setContactAccountsAction", { fail: `DB read: ${lerr.message}` }); return { ok: false, message: `DB read: ${lerr.message}` }; }
     const linked = new Set(((links ?? []) as Array<Record<string, unknown>>).map((l) => String(l.advertiser_company_id)));
     const missing = wanted.filter((id) => !linked.has(id));
     if (missing.length > 0) {
@@ -681,7 +695,7 @@ export async function setContactAccountsAction(input: {
       .eq("store_id", t.storeId)
       .eq("contact_id", contactId)
       .not("advertiser_company_id", "in", `(${wanted.join(",")})`);
-    if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+    if (derr) { log.warn("setContactAccountsAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     if (wanted.length > 0) {
       const { error: uerr } = await db.from("crm_contact_accounts").upsert(
         wanted.map((id) => ({
@@ -693,7 +707,7 @@ export async function setContactAccountsAction(input: {
         })),
         { onConflict: "store_id,contact_id,advertiser_company_id", ignoreDuplicates: false },
       );
-      if (uerr) return { ok: false, message: `DB write: ${uerr.message}` };
+      if (uerr) { log.warn("setContactAccountsAction", { fail: `DB write: ${uerr.message}` }); return { ok: false, message: `DB write: ${uerr.message}` }; }
       // created_by solo en inserto: las filas existentes conservan el suyo.
       await db
         .from("crm_contact_accounts")
@@ -707,6 +721,7 @@ export async function setContactAccountsAction(input: {
     revalidatePath("/contacts");
     return { ok: true, message: "Cuentas actualizadas." };
   } catch (e) {
+    log.error("setContactAccountsAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -742,7 +757,7 @@ export async function setAccountAttendantsAction(input: {
       .select("id,kind,deleted_at")
       .eq("store_id", t.storeId)
       .in("id", [agencyCompanyId, advertiserCompanyId]);
-    if (coerr) return { ok: false, message: `DB read: ${coerr.message}` };
+    if (coerr) { log.warn("setAccountAttendantsAction", { fail: `DB read: ${coerr.message}` }); return { ok: false, message: `DB read: ${coerr.message}` }; }
     const byId = new Map(((cos ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
     const agency = byId.get(agencyCompanyId);
     const advertiser = byId.get(advertiserCompanyId);
@@ -759,7 +774,7 @@ export async function setAccountAttendantsAction(input: {
         .select("id,company_id,deleted_at")
         .eq("store_id", t.storeId)
         .in("id", contactIds);
-      if (terr) return { ok: false, message: `DB read: ${terr.message}` };
+      if (terr) { log.warn("setAccountAttendantsAction", { fail: `DB read: ${terr.message}` }); return { ok: false, message: `DB read: ${terr.message}` }; }
       const teamById = new Map(((team ?? []) as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
       for (const id of contactIds) {
         const c = teamById.get(id);
@@ -775,7 +790,7 @@ export async function setAccountAttendantsAction(input: {
         .eq("agency_company_id", agencyCompanyId)
         .eq("advertiser_company_id", advertiserCompanyId)
         .maybeSingle();
-      if (lerr) return { ok: false, message: `DB read: ${lerr.message}` };
+      if (lerr) { log.warn("setAccountAttendantsAction", { fail: `DB read: ${lerr.message}` }); return { ok: false, message: `DB read: ${lerr.message}` }; }
       if (!link) {
         return { ok: false, message: "Primero vincula la agencia con el anunciante y luego asigna sus contactos." };
       }
@@ -788,7 +803,7 @@ export async function setAccountAttendantsAction(input: {
         .eq("store_id", t.storeId)
         .eq("agency_company_id", agencyCompanyId)
         .eq("advertiser_company_id", advertiserCompanyId);
-      if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+      if (derr) { log.warn("setAccountAttendantsAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
     } else {
       const { error: derr } = await db
         .from("crm_contact_accounts")
@@ -797,7 +812,7 @@ export async function setAccountAttendantsAction(input: {
         .eq("agency_company_id", agencyCompanyId)
         .eq("advertiser_company_id", advertiserCompanyId)
         .not("contact_id", "in", `(${contactIds.join(",")})`);
-      if (derr) return { ok: false, message: `DB write: ${derr.message}` };
+      if (derr) { log.warn("setAccountAttendantsAction", { fail: `DB write: ${derr.message}` }); return { ok: false, message: `DB write: ${derr.message}` }; }
       const { error: uerr } = await db.from("crm_contact_accounts").upsert(
         contactIds.map((id) => ({
           store_id: t.storeId,
@@ -808,7 +823,7 @@ export async function setAccountAttendantsAction(input: {
         })),
         { onConflict: "store_id,contact_id,advertiser_company_id", ignoreDuplicates: false },
       );
-      if (uerr) return { ok: false, message: `DB write: ${uerr.message}` };
+      if (uerr) { log.warn("setAccountAttendantsAction", { fail: `DB write: ${uerr.message}` }); return { ok: false, message: `DB write: ${uerr.message}` }; }
       await db
         .from("crm_contact_accounts")
         .update({ created_by: actor })
@@ -822,6 +837,7 @@ export async function setAccountAttendantsAction(input: {
     revalidatePath("/contacts");
     return { ok: true, message: "Atendidos actualizados." };
   } catch (e) {
+    log.error("setAccountAttendantsAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }
@@ -918,6 +934,7 @@ export async function mergeContactsAction(input: { survivorId: string; loserIds:
     revalidatePath("/contacts/duplicates");
     return { ok: true, message: `Fusionados ${losers.length + 1} contactos en uno.` };
   } catch (e) {
+    log.error("mergeContactsAction", { error: e instanceof Error ? e.message : String(e) });
     return { ok: false, message: e instanceof Error ? e.message : "Error." };
   }
 }

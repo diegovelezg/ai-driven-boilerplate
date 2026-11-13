@@ -462,6 +462,9 @@ export async function runBriefJob(
   storeId: string,
   opts: { force?: boolean; actor?: string } = {},
 ): Promise<{ inserted: number; runId: string | null; summary: string }> {
+  const { createLogger } = await import("@/lib/log");
+  const log = createLogger("brief", { storeId, actor: opts.actor ?? null, force: opts.force ?? false });
+  const t0 = Date.now();
   const { claimRunSlot, finishRun } = await import("@/lib/background");
   const { getDashboardSnapshot } = await import("@/lib/dashboard");
   const { startOfDayUTC } = await import("@/lib/format");
@@ -477,8 +480,10 @@ export async function runBriefJob(
   if (!runId) notes.push("sin slot de corrida (sys_runs sin tracking)");
   const done = async (summary: string, status: "done" | "error" = "done") => {
     if (runId) await finishRun(runId, { status, processed: 1, failed: 0, summary }).catch(() => undefined);
+    log.info("runBriefJob done", { runId, summary, ms: Date.now() - t0 });
     return { inserted: 0, runId, summary };
   };
+  log.debug("runBriefJob start", { runId });
   try {
     if (!opts.force && (await briefAlreadyRanToday(storeId))) {
       return done("Muro: ya corrió hoy.");
@@ -579,9 +584,11 @@ export async function runBriefJob(
     const degraded = notes.length > 0 ? ` Avisos: ${notes.join("; ")}.` : "";
     const summary = `Muro: ${rows.length} post(s) (hechos deterministas + ${BRIEF_NARRATE_PROCESS}).${degraded}`;
     if (runId) await finishRun(runId, { status: "done", processed: 1, failed: 0, summary }).catch(() => undefined);
+    log.info("runBriefJob done", { runId, inserted: rows.length, summary, ms: Date.now() - t0 });
     return { inserted: rows.length, runId, summary };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Fallo el muro diario.";
+    log.error(e instanceof Error ? e : msg, { runId, ms: Date.now() - t0 });
     if (runId) {
       const { finishRun: fr, formatRunError } = await import("@/lib/background");
       await fr(runId, { status: "error", processed: 0, failed: 1, error: formatRunError(e) }).catch(() => undefined);

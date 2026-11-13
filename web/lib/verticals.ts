@@ -7,6 +7,9 @@
 import { getSupabase } from "@/lib/supabase";
 import { buildQueries, searchSearxng, scrapeCandidates, scrapable, type Scraped } from "@/lib/retrieval";
 import { chatCompletionParams, getLlmConfig, reasoningBody, type ModelRef } from "@/lib/ai/llm-config";
+import { createLogger } from "@/lib/log";
+
+const log = createLogger("verticals");
 
 export interface BuyerPersona {
   who: string;
@@ -182,7 +185,11 @@ export async function researchVertical(
   try {
     raw = await briefOnce(cfg.primary, text, opts.storeId ? { storeId: opts.storeId } : undefined);
   } catch (e) {
-    if (!cfg.fallback) throw e;
+    if (!cfg.fallback) {
+      log.error(e instanceof Error ? e : String(e), { storeId: opts.storeId ?? null, vertical: v });
+      throw e;
+    }
+    log.warn("researchVertical fallback", { storeId: opts.storeId ?? null, vertical: v });
     raw = await briefOnce(cfg.fallback, text, opts.storeId ? { storeId: opts.storeId, usedFallback: true } : { usedFallback: true });
   }
   return {

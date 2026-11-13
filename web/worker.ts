@@ -12,7 +12,7 @@ async function main(): Promise<void> {
 
 if (require.main === module) {
   main().catch((e) => {
-    console.error("[worker] fatal", e);
+    log.error(e instanceof Error ? e : String(e), { fatal: true });
     process.exit(1);
   });
 }
