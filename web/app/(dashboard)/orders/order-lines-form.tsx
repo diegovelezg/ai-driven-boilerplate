@@ -18,6 +18,7 @@ import {
   type ScreenPick,
 } from "./order-screens";
 import { plural } from "./order-screens/types";
+import { parseSlotsInput } from "@/lib/order-lines";
 
 function uniq<T>(xs: T[]): T[] {
   return [...new Set(xs)];
@@ -47,9 +48,9 @@ export function OrderLinesForm({
   const screensById = useMemo(() => new Map(screens.map((s) => [s.id, s])), [screens]);
 
   // Meta de las líneas actuales (para pantallas fuera del top 200/inactivas
-  // y para preservar notas): nombre/detalle/notas + total original.
+  // y para preservar notas): nombre/detalle/notas + total original + slots.
   const initialMeta = useMemo(() => {
-    const m = new Map<string, { name: string | null; detail: string | null; notes: string | null; starts: string; ends: string; totalMajor: number | null }>();
+    const m = new Map<string, { name: string | null; detail: string | null; notes: string | null; starts: string; ends: string; totalMajor: number | null; slots: number }>();
     for (const l of initialLines) {
       const sid = typeof l.screen_id === "string" ? l.screen_id : "";
       if (!sid || m.has(sid)) continue;
@@ -58,6 +59,7 @@ export function OrderLinesForm({
       const ends = displayEndOfSafe(endsRaw) ?? isoDayPart(endsRaw) ?? "";
       const rateMinor = Number(l.rate_minor ?? NaN);
       const totalMajor = Number.isFinite(rateMinor) ? rateMinor / 100 : null;
+      const rawSlots = Number(l.cant_slots);
       m.set(sid, {
         name: typeof l.screen_name === "string" ? l.screen_name : null,
         detail: typeof l.screen_detail === "string" ? l.screen_detail : null,
@@ -65,6 +67,7 @@ export function OrderLinesForm({
         starts,
         ends,
         totalMajor,
+        slots: Number.isSafeInteger(rawSlots) && rawSlots >= 1 && rawSlots <= 100 ? rawSlots : 1,
       });
     }
     return m;
@@ -109,12 +112,17 @@ export function OrderLinesForm({
       if (!meta || meta.totalMajor === null) continue;
       const diasLine = diffDaysInclusive(meta.starts, meta.ends);
       if (diasLine !== null && diasLine > 0 && meta.totalMajor > 0) {
-        const unit = meta.totalMajor / diasLine;
+        const unit = meta.totalMajor / diasLine / meta.slots;
         if (Number.isFinite(unit) && unit > 0) out[id] = String(Math.round(unit * 100) / 100);
       }
     }
     return out;
   });
+  const [slots, setSlots] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      initialSelected.map((id) => [id, String(initialMeta.get(id)?.slots ?? 1)]),
+    ),
+  );
   const [notesById] = useState<Record<string, string | null>>(() =>
     Object.fromEntries([...initialMeta.entries()].map(([id, m]) => [id, m.notes])),
   );
@@ -131,15 +139,17 @@ export function OrderLinesForm({
     occupancy,
     occupiedOf,
     untilOf,
+    remainingOf,
+    capacityOf,
     occupiedCount,
     periodLabel,
     commonWindowFor,
     nextWindowLabelFor,
     ensureOccupancy,
-  } = useScreenAvailability({ screens, starts, ends, excludeIoId: orderId });
+  } = useScreenAvailability({ screens, starts, ends, slots, excludeIoId: orderId });
 
-  // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
-  // lo que el vendedor ya digitó o lo que viene de las líneas actuales.
+  // Precarga el precio de la BD (price_pen) y 1 slot al elegir pantallas,
+  // sin pisar lo que el vendedor ya digitó o lo que viene de las líneas actuales.
   const priceById = useMemo(() => new Map(screens.map((s) => [s.id, s.price_pen])), [screens]);
   useEffect(() => {
     setPrices((prev) => {
@@ -150,6 +160,17 @@ export function OrderLinesForm({
         const p = priceById.get(id);
         if (p !== null && p !== undefined && Number.isFinite(Number(p)) && Number(p) > 0) {
           next[id] = String(p);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setSlots((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of selected) {
+        if (next[id] === undefined) {
+          next[id] = "1";
           changed = true;
         }
       }
@@ -168,13 +189,16 @@ export function OrderLinesForm({
     const n = Number(String(prices[id] ?? "").replace(",", "."));
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  const slotsOf = (id: string) => parseSlotsInput(slots[id]);
   const invalidRows = rows.filter((r) => priceOf(r.id) === null);
+  const invalidSlotsRows = rows.filter((r) => slotsOf(r.id) === null);
   const blockedRows = rows.filter((r) => occupiedOf(r.id).length > 0);
   const commonWindow = commonWindowFor(selected);
   const nextWindowLabel = nextWindowLabelFor(selected);
   const total = rows.reduce((a, r) => {
     const unit = priceOf(r.id);
-    return a + (unit !== null && dias !== null ? unit * dias : 0);
+    const qty = slotsOf(r.id);
+    return a + (unit !== null && qty !== null && dias !== null ? unit * dias * qty : 0);
   }, 0);
 
   const heterogeneous = initialPeriod.starts === "" && initialLines.length > 0;
@@ -187,7 +211,8 @@ export function OrderLinesForm({
 
   const openCalendar = (id: string) => {
     setCalScreenId(id);
-    ensureOccupancy(id);
+    const q = slotsOf(id);
+    ensureOccupancy(id, q === null ? undefined : q);
   };
 
   const toggleScreen = (id: string) =>
@@ -197,11 +222,12 @@ export function OrderLinesForm({
   if (dias === null) missing.push("el periodo");
   if (rows.length === 0) missing.push("al menos una pantalla");
   else if (invalidRows.length > 0) missing.push(`precio de ${invalidRows.length} pantalla${plural(invalidRows.length)}`);
-  if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} ocupada${plural(blockedRows.length)} en ese periodo`);
+  else if (invalidSlotsRows.length > 0) missing.push(`slots de ${invalidSlotsRows.length} pantalla${plural(invalidSlotsRows.length)} (1–100)`);
+  if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} sin cupo en ese periodo`);
   const canSubmit = !pending && !checking && missing.length === 0;
 
   function save() {
-    if (dias === null || rows.length === 0 || invalidRows.length > 0 || blockedRows.length > 0) {
+    if (dias === null || rows.length === 0 || invalidRows.length > 0 || invalidSlotsRows.length > 0 || blockedRows.length > 0) {
       toastFormError("Revisa las pantallas", `Falta: ${missing.join(", ")}.`);
       return;
     }
@@ -212,7 +238,8 @@ export function OrderLinesForm({
           screen_id: r.id,
           starts,
           ends,
-          total: String((priceOf(r.id) as number) * (dias as number)),
+          total: String((priceOf(r.id) as number) * (dias as number) * (slotsOf(r.id) as number)),
+          slots: slotsOf(r.id) as number,
           notes: notesById[r.id] ?? null,
         })),
       });
@@ -286,6 +313,8 @@ export function OrderLinesForm({
                 onClear={() => setSelected([])}
                 occupiedOf={occupiedOf}
                 untilOf={untilOf}
+                remainingOf={remainingOf}
+                capacityOf={capacityOf}
                 onShowCalendar={openCalendar}
                 availableOnly={availableOnly}
                 onToggleAvailableOnly={() => setAvailableOnly((v) => !v)}
@@ -306,13 +335,17 @@ export function OrderLinesForm({
               <OrderScreensTable
                 rows={rows}
                 prices={prices}
+                slots={slots}
                 dias={dias}
                 currency={orderCurrency}
                 occupiedOf={occupiedOf}
+                remainingOf={remainingOf}
+                capacityOf={capacityOf}
                 checking={checking}
                 commonWindow={commonWindow}
                 onApplyWindow={commonWindow ? () => applyWindow(commonWindow) : null}
                 onPriceChange={(id, v) => setPrices((p) => ({ ...p, [id]: v }))}
+                onSlotsChange={(id, v) => setSlots((p) => ({ ...p, [id]: v }))}
                 onRemove={toggleScreen}
                 onCalendar={openCalendar}
                 onDetail={setDetailScreenId}
@@ -345,9 +378,15 @@ export function OrderLinesForm({
         duration={dias ?? 0}
         periodStarts={starts}
         periodEnds={ends}
+        capacity={calScreenId ? capacityOf(calScreenId) : null}
+        minFree={calScreenId ? remainingOf(calScreenId) : null}
         onApply={(w) => {
           applyWindow(w);
           setCalScreenId(null);
+        }}
+        onSelectRange={(from, to) => {
+          setStarts(from);
+          setEnds(to);
         }}
         onClose={() => setCalScreenId(null)}
       />

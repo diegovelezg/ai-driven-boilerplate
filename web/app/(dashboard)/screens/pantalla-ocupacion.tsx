@@ -9,6 +9,7 @@ import { RetryButton } from "@/components/buttons";
 import { Calendar } from "@/components/ui/calendar";
 import { formatDate, formatNumber, parseISODate } from "@/lib/format";
 import { addDays, firstFreeDay, todayLima, type OccupiedRange } from "@/lib/availability-utils";
+import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
 
 interface OccupancyItem {
   starts: string;
@@ -17,6 +18,7 @@ interface OccupancyItem {
   brand: string | null;
   status: string;
   source: "order" | "booking";
+  slots: number;
 }
 
 interface OccupancyData {
@@ -25,6 +27,8 @@ interface OccupancyData {
   today: string;
   ranges: OccupiedRange[];
   items: OccupancyItem[];
+  capacity: number;
+  remainingByDay: Record<string, number>;
 }
 
 const ORDER_STATUS: Record<string, string> = {
@@ -106,8 +110,12 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
 
   const ranges = data.ranges;
   const items = data.items;
+  const capacity = data.capacity ?? DEFAULT_SLOTS_PER_SCREEN;
+  const remainingByDay = data.remainingByDay ?? {};
   const today = todayLima();
   const horizonEnd = addDays(today, 29);
+
+  const freeToday = remainingByDay[today] ?? capacity;
 
   const isCovered = (day: string): boolean =>
     ranges.some((r) => r.starts <= day && day <= r.ends);
@@ -125,6 +133,12 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
     const to = parseISODate(r.ends);
     return from && to ? [{ from, to }] : [];
   });
+  const partial = Object.entries(remainingByDay)
+    .filter(([, free]) => free > 0 && free < capacity)
+    .flatMap(([day]) => {
+      const d = parseISODate(day);
+      return d ? [{ from: d, to: d }] : [];
+    });
 
   const upcoming = items.filter((i) => i.ends >= today).slice(0, 20);
   const next30 = items.filter((i) => i.starts <= horizonEnd && i.ends >= today);
@@ -141,7 +155,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
           <div className="min-w-0">
             <p className="truncate text-xs text-muted-foreground">Hoy</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">
-              {todayHit ? "Ocupada" : "Libre"}
+              {freeToday <= 0 ? "Llena" : "Libre"}
             </p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
               {todayHit
@@ -149,13 +163,14 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
                 : free
                   ? `Libre desde ${formatDate(free)}`
                   : "—"}
+              {` · quedan ${formatNumber(Math.max(0, freeToday))} de ${formatNumber(capacity)} slots`}
             </p>
           </div>
           <div className="min-w-0">
             <p className="truncate text-xs text-muted-foreground">Ocupación 30d</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{occPct}%</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground tabular-nums">
-              {formatNumber(busy30)} de 30 días ocupados
+              {formatNumber(busy30)} de 30 días llenos
             </p>
           </div>
           <div className="min-w-0">
@@ -168,17 +183,23 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
         </div>
       </AppCard>
 
-      <AppCard title="Calendario" description="Ocupado tachado en rojo. Navega meses para ver el horizonte." tone="sky" aria-label="Calendario de ocupación">
+      <AppCard title="Calendario" description="Sin cupo tachado en rojo. Navega meses para ver el horizonte." tone="sky" aria-label="Calendario de ocupación">
         <Calendar
           mode="single"
           locale={es}
-          modifiers={{ booked }}
-          modifiersClassNames={{ booked: "bg-destructive/10 text-destructive line-through" }}
+          modifiers={{ booked, partial }}
+          modifiersClassNames={{
+            booked: "bg-destructive/10 text-destructive line-through",
+            partial: "bg-amber-500/15 text-amber-700",
+          }}
         />
         <p className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
           <CalendarDays className="size-3.5" aria-hidden />
           <span className="mr-1 inline-block size-2.5 rounded-sm bg-destructive/20 align-middle" aria-hidden />
-          ocupado · el borrador aparta 7 días, vencido libera solo.
+          sin cupo
+          <span className="ml-2 inline-block size-2.5 rounded-sm bg-amber-500/20 align-middle" aria-hidden />
+          parcial
+          <span className="ml-1">· el borrador aparta 7 días, vencido libera solo.</span>
         </p>
       </AppCard>
 
@@ -199,7 +220,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
                       {[it.io_number, it.brand].filter(Boolean).join(" · ") || (it.source === "booking" ? "Reserva" : "—")}
                     </span>
                     <span className="block text-xs text-muted-foreground tabular-nums">
-                      {formatDate(it.starts)} → {formatDate(it.ends)}
+                      {formatDate(it.starts)} → {formatDate(it.ends)} · {formatNumber(it.slots ?? 1)} slot{(it.slots ?? 1) === 1 ? "" : "s"}
                     </span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1.5">
@@ -230,7 +251,7 @@ export function PantallaOcupacion({ screenId }: { screenId: string }) {
                     {[it.io_number, it.brand].filter(Boolean).join(" · ") || (it.source === "booking" ? "Reserva" : "—")}
                   </span>
                   <span className="block text-xs text-muted-foreground tabular-nums">
-                    {formatDate(it.starts)} → {formatDate(it.ends)}
+                    {formatDate(it.starts)} → {formatDate(it.ends)} · {formatNumber(it.slots ?? 1)} slot{(it.slots ?? 1) === 1 ? "" : "s"}
                   </span>
                 </span>
                 <HistoryBadge label={statusLabel(it)} />

@@ -358,6 +358,7 @@ export default async function OrderPrintPage({
                     "Fecha inicio",
                     "Fecha fin",
                     "Cant. días",
+                    "Slots",
                     "Total",
                   ].map((h, i) => (
                     <th
@@ -400,6 +401,9 @@ export default async function OrderPrintPage({
                       </td>
                       <td align="right" style={cell}>
                         {dd ?? "—"}
+                      </td>
+                      <td align="right" style={cell}>
+                        {typeof l.cant_slots === "number" && l.cant_slots >= 1 ? l.cant_slots : 1}
                       </td>
                       <td align="right" style={{ ...cell, whiteSpace: "nowrap" }}>
                         {money(l.rate_minor, currency)}

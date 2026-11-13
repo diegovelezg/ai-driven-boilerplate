@@ -728,6 +728,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                   <DrawerTableTh>Pantalla</DrawerTableTh>
                   <DrawerTableTh>Periodo</DrawerTableTh>
                   <DrawerTableTh numeric>Días</DrawerTableTh>
+                  <DrawerTableTh numeric>Slots</DrawerTableTh>
                   <DrawerTableTh numeric>Total</DrawerTableTh>
                 </DrawerTableHeader>
                 <DrawerTableBody>
@@ -759,6 +760,9 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                         <DrawerTableTd numeric className="text-xs tabular-nums">
                           {dias ?? "—"}
                         </DrawerTableTd>
+                        <DrawerTableTd numeric className="text-xs tabular-nums">
+                          {typeof l.cant_slots === "number" && l.cant_slots >= 1 ? l.cant_slots : 1}
+                        </DrawerTableTd>
                         <DrawerTableTd numeric className="tabular-nums">
                           <Money amountMinor={l.rate_minor as number} currency={orderCurrency} />
                         </DrawerTableTd>
@@ -766,7 +770,7 @@ export function OrdenDrawer({ orderId, myRole, onClose }: { orderId: string; myR
                     );
                   })}
                   <DrawerTableRow className="bg-muted/30 font-medium">
-                    <DrawerTableTd colSpan={3}>
+                    <DrawerTableTd colSpan={4}>
                       Total · {formatNumber(lines.length)} pantalla{lines.length === 1 ? "" : "s"}
                     </DrawerTableTd>
                     <DrawerTableTd numeric className="tabular-nums">

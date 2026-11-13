@@ -25,6 +25,8 @@ export function ScreenMultiSelect({
   onClear,
   occupiedOf,
   untilOf,
+  remainingOf,
+  capacityOf,
   onShowCalendar,
   availableOnly,
   onToggleAvailableOnly,
@@ -44,6 +46,8 @@ export function ScreenMultiSelect({
   onClear: () => void;
   occupiedOf: (id: string) => ScreenConflict[];
   untilOf: (id: string) => string | null;
+  remainingOf: (id: string) => number | null;
+  capacityOf: (id: string) => number | null;
   onShowCalendar: (id: string) => void;
   availableOnly: boolean;
   onToggleAvailableOnly: () => void;
@@ -152,9 +156,15 @@ export function ScreenMultiSelect({
               const occupied = periodReady ? occupiedOf(s.id) : [];
               const blocked = occupied.length > 0 && !checked;
               const until = untilOf(s.id);
+              const free = periodReady ? remainingOf(s.id) : null;
+              const cap = periodReady ? capacityOf(s.id) : null;
+              const restNote =
+                !blocked && free !== null && cap !== null && free < cap
+                  ? `Quedan ${formatNumber(free)} de ${formatNumber(cap)} slots`
+                  : null;
               const note = occupied.length > 0
-                ? `No disponible · ${[occupied[0].io_number, occupied[0].brand].filter(Boolean).join(" · ") || "ocupada"}${until ? ` · hasta ${formatDate(until)}` : ""}`
-                : null;
+                ? `${free !== null && free > 0 ? "Parcial" : "No disponible"} · ${[occupied[0].io_number, occupied[0].brand].filter(Boolean).join(" · ") || "ocupada"}${until ? ` · hasta ${formatDate(until)}` : ""}`
+                : restNote;
               return (
                 <div
                   key={s.id}

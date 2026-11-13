@@ -3,6 +3,7 @@ import { requireStoreAccess } from "@/lib/api/guard";
 import { displayEndOf, isHoldFresh } from "@/lib/availability";
 import { addDays, isoDayPart, limaDayStart, todayLima } from "@/lib/format";
 import { type OccupiedRange } from "@/lib/availability-utils";
+import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
 
 interface OccupancyItem {
   starts: string;
@@ -11,12 +12,16 @@ interface OccupancyItem {
   brand: string | null;
   status: string;
   source: "order" | "booking";
+  /** Slots que ocupa la pauta (línea: cant_slots; booking: 1). */
+  slots: number;
 }
 
 /**
  * GET /api/screens/:id/occupancy?past=90&future=120 — ocupación de una pantalla.
  * Ventana [hoy-past, hoy+future] (días inclusivos). Misma semántica que
  * lib/availability: excluye canceladas; el borrador aparta solo 7 días.
+ * `ranges` = días sin cupo (reservados >= capacidad); `remainingByDay` =
+ * slots libres por día para el resto visible; `capacity` = slots/día.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: screenId } = await params;
@@ -45,7 +50,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
     const { data: lines, error: lerr } = await db
       .from("io_lines")
-      .select("starts_at,ends_at,io_orders!insertion_order_lines_io_id_fkey!inner(io_number,brand,status,created_at)")
+      .select("starts_at,ends_at,cant_slots,io_orders!insertion_order_lines_io_id_fkey!inner(io_number,brand,status,created_at)")
       .eq("store_id", storeId)
       .eq("screen_id", screenId)
       .lt("starts_at", qEnd)
@@ -55,6 +60,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       const o = l.io_orders as unknown as Record<string, unknown> | null;
       if (!o || o.status === "cancelled") continue;
       if (o.status === "draft" && !isHoldFresh(typeof o.created_at === "string" ? o.created_at : null)) continue;
+      const qty = Number(l.cant_slots ?? 1);
       items.push({
         starts: isoDayPart(l.starts_at) ?? "",
         ends: displayEndOf(String(l.ends_at)),
@@ -62,6 +68,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         brand: typeof o.brand === "string" ? o.brand : null,
         status: typeof o.status === "string" ? o.status : "—",
         source: "order",
+        slots: Number.isFinite(qty) && qty >= 1 ? Math.floor(qty) : 1,
       });
     }
 
@@ -91,13 +98,38 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           brand: o && typeof o.brand === "string" ? o.brand : null,
           status: typeof b.status === "string" ? b.status : "—",
           source: "booking",
+          slots: 1,
         });
       }
     }
 
     items.sort((a, b) => (a.starts < b.starts ? -1 : a.starts > b.starts ? 1 : 0));
-    const ranges: OccupiedRange[] = items.map((i) => ({ starts: i.starts, ends: i.ends }));
-    return Response.json({ from, to, today, ranges, items });
+    const { getPeriodAvailability } = await import("@/lib/availability");
+    const avail = await getPeriodAvailability(storeId, [screenId], from, to, {}).catch(() => null);
+    const capacity = avail?.capacities[screenId] ?? DEFAULT_SLOTS_PER_SCREEN;
+    const remainingByDay: Record<string, number> = avail?.remaining[screenId] ?? {};
+    // Días sin cupo (q=1) → rangos contiguos para el calendario.
+    const fullDays = [...(avail?.conflicts.find((c) => c.screen_id === screenId)?.blockedDays ?? [])].sort();
+    const ranges: OccupiedRange[] = [];
+    let rs: string | null = null;
+    let rp: string | null = null;
+    const bump = (d: string) => {
+      if (rs === null || rp === null) {
+        rs = rp = d;
+        return;
+      }
+      if (d <= rp) return;
+      const next = addDays(rp, 1);
+      if (d === next) {
+        rp = d;
+        return;
+      }
+      ranges.push({ starts: rs, ends: rp });
+      rs = rp = d;
+    };
+    for (const d of fullDays) bump(d);
+    if (rs !== null && rp !== null) ranges.push({ starts: rs, ends: rp });
+    return Response.json({ from, to, today, ranges, items, capacity, remainingByDay });
   } catch (e) {
     return Response.json({ error: e instanceof Error ? e.message : "DB read failed." }, { status: 500 });
   }

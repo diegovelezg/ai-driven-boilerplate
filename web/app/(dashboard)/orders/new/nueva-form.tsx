@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "cn";
+import { parseSlotsInput } from "@/lib/order-lines";
 import { addDays, formatDate, formatNumber, parseISODate, toTitleCase } from "@/lib/format";
 import { Money } from "@/components/money";
 import { normalizeCurrency } from "@/lib/currency";import { createOrderRedirectAction } from "@/lib/order-actions";
@@ -89,6 +90,8 @@ export function NuevaOrdenForm({
   const [ends, setEnds] = useState<string>("");
   const [selected, setSelected] = useState<string[]>([]);
   const [prices, setPrices] = useState<Record<string, string>>({});
+  // Slots por línea: default 1 al agregar la pantalla (se reserva 1 slot).
+  const [slots, setSlots] = useState<Record<string, string>>({});
   const [calScreenId, setCalScreenId] = useState<string | null>(null);
   const [detailScreenId, setDetailScreenId] = useState<string | null>(null);
   const [availableOnly, setAvailableOnly] = useState(false);
@@ -102,12 +105,14 @@ export function NuevaOrdenForm({
     occupancy,
     occupiedOf,
     untilOf,
+    remainingOf,
+    capacityOf,
     occupiedCount,
     periodLabel,
     commonWindowFor,
     nextWindowLabelFor,
     ensureOccupancy,
-  } = useScreenAvailability({ screens, starts, ends });
+  } = useScreenAvailability({ screens, starts, ends, slots });
 
   // Agencias del tenant para vincular intermediaria (o texto manual si no existe).
   const agencies = companies.filter((c) => c.kind === "agencia");
@@ -206,8 +211,8 @@ export function NuevaOrdenForm({
     toastFormError("No se pudo crear la orden", state.message);
   }, [state, mark, focusFirst]);
 
-  // Precarga el precio de la BD (price_pen) al elegir pantallas, sin pisar
-  // lo que el vendedor ya digitó o editó.
+  // Precarga el precio de la BD (price_pen) y 1 slot al elegir pantallas,
+  // sin pisar lo que el vendedor ya digitó o editó.
   const priceById = useMemo(() => new Map(screens.map((s) => [s.id, s.price_pen])), [screens]);
   useEffect(() => {
     setPrices((prev) => {
@@ -223,13 +228,25 @@ export function NuevaOrdenForm({
       }
       return changed ? next : prev;
     });
+    setSlots((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of selected) {
+        if (next[id] === undefined) {
+          next[id] = "1";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, [selected, priceById]);
 
   const periodReady = dias !== null;
 
   const openCalendar = (id: string) => {
     setCalScreenId(id);
-    ensureOccupancy(id);
+    const q = slotsOf(id);
+    ensureOccupancy(id, q === null ? undefined : q);
   };
 
   /** Mueve el periodo a un inicio dado, conservando la duración. */
@@ -250,11 +267,14 @@ export function NuevaOrdenForm({
     const n = Number(String(prices[id] ?? "").replace(",", "."));
     return Number.isFinite(n) && n > 0 ? n : null;
   };
+  const slotsOf = (id: string) => parseSlotsInput(slots[id]);
   const lineTotalOf = (id: string) => {
     const unit = priceOf(id);
-    return unit !== null && dias !== null ? unit * dias : 0;
+    const qty = slotsOf(id);
+    return unit !== null && qty !== null && dias !== null ? unit * dias * qty : 0;
   };
   const invalidRows = rows.filter((r) => priceOf(r.id) === null);
+  const invalidSlotsRows = rows.filter((r) => slotsOf(r.id) === null);
   const total = rows.reduce((a, r) => a + lineTotalOf(r.id), 0);
 
   const blockedRows = rows.filter((r) => occupiedOf(r.id).length > 0);
@@ -275,7 +295,8 @@ export function NuevaOrdenForm({
   if (dias === null) missing.push("el periodo");
   if (rows.length === 0) missing.push("al menos una pantalla");
   else if (invalidRows.length > 0) missing.push(`precio de ${invalidRows.length} pantalla${plural(invalidRows.length)}`);
-  if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} ocupada${plural(blockedRows.length)} en ese periodo`);
+  else if (invalidSlotsRows.length > 0) missing.push(`slots de ${invalidSlotsRows.length} pantalla${plural(invalidSlotsRows.length)} (1–100)`);
+  if (blockedRows.length > 0) missing.push(`${blockedRows.length} pantalla${plural(blockedRows.length)} sin cupo en ese periodo`);
   const canSubmit = !pending && !checking && missing.length === 0;
 
   // Defensa cliente: el botón ya se deshabilita con `missing`, pero un
@@ -614,6 +635,8 @@ export function NuevaOrdenForm({
               onClear={() => setSelected([])}
               occupiedOf={occupiedOf}
               untilOf={untilOf}
+              remainingOf={remainingOf}
+              capacityOf={capacityOf}
               onShowCalendar={openCalendar}
               availableOnly={availableOnly}
               onToggleAvailableOnly={() => setAvailableOnly((v) => !v)}
@@ -638,19 +661,24 @@ export function NuevaOrdenForm({
                   <input type="hidden" name="line_starts_at" value={starts} />
                   <input type="hidden" name="line_ends_at" value={ends} />
                   <input type="hidden" name="line_cant_dias" value={dias ?? ""} />
-                  <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number)) : ""} />
+                  <input type="hidden" name="line_slots" value={slotsOf(s.id) ?? ""} />
+                  <input type="hidden" name="line_total" value={dias !== null && priceOf(s.id) !== null && slotsOf(s.id) !== null ? String((priceOf(s.id) as number) * (dias as number) * (slotsOf(s.id) as number)) : ""} />
                 </span>
               ))}
               <OrderScreensTable
                 rows={rows}
                 prices={prices}
+                slots={slots}
                 dias={dias}
                 currency={currency}
                 occupiedOf={occupiedOf}
+                remainingOf={remainingOf}
+                capacityOf={capacityOf}
                 checking={checking}
                 commonWindow={commonWindow}
                 onApplyWindow={commonWindow ? () => applyWindow(commonWindow) : null}
                 onPriceChange={(id, v) => setPrices((p) => ({ ...p, [id]: v }))}
+                onSlotsChange={(id, v) => setSlots((p) => ({ ...p, [id]: v }))}
                 onRemove={toggleScreen}
                 onCalendar={openCalendar}
                 onDetail={setDetailScreenId}
@@ -681,9 +709,15 @@ export function NuevaOrdenForm({
         duration={dias ?? 0}
         periodStarts={starts}
         periodEnds={ends}
+        capacity={calScreenId ? capacityOf(calScreenId) : null}
+        minFree={calScreenId ? remainingOf(calScreenId) : null}
         onApply={(w) => {
           applyWindow(w);
           setCalScreenId(null);
+        }}
+        onSelectRange={(from, to) => {
+          setStarts(from);
+          setEnds(to);
         }}
         onClose={() => setCalScreenId(null)}
       />

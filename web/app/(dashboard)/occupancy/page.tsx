@@ -3,7 +3,7 @@ import { AppCardState } from "@/components/app-card";
 import { PageHeader } from "@/components/page-header";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { requireMyStoreAccess, resolveActiveStoreId } from "@/lib/tenant";
-import { getScreenConflicts } from "@/lib/availability";
+import { getPeriodAvailability, type PeriodAvailability } from "@/lib/availability";
 import { addDays, isValidISODate, todayLima } from "@/lib/format";
 import { resolveSupplierDefault } from "@/lib/default-supplier";
 import { listScreens, listScreenFilterOptions } from "@/lib/screens-db";
@@ -78,7 +78,7 @@ export default async function OcupacionPage({
   let casaName: string | null = null;
   let truncated = false;
   let error: string | null = null;
-  let conflicts: Awaited<ReturnType<typeof getScreenConflicts>> = [];
+  let availability: PeriodAvailability = { conflicts: [], remaining: {}, taken: {}, capacities: {}, holds: {} };
 
   try {
     // Default de proveedor: SSOT en lib/default-supplier (misma regla que
@@ -121,8 +121,16 @@ export default async function OcupacionPage({
     cities = opts.cities;
     suppliers = opts.suppliers;
     // Fin inclusivo = último día visible (desde + dias - 1).
+    // Fraccionado por slots: remaining/capacities/holds para celdas con
+    // número, no binarias (ver OccupancyTimeline).
     const lastStr = addDays(desde, dias - 1);
-    conflicts = await getScreenConflicts(storeId, desde, lastStr);
+    availability = await getPeriodAvailability(
+      storeId,
+      rows.map((r) => r.id),
+      desde,
+      lastStr,
+      {},
+    );
   } catch (e) {
     error = e instanceof Error ? e.message : "No se pudieron cargar los datos.";
   }
@@ -132,13 +140,13 @@ export default async function OcupacionPage({
       <PageHeader
         eyebrow="Operación"
         title="Ocupación"
-        description="Filas = pantallas, columnas = días. Rojo ocupado, verde libre. Clic en la fila para su ficha."
+        description="Filas = pantallas, columnas = días. Cada celda muestra slots ocupados del día. Clic en la celda para el desglose, clic en el nombre para la ficha."
       />
       {error && <AppCardState>{error}</AppCardState>}
       {!error && (
         <OccupancyTimeline
           screens={screens}
-          conflicts={conflicts}
+          availability={availability}
           desde={desde}
           dias={dias}
           q={q}

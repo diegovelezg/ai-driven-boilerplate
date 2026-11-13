@@ -1,9 +1,10 @@
 import { PageHeader } from "@/components/page-header";
 import { connection } from "next/server";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { getMyStoreRole, requireMyStoreAccess } from "@/lib/tenant";
+import { DEFAULT_SLOTS_PER_SCREEN, getMyStoreRole, requireMyStoreAccess } from "@/lib/tenant";
 import { createServerSupabase } from "@/lib/supabase-server";
 import { TeamPanel } from "./team-panel";
+import { InventoryPanel } from "./inventory-panel";
 
 export const instant = false;
 
@@ -20,10 +21,13 @@ export default async function SettingsPage({
   const sp = searchParams ? await searchParams : null;
   const requestedStore = sp?.store ?? null;
   let activeStoreId: string | null = null;
+  let initialSlots = DEFAULT_SLOTS_PER_SCREEN;
   if (isSupabaseConfigured()) {
     try {
       const { getMyActiveStore } = await import("@/lib/tenant");
-      activeStoreId = (await getMyActiveStore(requestedStore).catch(() => null))?.active?.id ?? null;
+      const got = await getMyActiveStore(requestedStore).catch(() => null);
+      activeStoreId = got?.active?.id ?? null;
+      if (got?.active) initialSlots = got.active.default_slots_per_screen;
     } catch {
       activeStoreId = null;
     }
@@ -51,20 +55,27 @@ export default async function SettingsPage({
     <div className="page-shell max-w-[1200px]">
       <PageHeader
         eyebrow="Configuración"
-        title="Equipo"
-        description="Quién puede entrar a esta tienda y qué puede hacer cada persona."
+        title="Ajustes"
+        description="Equipo e inventario de esta tienda."
       />
       {accessDenied ? (
         <p className="text-sm text-muted-foreground">
           Sin acceso a esta tienda. Pide a un administrador que te dé acceso.
         </p>
       ) : (
-        <TeamPanel
-          members={membersData ?? []}
-          myRole={myRole}
-          myUserId={myUserId}
-          storeId={storeId}
-        />
+        <div className="flex flex-col gap-8">
+          <TeamPanel
+            members={membersData ?? []}
+            myRole={myRole}
+            myUserId={myUserId}
+            storeId={storeId}
+          />
+          <InventoryPanel
+            storeId={storeId}
+            initialSlots={initialSlots}
+            canEdit={myRole === "owner" || myRole === "admin"}
+          />
+        </div>
       )}
     </div>
   );
