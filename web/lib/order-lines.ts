@@ -9,6 +9,8 @@ export interface OrderLineInput {
   starts: string;
   ends: string;
   total: string | number;
+  /** Slots reservados (1–100). Ausente/vacío = 1 (default de filas legacy). */
+  slots?: string | number | null;
   notes?: string | null;
 }
 
@@ -21,6 +23,27 @@ export interface LineProblem {
 function numTotal(v: string | number): number | null {
   const n = typeof v === "number" ? v : Number(String(v ?? "").trim().replace(",", "."));
   return Number.isFinite(n) ? n : null;
+}
+
+/** Input crudo del form → slots o null (vacío = 1). Una sola semántica
+ *  para tabla, forms y hook de disponibilidad. */
+export function parseSlotsInput(v: unknown): number | null {
+  const raw = String(v ?? "").trim();
+  if (raw === "") return 1;
+  return normalizeLineSlots(raw);
+}
+
+/** Slots de la línea: entero 1–100. Ausente = 1 (default al agregar pantalla
+ *  y de filas legacy); vacío = 1 salvo `blankInvalid` (fail-closed en el
+ *  cable: el cliente bloquea el submit, pero un POST directo no debe colar
+ *  1 silencioso). null = inválido. */
+export function normalizeLineSlots(v: unknown, opts: { blankInvalid?: boolean } = {}): number | null {
+  if (v === null || v === undefined) return 1;
+  const t = String(v).trim().replace(",", ".");
+  if (t === "") return opts.blankInvalid ? null : 1;
+  const n = Number(t);
+  if (!Number.isSafeInteger(n) || n < 1 || n > 100) return null;
+  return n;
 }
 
 /** Valida forma (tipos, fechas, total). La disponibilidad y el tenant los
@@ -45,6 +68,9 @@ export function validateOrderLines(lines: OrderLineInput[]): LineProblem[] {
     const t = numTotal(l?.total ?? "");
     if (t === null || t <= 0) {
       out.push({ key: tag("total"), message: `Línea ${i + 1}: total inválido.` });
+    }
+    if (normalizeLineSlots(l?.slots, { blankInvalid: true }) === null) {
+      out.push({ key: tag("slots"), message: `Línea ${i + 1}: slots inválidos (1–100).` });
     }
     const notes = typeof l?.notes === "string" ? l.notes : "";
     if (notes.trim().length > 2000) {

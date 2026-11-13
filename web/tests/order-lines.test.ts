@@ -44,4 +44,26 @@ describe("order lines", () => {
     assert.equal(totalToMinor("0"), null);
     assert.equal(totalToMinor("abc"), null);
   });
+
+  it("slots: ausente vale 1, exige entero 1–100", () => {
+    assert.deepEqual(validateOrderLines([OK]), []);
+    assert.deepEqual(validateOrderLines([{ ...OK, slots: "2" }]), []);
+    assert.deepEqual(validateOrderLines([{ ...OK, slots: 100 }]), []);
+    const bad = validateOrderLines([
+      { ...OK, screen_id: "s1", slots: "" },
+      { ...OK, screen_id: "s2", slots: "0" },
+      { ...OK, screen_id: "s3", slots: "-1" },
+      { ...OK, screen_id: "s4", slots: "abc" },
+      { ...OK, screen_id: "s5", slots: 101 },
+      { ...OK, screen_id: "s6", slots: "1.5" },
+    ]);
+    assert.deepEqual(bad.map((p) => p.key), [
+      "line-0-slots",
+      "line-1-slots",
+      "line-2-slots",
+      "line-3-slots",
+      "line-4-slots",
+      "line-5-slots",
+    ]);
+  });
 });

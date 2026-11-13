@@ -30,7 +30,7 @@ function snap(over: Partial<DashboardSnapshot> = {}): DashboardSnapshot {
     firmadoMesMinor: 0,
     draftMesMinor: 0,
     byCurrency: {},
-    ocupacion14d: { ratio: null, diasVendidos: 0, diasDisponibles: 0 },
+    ocupacion14d: { ratio: null, slotsVendidos: 0, slotsDisponibles: 0 },
     alAire: { ois: 0, pantallas: 0 },
     porCertificar: 0,
     cobranza: { invoicedMinor: 0, paidMinor: 0, pendingMinor: 0, overdueMinor: 0 },
@@ -75,8 +75,8 @@ describe("muro de insights (issue #11)", () => {
         // Salud comercial (dashboard): ocupación, huecos y relevo 30d
         // nunca generan posts, aunque el snapshot los traiga.
         renovacion30d: { conRelevo: 1, total: 4, ratio: 0.25 },
-        ocupacion14d: { ratio: 0.42, diasVendidos: 42, diasDisponibles: 100 },
-        huecos: [{ screenId: "s1", screenName: "Pantalla 1", diasLibres: 9 }],
+        ocupacion14d: { ratio: 0.42, slotsVendidos: 42, slotsDisponibles: 100 },
+        huecos: [{ screenId: "s1", screenName: "Pantalla 1", diasLibres: 9, slotsLibres: 90 }],
       }),
     );
     assert.equal(facts.length, 1);

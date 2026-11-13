@@ -276,7 +276,7 @@ export async function getOrderDetail(storeId: string, id: string): Promise<Order
     ),
     db
       .from("io_lines")
-      .select("id,starts_at,ends_at,rate_minor,tarifa_regular_minor,cant_meses,cant_dias,notes,screen_id")
+      .select("id,starts_at,ends_at,rate_minor,tarifa_regular_minor,cant_meses,cant_dias,cant_slots,notes,screen_id")
       .eq("store_id", storeId)
       .eq("io_id", id)
       .order("starts_at", { ascending: true }),

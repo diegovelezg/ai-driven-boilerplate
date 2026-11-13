@@ -4,10 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSupabase } from "@/lib/supabase";
 import { resolveTenantStoreAction as resolveTenantStore } from "@/lib/tenant";
-import { getScreenConflicts, getScreenOccupancy, type ScreenConflict } from "@/lib/availability";
+import { getScreenOccupancy, type ScreenConflict } from "@/lib/availability";
+import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
 import { resolveActor } from "@/lib/actor";
 import { isValidCurrency, normalizeCurrency } from "@/lib/currency";
-import { addDays, isISODateShape, limaDayStart } from "@/lib/format";
+import { addDays, formatDate, isoDayPart, isISODateShape, limaDayStart } from "@/lib/format";
 import type { CrmState } from "@/lib/crm-actions";
 
 // SSOT: resolveTenantStore = resolveTenantStoreAction (ver lib/tenant.ts).
@@ -86,19 +87,24 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     }
     orderCurrency = currencyRaw;
   }
-  // Líneas: mismo largo en los 5 arreglos (una fila por pantalla).
+  // Líneas: mismo largo en los 6 arreglos (una fila por pantalla).
   const screens = form.getAll("screen_id").map((v) => String(v).trim());
   const inis = form.getAll("line_starts_at").map((v) => String(v).trim());
   const fins = form.getAll("line_ends_at").map((v) => String(v).trim());
   const totals = form.getAll("line_total").map((v) => String(v).trim().replace(",", "."));
   const dias = form.getAll("line_cant_dias").map((v) => String(v).trim().replace(",", "."));
+  const slotsRaw = form.getAll("line_slots").map((v) => String(v).trim());
+  if (slotsRaw.length > 0 && slotsRaw.length !== screens.length) {
+    return { ok: false, message: "Líneas incompletas." };
+  }
+  const { normalizeLineSlots } = await import("@/lib/order-lines");
   if (screens.length === 0 || screens.some((s) => !s)) {
     return { ok: false, message: "Cada línea necesita su pantalla." };
   }
   if (![inis.length, fins.length, totals.length, dias.length].every((n) => n === screens.length)) {
     return { ok: false, message: "Líneas incompletas." };
   }
-  const parsedLines: Array<{ screen: string; starts: string; ends: string; total: number; cant_dias: number | null }> = [];
+  const parsedLines: Array<{ screen: string; starts: string; ends: string; total: number; cant_dias: number | null; cant_slots: number }> = [];
   const nextDayLima = (d: string): string => limaDayStart(addDays(d, 1));
   for (let i = 0; i < screens.length; i++) {
     if (!inis[i] || !fins[i]) return { ok: false, message: `Línea ${i + 1}: periodo requerido.` };
@@ -106,6 +112,8 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
     const total = Number(totals[i]);
     if (!Number.isFinite(total) || total <= 0) return { ok: false, message: `Línea ${i + 1}: total inválido.` };
     const cant = dias[i] ? Number(dias[i]) : NaN;
+    const cantSlots = normalizeLineSlots(slotsRaw[i] ?? "", { blankInvalid: true });
+    if (cantSlots === null) return { ok: false, message: `Línea ${i + 1}: slots inválidos (1–100).` };
     parsedLines.push({
       screen: screens[i],
       starts: limaDayStart(inis[i]),
@@ -113,22 +121,30 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
       ends: nextDayLima(fins[i]),
       total,
       cant_dias: Number.isFinite(cant) && cant > 0 ? cant : null,
+      cant_slots: cantSlots,
     });
   }
   try {
     const db = getSupabase();
     // Anti-sobreventa en la venta: el cliente no es la garantía (carrera entre
-    // dos vendedores). Si una pantalla se ocupó después del chequeo UI, se
-    // rechaza aquí con mensaje amable (el trigger es la última línea).
-    const conflicts = await getScreenConflicts(
+    // dos vendedores). Dos chequeos: solape intra-orden (la propia orden no
+    // puede sumar cupo contra sí misma) y cupo por línea contra lo vigente
+    // (su periodo × su q, no MAX sobre el envoltorio).
+    const { findLineOverlaps } = await import("@/lib/order-lines");
+    const { findLineConflicts } = await import("@/lib/availability");
+    if (
+      findLineOverlaps(parsedLines.map((l, i) => ({ screen_id: l.screen, starts: inis[i], ends: fins[i], total: l.total }))).length > 0
+    ) {
+      return { ok: false, message: "Dos líneas usan la misma pantalla en periodos que se cruzan." };
+    }
+    const hit = await findLineConflicts(
       t.storeId,
-      inis.reduce((a, b) => (a < b ? a : b)),
-      fins.reduce((a, b) => (a > b ? a : b)),
+      parsedLines.map((l, i) => ({ screen_id: l.screen, starts: inis[i], ends: fins[i], slots: l.cant_slots })),
     );
-    const hit = conflicts.find((c) => screens.includes(c.screen_id));
     if (hit) {
-      const who = [hit.io_number, hit.brand].filter(Boolean).join(" · ");
-      return { ok: false, message: `Pantalla ocupada en ese periodo${who ? ` por ${who}` : ""}.` };
+      const who = [hit.conflict.io_number, hit.conflict.brand].filter(Boolean).join(" · ");
+      const days = (hit.conflict.blockedDays ?? []).map((d) => formatDate(d)).join(", ");
+      return { ok: false, message: `Línea ${hit.index + 1}: sin slots en ese periodo${who ? ` por ${who}` : ""}${days ? ` (${days})` : ""}.` };
     }
     // Las contrapartes deben pertenecer al tenant y estar activas (nada
     // nuevo con archivados; lo firmado vive en el snapshot de la NP).
@@ -334,6 +350,7 @@ export async function createOrderAction(form: FormData): Promise<CrmState> {
           tarifa_regular_minor: null,
           cant_meses: null,
           cant_dias: l.cant_dias,
+          cant_slots: l.cant_slots,
           notes: null,
         })),
       );
@@ -604,6 +621,9 @@ export async function updateOrderAction(input: {
 export interface AvailabilityState {
   ok: boolean;
   conflicts: ScreenConflict[];
+  /** screenId → día "yyyy-mm-dd" → slots libres (ventana pedida). */
+  remaining: Record<string, Record<string, number>>;
+  capacities: Record<string, number>;
   message: string;
 }
 
@@ -621,6 +641,7 @@ export async function updateOrderLinesAction(input: {
     starts: unknown;
     ends: unknown;
     total: unknown;
+    slots?: unknown;
     notes?: unknown;
   }>;
 }): Promise<CrmState> {
@@ -628,13 +649,14 @@ export async function updateOrderLinesAction(input: {
   if ("error" in t) return { ok: false, message: t.error };
   const orderId = String(input.orderId ?? "").trim();
   if (!orderId) return { ok: false, message: "Falta la orden." };
-  const { validateOrderLines, totalToMinor, findLineOverlaps } = await import("@/lib/order-lines");
-  const { rangesOverlap } = await import("@/lib/availability");
+  const { validateOrderLines, totalToMinor, findLineOverlaps, normalizeLineSlots } = await import("@/lib/order-lines");
   const lines = ((input.lines ?? []) as Array<Record<string, unknown>>).map((l) => ({
     screen_id: typeof l.screen_id === "string" ? l.screen_id.trim() : "",
     starts: typeof l.starts === "string" ? l.starts.trim() : "",
     ends: typeof l.ends === "string" ? l.ends.trim() : "",
     total: (l.total as string | number) ?? "",
+    // Sin coalescer a "": ausente (legacy/API) = default 1, explícito vacío = inválido (fail-closed).
+    slots: (l.slots as string | number | undefined) ?? undefined,
     notes: typeof l.notes === "string" ? l.notes : null,
   }));
   const problems = validateOrderLines(lines);
@@ -642,6 +664,8 @@ export async function updateOrderLinesAction(input: {
   if (findLineOverlaps(lines).length > 0) {
     return { ok: false, message: "Dos líneas usan la misma pantalla en periodos que se cruzan." };
   }
+  const slotsList = lines.map((l) => normalizeLineSlots(l.slots));
+  if (slotsList.some((x) => x === null)) return { ok: false, message: "Línea con slots inválidos (1–100)." };
   try {
     const db = getSupabase();
     const { data: existing, error: rerr } = await db
@@ -672,18 +696,18 @@ export async function updateOrderLinesAction(input: {
     ]);
     if ((invCount ?? 0) > 0) return { ok: false, message: "La orden tiene facturas: las líneas ya no se editan." };
     if ((bookCount ?? 0) > 0) return { ok: false, message: "La orden tiene reservas: las líneas ya no se editan." };
-    // Anti-sobreventa (sin la propia orden).
-    const inis = lines.map((l) => l.starts).reduce((a, b) => (a < b ? a : b));
-    const fins = lines.map((l) => l.ends).reduce((a, b) => (a > b ? a : b));
-    const conflicts = await getScreenConflicts(t.storeId, inis, fins, { excludeIoId: orderId });
-    for (const l of lines) {
-      const hit = conflicts.find(
-        (c) => c.screen_id === l.screen_id && rangesOverlap(c.starts, c.ends, l.starts, l.ends),
-      );
-      if (hit) {
-        const who = [hit.io_number, hit.brand].filter(Boolean).join(" · ");
-        return { ok: false, message: `Pantalla ocupada en ese periodo${who ? ` por ${who}` : ""}.` };
-      }
+    // Anti-sobreventa por día (sin la propia orden): cada línea pide sus slots
+    // (su periodo × su q, comparación inclusiva por días bloqueados).
+    const { findLineConflicts } = await import("@/lib/availability");
+    const hit = await findLineConflicts(
+      t.storeId,
+      lines.map((l, i) => ({ screen_id: l.screen_id, starts: l.starts, ends: l.ends, slots: slotsList[i] ?? 1 })),
+      { excludeIoId: orderId },
+    );
+    if (hit) {
+      const who = [hit.conflict.io_number, hit.conflict.brand].filter(Boolean).join(" · ");
+      const days = (hit.conflict.blockedDays ?? []).map((d) => formatDate(d)).join(", ");
+      return { ok: false, message: `Línea ${hit.index + 1}: sin slots en ese periodo${who ? ` por ${who}` : ""}${days ? ` (${days})` : ""}.` };
     }
     const totals = lines.map((l) => totalToMinor(l.total));
     if (totals.some((x) => x === null)) return { ok: false, message: "Línea con total inválido." };
@@ -696,6 +720,7 @@ export async function updateOrderLinesAction(input: {
         starts: l.starts,
         ends: l.ends,
         total: (totals[i] as number) / 100,
+        slots: slotsList[i] as number,
         notes: typeof l.notes === "string" && l.notes.trim() ? l.notes.trim().slice(0, 2000) : null,
       })),
       p_actor: actor,
@@ -709,47 +734,186 @@ export async function updateOrderLinesAction(input: {
 }
 
 /** Disponibilidad por periodo para el formulario (el server action revalida al crear).
- *  `excludeIoId`: editar sin chocar consigo misma. */
+ *  `excludeIoId`: editar sin chocar consigo misma. `screenIds` + `slots`:
+ *  pantallas evaluadas con su cupo pedido (resto visible); el resto del
+ *  inventario se evalúa con 1 slot para los badges del picker. */
 export async function checkAvailabilityAction(input: {
   starts: string;
   ends: string;
   excludeIoId?: string | null;
+  screenIds?: string[];
+  slots?: Record<string, number>;
 }): Promise<AvailabilityState> {
   const t = await resolveTenantStore();
-  if ("error" in t) return { ok: false, conflicts: [], message: t.error };
+  if ("error" in t) return { ok: false, conflicts: [], remaining: {}, capacities: {}, message: t.error };
   if (!isISODateShape(input.starts) || !isISODateShape(input.ends) || input.ends < input.starts) {
-    return { ok: false, conflicts: [], message: "Periodo inválido." };
+    return { ok: false, conflicts: [], remaining: {}, capacities: {}, message: "Periodo inválido." };
   }
   try {
     const exclude = typeof input.excludeIoId === "string" && input.excludeIoId ? input.excludeIoId : null;
-    return { ok: true, conflicts: await getScreenConflicts(t.storeId, input.starts, input.ends, { excludeIoId: exclude }), message: "" };
+    const ids = [...new Set((input.screenIds ?? []).map(String).filter(Boolean))].slice(0, 200);
+    const { getPeriodAvailability } = await import("@/lib/availability");
+    const res = await getPeriodAvailability(t.storeId, ids.length > 0 ? ids : null, input.starts, input.ends, {
+      excludeIoId: exclude,
+      slots: input.slots ?? {},
+    });
+    return { ok: true, conflicts: res.conflicts, remaining: res.remaining, capacities: res.capacities, message: "" };
   } catch (e) {
-    return { ok: false, conflicts: [], message: e instanceof Error ? e.message : "Error." };
+    return { ok: false, conflicts: [], remaining: {}, capacities: {}, message: e instanceof Error ? e.message : "Error." };
   }
 }
 
 export interface OccupancyState {
   ok: boolean;
   occupancy: Record<string, Array<{ starts: string; ends: string }>>;
+  capacities: Record<string, number>;
   message: string;
 }
 
-/** Rangos ocupados por pantalla (calendarios de disponibilidad, próximo hueco). */
+/** Rangos sin cupo por pantalla (calendarios de disponibilidad, próximo hueco).
+ *  `slots`: cupo pedido por pantalla para rangos relativos a la reserva. */
 export async function getScreenOccupancyAction(input: {
   screenIds: string[];
   from: string;
   excludeIoId?: string | null;
+  slots?: Record<string, number>;
 }): Promise<OccupancyState> {
   const t = await resolveTenantStore();
-  if ("error" in t) return { ok: false, occupancy: {}, message: t.error };
+  if ("error" in t) return { ok: false, occupancy: {}, capacities: {}, message: t.error };
   const ids = [...new Set((input.screenIds ?? []).map(String).filter(Boolean))].slice(0, 200);
   if (ids.length === 0 || !isISODateShape(input.from)) {
-    return { ok: false, occupancy: {}, message: "Parámetros inválidos." };
+    return { ok: false, occupancy: {}, capacities: {}, message: "Parámetros inválidos." };
   }
   try {
     const exclude = typeof input.excludeIoId === "string" && input.excludeIoId ? input.excludeIoId : null;
-    return { ok: true, occupancy: await getScreenOccupancy(t.storeId, ids, input.from, { excludeIoId: exclude }), message: "" };
+    const { getScreenCapacities } = await import("@/lib/availability");
+    const [occupancy, caps] = await Promise.all([
+      getScreenOccupancy(t.storeId, ids, input.from, { excludeIoId: exclude, slots: input.slots ?? {} }),
+      getScreenCapacities(t.storeId, ids),
+    ]);
+    return { ok: true, occupancy, capacities: Object.fromEntries(caps.entries()), message: "" };
   } catch (e) {
-    return { ok: false, occupancy: {}, message: e instanceof Error ? e.message : "Error." };
+    return { ok: false, occupancy: {}, capacities: {}, message: e instanceof Error ? e.message : "Error." };
+  }
+}
+
+export interface ScreenDayLine {
+  io_number: string | null;
+  brand: string | null;
+  slots: number;
+  status: string;
+  starts: string;
+  ends: string;
+  source: "order" | "booking";
+}
+
+export interface ScreenDayDetail {
+  ok: boolean;
+  screenId: string;
+  screenName: string | null;
+  day: string;
+  capacity: number;
+  reserved: number;
+  lines: ScreenDayLine[];
+  message: string;
+}
+
+/** Desglose de un día-pantalla para el drawer de la matriz (quién ocupa).
+ *  Misma semántica vigente que lib/availability: excluye canceladas y
+ *  borradores vencidos (el hold aparta 7 días). */
+export async function getScreenDayDetailAction(input: {
+  screenId: string;
+  day: string;
+}): Promise<ScreenDayDetail> {
+  const fail = (message: string): ScreenDayDetail => ({
+    ok: false, screenId: "", screenName: null, day: "", capacity: 0, reserved: 0, lines: [], message,
+  });
+  const t = await resolveTenantStore();
+  if ("error" in t) return fail(t.error);
+  const screenId = String(input.screenId ?? "").trim();
+  const day = String(input.day ?? "").trim();
+  if (!screenId || !isISODateShape(day)) return fail("Parámetros inválidos.");
+  try {
+    const db = getSupabase();
+    const { data: scr } = await db
+      .from("inv_screens")
+      .select("id,name")
+      .eq("store_id", t.storeId)
+      .eq("id", screenId)
+      .maybeSingle();
+    if (!scr) return fail("Pantalla no encontrada en esta tienda.");
+    const { getScreenCapacities, isHoldFresh, displayEndOf } = await import("@/lib/availability");
+    const caps = await getScreenCapacities(t.storeId, [screenId]);
+    const capacity = caps.get(screenId) ?? DEFAULT_SLOTS_PER_SCREEN;
+    const qStart = limaDayStart(day);
+    const qEnd = limaDayStart(addDays(day, 1));
+    const lines: ScreenDayLine[] = [];
+    const { data: olines, error: lerr } = await db
+      .from("io_lines")
+      .select("starts_at,ends_at,cant_slots,io_orders!insertion_order_lines_io_id_fkey!inner(io_number,brand,status,created_at)")
+      .eq("store_id", t.storeId)
+      .eq("screen_id", screenId)
+      .lt("starts_at", qEnd)
+      .gt("ends_at", qStart);
+    if (lerr) return fail(`DB read: ${lerr.message}`);
+    for (const l of (olines ?? []) as Array<Record<string, unknown>>) {
+      const o = l.io_orders as unknown as Record<string, unknown> | null;
+      if (!o || o.status === "cancelled") continue;
+      if (o.status === "draft" && !isHoldFresh(typeof o.created_at === "string" ? o.created_at : null)) continue;
+      const qty = Number(l.cant_slots ?? 1);
+      lines.push({
+        io_number: typeof o.io_number === "string" ? o.io_number : null,
+        brand: typeof o.brand === "string" ? o.brand : null,
+        slots: Number.isFinite(qty) && qty >= 1 ? Math.floor(qty) : 1,
+        status: typeof o.status === "string" ? o.status : "—",
+        starts: isoDayPart(l.starts_at) ?? "",
+        ends: displayEndOf(String(l.ends_at)),
+        source: "order",
+      });
+    }
+    const { data: slotRows, error: slotErr } = await db
+      .from("inv_slots")
+      .select("id")
+      .eq("store_id", t.storeId)
+      .eq("screen_id", screenId);
+    if (slotErr) return fail(`DB read: ${slotErr.message}`);
+    const slotIds = ((slotRows ?? []) as Array<Record<string, unknown>>).map((s) => String(s.id));
+    if (slotIds.length > 0) {
+      const { data: books, error: bookErr } = await db
+        .from("inv_bookings")
+        .select("starts_at,ends_at,status,io_orders!bookings_insertion_order_id_fkey(io_number,brand)")
+        .eq("store_id", t.storeId)
+        .in("slot_id", slotIds)
+        .neq("status", "cancelled")
+        .lt("starts_at", qEnd)
+        .gt("ends_at", qStart);
+      if (bookErr) return fail(`DB read: ${bookErr.message}`);
+      for (const b of ((books ?? []) as Array<Record<string, unknown>>)) {
+        const o = b.io_orders as unknown as Record<string, unknown> | null;
+        lines.push({
+          io_number: o && typeof o.io_number === "string" ? o.io_number : null,
+          brand: o && typeof o.brand === "string" ? o.brand : null,
+          slots: 1,
+          status: typeof b.status === "string" ? b.status : "—",
+          starts: isoDayPart(b.starts_at) ?? "",
+          ends: displayEndOf(String(b.ends_at)),
+          source: "booking",
+        });
+      }
+    }
+    lines.sort((a, b) => (a.starts < b.starts ? -1 : a.starts > b.starts ? 1 : 0));
+    const reserved = lines.reduce((a, l) => a + l.slots, 0);
+    return {
+      ok: true,
+      screenId,
+      screenName: typeof (scr as Record<string, unknown>).name === "string" ? String((scr as Record<string, unknown>).name) : null,
+      day,
+      capacity,
+      reserved,
+      lines,
+      message: "",
+    };
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Error.");
   }
 }

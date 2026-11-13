@@ -12,6 +12,7 @@ import { getSupabase } from "@/lib/supabase";
 import { normalizeCurrency } from "@/lib/currency";
 import { aggregateCobranza, toBillingInvoice, type BillingInvoice, type CobranzaTotals } from "@/lib/billing-status";
 import { DAY_MS, startOfDayUTC, startOfMonthUTC } from "@/lib/format";
+import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
 
 export type AlertKind = "sin_om" | "material" | "sin_evidencia" | "termina_sin_relevo";
 
@@ -29,7 +30,10 @@ export interface DashboardAlert {
 export interface Hueco {
   screenId: string;
   screenName: string;
+  /** Días totalmente libres en la ventana (sin slots vendidos). */
   diasLibres: number;
+  /** Slots-día libres en la ventana (capacidad − vendidos). */
+  slotsLibres: number;
 }
 
 export interface CurrencyTotals {
@@ -64,7 +68,7 @@ export interface DashboardSnapshot {
   };
   /** Bases de comparación de los deltas (misma moneda/unidad que el KPI). */
   prev: { comprometidoMinor: number; cobranzaPendingMinor: number; alAireOis: number };
-  ocupacion14d: { ratio: number | null; diasVendidos: number; diasDisponibles: number };
+  ocupacion14d: { ratio: number | null; slotsVendidos: number; slotsDisponibles: number };
   alAire: { ois: number; pantallas: number };
   porCertificar: number;
   renovacion30d: { conRelevo: number; total: number; ratio: number | null };
@@ -98,7 +102,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     db.from("inv_screens").select("id,name", { count: "exact" }).eq("store_id", storeId).eq("is_active", true).limit(500),
     db
       .from("io_orders")
-      .select("id,io_number,brand,status,starts_at,ends_at,advertiser_company_id,billing_company_id,currency", { count: "exact" })
+      .select("id,io_number,brand,status,starts_at,ends_at,created_at,advertiser_company_id,billing_company_id,currency", { count: "exact" })
       .eq("store_id", storeId)
       .neq("status", "cancelled")
       .order("starts_at", { ascending: true })
@@ -122,6 +126,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     io_number: String(o.io_number ?? "—"),
     brand: (o.brand as string | null) ?? null,
     status: String(o.status ?? ""),
+    created_at: (o.created_at as string | null) ?? null,
     starts_at: (o.starts_at as string | null) ?? null,
     ends_at: (o.ends_at as string | null) ?? null,
     currency: normalizeCurrency(o.currency, currency),
@@ -135,6 +140,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     io_id: string;
     screen_id: string;
     rate_minor: number;
+    cant_slots: number;
     starts_at: string;
     ends_at: string;
     starts_ms: number | null;
@@ -149,7 +155,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
     const [lines, oms, creas, photos] = await Promise.all([
       db
         .from("io_lines")
-        .select("io_id,screen_id,rate_minor,starts_at,ends_at")
+        .select("io_id,screen_id,rate_minor,cant_slots,starts_at,ends_at")
         .eq("store_id", storeId)
         .in("io_id", oiIds)
         .limit(2000),
@@ -166,6 +172,10 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       io_id: String(l.io_id),
       screen_id: String(l.screen_id),
       rate_minor: Number(l.rate_minor ?? 0),
+      cant_slots: (() => {
+        const n = Number(l.cant_slots ?? 1);
+        return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+      })(),
       starts_at: String(l.starts_at),
       ends_at: String(l.ends_at),
       starts_ms: parseMs(l.starts_at),
@@ -288,13 +298,34 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   // Corte al cierre del mes anterior: lo vencido después no contaba aún.
   for (const [c, list] of prevGroups) prevByCurrency[c] = aggregateCobranza(list, monthStart);
 
-  // 2. Ocupación 14d (pantalla-día por líneas, no por bookings hold).
+  // 2. Ocupación 14d en slots-día (capacidad por pantalla × ventana).
+  // Pondera cada línea por su cant_slots; la capacidad es slots propios
+  // activos o el default del tenant (SSOT lib/availability).
+  // Misma vigencia que la matriz: excluye borradores vencidos (el hold aparta
+  // 7 días); bookings no entran al KPI (ver matriz).
   const WIN = 14;
   const winEnd = today00 + WIN * DAY_MS;
-  const occupied = new Set<string>();
+  let holdFresh: (createdAt: string | null) => boolean = () => true;
+  try {
+    const { isHoldFresh } = await import("@/lib/availability");
+    holdFresh = (c) => isHoldFresh(c);
+  } catch {
+    // sin filtro de frescura
+  }
+  let capacities: Map<string, number> = new Map();
+  try {
+    const { getScreenCapacities } = await import("@/lib/availability");
+    capacities = await getScreenCapacities(storeId, screenRows.map((s) => s.id));
+  } catch {
+    capacities = new Map();
+  }
+  const capOf = (id: string): number => capacities.get(id) ?? DEFAULT_SLOTS_PER_SCREEN;
   const perScreen = new Map<string, Set<number>>();
+  const soldByScreen = new Map<string, number>();
   for (const l of lineRows) {
     if (l.starts_ms === null || l.ends_ms === null || l.ends_ms <= l.starts_ms) continue;
+    const io = oiById.get(l.io_id);
+    if (io?.status === "draft" && !holdFresh(io.created_at ?? null)) continue;
     const s = Math.max(l.starts_ms, today00);
     const e = Math.min(l.ends_ms, winEnd);
     if (e <= s) continue;
@@ -302,19 +333,21 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       const dayStart = today00 + d * DAY_MS;
       const dayEnd = dayStart + DAY_MS;
       if (s < dayEnd && dayStart < e) {
-        occupied.add(`${l.screen_id}:${d}`);
         let set = perScreen.get(l.screen_id);
         if (!set) {
           set = new Set();
           perScreen.set(l.screen_id, set);
         }
         set.add(d);
+        soldByScreen.set(l.screen_id, (soldByScreen.get(l.screen_id) ?? 0) + l.cant_slots);
       }
     }
   }
-  const diasDisponibles = screenRows.length * WIN;
-  const diasVendidos = occupied.size;
-  const ocupacionRatio = diasDisponibles > 0 ? diasVendidos / diasDisponibles : null;
+  let slotsDisponibles = 0;
+  for (const s of screenRows) slotsDisponibles += capOf(s.id) * WIN;
+  let slotsVendidos = 0;
+  for (const v of soldByScreen.values()) slotsVendidos += v;
+  const ocupacionRatio = slotsDisponibles > 0 ? slotsVendidos / slotsDisponibles : null;
 
   // 3. Al aire hoy (y ayer, para el delta; misma data, corte distinto).
   const stageAt = (o: (typeof oiRows)[number], ref: number) => orderStage({
@@ -435,12 +468,17 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
   );
 
   const huecos: Hueco[] = screenRows
-    .map((s) => ({
-      screenId: s.id,
-      screenName: s.name,
-      diasLibres: WIN - (perScreen.get(s.id)?.size ?? 0),
-    }))
-    .sort((a, b) => b.diasLibres - a.diasLibres)
+    .map((s) => {
+      const cap = capOf(s.id);
+      const sold = soldByScreen.get(s.id) ?? 0;
+      return {
+        screenId: s.id,
+        screenName: s.name,
+        diasLibres: WIN - (perScreen.get(s.id)?.size ?? 0),
+        slotsLibres: cap * WIN - sold,
+      };
+    })
+    .sort((a, b) => b.slotsLibres - a.slotsLibres)
     .slice(0, 5);
 
   for (const k of Object.keys(byCurrency)) {
@@ -485,7 +523,7 @@ export async function getDashboardSnapshot(storeId: string): Promise<DashboardSn
       cobranzaPendingMinor: prevCobranzaPending,
       alAireOis: prevAlAireOis,
     },
-    ocupacion14d: { ratio: ocupacionRatio, diasVendidos, diasDisponibles },
+    ocupacion14d: { ratio: ocupacionRatio, slotsVendidos, slotsDisponibles },
     alAire: { ois: alAireOis.length, pantallas: alAireScreens.size },
     porCertificar,
     renovacion30d: {

@@ -17,13 +17,19 @@ import "server-only";
 // resolve de server actions (antes copiado en crm/order/screens-actions).
 import { getSupabase } from "@/lib/supabase";
 import { normalizeCurrency } from "@/lib/currency";
+import { DEFAULT_SLOTS_PER_SCREEN, normalizeSlotsPerScreen } from "@/lib/store-slots";
 import type { MemberRole } from "@/lib/roles";
+
+export { DEFAULT_SLOTS_PER_SCREEN, normalizeSlotsPerScreen };
 
 export interface TenantStore {
   id: string;
   name: string | null;
   shop_currency: string;
   shop_country: string | null;
+  /** Espacios vendibles por pantalla y día (1 slot = 1 espacio).
+   *  Fallback cuando la pantalla no tiene slots explícitos. Default 10. */
+  default_slots_per_screen: number;
 }
 
 /** Lista tiendas ordenadas por creación. Si hay más de 50, valida el ?store=
@@ -38,18 +44,19 @@ async function listStores(
     name: (r.name as string | null) ?? null,
     shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
     shop_country: (r.shop_country as string | null) ?? null,
+    default_slots_per_screen: normalizeSlotsPerScreen(r.default_slots_per_screen),
   });
   if (requestedId) {
     const { data: one } = await db
       .from("sys_stores")
-      .select("id,name,shop_currency,shop_country")
+      .select("id,name,shop_currency,shop_country,default_slots_per_screen")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) return { stores: [mapRow(one as Record<string, unknown>)], truncated: false, total: 1 };
   }
   const { data, error, count } = await db
     .from("sys_stores")
-    .select("id,name,shop_currency,shop_country", { count: "exact" })
+    .select("id,name,shop_currency,shop_country,default_slots_per_screen", { count: "exact" })
     .order("created_at", { ascending: true })
     .limit(50);
   if (error) throw new Error(`Stores read: ${error.message}`);
@@ -216,7 +223,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
     if (!ids.includes(requestedId)) return listMyStores();
     const { data: one } = await db
       .from("sys_stores")
-      .select("id,name,shop_currency,shop_country")
+      .select("id,name,shop_currency,shop_country,default_slots_per_screen")
       .eq("id", requestedId)
       .maybeSingle();
     if (one) {
@@ -226,13 +233,14 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
         name: (r.name as string | null) ?? null,
         shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
         shop_country: (r.shop_country as string | null) ?? null,
+        default_slots_per_screen: normalizeSlotsPerScreen(r.default_slots_per_screen),
       }];
     }
     return [];
   }
   const { data, error } = await db
     .from("sys_stores")
-    .select("id,name,shop_currency,shop_country")
+    .select("id,name,shop_currency,shop_country,default_slots_per_screen")
     .in("id", ids)
     .order("created_at", { ascending: true });
   if (error) throw new Error(`Stores read: ${error.message}`);
@@ -241,6 +249,7 @@ export async function listMyStores(requestedId?: string | null): Promise<TenantS
     name: (r.name as string | null) ?? null,
     shop_currency: normalizeCurrency(r.shop_currency ?? "PEN"),
     shop_country: (r.shop_country as string | null) ?? null,
+    default_slots_per_screen: normalizeSlotsPerScreen(r.default_slots_per_screen),
   }));
 }
 

@@ -46,6 +46,7 @@ const INSTANT = new Set([
   "updateOrderLinesAction",
   "checkAvailabilityAction",
   "getScreenOccupancyAction",
+  "getScreenDayDetailAction", // desglose día-pantalla del drawer (lectura inline)
   "signOrderAction",
   "cancelOrderAction",
   "reactivateOrderAction",

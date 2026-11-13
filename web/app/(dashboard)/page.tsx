@@ -86,7 +86,7 @@ export default async function DashboardPage() {
                 label="Ocupación 14d"
                 icon={Gauge}
                 value={snap.ocupacion14d.ratio === null ? "—" : formatPercent(snap.ocupacion14d.ratio)}
-                hint={`${formatNumber(snap.ocupacion14d.diasVendidos)} de ${formatNumber(snap.ocupacion14d.diasDisponibles)} pantalla-día`}
+                hint={`${formatNumber(snap.ocupacion14d.slotsVendidos)} de ${formatNumber(snap.ocupacion14d.slotsDisponibles)} slots-día`}
                 tone="primary"
               />
               <Metric
@@ -122,7 +122,7 @@ export default async function DashboardPage() {
                   <li key={h.screenId} className="flex items-center justify-between gap-3 text-sm">
                     <span className="min-w-0 truncate font-medium">{h.screenName}</span>
                     <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {formatNumber(h.diasLibres)}d libres
+                      {formatNumber(h.slotsLibres)} slots libres
                     </span>
                   </li>
                 ))}

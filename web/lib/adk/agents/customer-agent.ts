@@ -4,7 +4,7 @@ import { getSupabase } from "@/lib/supabase";
 import { getCrmCompany, listCrmCompanies } from "@/lib/crm-db";
 import { getOrderDetail, listOrders } from "@/lib/orders-db";
 import { getScreenDetail, listScreens } from "@/lib/screens-db";
-import { getScreenConflicts, getScreenOccupancy } from "@/lib/availability";
+import { getScreenOccupancy } from "@/lib/availability";
 import { addDays, todayLima } from "@/lib/availability-utils";
 import { getLlmConfig } from "@/lib/ai/llm-config";
 import { resolveModelInstance } from "@/lib/ai/model-resolver";
@@ -13,6 +13,7 @@ import { getDashboardSnapshot } from "@/lib/dashboard";
 import { ORDER_STAGE_LABELS, orderStage, orderTiming } from "@/lib/order-stage";
 import { BILLING_LABELS, billingStatus, toBillingInvoice, aggregateCobranza } from "@/lib/billing-status";
 import { invoiceMatchesOrder, normalizeCurrency } from "@/lib/currency";
+import { DEFAULT_SLOTS_PER_SCREEN } from "@/lib/store-slots";
 
 export interface AgentContext {
   storeId: string | null;
@@ -36,7 +37,7 @@ No hablas de churn, predicciones, winback ni scoring: ese motor no existe en est
 No escribes en base de datos: para crear/editar se usan las server actions existentes de la UI, nunca INSERT desde el chat.
 Moneda siempre explícita (PEN/USD según la orden o la vista); nunca mezcles monedas ni heredes en silencio.
 En accionables, enlaza a la vista real: /orders/:id, /screens, /companies/:id.
-Reglas de foco: si el contexto indica una pantalla, empresa, orden, contacto o marca concreta, responde sobre ella sin pedir su id; usa get_screen/get_company/get_order con ese id primero. Para "próximos 14 días" calcula desde hoy (Lima) y evalúa ocupación con from/to explícitos; si no dan periodo, usa hoy→hoy+13. Responde en español, breve y con cifras exactas de las tools.`;
+Reglas de foco: si el contexto indica una pantalla, empresa, orden, contacto o marca concreta, responde sobre ella sin pedir su id; usa get_screen/get_company/get_order con ese id primero. Para "próximos 14 días" calcula desde hoy (Lima) y evalúa ocupación con from/to explícitos; si no dan periodo, usa hoy→hoy+13. Disponibilidad por slots/día (capacidad 10 salvo slots propios): free = hay cupo para los slots pedidos en todo el periodo; cita siempre quedan/capacidad y días bloqueados. Responde en español, breve y con cifras exactas de las tools.`;
 
 function needStore(ctx: AgentContext): string | null {
   return ctx.storeId ?? null;
@@ -220,29 +221,33 @@ function getScreenTool(ctx: AgentContext) {
   return new FunctionTool({
     name: "get_screen",
     description:
-      "Ficha de una pantalla del inventario con precio, impacto/CPM, reservas y ocupación en un periodo. Para '¿está libre?' usa from/to (por defecto hoy→hoy+13 Lima). Acepta screen_id exacto o texto q.",
+      "Ficha de una pantalla con precio, impacto/CPM y ocupación por slots en un periodo. Para '¿está libre?' usa from/to (por defecto hoy→hoy+13 Lima) y slots (cupo pedido, default 1). free = hay cupo para esos slots todo el periodo; min_free_slots_in_period dice el resto mínimo.",
     parameters: z.object({
       screen_id: z.string().uuid().describe("ID exacto de la pantalla (inv_screens.id).").optional(),
       q: z.string().min(2).max(120).describe("Texto a buscar (pantalla, venue, distrito, marca).").optional(),
       from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Inicio inclusivo yyyy-mm-dd.").optional(),
       to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Fin inclusivo yyyy-mm-dd.").optional(),
+      slots: z.number().int().min(1).max(100).describe("Slots por día que quiere reservar (default 1).").optional(),
     }),
     execute: async ({
       screen_id,
       q,
       from,
       to,
+      slots,
     }: {
       screen_id?: string;
       q?: string;
       from?: string;
       to?: string;
+      slots?: number;
     }) => {
       const storeId = needStore(ctx);
       if (!storeId) return { error: "Sin tienda en contexto." };
       const start = from ?? todayLima();
       const end = to ?? addDays(start, 13);
       if (end < start) return { error: `Rango inválido: ${start} > ${end}.` };
+      const wanted = Number.isSafeInteger(slots) && (slots as number) >= 1 && (slots as number) <= 100 ? (slots as number) : 1;
       try {
         let targetId = screen_id ?? ctx.screenId ?? null;
         if (!targetId) {
@@ -258,9 +263,12 @@ function getScreenTool(ctx: AgentContext) {
           }
           targetId = found.rows[0].id;
         }
-        const [detail, occupancy] = await Promise.all([
+        const { getPeriodAvailability, getScreenCapacities } = await import("@/lib/availability");
+        const [detail, avail, occ, caps] = await Promise.all([
           getScreenDetail(storeId, targetId!),
-          getScreenOccupancy(storeId, [targetId!], start).catch(() => ({})),
+          getPeriodAvailability(storeId, [targetId!], start, end, { slots: { [targetId!]: wanted } }).catch(() => null),
+          getScreenOccupancy(storeId, [targetId!], start, { slots: { [targetId!]: wanted } }).catch(() => ({})),
+          getScreenCapacities(storeId, [targetId!]).catch(() => new Map()),
         ]);
         if (!detail) return { error: "Pantalla no encontrada." };
         const s = detail.screen as Record<string, unknown>;
@@ -278,9 +286,11 @@ function getScreenTool(ctx: AgentContext) {
               ? Number(s.impact_day)
               : null;
         const cpm = price !== null && impact !== null && impact > 0 ? Math.round((price / impact) * 1000) : null;
-        const ranges = (occupancy as Record<string, Array<{ starts: string; ends: string }>>)[targetId!] ?? [];
-        const conflicts = await getScreenConflicts(storeId, start, end).catch(() => []);
-        const mine = conflicts.filter((c) => c.screen_id === targetId);
+        const ranges = (occ as Record<string, Array<{ starts: string; ends: string }>>)[targetId!] ?? [];
+        const capacity = caps.get(targetId!) ?? avail?.capacities[targetId!] ?? DEFAULT_SLOTS_PER_SCREEN;
+        const mine = (avail?.conflicts ?? []).filter((c) => c.screen_id === targetId);
+        const freeDays = avail?.remaining[targetId!] ?? {};
+        const minFree = Object.keys(freeDays).length > 0 ? Math.min(...Object.values(freeDays)) : capacity;
         return {
           id: targetId,
           name: (s.name as string | null) ?? null,
@@ -296,8 +306,18 @@ function getScreenTool(ctx: AgentContext) {
           impact_day: impact,
           cpm_pen: cpm,
           period: { from: start, to: end },
+          requested_slots: wanted,
+          capacity_slots_per_day: capacity,
+          min_free_slots_in_period: minFree,
           free: mine.length === 0,
-          conflicts: mine.slice(0, 5),
+          conflicts: mine.slice(0, 5).map((c) => ({
+            io_number: c.io_number,
+            brand: c.brand,
+            source: c.source,
+            blocked_days: c.blockedDays ?? [],
+            requested: c.requested ?? wanted,
+            remaining: c.remaining ?? null,
+          })),
           occupancy_next_400d: ranges.slice(0, 20),
           bookings_count: detail.bookings_count,
           lines_count: detail.lines_count,
@@ -314,18 +334,20 @@ function searchInventoryTool(ctx: AgentContext) {
   return new FunctionTool({
     name: "search_inventory",
     description:
-      "Busca pantallas del inventario por texto/ciudad y marca ocupación en un periodo. Respeta el hard-hold io_check_hold_overlap: un booking confirmado/activo solapa y bloquea el slot.",
+      "Busca pantallas del inventario por texto/ciudad y marca ocupación por slots en un periodo. slots = cupo pedido por día (default 1); free = hay cupo para esos slots todo el periodo. El borrador aparta 7 días (vencido libera); bookings e IOs vigentes ocupan.",
     parameters: z.object({
       q: z.string().min(2).max(120).describe("Texto (pantalla, venue, distrito, marca).").optional(),
       city: z.string().min(2).max(80).describe("Ciudad (p.ej. Lima).").optional(),
       from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Inicio inclusivo yyyy-mm-dd.").optional(),
       to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Fin inclusivo yyyy-mm-dd.").optional(),
+      slots: z.number().int().min(1).max(100).describe("Slots por día que se quieren reservar (default 1).").optional(),
     }),
-    execute: async ({ q, city, from, to }: { q?: string; city?: string; from?: string; to?: string }) => {
+    execute: async ({ q, city, from, to, slots }: { q?: string; city?: string; from?: string; to?: string; slots?: number }) => {
       const storeId = needStore(ctx);
       if (!storeId) return { error: "Sin tienda en contexto." };
       if ((from && !to) || (!from && to)) return { error: "Pasa from y to juntos (yyyy-mm-dd)." };
       if (from && to && to < from) return { error: `Rango inválido: ${from} > ${to}.` };
+      const wanted = Number.isSafeInteger(slots) && (slots as number) >= 1 && (slots as number) <= 100 ? (slots as number) : 1;
       try {
         const found = await listScreens(storeId, {
           q: q ?? "",
@@ -348,18 +370,25 @@ function searchInventoryTool(ctx: AgentContext) {
             hint: "Sin periodo: ocupación no evaluada. Pasa from/to para disponibilidad.",
           };
         }
-        const conflicts = await getScreenConflicts(storeId, from, to);
-        const busyBy = new Map<string, typeof conflicts>();
-        for (const c of conflicts) {
-          const arr = busyBy.get(c.screen_id) ?? [];
-          arr.push(c);
-          busyBy.set(c.screen_id, arr);
-        }
+        const { getPeriodAvailability } = await import("@/lib/availability");
+        const ids = found.rows.map((s) => s.id);
+        const avail = await getPeriodAvailability(storeId, ids, from, to, {
+          slots: Object.fromEntries(ids.map((id) => [id, wanted])),
+        });
         return {
           found: found.total,
           period: { from, to },
+          requested_slots: wanted,
           rows: found.rows.map((s) => {
-            const busy = busyBy.get(s.id) ?? [];
+            const busy = (avail.conflicts.filter((c) => c.screen_id === s.id)).slice(0, 3).map((c) => ({
+              io_number: c.io_number,
+              brand: c.brand,
+              source: c.source,
+              blocked_days: c.blockedDays ?? [],
+              remaining: c.remaining ?? null,
+            }));
+            const freeDays = avail.remaining[s.id] ?? {};
+            const minFree = Object.keys(freeDays).length > 0 ? Math.min(...Object.values(freeDays)) : (avail.capacities[s.id] ?? DEFAULT_SLOTS_PER_SCREEN);
             return {
               id: s.id,
               name: s.name,
@@ -367,13 +396,9 @@ function searchInventoryTool(ctx: AgentContext) {
               venue: s.venue_name,
               price_pen: s.price_pen,
               free: busy.length === 0,
-              conflicts: busy.slice(0, 3).map((c) => ({
-                io_number: c.io_number,
-                brand: c.brand,
-                starts: c.starts,
-                ends: c.ends,
-                source: c.source,
-              })),
+              capacity_slots_per_day: avail.capacities[s.id] ?? DEFAULT_SLOTS_PER_SCREEN,
+              min_free_slots_in_period: minFree,
+              conflicts: busy,
             };
           }),
         };
@@ -521,9 +546,9 @@ function explainKpiTool(ctx: AgentContext) {
               kpi,
               lectura: snap.ocupacion14d.ratio === null
                 ? "Sin pantallas activas para medir ocupación."
-                : `Ocupación 14d: ${Math.round(snap.ocupacion14d.ratio * 100)}% (${snap.ocupacion14d.diasVendidos}/${snap.ocupacion14d.diasDisponibles} pantalla-día).`,
+                : `Ocupación 14d: ${Math.round(snap.ocupacion14d.ratio * 100)}% (${snap.ocupacion14d.slotsVendidos}/${snap.ocupacion14d.slotsDisponibles} slots-día).`,
               numeros: snap.ocupacion14d,
-              accionable: snap.huecos.length > 0 ? `Hueco mayor: ${snap.huecos[0].screenName} (${snap.huecos[0].diasLibres}d libres). Ver /screens.` : "Sin huecos top: ver /screens.",
+              accionable: snap.huecos.length > 0 ? `Hueco mayor: ${snap.huecos[0].screenName} (${snap.huecos[0].slotsLibres} slots libres). Ver /screens.` : "Sin huecos top: ver /screens.",
               deep_link: "/screens",
             };
           case "al_aire":
@@ -553,7 +578,7 @@ function explainKpiTool(ctx: AgentContext) {
           case "huecos":
             return {
               kpi,
-              lectura: snap.huecos.length === 0 ? "Sin huecos medidos." : `Top huecos 14d: ${snap.huecos.slice(0, 3).map((h) => `${h.screenName} (${h.diasLibres}d)`).join(", ")}.`,
+              lectura: snap.huecos.length === 0 ? "Sin huecos medidos." : `Top huecos 14d: ${snap.huecos.slice(0, 3).map((h) => `${h.screenName} (${h.slotsLibres} slots)`).join(", ")}.`,
               numeros: snap.huecos.slice(0, 5),
               accionable: "Oferta esos huecos a anunciantes activos. Ver /screens.",
               deep_link: "/screens",
